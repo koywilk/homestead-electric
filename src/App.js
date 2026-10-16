@@ -7048,6 +7048,10 @@ const ICON_PATHS = {
   returntrips:  <><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></>,
   openitems:    <><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/><path d="m3 6 1.5 1.5L7 5"/><path d="m3 12 1.5 1.5L7 11"/><path d="m3 18 1.5 1.5L7 17"/></>,
   x:            <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
+  // v542: used by the dashboard but missing (rendered blank since v530/v540).
+  activity:     <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>,
+  myday:        <><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="m8.5 14.5 2 2 4-4"/></>,
+  filter:       <path d="M22 3H2l8 9.46V19l4 2v-8.54z"/>,
   check:        <path d="M20 6 9 17l-5-5"/>,
   plus:         <><path d="M5 12h14"/><path d="M12 5v14"/></>,
   bell:         <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
@@ -31132,6 +31136,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             showSync={job.roughStatus==="inprogress"}
                           />
                         )}
+                        {["waiting","waiting_date"].includes(job.roughStatus||"") && (
+                          <WaitingOnInput value={job.roughWaitingOn} label="Rough is waiting on" onSave={t=>u({roughWaitingOn:t})}/>
+                        )}
                         {/* Removed: SCHEDULED FOR / SCHEDULE BY duplicate input.
                             The pill above shows + edits the same date now;
                             clicking the calendar icon opens the schedule
@@ -31195,6 +31202,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               {r==="pass"?"✓ Pass":"✗ Fail"}
                             </button>
                           ))}
+                          <InspNoShow date={job.fourWayTargetDate} result={job.roughInspectionResult} what="rough (4-way) inspection" onClear={()=>u({fourWayTargetDate:""})}/>
                         </div>
                       </div>
 
@@ -31511,6 +31519,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             showSync={job.finishStatus==="inprogress"}
                           />
                         )}
+                        {["waiting","waiting_date"].includes(job.finishStatus||"") && (
+                          <WaitingOnInput value={job.finishWaitingOn} label="Finish is waiting on" onSave={t=>u({finishWaitingOn:t})}/>
+                        )}
                         {/* Removed: SCHEDULED FOR / SCHEDULE BY duplicate input
                             on Finish too — pill is the single edit surface. */}
                       </div>
@@ -31568,6 +31579,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               {r==="pass"?"✓ Pass":"✗ Fail"}
                             </button>
                           ))}
+                          <InspNoShow date={job.finalInspectionTargetDate} result={job.finalInspectionResult} what="final inspection" onClear={()=>u({finalInspectionTargetDate:""})}/>
                         </div>
                       </div>
 
@@ -45564,6 +45576,33 @@ const PLAN_CATS = [["plans", "Plans"], ["cabinet", "Cabinet"], ["appliance", "Ap
 const planNum = (n) => { const s = String(n || ""); return !s ? "No number" : /^Q/i.test(s) ? `Quote #${s.slice(1)}` : `#${s.replace(/^#/, "")}`; };
 const planAgo = (iso) => { const t = Date.parse(iso || ""); if (!t) return ""; const m = Math.round((Date.now() - t) / 60000); return m < 60 ? `${Math.max(1, m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
 
+// v542: why a phase is On Hold or Awaiting a start date, in one line. The office
+// dashboard prints it under the job's stage ("Waiting on: cabinet install").
+// Saved on blur through the job's own u() patch (stamped like every job save).
+function WaitingOnInput({ value, onSave, label }) {
+  const [v, setV] = useState(value || "");
+  useEffect(() => { setV(value || ""); }, [value]);
+  const commit = () => { const t = v.trim().slice(0, 140); if (t !== (value || "")) onSave(t); };
+  return (
+    <input value={v} onChange={e => setV(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      placeholder="Waiting on… (who or what)" aria-label={label} maxLength={140}
+      style={{ flex: "1 1 220px", minWidth: 180, fontSize: 13, padding: "7px 10px", border: `1px dashed ${C.slateLine}`, borderRadius: 7, background: C.card, color: C.text, fontFamily: "inherit" }}/>
+  );
+}
+// v542: an inspection target date that has passed with no Pass/Fail logged can be
+// cleared in one tap ("it didn't happen"), so it stops showing as overdue on the
+// dashboard. Asks first; clears only the target date.
+function InspNoShow({ date, result, what, onClear }) {
+  const at = date ? parseAnyDate(String(date).trim()) : null;
+  if (!at || result || localYmd(at) >= localYmd(new Date())) return null;
+  return (
+    <button onClick={() => { if (window.confirm(`The ${what} set for ${date} didn't happen?\n\nThis clears the target date so it stops showing as overdue. Set a new date when it's booked.`)) onClear(); }}
+      style={{ padding: "3px 9px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${C.border}`, background: C.card, color: C.dim, fontFamily: "inherit" }}>
+      Didn't happen
+    </button>
+  );
+}
+
 function PlanFileForm({ f, identity, onDone }) {
   const guess = String(f.bestGuess || f.number || "");
   const [kind, setKind] = useState(/^Q/i.test(guess) ? "quote" : "job");
@@ -45616,7 +45655,11 @@ function PlansCard({ identity, users = [] }) {
   if (!allowed) return null;
   const markSeen = (ids) => ids.forEach(id => updateDoc(doc(db, "agentFindings", id), { seen: true, seenAt: new Date().toISOString(), seenBy: identity?.name || "" })
     .catch(e => toast.error(`Couldn't mark seen: ${e?.message || e}`)));
-  const visible = rows.filter(f => showSeen || !f.seen);
+  // v542: an unmatched plan is done once it is filed or dismissed (the server stamps
+  // resolved; a later filing leaves a filed_<item> finding) — not when someone taps Seen.
+  const rowIds = new Set(rows.map(r => r.id));
+  const planDone = (f) => !!f.resolved || (!!f.item && rowIds.has(`filed_${f.item}`));
+  const visible = rows.filter(f => showSeen || !f.seen || (f.type === "unmatched_plan" && !planDone(f)));
   const needs = visible.filter(f => PLAN_NEEDS.includes(f.type));
   const groups = [];
   const byNum = new Map();
@@ -45646,7 +45689,7 @@ function PlansCard({ identity, users = [] }) {
           {(f.links || []).map((l, i) => <a key={i} href={l.url} target="_blank" rel="noreferrer" style={link}>{l.label}</a>)}
           {!f.seen && <button onClick={() => markSeen([f.id])} style={{ ...link, background: "none", border: "none", padding: 0, cursor: "pointer", color: C.dim, fontFamily: "inherit" }}>Seen</button>}
         </div>
-        {need && f.type === "unmatched_plan" && f.canFile && !f.seen && <PlanFileForm f={f} identity={identity}/>}
+        {need && f.type === "unmatched_plan" && f.canFile && !planDone(f) && <PlanFileForm f={f} identity={identity}/>}
       </div>
     </div>
   );
@@ -45697,7 +45740,12 @@ function PlansCard({ identity, users = [] }) {
 // People · Automations), built from what App already holds in memory (jobs
 // for the current mode, users, needs, Upcoming). Extra reads: the People tab's
 // device list (settings/deviceVersions, the same getDoc DeviceVersionsCard
-// does) and the Automations tab's two sources. Nothing here writes to Firestore.
+// does), the Automations tab's two sources, and (v542) settings/crewPTO,
+// settings/simproTotals and settings/autoDocRuns. Nothing writes on its own; v542
+// adds four buttons Koy presses, each asking first: File it / Not ours on a plan
+// (planFileByHand / planDismissByHand callables, name + PIN), Ask <foreman> to
+// import (one My Day task through the stamped needs write) and Run now on three
+// automated docs (their existing test-trigger callables).
 const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"]];
 // Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
 // what Koy's two Claude Routines produced, read from where they already put it.
@@ -45741,13 +45789,17 @@ function odAgo(at, now) {
   if (h < 36) return `${h} h ago`;
   return `${Math.round(h / 24)} d ago`;
 }
-// v540 palette: app dark navy + steel blue lead (Koy: no yellow/amber, no orange lead).
-// Each hue is lightened to read >= 4.5:1 on the dark cards. OD_A is the accent (tabs,
-// buttons, neutral counts); OD_O stays as the orange category (starts, punch). OD_WARN is
-// the caution colour that replaced amber. Every value must stay distinct from OD_R/OD_O/OD_G
+// v542 palette: a LIGHT page (Koy 2026-10-14: "I want it light mode not dark"), same
+// families as v540 (steel blue lead, no yellow/amber, no orange lead). Each hue is
+// darkened to read >= 4.5:1 on the white cards. OD_A is the accent (tabs, buttons,
+// neutral counts); OD_O stays as the orange category (starts, punch). OD_WARN is the
+// caution colour that replaced amber. Every value must stay distinct from OD_R/OD_O/OD_G
 // because ATTN_SEV keys severity by colour.
-const OD_O = "#F08A55", OD_G = "#45D483", OD_R = "#FF7B7B", OD_B = "#66A8FF", OD_P = "#B1A4F4", OD_WARN = "#F28BA8";
-const OD_A = "#66A8FF", OD_SLATE = "#9FB0C8", OD_CYAN = "#5CC8E0", OD_GREY = "#8B95A7", OD_ON_A = "#0B1526";
+const OD_O = "#B4531A", OD_G = "#18804A", OD_R = "#C43B3B", OD_B = "#2563C9", OD_P = "#6A4FC8", OD_WARN = "#B23A6E";
+const OD_A = "#2563C9", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6B7487", OD_ON_A = "#fff";
+// Foreman filter value for "jobs with no foreman" (blank, Unassigned, TBD, Paul, or
+// someone no longer on the team). Never a real name.
+const OD_NOFM = "__none__";
 const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
 const OD_DAY = 24*60*60*1000;
 // Calendar days, not 24-hour steps: the fall-back Sunday is 25 hours long.
@@ -45772,6 +45824,43 @@ function odWhen(ev, now) {
   const day = k === today ? "Today" : k === y ? "Yesterday" : `${odDow(ev.at)} ${odShort(ev.at)}`;
   return ev.dateOnly ? day : `${day} · ${odTime(ev.at)}`;
 }
+// The Pass/Fail buttons log an attempt on every tap and leave it when the
+// result is cleared: drop back-to-back repeats and a trailing attempt whose
+// phase result is now blank, so counts match what really happened. Shared by
+// the job rollup and the Activity feed (v542: the feed used the raw list and
+// showed 5 failed inspections where Overview and Quality showed 3).
+function odRealAtts(list, result, ph) {
+  const out = [];
+  (list || []).forEach(a => { if (!a || !a.result) return; const p = out[out.length - 1]; if (p && p.result === a.result && p.date === a.date) return; out.push({ ...a, ph }); });
+  if (!result && out.length) out.pop();
+  return out;
+}
+// One reading of an open return trip, used on every tab (v542): booked (dated,
+// ahead), late (dated visit passed without a sign-off, or a schedule-by date
+// passed without a date), "to book" (schedule-by date still ahead) or no date.
+function odRtInfo(rt, t0) {
+  const dayOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const at = odDate(odRtDate(rt));
+  if (at) {
+    const late = Math.round((t0 - dayOf(at)) / OD_DAY);
+    return late > 0 ? { k: "late", at, late, text: `visit was ${odShort(at)}, not closed` } : { k: "booked", at, text: `booked ${odDow(at)} ${odShort(at)}` };
+  }
+  const by = odDate(rt.rtStatusDate);
+  if (by) {
+    const late = Math.round((t0 - dayOf(by)) / OD_DAY);
+    return late > 0 ? { k: "late", at: by, late, by: true, text: `not scheduled by ${odShort(by)}` } : { k: "tobook", at: by, text: `book by ${odShort(by)}` };
+  }
+  return { k: "none", text: "no date" };
+}
+const odRtSumText = (s) => [`${s.open} open`, s.late && `${s.late} past date`, s.booked && `${s.booked} booked`, s.tobook && `${s.tobook} to book`, s.none && `${s.none} no date`].filter(Boolean).join(" · ");
+// Money from Simpro (settings/simproTotals, written by the Friday Packet and the
+// daily dailySimproTotals run): the job's total including tax, by Simpro number.
+const odMoney = (n) => n == null ? "" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `$${Math.round(n / 1e3)}k` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
+// Short nicknames people type on the crew app, folded into the team member's
+// full name in the Activity person filter (abe → Abraham).
+const OD_NICK = { abe: "abraham", bill: "william", will: "william", bob: "robert", rob: "robert", jim: "james", jimmy: "james", tom: "thomas", dan: "daniel", danny: "daniel",
+  chris: "christopher", matt: "matthew", nick: "nicholas", tony: "anthony", joe: "joseph", mike: "michael", steve: "steven", sam: "samuel", alex: "alexander",
+  josh: "joshua", jake: "jacob", zach: "zachary", nate: "nathan", andy: "andrew", drew: "andrew", greg: "gregory", ben: "benjamin", ed: "edward", ted: "edward" };
 
 // Everything that happened on the jobs, newest first, last 30 days.
 // lastWork (optional) gets each job's newest real work, any age — opening a
@@ -45817,8 +45906,7 @@ function odBuildEvents(jobs, now, lastWork) {
       if (co.coStatusSyncedAt && OD_CO_LABEL[co.coStatus])
         push(co.coStatusSyncedAt, "co", "", `Change order ${OD_CO_LABEL[co.coStatus]} (Simpro)`, odText(co.desc), ["approved","completed"].includes(co.coStatus) ? "good" : co.coStatus === "denied" ? "bad" : "");
     });
-    [["roughInspectionAttempts","Rough"],["finalInspectionAttempts","Final"]].forEach(([k, ph]) => (j[k] || []).forEach(a => {
-      if (!a || !a.result) return;
+    [["roughInspectionAttempts","Rough","roughInspectionResult"],["finalInspectionAttempts","Final","finalInspectionResult"]].forEach(([k, ph, rk]) => odRealAtts(j[k], j[rk], ph).forEach(a => {
       const fail = a.result === "fail", n = (a.items || []).length;
       push(a.date, "insp", a.by, `${ph} inspection ${fail ? "failed" : "passed"}`, fail && n ? `${n} item${n === 1 ? "" : "s"} to fix` : "", fail ? "bad" : "good");
     }));
@@ -45880,12 +45968,15 @@ function odBuildSchedule(jobs, upcoming, today) {
       add(j.roughProjectedStart, "start", "Rough start", j, { confirmed: !!j.roughStartConfirmed || ["scheduled","date_confirmed"].includes(rs) });
     if (j.finishProjectedStart && !finishStarted)
       add(j.finishProjectedStart, "start", "Finish start", j, { confirmed: !!j.finishStartConfirmed || ["scheduled","date_confirmed"].includes(fs) });
+    // v542: a FAILED inspection keeps its slot — a target set after the last
+    // attempt is the re-inspection, so it shows (it used to vanish once any
+    // result was logged, and a failed rough looked like "Rough done").
     const insp = (target, result, attempts, label, ok) => {
       const at = odDate(target), last = lastAttempt(attempts);
-      if (!at || result || !ok || (last && localYmd(last) >= localYmd(at))) return;
-      add(target, "insp", label, j);
+      if (!at || result === "pass" || !ok || (last && localYmd(last) >= localYmd(at))) return;
+      add(target, "insp", result === "fail" ? label.replace("inspection", "re-inspection") : label, j);
     };
-    insp(j.fourWayTargetDate, j.roughInspectionResult, j.roughInspectionAttempts, "Rough inspection", roughStarted && rs !== "complete" && !finishStarted);
+    insp(j.fourWayTargetDate, j.roughInspectionResult, j.roughInspectionAttempts, "Rough inspection", roughStarted && (rs !== "complete" || j.roughInspectionResult === "fail") && !finishStarted);
     insp(j.finalInspectionTargetDate, j.finalInspectionResult, j.finalInspectionAttempts, "Final inspection", finishStarted);
     if (j.qcStatus === "scheduled" && j.qcStatusDate) add(j.qcStatusDate, "qc", "Rough QC walk", j);
     if (j.finishQcStatus === "scheduled" && j.finishQcStatusDate) add(j.finishQcStatusDate, "qc", "Finish QC walk", j);
@@ -45910,7 +46001,7 @@ function OdRing({ pct, color, size = 36, label }) {
   const r = size/2 - 4, C2 = 2*Math.PI*r, p = Math.max(0, Math.min(1, pct || 0));
   return (
     <svg className="spark" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="5"/>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(27,43,74,.1)" strokeWidth="5"/>
       {p > 0 && <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" strokeDasharray={`${(C2*p).toFixed(1)} ${C2.toFixed(1)}`} transform={`rotate(-90 ${size/2} ${size/2})`}/>}
     </svg>
   );
@@ -45965,14 +46056,14 @@ function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel
   return (
     <svg className="od-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} fontFamily="inherit">
       <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".26"/><stop offset="1" stopColor={color} stopOpacity="0"/></linearGradient></defs>
-      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="rgba(255,255,255,.08)"/><text x={L-8} y={y(t)+4} textAnchor="end" fontSize="11.5" fill="#A3ADBD">{fmt(t)}</text></g>)}
+      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="rgba(27,43,74,.09)"/><text x={L-8} y={y(t)+4} textAnchor="end" fontSize="11.5" fill={C.dim}>{fmt(t)}</text></g>)}
       {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="11.5" fill={OD_B}>{targetLabel}</text></g>}
       {pts.length > 1 && <path d={`${d} L${pts[pts.length-1][0]} ${y(min)} L${pts[0][0]} ${y(min)}Z`} fill={`url(#${gid})`}/>}
       {pts.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>}
       {hi >= 0 && <line x1={x(hi)} x2={x(hi)} y1={y(vals[hi])} y2={y(min)} stroke={color} strokeWidth="1" strokeDasharray="2 3"/>}
-      {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#141821" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
-      {pill && <g><rect x={px-pw/2} y={y(vals[hi])-29} width={pw} height="20" rx="10" fill="#0F131B" stroke={color}/><text x={px} y={y(vals[hi])-15} textAnchor="middle" fontSize="11.5" fontWeight="700" fill="#E6EAF1">{pill}</text></g>}
-      {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="11.5" fill="#A3ADBD">{l}</text> : null)}
+      {vals.map((v, i) => v == null ? null : <circle key={i} cx={x(i)} cy={y(v)} r={i === hi ? 5.5 : 3} fill={i === hi ? "#fff" : color} stroke={color} strokeWidth={i === hi ? 2.5 : 0}/>)}
+      {pill && <g><rect x={px-pw/2} y={y(vals[hi])-29} width={pw} height="20" rx="10" fill="#fff" stroke={color}/><text x={px} y={y(vals[hi])-15} textAnchor="middle" fontSize="11.5" fontWeight="700" fill={C.text}>{pill}</text></g>}
+      {labels.map((l, i) => l ? <text key={i} x={x(i)} y={H-8} textAnchor="middle" fontSize="11.5" fill={C.dim}>{l}</text> : null)}
       {onSel && vals.map((v, i) => <rect key={"h" + i} x={x(i) - step/2} y={T - 10} width={step} height={H - T - B + 10} fill="transparent" style={{ cursor: "pointer" }}
         onMouseEnter={() => onSel(i)} onClick={() => onSel(i)}><title>{labels[i] || ""}</title></rect>)}
     </svg>
@@ -45993,11 +46084,11 @@ function OdHBars({ rows, max, empty }) {
     </div>
   );
 }
-function OdItem({ color, icon, tag, title, sub, when, onClick }) {
+function OdItem({ color, icon, tag, tagColor, title, sub, when, onClick }) {
   return (
     <button type="button" className="od-item" onClick={onClick} disabled={!onClick}>
       <span className="th" style={{ "--c": color }}><Icon name={icon} size={16} color={color}/></span>
-      <span className="tx"><em style={{ color }}>{tag}</em><b>{title}</b>{sub ? <small>{sub}</small> : null}</span>
+      <span className="tx"><em style={{ color: tagColor || color }}>{tag}</em><b>{title}</b>{sub ? <small>{sub}</small> : null}</span>
       {when ? <span className="when">{when}</span> : null}
       {onClick ? <span className="chev"><Icon name="chevronRight" size={14}/></span> : null}
     </button>
@@ -46050,52 +46141,57 @@ function odJobInfo(j, now) {
     if (!it || it.voided || it.done) return;
     const at = odDate(it.addedAtTs || it.addedAt) || (/^\d{13}$/.test(String(it.id || "")) ? new Date(+it.id) : null);
     punch.push({ text: odText(it.text) || "(no text)", phase: ph, room: (ctx && ctx.roomName) || "", who: it.assignedTo || "",
-      age: at ? Math.max(0, Math.floor((now - at) / OD_DAY)) : null, serious: it.severity === "serious", waiting: !!it.waiting, job: j });
+      age: at ? Math.max(0, Math.floor((now - at) / OD_DAY)) : null, serious: it.severity === "serious", waiting: !!it.waiting, waitingOn: odText(it.waitingOn || ""), job: j });
   }));
   const cos = (j.changeOrders || []).filter(Boolean);
   const openCos = cos.filter(co => !["completed","converted","denied"].includes(co.coStatus || "") && !coIsConverted(co, j.returnTrips));
   const rts = (j.returnTrips || []).filter(Boolean);
   const openRts = rts.filter(rt => !rt.signedOff && rt.rtStatus !== "complete");
-  // The Pass/Fail buttons log an attempt on every tap and leave it when the
-  // result is cleared: drop back-to-back repeats and a trailing attempt whose
-  // phase result is now blank, so counts match what really happened.
-  const realAtts = (list, result, ph) => {
-    const out = [];
-    (list || []).forEach(a => { if (!a || !a.result) return; const p = out[out.length - 1]; if (p && p.result === a.result && p.date === a.date) return; out.push({ ...a, ph }); });
-    if (!result && out.length) out.pop();
-    return out;
-  };
-  const atts = [...realAtts(j.roughInspectionAttempts, j.roughInspectionResult, "Rough"), ...realAtts(j.finalInspectionAttempts, j.finalInspectionResult, "Final")]
+  // Questions still waiting on an answer (v542 "Open questions").
+  const questions = [];
+  [["roughQuestions","Rough"],["finishQuestions","Finish"]].forEach(([k, ph]) => {
+    const v = j[k], lists = Array.isArray(v) ? [v] : v && typeof v === "object" ? Object.values(v).filter(Array.isArray) : [];
+    lists.forEach(list => list.forEach(q => {
+      if (!q || q.deleted || q.done || q.answeredAt) return;
+      const at = odDate(q.addedAt);
+      questions.push({ text: odText(q.question) || "(no text)", ph, who: q.addedBy || "", forWho: q.for || "", at, age: at ? Math.max(0, Math.floor((now - at) / OD_DAY)) : null, job: j });
+    }));
+  });
+  const atts = [...odRealAtts(j.roughInspectionAttempts, j.roughInspectionResult, "Rough"), ...odRealAtts(j.finalInspectionAttempts, j.finalInspectionResult, "Final")]
     .filter(a => a && a.result).map(a => ({ ...a, _at: odDate(a.date) })).sort((a, b) => (b._at || 0) - (a._at || 0));
   const failOpen = [];
   if (j.roughInspectionResult === "fail") (j.roughInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Rough", text: odText(it.text || it) }); });
   if (j.finalInspectionResult === "fail") (j.finalInspectionItems || []).forEach(it => { if (it && !it.done) failOpen.push({ ph: "Final", text: odText(it.text || it) }); });
-  return { punch, cos, openCos, rts, openRts, atts, failOpen };
+  return { punch, cos, openCos, rts, openRts, atts, failOpen, questions };
 }
 // Where the work actually is (v532). The Job Board's STAGE_SECTIONS sort by
 // the first match, so a job whose prep checklist isn't fully ticked sits in
 // "Pre Job Prep" even with rough underway. Here the crew's own rough/finish
 // status wins; unfinished prep is a separate flag, and a start date that has
 // passed without the status moving gets its own honest label.
+// `short` feeds the Active jobs caption (v542). "roughFail" (v542): rough marked
+// complete but its rough inspection failed with no pass since — it used to read
+// "Rough done, finish next" and get asked for a finish date.
 const OD_PHASES = [
-  { key: "finish",     label: "Finish in progress",       color: "#66A8FF" },
-  { key: "finishDue",  label: "Finish start date passed", color: "#F28BA8" },
-  { key: "finishHold", label: "Finish on hold",           color: "#9FB0C8" },
-  { key: "between",    label: "Rough done, finish next",  color: "#5CC8E0" },
-  { key: "rough",      label: "Rough in progress",        color: "#F08A55" },
-  { key: "roughDue",   label: "Rough start date passed",  color: "#F28BA8" },
-  { key: "roughHold",  label: "Rough on hold",            color: "#9FB0C8" },
-  { key: "roughNext",  label: "Rough not started",        color: "#A3ADBD" },
-  { key: "noStatus",   label: "No status set",            color: "#9AA4B6" },
-  { key: "prep",       label: "Job prep",                 color: "#4FBFB8" },
-  { key: "commPrecon", label: "Pre-Con",                  color: "#4FBFB8" },
-  { key: "commReady",  label: "Ready to start",           color: "#A3ADBD" },
-  { key: "commInProgress", label: "In progress",          color: "#F08A55" },
-  { key: "commHold",   label: "On hold",                  color: "#9FB0C8" },
-  { key: "commCloseout", label: "Closeout",               color: "#B1A4F4" },
-  { key: "quick",      label: "Quick job",                color: "#B1A4F4" },
-  { key: "ped",        label: "Temp ped",                 color: "#B1A4F4" },
-  { key: "complete",   label: "Complete",                 color: "#45D483" },
+  { key: "finish",     label: "Finish in progress",       short: "Finish",      color: OD_A },
+  { key: "finishDue",  label: "Finish start date passed", short: "Finish late", color: OD_WARN },
+  { key: "finishHold", label: "Finish on hold",           short: "Hold",        color: OD_SLATE },
+  { key: "roughFail",  label: "Rough inspection failed",  short: "Failed insp", color: OD_R },
+  { key: "between",    label: "Rough done, finish next",  short: "Between",     color: OD_CYAN },
+  { key: "rough",      label: "Rough in progress",        short: "Rough",       color: OD_O },
+  { key: "roughDue",   label: "Rough start date passed",  short: "Rough late",  color: OD_WARN },
+  { key: "roughHold",  label: "Rough on hold",            short: "Hold",        color: OD_SLATE },
+  { key: "roughNext",  label: "Rough not started",        short: "Not started", color: OD_GREY },
+  { key: "noStatus",   label: "No status set",            short: "No status",   color: "#7A8394" },
+  { key: "prep",       label: "Job prep",                 short: "Prep",        color: "#2F8A84" },
+  { key: "commPrecon", label: "Pre-Con",                  short: "Pre-Con",     color: "#2F8A84" },
+  { key: "commReady",  label: "Ready to start",           short: "Ready",       color: OD_GREY },
+  { key: "commInProgress", label: "In progress",          short: "In progress", color: OD_O },
+  { key: "commHold",   label: "On hold",                  short: "Hold",        color: OD_SLATE },
+  { key: "commCloseout", label: "Closeout",               short: "Closeout",    color: OD_P },
+  { key: "quick",      label: "Quick job",                short: "Quick",       color: OD_P },
+  { key: "ped",        label: "Temp ped",                 short: "Ped",         color: OD_P },
+  { key: "complete",   label: "Complete",                 short: "Done",        color: OD_G },
 ];
 const OD_PHASE = Object.fromEntries(OD_PHASES.map((p, i) => [p.key, { ...p, i }]));
 const OD_NOT_STARTED = ["", "waiting_date", "date_confirmed", "scheduled"];
@@ -46142,6 +46238,13 @@ function odPhase(j, today) {
   if (fs === "inprogress") return ph("finish", parseStage(j.finishStage) ? `${parseStage(j.finishStage)}%` : "");
   if (fs === "waiting") return ph("finishHold");
   if (rs === "complete") {
+    // v542: rough marked done but its inspection failed with no pass since.
+    if (j.roughInspectionResult === "fail") {
+      const lastF = odRealAtts(j.roughInspectionAttempts, j.roughInspectionResult, "Rough").filter(a => a.result === "fail").map(a => odDate(a.date)).filter(Boolean).sort((a, b) => b - a)[0] || null;
+      const tg = odDate(j.fourWayTargetDate);
+      const rebook = tg && (!lastF || localYmd(tg) > localYmd(lastF)) ? tg : null;
+      return { ...ph("roughFail", `${lastF ? "Failed " + odShort(lastF) : "Failed"} · ${rebook ? "re-inspect " + odShort(rebook) : "re-inspect not booked"}`), rebook };
+    }
     const at = ["scheduled", "date_confirmed"].includes(fs) && due(j.finishProjectedStart);
     if (at) return ph("finishDue", `Set for ${odShort(at)}, finish status not moved to In Progress`);
     return ph("between", when(j.finishProjectedStart) ? `Finish ${when(j.finishProjectedStart, j.finishStartConfirmed)}` : fs === "waiting_date" || !fs ? "Waiting on a finish date" : "");
@@ -46162,8 +46265,344 @@ const OD_QC_BUCKET = { failed: "failed, needs fixing", overdue: "walk date passe
 const odQcText = (v) => v ? (getStatusDef(QC_STATUSES, v).label || v).replace(/^QC /, "") : "";
 const odStatusLabel = (v) => { const s = ROUGH_STATUSES.find(x => x.value === (v || "")); return v ? ((s && s.label) || v) : "Not set"; };
 const odPlural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const odDaysBetween = (a, b) => Math.round((new Date(b.getFullYear(), b.getMonth(), b.getDate()) - new Date(a.getFullYear(), a.getMonth(), a.getDate())) / OD_DAY);
 
-function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob }) {
+// ── The dashboard's numbers (v542) ───────────────────────────────────────────
+// Everything OfficeDash shows, from what App already holds in memory plus the
+// settings docs the tabs read (crewPTO, simproTotals). Pure — no React, no
+// Firestore — so scripts/odash-model-test.js runs it on real job shapes.
+// v542 (information audit 2026-10-14, docs/visual-audit-2026-10-09/
+// DASHBOARD-INFO-AUDIT-2026-10-14.md in the command-center repo): one foreman
+// list for every tab, one reading of return trips, open questions, failed
+// inspections grouped with their re-inspection, money from Simpro, and the
+// Needs attention lines the audit asked for.
+function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto = [], simTotals = null, now = new Date() }) {
+  const today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const secs = OD_PHASES;
+  // A record with no name is an empty shell, not a job (the app's own lists skip them too).
+  const allLive = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote" && String(j.name || "").trim());
+  const phaseById = {};
+  allLive.forEach(j => { try { phaseById[j.id] = odPhase(j, today); } catch (e) { phaseById[j.id] = null; } });
+  const secOf = (j) => (j && phaseById[j.id]) || null;
+  const isDone = (j) => { const s = secOf(j); return !!s && s.key === "complete"; };
+
+  // Team first, so every tab shares one foreman list.
+  const accRank = { admin: 0, manager: 1, standard: 2 };
+  const staff = []; const staffKey = new Set();
+  (users || []).filter(u => u && u.active !== false && getAccess(u) !== "contractor" && String(u.name || "").trim())
+    .sort((a, b) => (accRank[getAccess(a)] ?? 9) - (accRank[getAccess(b)] ?? 9))
+    .forEach(u => { const k = String(u.name).trim().toLowerCase(); if (!staffKey.has(k)) { staffKey.add(k); staff.push(u); } });
+  const titleOf = (u) => u.title || (["admin","justin","jeromy"].includes(u.role) ? "admin" : ["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+  // A foreman is anyone titled foreman or jr foreman on Team Members, or anyone on
+  // the team named as foreman on an active job. Blank, Unassigned, TBD and Paul
+  // (SBV2_EXCLUDE_NAME) never are; a job on one of those, or on someone no longer
+  // on the team, is a job with no foreman.
+  const roster = [];
+  const addR = (n) => { const s = String(n || "").trim(); if (s && !SBV2_EXCLUDE_NAME(s) && !roster.some(x => sameName(x, s))) roster.push(s); };
+  staff.forEach(u => { if (["foreman", "jrforeman"].includes(titleOf(u))) addR(u.name); });
+  allLive.forEach(j => { if (isDone(j)) return; const u = staff.find(x => sameName(x.name, j.foreman)); if (u) addR(u.name); });
+  roster.sort((a, b) => a.localeCompare(b));
+  const fmName = (j) => (j && roster.find(n => sameName(n, j.foreman))) || "";
+  const live = foreman === OD_NOFM ? allLive.filter(j => !fmName(j)) : foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
+  const up = (upcoming || []).filter(u => u && (!foreman || (foreman === OD_NOFM ? !roster.some(n => sameName(n, u.foreman)) : sameName(u.foreman, foreman))));
+  const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
+  const active = live.filter(j => !isDone(j));
+  const allActive = allLive.filter(j => !isDone(j));
+  const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
+  const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
+
+  const lastWork = {};
+  const events = odBuildEvents(live, now, lastWork);
+  const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
+  const inRange = events.filter(e => e.at >= odAddDays(t0, -(range - 1)));
+  const evToday = events.filter(e => localYmd(e.at) === today);
+  const yest = localYmd(odAddDays(t0, -1));
+  const evYest = events.filter(e => localYmd(e.at) === yest);
+  const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = odAddDays(t0, -i), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
+
+  const info = {}, lastAct = {};
+  live.forEach(j => { info[j.id] = odJobInfo(j, now); lastAct[j.id] = lastWork[j.id] || null; });
+  const sched = odBuildSchedule(live, up, today);
+  const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
+
+  // Money (Simpro job totals incl. tax, by Simpro number). Job value is the proxy
+  // for a change order's worth: COs carry no amount in the app.
+  const byNo = (simTotals && simTotals.byNo) || {};
+  const moneyOf = (j) => { const k = String((j && j.simproNo) || "").trim(); const t = k && byNo[k]; return t && typeof t.total === "number" ? t.total : null; };
+
+  const openPunch = active.flatMap(j => info[j.id].punch);
+  const openCOs = live.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
+  const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
+  const coBy = { needs_sending: 0, pending: 0, approved: 0, scheduled: 0, other: 0 };
+  openCOs.forEach(x => { const k = x.co.coStatus || ""; coBy[["needs_sending","pending","approved","scheduled"].includes(k) ? k : "other"]++; });
+  const coOnDone = openCOs.filter(x => isDone(x.job));
+  const coAge = (co) => odDate(co.submittedAt || co.createdAt || co.date);
+  const openRTs = live.flatMap(j => info[j.id].openRts.map(rt => ({ rt, job: j, ri: odRtInfo(rt, t0) })));
+  const rtSum = { open: openRTs.length, late: 0, booked: 0, tobook: 0, none: 0 };
+  openRTs.forEach(x => { rtSum[x.ri.k]++; });
+  const rtOrder = { late: 0, tobook: 1, none: 2, booked: 3 };
+  openRTs.sort((a, b) => (rtOrder[a.ri.k] - rtOrder[b.ri.k]) || ((b.ri.late || 0) - (a.ri.late || 0)) || ((a.ri.at || 0) - (b.ri.at || 0)));
+  const openQs = active.flatMap(j => info[j.id].questions).sort((a, b) => (b.age ?? -1) - (a.age ?? -1));
+  // Same rows and buckets as the app's QC tracker (qcWalkRows / qcBucketOf),
+  // with the date compared as a real date.
+  const qcRows = []; let qcAll = []; try { qcAll = qcWalkRows(active); } catch (e) {}
+  qcAll.forEach(r => {
+    const at = odDate(r.date), st = r.status === "scheduled" && at && localYmd(at) < today ? (r.started ? "overdue" : "needs") : qcBucketOf({ ...r, date: "" }, today);
+    if (["failed","overdue","needs","scheduled"].includes(st)) qcRows.push({ job: r.job, phase: r.phase + " QC", st, at });
+  });
+  const qcOrder = { failed: 0, overdue: 1, needs: 2, scheduled: 3 }; qcRows.sort((a, b) => qcOrder[a.st] - qcOrder[b.st]);
+  const byForeman = {};
+  const fmOf = (j) => fmName(j) || "No foreman";
+  active.forEach(j => { const f = fmOf(j); byForeman[f] = byForeman[f] || { open: 0, closed: 0, jobs: 0, items: [] }; byForeman[f].jobs++; byForeman[f].open += info[j.id].punch.length; byForeman[f].items.push(...info[j.id].punch); });
+  events.forEach(e => { if (e.type === "punch" && e.tone === "good" && now - e.at < 30*OD_DAY) { const f = fmOf(e.job); if (byForeman[f]) byForeman[f].closed++; } });
+
+  // Inspections
+  const firsts = [], allAtts = [];
+  live.forEach(j => info[j.id].atts.forEach(a => { if (a._at) allAtts.push({ ...a, job: j }); }));
+  live.forEach(j => ["Rough","Final"].forEach(ph => {
+    const atts = info[j.id].atts.filter(a => a.ph === ph && a._at).sort((a, b) => a._at - b._at);
+    if (atts.length) firsts.push({ job: j, ph, at: atts[0]._at, pass: atts[0].result === "pass" });
+  }));
+  allAtts.sort((a, b) => b._at - a._at);
+  const fails = allAtts.filter(a => a.result === "fail");
+  const in90 = firsts.filter(f => now - f.at < 90*OD_DAY);
+  const fp90 = in90.length ? Math.round(100 * in90.filter(f => f.pass).length / in90.length) : null;
+  const insp30 = allAtts.filter(a => now - a._at < 30*OD_DAY);
+  const months = []; for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); const mf = firsts.filter(f => f.at.getFullYear() === m.getFullYear() && f.at.getMonth() === m.getMonth()); months.push({ m, label: m.toLocaleDateString([], { month: "short" }), n: mf.length, pass: mf.filter(f => f.pass).length, v: mf.length ? Math.round(100 * mf.filter(f => f.pass).length / mf.length) : null, list: mf }); }
+  // Failed inspections, one row per job and phase, with what happened since:
+  // passed later, re-inspection booked, or not re-booked. Items fall back to the
+  // job's live list when the Fail tap came before the items were typed.
+  const failGroups = [];
+  live.forEach(j => ["Rough","Final"].forEach(ph => {
+    const atts = info[j.id].atts.filter(a => a.ph === ph && a._at).sort((a, b) => a._at - b._at);
+    const fl = atts.filter(a => a.result === "fail"); if (!fl.length) return;
+    const lastFail = fl[fl.length - 1];
+    const passAfter = atts.find(a => a.result === "pass" && a._at >= lastFail._at) || null;
+    const target = odDate(ph === "Rough" ? j.fourWayTargetDate : j.finalInspectionTargetDate);
+    const rebook = !passAfter && target && localYmd(target) > localYmd(lastFail._at) ? target : null;
+    const snap = (lastFail.items || []).map(it => odText(it && (it.text || it))).filter(Boolean);
+    const liveItems = info[j.id].failOpen.filter(x => x.ph === ph).map(x => x.text).filter(Boolean);
+    const items = snap.length ? snap : liveItems;
+    const stillFail = (ph === "Rough" ? j.roughInspectionResult : j.finalInspectionResult) === "fail";
+    failGroups.push({ job: j, ph, n: fl.length, first: fl[0]._at, last: lastFail._at, passAfter: passAfter ? passAfter._at : null, rebook, items, noList: !items.length && stillFail, by: lastFail.by || "" });
+  }));
+  failGroups.sort((a, b) => b.last - a.last);
+  const failOpenG = failGroups.filter(g => !g.passAfter);
+  const notRebooked = failOpenG.filter(g => !g.rebook);
+  const failStatus = (g) => g.passAfter ? `passed ${odShort(g.passAfter)}` : g.rebook ? `re-inspect ${odDow(g.rebook)} ${odShort(g.rebook)}` : "not re-booked";
+  const failGroupOf = {}; failGroups.forEach(g => { failGroupOf[`${g.job.id}|${g.ph}`] = g; });
+
+  // Schedule
+  const overdue = sched.filter(s => s.at < t0 && s.type !== "start");
+  const startsPast = sched.filter(s => s.at < t0 && s.type === "start");
+  const lateOf = (s) => Math.max(0, odDaysBetween(s.at, t0));
+  const needsDate = [];
+  const needsBy = (j, ph) => { const a = odDate(j[ph + "NeedsByStart"]), b = odDate(j[ph + "NeedsByEnd"]); return a ? `GC needs it ${odShort(a)}${b ? "–" + odShort(b) : ""}` : ""; };
+  active.forEach(j => {
+    if (j.quickJob || j.tempPed) return;
+    const s = secOf(j);
+    if (s && s.stale) return;                 // work already logged: the status-behind line owns it
+    const rs = effRS(j), fs = effFS(j);
+    const row = (what, ph) => needsDate.push({ job: j, what, by: needsBy(j, ph), last: lastAct[j.id] || null });
+    if (["","waiting_date"].includes(rs) && !j.roughProjectedStart) row("Rough start", "rough");
+    else if (s && s.key === "roughFail") { if (!s.rebook) row("Rough re-inspection", "rough"); }
+    else if (rs === "complete" && ["","waiting_date"].includes(fs) && !j.finishProjectedStart) row("Finish start", "finish");
+    else if (parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult && rs !== "complete") row("Rough inspection", "rough");
+  });
+  needsDate.sort((a, b) => (a.last ? a.last.getTime() : 0) - (b.last ? b.last.getTime() : 0));
+  up.forEach(u => { if (!u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start", by: "", last: null }); });
+  const finishStartOf = {}; sched.forEach(s => { if (s.type === "start" && s.label === "Finish start" && s.job && s.at >= t0 && !finishStartOf[s.job.id]) finishStartOf[s.job.id] = s; });
+  const scans = active.filter(j => matterportScanNeeded(j)).sort((a, b) => parseStage(b.roughStage) - parseStage(a.roughStage));
+  const scanInfo = {};
+  scans.forEach(j => {
+    const bookedAt = j.matterportStatus === "scheduled" ? odDate(j.matterportStatusDate) : null;
+    const rp = parseStage(j.roughStage), done = effRS(j) === "complete" || rp >= 100;
+    const fsS = finishStartOf[j.id] || null;
+    const inspLate = overdue.find(s => s.job && s.job.id === j.id && s.type === "insp") || null;
+    const urgent = !bookedAt && (done || (fsS && fsS.at < odAddDays(t0, 14)));
+    scanInfo[j.id] = { bookedAt, done, fsS, inspLate, urgent,
+      booking: bookedAt ? `booked ${odDow(bookedAt)} ${odShort(bookedAt)}` : "not booked",
+      state: [done ? `Rough done${lastAct[j.id] ? ", last work " + odAgo(lastAct[j.id], now) : ""}` : `Rough ${rp}%`, fsS && `finish starts ${odDow(fsS.at)} ${odShort(fsS.at)}`, inspLate && `inspection ${lateOf(inspLate)} d overdue`].filter(Boolean).join(" · ") };
+  });
+  // An inspection booked within a week on a job well short of ready.
+  const notReady = sched.filter(s => s.type === "insp" && s.job && s.at >= t0 && s.at < odAddDays(t0, 7)).filter(s => {
+    const fin = /Final/.test(s.label), pct = parseStage(fin ? s.job.finishStage : s.job.roughStage), pn = info[s.job.id].punch.length;
+    return pct < 90 || pn > 10;
+  });
+  const notReadyIds = new Set(notReady.map(s => s.job.id));
+
+  // Needs attention
+  const attnAll = [
+    { k: "stale", label: "Status is behind the work logged", color: OD_WARN, icon: "alertTriangle",
+      rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_WARN })) },
+    { k: "invoice", label: "Ready to invoice", color: OD_G, icon: "dollarSign",
+      rows: live.filter(j => j.readyToInvoice && !j.invoiceDismissed).map(j => ({ title: j.name, sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo].filter(Boolean).join(" · "), right: odMoney(moneyOf(j)), money: moneyOf(j), job: j, color: OD_G }))
+        .sort((a, b) => (b.money || 0) - (a.money || 0)) },
+    { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_R, icon: "changeorders",
+      rows: openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: coAge(x.co) })).filter(x => x.at && now - x.at > 60*OD_DAY)
+        .map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}${moneyOf(x.job) != null ? ` · job value ${odMoney(moneyOf(x.job))}` : ""}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, money: moneyOf(x.job), age: now - x.at, job: x.job, color: OD_B }))
+        .sort((a, b) => ((b.money || 0) - (a.money || 0)) || (b.age - a.age)) },
+    { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_WARN, icon: "checkCircle",
+      rows: overdue.filter(s => s.type === "insp" && now - s.at > 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, right: `${lateOf(s)} d`, job: s.job, color: OD_WARN })) },
+    { k: "overdue", label: "Inspection date passed, no result logged", color: OD_R, icon: "alertTriangle",
+      rows: overdue.filter(s => s.type === "insp" && now - s.at <= 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, right: `${lateOf(s)} d`, job: s.job, color: OD_R })) },
+    { k: "failNoList", label: "Failed inspection with no correction list", color: OD_R, icon: "x",
+      rows: failOpenG.filter(g => g.noList).map(g => ({ title: g.job.name, sub: `${g.ph} failed ${odShort(g.last)} · no items entered, ask ${g.job.foreman || "the foreman"}`, job: g.job, color: OD_R })) },
+    { k: "scanLate", label: "Pre-drywall scan not logged", color: OD_R, icon: "camera",
+      rows: scans.filter(j => scanInfo[j.id].urgent).map(j => ({ title: j.name, sub: `${scanInfo[j.id].state} · call ${j.foreman || "the foreman"}`, job: j, color: OD_R })) },
+    { k: "notReady", label: "Inspection booked, job not ready", color: OD_O, icon: "checkCircle",
+      rows: notReady.map(s => ({ title: s.name, sub: `${s.label} ${odDow(s.at)} ${odShort(s.at)} · ${/Final/.test(s.label) ? "finish" : "rough"} ${parseStage(/Final/.test(s.label) ? s.job.finishStage : s.job.roughStage)}% · ${info[s.job.id].punch.length} open punch`, job: s.job, color: OD_O })) },
+    { k: "startsPast", label: "Start date passed, phase not started", color: OD_O, icon: "flag",
+      rows: startsPast.map(s => ({ title: s.name, sub: `${s.label} was ${s.confirmed ? "set" : "projected"} for ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+    { k: "rtLate", label: "Return trips past their date", color: OD_R, icon: "returntrips",
+      rows: openRTs.filter(x => x.ri.k === "late").map(x => ({ title: x.job.name, sub: `${x.ri.text}${odText(x.rt.scope) ? " · " + odText(x.rt.scope) : ""}`, right: `${x.ri.late} d`, job: x.job, color: OD_R })) },
+    { k: "failOpen", label: "Failed inspection items not fixed", color: OD_R, icon: "x",
+      rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
+    { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
+      rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+    { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
+      rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
+    { k: "rtNoDate", label: "Return trips with no date", color: OD_WARN, icon: "returntrips",
+      rows: openRTs.filter(x => x.ri.k === "none").map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_WARN })) },
+    { k: "needsDate", label: "Needs a date", color: OD_WARN, icon: "calendar",
+      rows: needsDate.filter(n => n.job).map(n => ({ title: n.job.name, sub: [n.what, n.job.foreman || "No foreman", n.last ? `last work ${odAgo(n.last, now)}` : "no work logged", n.by].filter(Boolean).join(" · "), job: n.job, color: OD_WARN })) },
+    { k: "quiet", label: "In progress, no update in 5+ days", color: OD_WARN, icon: "clock",
+      rows: active.filter(j => secOf(j) && OD_UNDERWAY.includes(secOf(j).key) && !secOf(j).stale && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
+        .sort((a, b) => (lastAct[a.id] || 0) - (lastAct[b.id] || 0))
+        .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_WARN })) },
+    { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
+      rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
+  ];
+  const attnBy = {}; attnAll.forEach(a => { attnBy[a.k] = a; });
+  const sumMoney = (rows) => { const seen = new Set(); let s = 0, n = 0; rows.forEach(r => { if (r.job && !seen.has(r.job.id)) { seen.add(r.job.id); n++; if (r.money != null) s += r.money; } }); return { s, n }; };
+  { const m = sumMoney(attnBy.invoice.rows); if (m.s) attnBy.invoice.extra = odMoney(m.s); }
+  { const m = sumMoney(attnBy.coOld.rows); if (attnBy.coOld.rows.length) attnBy.coOld.extra = `on ${odPlural(m.n, "job")}${m.s ? `, job value ${odMoney(m.s)}` : ""}`; }
+  const attn = attnAll.filter(a => a.rows.length);
+  // v538: worst first — red (overdue, money at risk), then orange (dates), gold (stale), blue (to do), green (money in).
+  const ATTN_SEV = { [OD_R]: 0, [OD_O]: 1, [OD_WARN]: 2, [OD_B]: 3, [OD_G]: 4 };
+  attn.sort((a, b) => (ATTN_SEV[a.color] ?? 5) - (ATTN_SEV[b.color] ?? 5));
+
+  // People
+  const weekEnd = localYmd(odAddDays(t0, 6));
+  const ptoList = (pto || []).filter(p => p && p.name && p.start);
+  const ptoWeek = ptoList.filter(p => (p.end || p.start) >= today && p.start <= weekEnd).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+  const offToday = (name) => ptoList.find(p => sameName(p.name, name) && p.start <= today && (p.end || p.start) >= today) || null;
+  const people = staff.map(u => {
+    const mine = events.filter(e => e.who && sameName(e.who, u.name));
+    let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
+    const openedToday = new Set();
+    allLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && localYmd(at) === today) openedToday.add(j.id); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
+    const todayMine = mine.filter(e => localYmd(e.at) === today);
+    const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(odAddDays(t0, -i)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
+    const jobsOn = allActive.filter(j => sameName(j.foreman, u.name) || sameName(j.lead, u.name));
+    const off = offToday(u.name);
+    // active today · on in the last 3 days · approved off · not seen in 30 days ·
+    // quiet 3–30 days while foreman or lead on an active job · quiet with no job.
+    const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : off ? "off" : !last || now - last >= 30*OD_DAY ? "gone" : jobsOn.length ? "quiet" : "idle";
+    return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set([...todayMine.map(e => e.job.id), ...openedToday]).size, openedN: openedToday.size, days7, status, role: getAccess(u), title: titleOf(u),
+      lastJob: mine.length ? mine[0].job.name : "", jobsOn, off };
+  }).sort((a, b) => (b.todayN - a.todayN) || ((b.last || 0) - (a.last || 0)));
+  // Two people with the same first name show a last initial everywhere first names are used.
+  const firstCount = {}; people.forEach(p => { const f = odFirst(p.name).toLowerCase(); firstCount[f] = (firstCount[f] || 0) + 1; });
+  const shortName = (name) => { const parts = String(name || "").trim().split(/\s+/); const f = parts[0] || ""; return firstCount[f.toLowerCase()] > 1 && parts[1] ? `${f} ${parts[1][0].toUpperCase()}` : f; };
+  const teamN = people.filter(p => !["gone", "off"].includes(p.status)).length;
+  const foremenP = roster.map(n => people.find(p => sameName(p.name, n))).filter(Boolean);
+  const noForemanJobs = active.filter(j => !j.quickJob && !j.tempPed && !fmName(j));
+  // Why a job has no foreman, by the name on it — the decision is Koy's: reassign
+  // the jobs, or put the person back on the team (2026-10-15: Vasa Mataafa's team
+  // record is deactivated while he is still named on 11 active jobs).
+  const allUsers = (users || []).filter(u => u && String(u.name || "").trim());
+  const whyNoFm = (name) => {
+    const n = String(name || "").trim();
+    if (!n || /^unassigned$/i.test(n)) return "no foreman set";
+    if (/\btbd\b/i.test(n) || /^to be determined$/i.test(n)) return "foreman TBD";
+    const u = allUsers.find(x => sameName(x.name, n));
+    if (!u) return "not on the team list";
+    if (u.active === false) return "deactivated on the team list";
+    if (getAccess(u) === "contractor") return "outside contractor";
+    return "not a crew foreman";
+  };
+  const noFmGroups = [];
+  noForemanJobs.forEach(j => { const n = String(j.foreman || "").trim(); const k = /^unassigned$/i.test(n) ? "" : n; let g = noFmGroups.find(x => sameName(x.name, k) || (!x.name && !k)); if (!g) { g = { name: k, why: whyNoFm(k), jobs: [] }; noFmGroups.push(g); } g.jobs.push(j); });
+  noFmGroups.sort((a, b) => b.jobs.length - a.jobs.length);
+  const noFmText = noFmGroups.map(g => `${g.jobs.length} ${g.name ? "on " + g.name : "unassigned"}${g.name ? ` (${g.why.replace(" on the team list", "")})` : ""}`).join(" · ");
+  // Names on active jobs that aren't on the roster — still filterable.
+  const offTeam = [...new Set(allActive.filter(j => !fmName(j)).map(j => String(j.foreman || "").trim()).filter(n => n && !/^unassigned$/i.test(n)))].sort((a, b) => a.localeCompare(b));
+  const troubleOf = (name) => {
+    const m = (k) => (attnBy[k] ? attnBy[k].rows.filter(r => r.job && sameName(r.job.foreman, name)).length : 0);
+    const t = { quiet: m("quiet"), rt: m("rtLate"), insp: m("overdue") + m("inspOld") };
+    t.total = t.quiet + t.rt + t.insp;
+    t.text = [t.quiet && `${odPlural(t.quiet, "job")} quiet 5+ d`, t.rt && `${odPlural(t.rt, "return trip")} past date`, t.insp && `${odPlural(t.insp, "inspection")} unlogged`].filter(Boolean).join(" · ");
+    return t;
+  };
+  const openNeeds = (needs || []).filter(n => n && !n.voided && needIsOpen(n, today));
+  const load = {}; openNeeds.forEach(n => { const a = needAssignee(n) || "Unassigned"; (load[a] = load[a] || { n: 0, urgent: 0, list: [] }); load[a].n++; load[a].list.push(n); if (needPriority(n) === "urgent") load[a].urgent++; });
+  const timeOff = openNeeds.filter(n => n.timeoffId);
+
+  const tally = (list) => { const m = {}; list.forEach(e => { (m[e.job.id] = m[e.job.id] || { job: e.job, n: 0, ev: [] }); m[e.job.id].n++; m[e.job.id].ev.push(e); }); return Object.values(m).sort((a, b) => b.n - a.n); };
+  const busyToday = tally(evToday), busyRange = tally(inRange);
+  const busy = busyToday[0] ? { ...busyToday[0], when: "today" } : busyRange[0] ? { ...busyRange[0], when: `last ${range} days` } : null;
+  if (busy) { const bj = busy.job; busy.qs = (info[bj.id] || { questions: [] }).questions.length; busy.punch = (info[bj.id] || { punch: [] }).punch.length; busy.prep = prepOpen(bj); }
+
+  return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
+    openPunch, openCOs, coWaiting, coBy, coOnDone, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
+    overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
+    people, teamN, shortName, foremenP, noForemanJobs, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
+}
+
+// Plan intake findings → what still waits on Koy (v542). An unmatched plan or walk
+// waits until it is filed, dismissed or matched — the server stamps `resolved`,
+// and a plan the Routine (or anyone) filed later leaves a filed_<item> finding —
+// not until someone taps Seen. The other kinds (possible CO, two folders, errors)
+// wait until seen, as before.
+function odPlanModel(findings, now) {
+  const all = (findings || []).map(f => ({ ...f, _at: odDate(f.createdAt) }));
+  const ids = new Set(all.map(f => f.id));
+  const resolved = (f) => !!f.resolved
+    || (f.type === "unmatched_plan" && !!f.item && ids.has(`filed_${f.item}`))
+    || (f.type === "walk_unmatched" && ids.has(String(f.id || "").replace(/^walk_unmatched_/, "walk_job_")));
+  const cutoff = now.getTime() - 14*OD_DAY;
+  const fl = all.filter(f => f._at && f._at.getTime() >= cutoff);
+  const isWaiting = (f) => PLAN_NEEDS.includes(f.type) && (["unmatched_plan", "walk_unmatched"].includes(f.type) ? !resolved(f) : !f.seen);
+  const waiting = fl.filter(isWaiting).sort((a, b) => a._at - b._at);
+  const byNo = {};
+  waiting.forEach(f => [f.bestGuess, f.altGuess, f.number].forEach(v => { const n = String(v || "").replace(/^#/, "").trim(); if (/^\d+$/.test(n)) (byNo[n] = byNo[n] || []).includes(f) || byNo[n].push(f); }));
+  return { fl, waiting, isWaiting, resolved, byNo, oldest: waiting[0] || null };
+}
+
+// When each automated doc should have been made (local time) — "made Tue 6:02 AM"
+// vs "did not run Tue 6:00 AM" (v542). [day of week, hour, minute].
+const OD_DOC_DUE = { packet: [5, 5, 30], lead: [2, 6, 0], weekly: [2, 16, 0], foreman: [2, 16, 0], monday: [1, 15, 0] };
+// Which run stamp a doc reads (settings/autoDocRuns, written by the functions).
+const OD_DOC_RUN = { packet: "packet", lead: "lead", weekly: "weekly", foreman: "weekly" };
+function odLastDue(due, now) {
+  const [dw, h, m] = due;
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m);
+  d.setDate(d.getDate() - ((d.getDay() - dw + 7) % 7));
+  if (d > now) d.setDate(d.getDate() - 7);
+  return d;
+}
+function odDocStatus(x, { latestDocs, runs, packetAt, now }) {
+  const lt = x.latest && latestDocs && latestDocs[x.latest];
+  const doc = lt && lt.url ? lt : null;
+  const run = OD_DOC_RUN[x.k] && runs ? runs[OD_DOC_RUN[x.k]] : null;
+  const runAt = run && odDate(run.lastRunAt);
+  const made = [doc && odDate(doc.createdTime), run && run.ok !== false && runAt, x.k === "packet" && packetAt].filter(Boolean).sort((a, b) => b - a)[0] || null;
+  const due = OD_DOC_DUE[x.k] && odLastDue(OD_DOC_DUE[x.k], now);
+  const lookupFailed = !!(lt && lt.error === "no_access") || !!(lt && lt.error === "error");
+  if (run && run.ok === false && runAt && (!made || runAt >= made)) return { tone: "bad", made, due, doc, text: `last run failed ${odDow(runAt)} ${odShort(runAt)}: ${String(run.error || "error").slice(0, 80)}` };
+  // "Did not run" only with a run on record and none since the last due time;
+  // with nothing on record yet (stamps begin with v542) the card stays neutral.
+  if (due && now - due > 45*60*1000 && (!made || made < new Date(due.getTime() - 20*60*1000))) {
+    if (!made) return lookupFailed ? { tone: "warn", made, due, doc, text: "could not list the folder" } : { tone: "", made, due, doc, text: "no run recorded yet" };
+    return { tone: "bad", made, due, doc, missed: true, text: `did not run ${odDow(due)} ${odTime(due)} · last made ${odDow(made)} ${odShort(made)}` };
+  }
+  if (made) return { tone: "good", made, due, doc, text: `made ${odDow(made)} ${odShort(made)} · ${odTime(made)}` };
+  if (lookupFailed) return { tone: "warn", made, due, doc, text: "could not list the folder" };
+  return { tone: "", made, due, doc, text: "" };
+}
+
+function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
   const [tab, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
@@ -46187,10 +46626,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [jobsStage, setJobsStage] = useState("");
   const [jobsQ, setJobsQ] = useState("");
   const [planShow, setPlanShow] = useState("all");
+  const [runBusy, setRunBusy] = useState("");          // automated doc being run now (v542)
+  const [planBusy, setPlanBusy] = useState(false);     // "Not ours" in flight (v542)
   const [showAllDevices, setShowAllDevices] = useState(false);
   const [tick, setTick] = useState(0);
+  const [actLimit, setActLimit] = useState(200);
   useEffect(() => { const id = setInterval(() => setTick(t => t + 1), 5*60*1000); return () => clearInterval(id); }, []);
-  useEffect(() => { setChartSel(null); setActDay(""); }, [range, foreman]);
+  useEffect(() => { setChartSel(null); setActDay(""); setActLimit(200); }, [range, foreman]);
 
   // People tab: the device list (read once per visit, like Settings does).
   const [devices, setDevices] = useState(null);
@@ -46205,11 +46647,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     })();
     return () => { dead = true; };
   }, [tab]);
-  // Automations tab: plan-intake findings (live while the tab is open, same
-  // query and dry/test filter as the Today Plans card) and the appliance sheet.
+  // Plan-intake findings (live while a tab that shows them is open — v542 adds
+  // Overview's Needs you and the Jobs "plan waiting" tag; same query and
+  // dry/test filter as the Today Plans card) and the appliance sheet.
   const [findings, setFindings] = useState(undefined);   // undefined = loading, null = unreadable
+  const planTab = ["overview", "jobs", "cc"].includes(tab);
   useEffect(() => {
-    if (tab !== "cc") return;
+    if (!planTab) return;
     let unsub = null;
     try {
       unsub = onSnapshot(query(collection(db, "agentFindings"), orderBy("createdAt", "desc"), limit(250)),
@@ -46217,19 +46661,44 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         () => setFindings(null));
     } catch (e) { setFindings(null); }
     return () => { if (unsub) unsub(); };
-  }, [tab]);
+  }, [planTab]);
+  // Automated docs: the newest doc of each kind (autoDocsLatest) and the run
+  // stamps the functions write (settings/autoDocRuns, v542) — Overview needs
+  // them too, so a run that didn't happen lands in Needs you.
+  const docTab = ["overview", "cc"].includes(tab);
   const [latestDocs, setLatestDocs] = useState({});
+  const [docsTick, setDocsTick] = useState(0);
   useEffect(() => {
-    if (tab !== "cc") return;
+    if (!docTab) return;
     let dead = false;
-    try { httpsCallable(functions, "autoDocsLatest")({}).then(r => { if (!dead) setLatestDocs((r && r.data && r.data.docs) || {}); }, e => console.warn("[HE dashboard] autoDocsLatest:", e && e.message)); } catch (e) {}
+    try { httpsCallable(functions, "autoDocsLatest")(docsTick ? { refresh: true } : {}).then(r => { if (!dead) setLatestDocs((r && r.data && r.data.docs) || {}); }, e => { console.warn("[HE dashboard] autoDocsLatest:", e && e.message); if (!dead) setLatestDocs({ _failed: true }); }); } catch (e) {}
     return () => { dead = true; };
-  }, [tab]);
+  }, [docTab, docsTick]);
   const [packetAt, setPacketAt] = useState(null);
+  const [docRuns, setDocRuns] = useState({});
   useEffect(() => {
-    if (tab !== "cc") return;
+    if (!docTab) return;
     let dead = false;
     getDoc(doc(db, "settings", "fridayPacket")).then(snap => { if (!dead) setPacketAt(snap.exists() ? odDate((snap.data() || {}).lastRunAt) : null); }, () => {});
+    getDoc(doc(db, "settings", "autoDocRuns")).then(snap => { if (!dead) setDocRuns(snap.exists() ? (snap.data() || {}) : {}); }, () => {});
+    return () => { dead = true; };
+  }, [docTab, docsTick]);
+  // Approved time off (settings/crewPTO, read-only here): "Out today / this week",
+  // and an approved day off is never counted as a quiet phone (v542).
+  const [pto, setPto] = useState([]);
+  useEffect(() => {
+    if (!["overview", "people", "activity"].includes(tab)) return;
+    let dead = false;
+    getDoc(doc(db, "settings", "crewPTO")).then(snap => { if (!dead) setPto(snap.exists() ? ((snap.data() || {}).list || []) : []); }, () => {});
+    return () => { dead = true; };
+  }, [tab]);
+  // Money: Simpro job totals (settings/simproTotals, written by the Friday Packet
+  // and the daily dailySimproTotals function, v542).
+  const [simTotals, setSimTotals] = useState(null);
+  useEffect(() => {
+    if (!["overview", "jobs"].includes(tab)) return;
+    let dead = false;
+    getDoc(doc(db, "settings", "simproTotals")).then(snap => { if (!dead) setSimTotals(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
   }, [tab]);
   const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
@@ -46242,158 +46711,17 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     return () => { dead = true; };
   }, [tab, applTick]);
 
-  const d = useMemo(() => {
-    const now = new Date(), today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const secs = OD_PHASES;
-    const allLive = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote");
-    const foremen = [...new Set(allLive.map(j => String(j.foreman || "").trim()).filter(n => n && !/^unassigned$/i.test(n)))].sort((a, b) => a.localeCompare(b));
-    const live = foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
-    const up = (upcoming || []).filter(u => u && (!foreman || sameName(u.foreman, foreman)));
-    const phaseById = {};
-    allLive.forEach(j => { try { phaseById[j.id] = odPhase(j, today); } catch (e) { phaseById[j.id] = null; } });
-    const secOf = (j) => phaseById[j.id] || null;
-    const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
-    const isDone = (j) => { const s = secOf(j); return !!s && s.key === "complete"; };
-    const active = live.filter(j => !isDone(j));
-    const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
-    const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
-
-    const lastWork = {};
-    const events = odBuildEvents(live, now, lastWork);
-    const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
-    const inRange = events.filter(e => e.at >= odAddDays(t0, -(range - 1)));
-    const evToday = events.filter(e => localYmd(e.at) === today);
-    const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = odAddDays(t0, -i), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
-
-    // Per-job rollups
-    const info = {}, lastAct = {};
-    live.forEach(j => {
-      info[j.id] = odJobInfo(j, now);
-      lastAct[j.id] = lastWork[j.id] || null;
-    });
-    const sched = odBuildSchedule(live, up, today);
-    const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
-
-    const openPunch = active.flatMap(j => info[j.id].punch);
-    const openCOs = live.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
-    const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
-    const openRTs = live.flatMap(j => info[j.id].openRts.map(rt => ({ rt, job: j })));
-    // Same rows and buckets as the app's QC tracker (qcWalkRows / qcBucketOf),
-    // with the date compared as a real date.
-    const qcRows = []; let qcAll = []; try { qcAll = qcWalkRows(active); } catch (e) {}
-    qcAll.forEach(r => {
-      const at = odDate(r.date), st = r.status === "scheduled" && at && localYmd(at) < today ? (r.started ? "overdue" : "needs") : qcBucketOf({ ...r, date: "" }, today);
-      if (["failed","overdue","needs","scheduled"].includes(st)) qcRows.push({ job: r.job, phase: r.phase + " QC", st, at });
-    });
-    const qcOrder = { failed: 0, overdue: 1, needs: 2, scheduled: 3 }; qcRows.sort((a, b) => qcOrder[a.st] - qcOrder[b.st]);
-    const byForeman = {};
-    const fmOf = (j) => SBV2_EXCLUDE_NAME(j.foreman) ? "No foreman" : String(j.foreman).trim();
-    active.forEach(j => { const f = fmOf(j); byForeman[f] = byForeman[f] || { open: 0, closed: 0, items: [] }; byForeman[f].open += info[j.id].punch.length; byForeman[f].items.push(...info[j.id].punch); });
-    events.forEach(e => { if (e.type === "punch" && e.tone === "good" && now - e.at < 30*OD_DAY) { const f = fmOf(e.job); if (byForeman[f]) byForeman[f].closed++; } });
-
-    // Inspections
-    const firsts = [], allAtts = [];
-    live.forEach(j => info[j.id].atts.forEach(a => { if (a._at) allAtts.push({ ...a, job: j }); }));
-    live.forEach(j => ["Rough","Final"].forEach(ph => {
-      const atts = info[j.id].atts.filter(a => a.ph === ph && a._at).sort((a, b) => a._at - b._at);
-      if (atts.length) firsts.push({ job: j, ph, at: atts[0]._at, pass: atts[0].result === "pass" });
-    }));
-    allAtts.sort((a, b) => b._at - a._at);
-    const fails = allAtts.filter(a => a.result === "fail");
-    const in90 = firsts.filter(f => now - f.at < 90*OD_DAY);
-    const fp90 = in90.length ? Math.round(100 * in90.filter(f => f.pass).length / in90.length) : null;
-    const insp30 = allAtts.filter(a => now - a._at < 30*OD_DAY);
-    const months = []; for (let i = 5; i >= 0; i--) { const m = new Date(now.getFullYear(), now.getMonth() - i, 1); const mf = firsts.filter(f => f.at.getFullYear() === m.getFullYear() && f.at.getMonth() === m.getMonth()); months.push({ m, label: m.toLocaleDateString([], { month: "short" }), n: mf.length, pass: mf.filter(f => f.pass).length, v: mf.length ? Math.round(100 * mf.filter(f => f.pass).length / mf.length) : null, list: mf }); }
-
-    // Schedule
-    const overdue = sched.filter(s => s.at < t0 && s.type !== "start");
-    const startsPast = sched.filter(s => s.at < t0 && s.type === "start");
-    const needsDate = [];
-    active.forEach(j => {
-      if (j.quickJob || j.tempPed) return;
-      const rs = effRS(j), fs = effFS(j);
-      if (["","waiting_date"].includes(rs) && !j.roughProjectedStart) needsDate.push({ job: j, what: "Rough start" });
-      else if (rs === "complete" && ["","waiting_date"].includes(fs) && !j.finishProjectedStart) needsDate.push({ job: j, what: "Finish start" });
-      else if (parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult && rs !== "complete") needsDate.push({ job: j, what: "Rough inspection" });
-    });
-    up.forEach(u => { if (!u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start" }); });
-    const scans = active.filter(j => matterportScanNeeded(j));
-
-    // Needs attention
-    const attn = [
-      { k: "stale", label: "Status is behind the work logged", color: OD_WARN, icon: "alertTriangle",
-        rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_WARN })) },
-      { k: "invoice", label: "Ready to invoice", color: OD_G, icon: "dollarSign",
-        rows: live.filter(j => j.readyToInvoice && !j.invoiceDismissed).map(j => ({ title: j.name, sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo].filter(Boolean).join(" · "), job: j, color: OD_G })) },
-      { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_R, icon: "changeorders",
-        rows: openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: odDate(x.co.submittedAt || x.co.createdAt || x.co.date) })).filter(x => x.at && now - x.at > 60*OD_DAY)
-          .sort((a, b) => a.at - b.at).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, job: x.job, color: OD_B })) },
-      { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_WARN, icon: "checkCircle",
-        rows: overdue.filter(s => s.type === "insp" && now - s.at > 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_WARN })) },
-      { k: "overdue", label: "Inspection date passed, no result logged", color: OD_R, icon: "alertTriangle",
-        rows: overdue.filter(s => s.type === "insp" && now - s.at <= 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, job: s.job, color: OD_R })) },
-      { k: "startsPast", label: "Start date passed, phase not started", color: OD_O, icon: "flag",
-        rows: startsPast.map(s => ({ title: s.name, sub: `${s.label} was ${s.confirmed ? "set" : "projected"} for ${odShort(s.at)}`, job: s.job, color: OD_O })) },
-      { k: "rtLate", label: "Return trips past their date", color: OD_R, icon: "returntrips",
-        rows: overdue.filter(s => s.type === "rt").map(s => ({ title: s.name, sub: `${s.by ? "Should have been scheduled by" : "Was set for"} ${odShort(s.at)}${s.detail ? " · " + s.detail : ""}`, job: s.job, color: OD_R })) },
-      { k: "failOpen", label: "Failed inspection items not fixed", color: OD_R, icon: "x",
-        rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
-      { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
-        rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
-      { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
-        rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
-      { k: "rtNoDate", label: "Return trips with no date", color: OD_WARN, icon: "returntrips",
-        rows: openRTs.filter(x => !x.rt.scheduledDate && !x.rt.date && !x.rt.rtStatusDate).map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_WARN })) },
-      { k: "quiet", label: "In progress, no update in 5+ days", color: OD_WARN, icon: "clock",
-        rows: active.filter(j => secOf(j) && OD_UNDERWAY.includes(secOf(j).key) && !secOf(j).stale && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
-          .sort((a, b) => (lastAct[a.id] || 0) - (lastAct[b.id] || 0))
-          .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_WARN })) },
-      { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
-        rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
-    ].filter(a => a.rows.length);
-    // v538: worst first — red (overdue, money at risk), then orange (dates), gold (stale), blue (to do), green (money in).
-    const ATTN_SEV = { [OD_R]: 0, [OD_O]: 1, [OD_WARN]: 2, [OD_B]: 3, [OD_G]: 4 };
-    attn.sort((a, b) => (ATTN_SEV[a.color] ?? 5) - (ATTN_SEV[b.color] ?? 5));
-
-    // People
-    const accRank = { admin: 0, manager: 1, standard: 2 };
-    const staff = []; const staffKey = new Set();
-    (users || []).filter(u => u && u.active !== false && getAccess(u) !== "contractor" && String(u.name || "").trim())
-      .sort((a, b) => (accRank[getAccess(a)] ?? 9) - (accRank[getAccess(b)] ?? 9))
-      .forEach(u => { const k = String(u.name).trim().toLowerCase(); if (!staffKey.has(k)) { staffKey.add(k); staff.push(u); } });
-    const titleOf = (u) => u.title || (["admin","justin","jeromy"].includes(u.role) ? "admin" : ["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
-    const people = staff.map(u => {
-      const mine = events.filter(e => e.who && sameName(e.who, u.name));
-      let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
-      const openedToday = new Set();
-      allLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && localYmd(at) === today) openedToday.add(j.id); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
-      const todayMine = mine.filter(e => localYmd(e.at) === today);
-      const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(odAddDays(t0, -i)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
-      const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : "quiet";
-      return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set([...todayMine.map(e => e.job.id), ...openedToday]).size, openedN: openedToday.size, days7, status, role: getAccess(u), title: titleOf(u),
-        lastJob: mine.length ? mine[0].job.name : "" };
-    }).sort((a, b) => (b.todayN - a.todayN) || ((b.last || 0) - (a.last || 0)));
-    // Foremen = the app's own title rule (Team Members); jobs whose foreman is
-    // blank, Unassigned, a contractor or deactivated get one card of their own.
-    const foremenP = people.filter(p => p.title === "foreman");
-    const noForemanJobs = active.filter(j => !j.quickJob && !j.tempPed && !foremenP.some(p => sameName(j.foreman, p.name)));
-    const openNeeds = (needs || []).filter(n => n && !n.voided && needIsOpen(n, today));
-    const load = {}; openNeeds.forEach(n => { const a = needAssignee(n) || "Unassigned"; (load[a] = load[a] || { n: 0, urgent: 0, list: [] }); load[a].n++; load[a].list.push(n); if (needPriority(n) === "urgent") load[a].urgent++; });
-    const timeOff = openNeeds.filter(n => n.timeoffId);
-
-    const tally = (list) => { const m = {}; list.forEach(e => { (m[e.job.id] = m[e.job.id] || { job: e.job, n: 0, ev: [] }); m[e.job.id].n++; m[e.job.id].ev.push(e); }); return Object.values(m).sort((a, b) => b.n - a.n); };
-    const busyToday = tally(evToday), busyRange = tally(inRange);
-    const busy = busyToday[0] ? { ...busyToday[0], when: "today" } : busyRange[0] ? { ...busyRange[0], when: `last ${range} days` } : null;
-
-    return { now, today, t0, secs, foremen, allLive, live, up, active, secOf, secIdx, bySec, prepOpen, events, evById, inRange, evToday, perDay, info, lastAct, sched, nextOf,
-      openPunch, openCOs, coWaiting, openRTs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, overdue, needsDate, scans, attn,
-      people, foremenP, noForemanJobs, openNeeds, load, timeOff, busy, busyRange };
-  }, [jobs, users, needs, upcoming, mode, tick, foreman, range]); // eslint-disable-line
+  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, range, pto, simTotals, now: new Date() }),
+    [jobs, users, needs, upcoming, mode, tick, foreman, range, pto, simTotals]); // eslint-disable-line
+  const plan = useMemo(() => odPlanModel(findings, new Date()), [findings, tick]); // eslint-disable-line
+  const docStat = (x) => odDocStatus(x, { latestDocs, runs: docRuns, packetAt, now: d.now });
 
   const openJob = (job) => { if (job) setSheet({ kind: "job", id: job.id }); };
   const openPerson = (name) => setSheet({ kind: "person", name });
   const openList = (title, sub, rows) => setSheet({ kind: "list", title, sub, rows });
   const goApp = (job) => { if (job && onSelectJob) onSelectJob(job); };
+  // A deep link into the app (My Day on a task, a view): /?view=myday&need=<id>.
+  const openApp = (url) => { if (onOpenApp) onOpenApp(url); else { try { window.location.href = url; } catch (e) {} } };
   const ahead = (days) => d.sched.filter(s => s.at >= d.t0 && s.at < odAddDays(d.t0, days));
   const greet = d.now.getHours() < 12 ? "Good morning" : d.now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const me = odFirst(identity && identity.name) || "there";
@@ -46404,12 +46732,27 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const starts14 = next14.filter(s => s.type === "start");
   const insp7 = next7.filter(s => s.type === "insp");
   const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
+  // The 7/14/30-day window only changes Overview's chart and the Activity tab (v542).
+  const rangeApplies = tab === "overview" || tab === "activity";
+  const fmLabel = foreman === OD_NOFM ? "jobs with no foreman" : foreman ? `${foreman}'s jobs` : "";
   const TONE = { good: OD_G, bad: OD_R };
   const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera", question: "help", note: "fileText" };
-  const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_CYAN, question: "#4FBFB8", note: "#A3ADBD" };
-  const TYPE_NAME = { punch: "Punch", co: "Change orders", insp: "Inspections", rt: "Return trips", update: "Updates", photo: "Photos", question: "Questions", note: "Job notes" };
+  const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_CYAN, question: "#2F8A84", note: OD_GREY };
+  // v542 words: "activity" / "logged" means everything; "Daily updates" means only the foremen's daily and status updates.
+  const TYPE_NAME = { punch: "Punch", co: "Change orders", insp: "Inspections", rt: "Return trips", update: "Daily updates", photo: "Photos", question: "Questions", note: "Job notes" };
   const punchRows = (list) => list.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, job: p.job, tag: [p.who && `On ${odFirst(p.who)}`, p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · ") }));
-  const schedRow = (s) => ({ title: s.name, sub: `${s.label}${s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""}${s.detail ? " · " + s.detail : ""}`, right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job });
+  // Schedule rows: starts name the foreman ("No foreman" in red), a start on a job whose
+  // pre-drywall scan isn't logged says so, and anything past its date says how late.
+  const schedBits = (s) => {
+    const late = s.at < d.t0 ? d.lateOf(s) : 0;
+    const scanMiss = s.type === "start" && s.job && d.scanInfo[s.job.id] && !d.scanInfo[s.job.id].bookedAt;
+    const fm = s.type === "start" ? (s.job ? (s.job.foreman && !SBV2_EXCLUDE_NAME(s.job.foreman) ? s.job.foreman : "No foreman") : "") : "";
+    return { late, scanMiss, fm, bad: !!late || scanMiss || fm === "No foreman" };
+  };
+  const schedRow = (s) => { const b = schedBits(s); return { title: s.name,
+    sub: [`${s.label}${s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""}`, b.fm, s.detail, s.type === "rt" && s.by && "schedule-by date"].filter(Boolean).join(" · "),
+    tag: [b.late && `${b.late} d late`, b.scanMiss && "Scan not done"].filter(Boolean).join(" · "), tagColor: b.bad ? OD_R : undefined,
+    right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job }; };
   const eventRow = (e) => ({ title: e.job.name, sub: `${e.label}${e.detail ? ": " + e.detail : ""}${e.who ? " · " + odFirst(e.who) : ""}`, right: odWhen(e, d.now), color: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type], job: e.job });
 
   // ── shared pieces ──
@@ -46420,10 +46763,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     ? <button type="button" key={i} onClick={fn}><b>{v}</b><small>{l}</small></button>
     : <div key={i}><b>{v}</b><small>{l}</small></div>)}</div>;
   const Sec = ({ children, right, onRight }) => <div className="od-sec"><span>{children}</span>{right ? (onRight ? <button type="button" onClick={onRight}>{right}</button> : <small>{right}</small>) : null}</div>;
-  const schedItem = (s, i) => (
-    <OdItem key={i} color={OD_SCHED_COLOR[s.type]} icon={OD_SCHED_ICON[s.type]} tag={s.label + (s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : "")}
-      title={s.name} sub={s.detail || (s.job && s.job.foreman ? s.job.foreman : "")} when={`${odDow(s.at)} ${odShort(s.at)}`} onClick={s.job ? () => openJob(s.job) : null}/>
-  );
+  const schedItem = (s, i) => { const b = schedBits(s); return (
+    <OdItem key={i} color={OD_SCHED_COLOR[s.type]} icon={OD_SCHED_ICON[s.type]} tag={[s.label + (s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""), b.late && `${b.late} d late`, b.scanMiss && "scan not done"].filter(Boolean).join(" · ")}
+      tagColor={b.bad ? OD_R : undefined}
+      title={s.name} sub={[b.fm || (s.job && s.job.foreman ? s.job.foreman : ""), s.detail].filter(Boolean).join(" · ")} when={`${odDow(s.at)} ${odShort(s.at)}`} onClick={s.job ? () => openJob(s.job) : null}/>
+  ); };
   const Cal = () => {
     const y = d.now.getFullYear(), m = d.now.getMonth(), first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
     const byDay = {}; d.sched.forEach(s => { if (s.at.getFullYear() === y && s.at.getMonth() === m) (byDay[s.at.getDate()] = byDay[s.at.getDate()] || []).push(s); });
@@ -46446,22 +46790,36 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   };
   const Rows = ({ rows, empty }) => rows.length ? (
     <div className="od-rows">
-      {rows.map((r, i) => (
+      {rows.map((r, i) => r.divider ? <div className="od-dayh sub" key={i}>{r.divider}</div> : (
         <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
           <span className="k" style={{ "--c": r.color || OD_A }}><Icon name={r.icon || "activity"} size={15}/></span>
-          <span className="m"><b>{r.title}</b>{r.tag ? <em>{r.tag}</em> : null}<small>{r.sub}</small></span>
-          <span className="t">{r.right || ""}</span>
+          <span className="m"><b>{r.title}</b>{r.tag ? <em style={r.tagColor ? { color: r.tagColor } : null}>{r.tag}</em> : null}<small>{r.sub}</small></span>
+          <span className="t" style={r.rightColor ? { color: r.rightColor, fontWeight: 700 } : null}>{r.right || ""}</span>
         </button>
       ))}
     </div>
   ) : <div className="od-empty">{empty || "Nothing here."}</div>;
+  // Team pulse (v542): quiet people first, each with the jobs they run; "opened 3 jobs ·
+  // nothing logged" instead of "0 updates · 3 jobs touched"; "last on a job" for the
+  // job clock (the device list's "app opened" is the other clock).
+  const PULSE_ORDER = { quiet: 0, active: 1, earlier: 2, off: 3, idle: 4, gone: 5 };
+  const pulseLine = (p) => p.status === "active"
+    ? (p.todayN ? `logged ${p.todayN} on ${odPlural(Math.max(1, new Set(p.mine.filter(e => localYmd(e.at) === d.today).map(e => e.job.id)).size), "job")}${p.openedN > 0 ? ` · opened ${p.openedN}` : ""}` : `opened ${odPlural(p.openedN || p.jobsToday, "job")} · nothing logged`)
+    : p.status === "off" ? `Off until ${p.off && p.off.end ? odShort(odDate(p.off.end) || d.now) : "today"} · approved`
+    : p.last ? `last on a job ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "not seen in 30 days";
+  const pulseTag = (p) => {
+    const t = p.title === "foreman" ? "Foreman" : p.title === "jrforeman" ? "Jr foreman" : p.title === "lead" ? "Lead" : p.title === "admin" ? "Office" : "Crew";
+    if (!p.jobsOn.length) return t;
+    const q = p.jobsOn.filter(j => { const la = d.lastAct[j.id]; const s = d.secOf(j); return s && OD_UNDERWAY.includes(s.key) && (!la || d.now - la > 5*OD_DAY); }).length;
+    return `${t} · ${odPlural(p.jobsOn.length, "job")}${q ? ` · ${q} quiet` : ""}`;
+  };
   const Pulse = ({ list }) => (
     <div className="od-pulse">
-      {list.map(p => (
-        <button type="button" className="od-person" key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
+      {list.slice().sort((a, b) => (PULSE_ORDER[a.status] - PULSE_ORDER[b.status]) || ((b.todayN || 0) - (a.todayN || 0)) || ((b.last || 0) - (a.last || 0))).map(p => (
+        <button type="button" className={"od-person" + (p.status === "quiet" ? " quiet" : "")} key={p.u.id || p.name} onClick={() => openPerson(p.name)}>
           <i className="av sm">{(p.name[0] || "?").toUpperCase()}</i>
-          <div><b>{odFirst(p.name)}</b><small>{p.status === "active" ? `${odPlural(p.todayN, "update")} · ${odPlural(p.jobsToday, "job")} touched today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</small></div>
-          <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_B : "#7F8AA0" }}/>
+          <div><b>{d.shortName(p.name)}</b><em>{pulseTag(p)}</em><small>{pulseLine(p)}</small></div>
+          <span className="beat" style={{ "--c": p.status === "active" ? OD_G : p.status === "earlier" ? OD_B : p.status === "quiet" ? OD_R : OD_GREY }}/>
         </button>
       ))}
     </div>
@@ -46469,27 +46827,81 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const search = q.trim().toLowerCase();
   const nFilters = (foreman ? 1 : 0) + (range !== 14 ? 1 : 0) + (search ? 1 : 0);
   const searchHits = search ? d.allLive.filter(j => `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(search)).slice(0, 8) : [];
-
+  const planWaitingOn = (j) => (j && j.simproNo && plan.byNo[String(j.simproNo).trim()]) || [];
+  // Needs you (v542): the decisions only Koy makes, gathered from four tabs onto the
+  // landing tab. Each line opens the list its own tab already builds.
+  const myUrgent = d.openNeeds.filter(n => identity && sameName(needAssignee(n), identity.name) && needPriority(n) === "urgent");
+  const docsMissed = OD_DOCS.filter(x => OD_DOC_DUE[x.k]).map(x => ({ x, st: docStat(x) })).filter(o => o.st.missed || o.st.tone === "bad");
+  const planAge = (f) => f && f._at ? Math.max(0, Math.floor((d.now - f._at) / OD_DAY)) : 0;
+  const needYou = [
+    { k: "plans", label: "Plans waiting to be filed", icon: "fileText", color: OD_R, n: plan.waiting.length, extra: plan.oldest ? `oldest ${planAge(plan.oldest)} d` : "",
+      open: () => { setPlanShow("needs"); pickTab("cc"); } },
+    { k: "timeoff", label: "Time-off requests to decide", icon: "calendar", color: OD_O, n: d.timeOff.length, extra: d.timeOff.length ? `first ${d.timeOff.map(n => odDate(n.dueDate)).filter(Boolean).sort((a, b) => a - b).map(at => `${odDow(at)} ${odShort(at)}`)[0] || ""}` : "",
+      open: () => openList("Time off to decide", "Tap one to decide it on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O, icon: "calendar", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(n.id)}`) }))) },
+    { k: "urgent", label: "Your urgent My Day tasks", icon: "myday", color: OD_R, n: myUrgent.length, extra: "",
+      open: () => openList("Your urgent tasks", "Tap one to open it on My Day", myUrgent.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: OD_R, icon: "myday", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) }))) },
+    { k: "questions", label: "Crew questions not answered", icon: "help", color: OD_O, n: d.openQs.length, extra: [`${d.openQs.filter(x => x.age != null && x.age < 7).length} this week`, d.openQs[0] && d.openQs[0].age != null && `oldest ${d.openQs[0].age} d`].filter(Boolean).join(" · "),
+      open: () => openList("Open questions", "Oldest first, by job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job }))) },
+    { k: "nofm", label: "Jobs with no active foreman", icon: "hardHat", color: OD_O, n: d.noForemanJobs.length, extra: d.noFmText,
+      open: () => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `Foreman set to ${j.foreman} — ${d.whyNoFm(j.foreman)}` : "No foreman set", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id] && d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_O, job: j }))) },
+    { k: "qc", label: "QC walks that need a walk", icon: "clipboard", color: OD_B, n: d.qcRows.filter(r => r.st === "needs" || r.st === "overdue").length, extra: "",
+      open: () => openList("QC walks that need a walk", "", d.qcRows.filter(r => r.st === "needs" || r.st === "overdue").map(r => ({ title: r.job.name, sub: `${r.phase} · ${OD_QC_BUCKET[r.st]} · ${r.job.foreman || "No foreman"}`, right: r.at ? odShort(r.at) : "", color: OD_B, icon: "clipboard", job: r.job }))) },
+    { k: "docs", label: "Automated docs that did not run", icon: "fileText", color: OD_R, n: docsMissed.length, extra: docsMissed.map(o => o.x.title).join(", "),
+      open: () => pickTab("cc") },
+  ].filter(x => x.n > 0);
   let main = null, right = null;
   if (tab === "overview") {
     const actMax = Math.max(1, ...d.perDay.map(p => p.n));
     const insPass = d.insp30.filter(a => a.result === "pass").length;
+    const inspNoResult = d.overdue.filter(s => s.type === "insp").length;
     const selDay = chartSel != null && d.perDay[chartSel] ? d.perDay[chartSel] : null;
     const selEvents = selDay ? d.events.filter(e => localYmd(e.at) === selDay.k) : [];
     const selTop = selDay ? (() => { const m = {}; selEvents.forEach(e => { m[e.job.name] = (m[e.job.name] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3); })() : [];
+    // Before noon the greeting reports yesterday: today's count is still ~0 at 7 AM.
+    const morning = d.now.getHours() < 12;
+    const greetEv = morning ? d.evYest : d.evToday;
+    const greetLine = `${morning ? "Yesterday: " : ""}${odPlural(greetEv.length, "thing")} logged ${morning ? "" : "today "}across ${odPlural(new Set(greetEv.map(e => e.job.id)).size, "job")}`;
+    const coCap = [d.coBy.needs_sending && `${d.coBy.needs_sending} to send`, d.coBy.approved && `${d.coBy.approved} approved`, d.coBy.scheduled && `${d.coBy.scheduled} scheduled`, d.coBy.other && `${d.coBy.other} no status`, d.coOnDone.length && `${d.coOnDone.length} on finished jobs`].filter(Boolean).join(" · ");
+    const coCount = {}; d.openCOs.forEach(x => { coCount[x.job.id] = (coCount[x.job.id] || 0) + 1; });
+    const coStatusRank = { needs_sending: 0, pending: 1, approved: 2, scheduled: 3 };
+    const stageCap = d.bySec.slice(0, 5).map(s => `${s.short || s.label} ${s.jobs.length}`).join(" · ") + (d.bySec.length > 5 ? ` · +${d.bySec.slice(5).reduce((n, s) => n + s.jobs.length, 0)}` : "");
+    // Foremen: one roster; with a foreman picked, only that card. Worst trouble first.
+    const shownForemen = (foreman && foreman !== OD_NOFM ? d.foremenP.filter(p => sameName(p.name, foreman)) : foreman === OD_NOFM ? [] : d.foremenP)
+      .map(p => ({ p, t: d.troubleOf(p.name) })).sort((a, b) => (b.t.total - a.t.total) || (b.p.todayN - a.p.todayN));
+    const postedN = shownForemen.filter(x => x.p.todayN > 0).length;
+    const notSeen2 = shownForemen.filter(x => !x.p.last || d.now - x.p.last > 2*OD_DAY).length;
+    const b = d.busy;
     main = (<>
-      <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {odPlural(d.evToday.length, "update")} today across {odPlural(new Set(d.evToday.map(e => e.job.id)).size, "job")}{foreman ? ` · ${foreman}'s jobs only` : ""}</p></div></div>
+      <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {greetLine}{fmLabel ? ` · ${fmLabel} only` : ""}</p></div></div>
+      {needYou.length > 0 && (
+        <div className="od-white od-pad od-needyou">
+          <div className="od-ct">Needs you<small>decisions only you make · tap a line</small></div>
+          <div className="od-attn">
+            {needYou.map(x => (
+              <button type="button" key={x.k} aria-label={`${x.label}: ${x.n}${x.extra ? ", " + x.extra : ""}. Open the list`} onClick={x.open}>
+                <span className="ic" style={{ "--c": x.color }}><Icon name={x.icon} size={14}/></span><span className="lb">{x.label}{x.extra ? <small className="age"> · {x.extra}</small> : null}</span><span className="n" style={{ color: x.color }}>{x.n}</span><Icon name="chevronRight" size={13}/>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="od-minis">
-        <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint="bars: jobs by stage" value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
+        <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint={stageCap} value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
           onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
           <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_A} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
         </OdMini>
         <OdMini title="Inspections, 30 days" color={!d.insp30.length ? OD_G : insPass === 0 ? OD_R : insPass < d.insp30.length ? OD_WARN : OD_G} icon={d.insp30.length && insPass === 0 ? "alertTriangle" : "checkCircle"} value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed${d.insp30.length - insPass ? ` · ${d.insp30.length - insPass} failed` : ""}` : "none logged"}
-          onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed`, d.insp30.map(a => ({ title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job })))}>
+          hint={inspNoResult ? `${odPlural(inspNoResult, "inspection")} past the target with no result logged` : ""}
+          onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed${inspNoResult ? ` · ${inspNoResult} with no result logged` : ""}`, [
+            ...d.insp30.slice().sort((a, b) => (a.result === "fail" ? 0 : 1) - (b.result === "fail" ? 0 : 1) || b._at - a._at).map(a => { const g = d.failGroupOf[`${a.job.id}|${a.ph}`]; return { title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, tag: a.result === "fail" && g ? d.failStatus(g) : "", tagColor: a.result === "fail" && g && !g.rebook && !g.passAfter ? OD_R : undefined, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job }; }),
+            ...d.overdue.filter(s => s.type === "insp").map(s => ({ ...schedRow(s), icon: "alertTriangle", color: OD_WARN, sub: `${s.label} · target was ${odShort(s.at)} · no result logged` })),
+          ])}>
           <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
         </OdMini>
-        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`}
-          onClick={() => openList("Open change orders", `${d.coWaiting} waiting on the GC`, d.openCOs.slice().sort((a, b) => String(a.co.coStatus).localeCompare(String(b.co.coStatus))).map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_WARN : OD_B, job: x.job })))}>
+        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`} hint={coCap}
+          onClick={() => openList("Open change orders", `Grouped by job, most first · ${d.coWaiting} waiting on the GC${coCap ? " · " + coCap : ""}`, d.openCOs.slice()
+            .sort((a, b) => (coCount[b.job.id] - coCount[a.job.id]) || String(a.job.name).localeCompare(String(b.job.name)) || ((coStatusRank[a.co.coStatus] ?? 9) - (coStatusRank[b.co.coStatus] ?? 9)))
+            .map(x => ({ title: `${x.job.name}${coCount[x.job.id] > 1 ? ` (${coCount[x.job.id]})` : ""}`, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}${d.isDone(x.job) ? " · job finished" : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_WARN : OD_B, job: x.job })))}>
           <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
         </OdMini>
         <OdMini title="Open punch items" color={OD_R} icon="openitems" hint="bars: by foreman, most first" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
@@ -46499,54 +46911,57 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">Updates per day<small>all jobs, last {range} days · tap a day</small></div>
+          <div className="od-ct">Activity per day<small>everything logged on all jobs, last {range} days · tap a day</small></div>
           <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => (range > 14 ? i % 5 === 0 : i % 2 === 0) || i === d.perDay.length - 1 ? odShort(p.d) : "")} color={OD_A} min={0} max={Math.ceil(actMax*1.2) || 1}
-            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Updates per day: ${d.perDay.map(p => p.n).join(", ")}`}
+            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Things logged per day: ${d.perDay.map(p => p.n).join(", ")}`}
             sel={chartSel} onSel={setChartSel} tip={(v, i) => `${v} · ${odDow(d.perDay[i].d)} ${odShort(d.perDay[i].d)}`}/>
           {selDay ? (
             <div className="od-daysum">
-              <div><b>{odDow(selDay.d)} {odShort(selDay.d)}: {odPlural(selDay.n, "update")}</b><small>{selTop.length ? selTop.map(([n, c]) => `${n} (${c})`).join(" · ") : "Nothing logged"}</small></div>
+              <div><b>{odDow(selDay.d)} {odShort(selDay.d)}: {odPlural(selDay.n, "thing")} logged</b><small>{selTop.length ? selTop.map(([n, c]) => `${n} (${c})`).join(" · ") : "Nothing logged"}</small></div>
               {selDay.n > 0 && <button type="button" onClick={() => { setActDay(selDay.k); setActFilter("all"); pickTab("activity"); }}>See them</button>}
             </div>
           ) : <div className="od-hint">Tap or hover the chart to see a day.</div>}
         </div>
         <div className="od-white od-pad">
-          <div className="od-ct">Needs attention<small>{d.attn.length ? "tap a line" : ""}</small></div>
+          <div className="od-ct">Needs attention<small>{d.attn.length ? "chases · tap a line" : ""}</small></div>
           {d.attn.length ? (
             <div className="od-attn">
               {d.attn.map(a => {
-                const ages = a.rows.map(r => parseInt(r.right, 10)).filter(n => !isNaN(n));
+                const ages = a.rows.filter(r => /^\d+ d$/.test(String(r.right || ""))).map(r => parseInt(r.right, 10));
                 const oldest = ages.length ? Math.max(...ages) : 0;
                 return (
-                <button type="button" key={a.k} aria-label={`${a.label}: ${odPlural(a.rows.length, "item")}${oldest ? `, oldest ${oldest} days` : ""}. Open the list`} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}>
-                  <span className="ic" style={{ "--c": a.color }}><Icon name={a.icon} size={14}/></span><span className="lb">{a.label}{oldest ? <small className="age"> · oldest {oldest} d</small> : null}</span><span className="n" style={{ color: a.color }}>{a.rows.length}</span><Icon name="chevronRight" size={13}/>
+                <button type="button" key={a.k} aria-label={`${a.label}: ${odPlural(a.rows.length, "item")}${a.extra ? `, ${a.extra}` : ""}${oldest ? `, oldest ${oldest} days` : ""}. Open the list`} onClick={() => openList(a.label, [odPlural(a.rows.length, "item"), a.extra].filter(Boolean).join(" · "), a.rows)}>
+                  <span className="ic" style={{ "--c": a.color }}><Icon name={a.icon} size={14}/></span><span className="lb">{a.label}{a.extra ? <small className="age"> · {a.extra}</small> : null}{oldest ? <small className="age"> · oldest {oldest} d</small> : null}</span><span className="n" style={{ color: a.color }}>{a.rows.length}</span><Icon name="chevronRight" size={13}/>
                 </button>
                 );
               })}
             </div>
           ) : <div className="od-empty">Nothing flagged. Every inspection has a result, every start is confirmed and every job has had an update this week.</div>}
-          {d.busy && <div className="od-busy">
-            <small>Busiest job {d.busy.when}</small>
-            <button type="button" className="od-link" onClick={() => openJob(d.busy.job)}><b>{d.busy.job.name}</b> · {odPlural(d.busy.n, "update")}</button>
+          {b && <div className="od-busy">
+            <small>Most activity {b.when}</small>
+            <button type="button" className="od-link" onClick={() => openJob(b.job)}><b>{b.job.name}</b> · {odPlural(b.n, "thing")} logged{b.qs ? ` · ${odPlural(b.qs, "open question")}` : ""}{b.punch ? ` · ${b.punch} punch` : ""}{b.prep ? " · prep not finished" : ""}</button>
           </div>}
         </div>
       </div>
-      <Sec right={`${onApp} on the app today`}>Foremen</Sec>
+      <Sec right={shownForemen.length ? `${postedN} of ${odPlural(shownForemen.length, "foreman").replace(/foremans$/, "foremen")} posted today${notSeen2 ? ` · ${notSeen2} not seen in 2+ days` : ""}` : ""}>Foremen</Sec>
       <div className="od-plan">
-        {d.foremenP.slice(0, 9).map((p, i) => {
+        {shownForemen.slice(0, 12).map(({ p, t }, i) => {
           const fj = d.active.filter(j => sameName(j.foreman, p.name));
           const op = fj.reduce((n, j) => n + d.info[j.id].punch.length, 0);
+          const hot = i === 0 && p.todayN && !t.total;
           return (
-            <button type="button" className={"od-white od-crew od-tap" + (i === 0 && p.todayN ? " hot" : "")} key={p.u.id || p.name} aria-label={`${p.name}: ${odPlural(fj.length, "active job")}, ${op} open punch${p.status === "active" ? `, ${odPlural(p.todayN, "update")} today` : ""}. Open their panel`} onClick={() => openPerson(p.name)}>
+            <button type="button" className={"od-white od-crew od-tap" + (hot ? " hot" : "")} key={p.u.id || p.name} aria-label={`${p.name}: ${odPlural(fj.length, "active job")}, ${op} open punch${t.text ? ", " + t.text : ""}${p.status === "active" ? `, ${odPlural(p.todayN, "thing")} logged today` : ""}. Open their panel`} onClick={() => openPerson(p.name)}>
               <div><b>{p.name}</b><p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
-                <span className="day">{p.status === "active" ? `${odPlural(p.todayN, "update")} today` : p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
-              <OdBars vals={p.days7} color={i === 0 && p.todayN ? OD_ON_A : OD_A} hi={6} label={`${p.name}: updates per day, last 7 days: ${p.days7.join(", ")}`}/>
+                {t.text ? <p className="trouble">{t.text}</p> : null}
+                <span className="day">{p.status === "active" ? (p.todayN ? `${odPlural(p.todayN, "thing")} logged today` : `Opened ${odPlural(p.openedN || p.jobsToday || 1, "job")} today, nothing logged`) : p.status === "off" ? "Off today · approved" : p.last ? `Last on a job ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
+              <OdBars vals={p.days7} color={hot ? OD_ON_A : OD_A} hi={6} label={`${p.name}: things logged per day, last 7 days: ${p.days7.join(", ")}`}/>
             </button>
           );
         })}
-        {d.noForemanJobs.length > 0 && (
-          <button type="button" className="od-white od-crew od-tap" onClick={() => openList("Jobs with no active foreman", "Blank, Unassigned, a contractor, or someone no longer on the team", d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman ? `Foreman: ${j.foreman}` : "No foreman", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_WARN, job: j })))}>
+        {d.noForemanJobs.length > 0 && (!foreman || foreman === OD_NOFM) && (
+          <button type="button" className="od-white od-crew od-tap" onClick={() => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `Foreman set to ${j.foreman} — ${d.whyNoFm(j.foreman)}` : "No foreman set", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id] && d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_O, job: j })))}>
             <div><b>No active foreman</b><p>{odPlural(d.noForemanJobs.length, "active job")} · {d.noForemanJobs.reduce((n, j) => n + d.info[j.id].punch.length, 0)} open punch</p>
+              <p className="trouble">{d.noFmText}</p>
               <span className="day">Tap for the list</span></div>
           </button>
         )}
@@ -46554,15 +46969,23 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       </div>
     </>);
     right = (<>
-      <Me sub={`${mode === "commercial" ? "Commercial" : "Residential"}${foreman ? " · " + foreman : ""}`}/>
-      <Stats items={[[next7.length, "Dated, next 7 d", () => pickTab("schedule")], [onApp, "On app today", () => pickTab("people")], [d.openNeeds.length, "Open tasks", () => pickTab("people")]]}/>
+      <Me sub={`${mode === "commercial" ? "Commercial" : "Residential"}${fmLabel ? " · " + fmLabel : ""}`}/>
+      <Stats items={[[next7.length, "Dated, next 7 d", () => pickTab("schedule")], [onApp, "Crew on app today", () => pickTab("people")], [d.openNeeds.length, "Open tasks", () => pickTab("people")]]}/>
+      {d.ptoWeek.length > 0 && <><Sec right={`${d.ptoWeek.length}`}>Out this week</Sec>
+        <div className="od-list">{d.ptoWeek.slice(0, 5).map((p, i) => <OdItem key={i} color={OD_SLATE} icon="calendar" tag={p.start <= d.today ? "Out today" : "Out"} title={p.name} sub={p.note || "Time off"} when={`${odShort(odDate(p.start) || d.now)}${p.end && p.end !== p.start ? "–" + odShort(odDate(p.end) || d.now) : ""}`}/>)}</div></>}
       <Cal/>
       <Sec right="see all" onRight={() => pickTab("schedule")}>Next 14 days</Sec>
       <div className="od-list">{next14.slice(0, 7).map(schedItem)}{!next14.length && <div className="od-empty dark">Nothing dated in the next 14 days.</div>}</div>
     </>);
   } else if (tab === "jobs") {
     const jq = jobsQ.trim().toLowerCase();
-    let list = d.active.filter(j => (!jobsStage || (d.secOf(j) && d.secOf(j).key === jobsStage)) && (!jq || `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(jq)));
+    // v542 filters: "Quiet 21+ d" (rough or finish underway, no work logged in 21+ days)
+    // and "Finished, COs open" (done jobs still carrying open change orders).
+    const quiet21 = (j) => { const s = d.secOf(j), la = d.lastAct[j.id]; return !!s && OD_UNDERWAY.includes(s.key) && (!la || d.now - la > 21*OD_DAY); };
+    const doneCoJobs = d.live.filter(j => d.isDone(j) && d.info[j.id] && d.info[j.id].openCos.length);
+    const quietJobs = d.active.filter(quiet21);
+    const base = jobsStage === "__doneco" ? doneCoJobs : jobsStage === "__quiet" ? quietJobs : d.active.filter(j => !jobsStage || (d.secOf(j) && d.secOf(j).key === jobsStage));
+    let list = base.filter(j => !jq || `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(jq));
     const val = {
       name: j => String(j.name || "").toLowerCase(), foreman: j => String(j.foreman || "~").toLowerCase(), stage: j => d.secIdx(j),
       punch: j => d.info[j.id].punch.length, cos: j => d.info[j.id].openCos.length, next: j => d.nextOf[j.id] ? d.nextOf[j.id].at.getTime() : 9e15, last: j => d.lastAct[j.id] ? d.lastAct[j.id].getTime() : 0,
@@ -46571,26 +46994,49 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     list = list.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * jobsSort.dir; });
     const sortBy = (key) => setJobsSort(s => ({ key, dir: s.key === key ? -s.dir : (key === "last" || key === "punch" || key === "cos" ? -1 : 1) }));
     const H = ({ k, children }) => <button type="button" className={"th" + (jobsSort.key === k ? " on" : "")} onClick={() => sortBy(k)}>{children}{jobsSort.key === k ? (jobsSort.dir > 0 ? " ↑" : " ↓") : ""}</button>;
+    // Stage note extras: why a job on hold / waiting is waiting, and the last inspection result.
+    const waitText = (j, s) => {
+      if (!s) return "";
+      const isRough = ["roughHold", "roughNext", "noStatus"].includes(s.key), isFinish = ["finishHold", "between"].includes(s.key);
+      const why = isRough ? j.roughWaitingOn : isFinish ? j.finishWaitingOn : "";
+      if (why && (/hold/i.test(s.key) || /Waiting/.test(s.note || ""))) return `Waiting on: ${odText(why)}`;
+      if (/hold/i.test(s.key) || /Waiting on a/.test(s.note || "")) { const w = d.info[j.id].punch.find(p => p.waiting); return w ? `Punch waiting${w.waitingOn ? " on " + w.waitingOn : ""}: ${w.text}` : ""; }
+      return "";
+    };
+    const inspNote = (j, s) => {
+      if (!s || !["rough", "between"].includes(s.key)) return "";
+      const a = d.info[j.id].atts.find(x => x.ph === "Rough");
+      return a ? `Rough ${a.result === "fail" ? "failed" : "passed"} ${a._at ? odShort(a._at) : ""}${a.result === "fail" ? " · re-inspect" : ""}` : "";
+    };
+    const notCalled = (j) => { const s = d.secOf(j); return !!s && s.key === "rough" && parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult; };
+    const coCell = (j) => {
+      const cos = d.info[j.id].openCos, send = cos.filter(c => c.coStatus === "needs_sending").length, wait = cos.filter(c => c.coStatus === "pending");
+      const old = wait.some(c => { const at = d.coAge(c); return at && d.now - at > 60*OD_DAY; });
+      return { n: cos.length, split: [send && `${send} to send`, wait.length && `${wait.length} waiting`].filter(Boolean).join(" · "), color: send ? OD_R : old ? OD_WARN : undefined };
+    };
+    const attnTop = d.attn.slice(0, 3);
     main = (<>
-      <div className="od-head"><div><h1>Jobs</h1><p>{odPlural(d.active.length, "active job")}{foreman ? ` for ${foreman}` : ""} · tap a column to sort, a row to open the job</p></div></div>
+      <div className="od-head"><div><h1>Jobs</h1><p>{odPlural(d.active.length, "active job")}{fmLabel ? ` · ${fmLabel}` : ""} · tap a column to sort, a row to open the job</p></div></div>
       <div className="od-chips">
         <button type="button" aria-pressed={!jobsStage} onClick={() => setJobsStage("")}>All <span>{d.active.length}</span></button>
+        {quietJobs.length > 0 && <button type="button" aria-pressed={jobsStage === "__quiet"} onClick={() => setJobsStage(jobsStage === "__quiet" ? "" : "__quiet")} style={{ "--c": OD_R }}><i/>Quiet 21+ d <span>{quietJobs.length}</span></button>}
         {d.bySec.map(s => <button type="button" key={s.key} aria-pressed={jobsStage === s.key} onClick={() => setJobsStage(jobsStage === s.key ? "" : s.key)} style={{ "--c": s.color }}><i/>{s.label} <span>{s.jobs.length}</span></button>)}
+        {doneCoJobs.length > 0 && <button type="button" aria-pressed={jobsStage === "__doneco"} onClick={() => setJobsStage(jobsStage === "__doneco" ? "" : "__doneco")} style={{ "--c": OD_B }}><i/>Finished, COs open <span>{doneCoJobs.length}</span></button>}
       </div>
       <div className="od-white od-pad">
         <input className="od-q" type="search" value={jobsQ} onChange={e => setJobsQ(e.target.value)} placeholder="Filter by job, number, address, GC or foreman" aria-label="Filter jobs"/>
         <div className="od-tablewrap">
           <div className="od-table">
             <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman</H><H k="stage">Where it is</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last work</H></div>
-            {list.map(j => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id]; return (
+            {list.map(j => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id], co = coCell(j), pw = planWaitingOn(j), nr = d.notReadyIds.has(j.id), wt = waitText(j, s), inote = inspNote(j, s); return (
               <button type="button" className="tr" key={j.id} onClick={() => openJob(j)}>
-                <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small></span>
+                <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small>{pw.length ? <small className="flag">{pw.length > 1 ? `${pw.length} plans waiting` : "Plan waiting"}</small> : null}</span>
                 <span className="c">{j.foreman || "—"}</span>
-                <span className="c st"><em className="pill" style={{ "--c": s ? s.color : "#A3ADBD" }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
+                <span className="c st"><em className="pill" style={{ "--c": s ? s.color : OD_GREY }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{inote ? <small>{inote}</small> : null}{wt ? <small>{wt}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
                 <span className="c num">{d.info[j.id].punch.length || "—"}</span>
-                <span className="c num">{d.info[j.id].openCos.length || "—"}</span>
-                <span className="c">{nx ? <>{odShort(nx.at)} <small>{nx.label}</small></> : "—"}</span>
-                <span className="c">{la ? odAgo(la, d.now) : "—"}</span>
+                <span className="c num" style={co.color ? { color: co.color } : null}>{co.n || "—"}{co.split ? <small className="sp">{co.split}</small> : null}</span>
+                <span className="c" style={nr ? { color: OD_R, fontWeight: 700 } : null}>{nx ? <>{odShort(nx.at)} <small>{nx.label}{nr ? " · not ready" : ""}</small></> : notCalled(j) ? <span style={{ color: OD_R, fontWeight: 700 }}>Rough insp. not called</span> : "—"}</span>
+                <span className="c" style={quiet21(j) ? { color: OD_R, fontWeight: 700 } : null}>{la ? odAgo(la, d.now) : "—"}</span>
               </button>
             ); })}
             {!list.length && <div className="od-empty">No jobs match.</div>}
@@ -46598,44 +47044,84 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         </div>
       </div>
     </>);
+    const fmRows = [
+      ...(d.noForemanJobs.length ? [{ name: "No foreman", note: d.noForemanJobs.length, v: d.noForemanJobs.length, color: OD_R, on: foreman === OD_NOFM, onClick: () => pickForeman(foreman === OD_NOFM ? "" : OD_NOFM) }] : []),
+      ...d.roster.map(fm => { const n = d.active.filter(j => sameName(j.foreman, fm)).length; return { name: fm, note: n, v: n, color: OD_A, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) }; }).filter(r => r.v),
+    ];
     right = (<>
-      <Me sub="Jobs"/>
-      <Stats items={[[d.active.length, "Active"], [d.needsDate.length, "Need a date", () => openList("Needs a date", odPlural(d.needsDate.length, "job"), d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what, color: OD_R, job: n.job })))], [d.attn.reduce((n, a) => n + a.rows.length, 0), "Flags", () => pickTab("overview")]]}/>
+      <Me sub={fmLabel ? `Jobs · ${fmLabel}` : "Jobs"}/>
+      <Stats items={[[d.active.length, "Active"], [d.needsDate.length, "Need a date", () => openList("Needs a date", `${odPlural(d.needsDate.length, "job")} · least recent work first`, d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: [n.what, n.job ? (n.job.foreman || "No foreman") : "Upcoming tab", n.last ? `last work ${odAgo(n.last, d.now)}` : n.job ? "no work logged" : "", n.by].filter(Boolean).join(" · "), color: OD_R, job: n.job })))], [d.attn.reduce((n, a) => n + a.rows.length, 0), "Needs attention", () => pickTab("overview")]]}/>
+      {attnTop.length > 0 && <div className="od-list">{attnTop.map(a => <OdItem key={a.k} color={a.color} icon={a.icon} tag={`${a.rows.length}`} title={a.label} sub={a.extra || ""} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}/>)}</div>}
       <Sec>Where the work is</Sec>
       <div className="od-box light"><OdHBars rows={d.bySec.map(s => ({ name: s.label, note: s.jobs.length, v: s.jobs.length, color: s.color, on: jobsStage === s.key, onClick: () => setJobsStage(jobsStage === s.key ? "" : s.key) }))} empty="No active jobs."/></div>
       <Sec>By foreman</Sec>
-      <div className="od-box light"><OdHBars rows={d.foremen.map(fm => ({ name: fm, note: d.active.filter(j => sameName(j.foreman, fm)).length, v: d.active.filter(j => sameName(j.foreman, fm)).length, color: OD_A, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) })).filter(r => r.v)} empty="No foremen set on jobs."/></div>
+      <div className="od-box light"><OdHBars rows={fmRows} empty="No foremen set on jobs."/></div>
     </>);
   } else if (tab === "activity") {
     const aq = actQ.trim().toLowerCase();
     const base = actDay ? d.events.filter(e => localYmd(e.at) === actDay) : d.inRange;
     const typeCounts = Object.keys(TYPE_NAME).map(k => ({ k, n: base.filter(e => e.type === k).length }));
     // v538: nicknames, first names and initials fold into the team member's full name (abe / Abe → Abraham Tristan, Ds → Daegan Smith).
+    // v542: a short nickname map catches the ones a prefix can't (abe → Abraham).
     const staffNames = d.people.map(p => p.name);
     const canon = (who) => {
       const w = String(who || "").trim(); if (!w) return "";
       const wl = w.toLowerCase();
       const full = staffNames.find(n => sameName(w, n)); if (full) return full;
+      if (OD_NICK[wl]) { const f = staffNames.find(n => n.toLowerCase().split(/\s+/)[0] === OD_NICK[wl]); if (f) return f; }
       if (wl.length >= 3) { const f = staffNames.find(n => n.toLowerCase().split(/\s+/)[0].startsWith(wl)); if (f) return f; }
       if (wl.length === 2) { const f = staffNames.find(n => n.toLowerCase().split(/\s+/).map(x => x[0]).join("") === wl); if (f) return f; }
       return w;
     };
     const personNames = [...new Set(base.map(e => canon(e.who)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-    const list = base.filter(e => (actFilter === "all" || e.type === actFilter) && (!actPerson || canon(e.who) === actPerson) &&
-      (!aq || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(aq))).slice(0, 200);
+    const matched = base.filter(e => (actFilter === "all" || e.type === actFilter) && (!actPerson || canon(e.who) === actPerson) &&
+      (!aq || `${e.job.name} ${e.label} ${e.detail} ${e.who}`.toLowerCase().includes(aq)));
+    const list = matched.slice(0, actLimit);
+    // Within a day: rows that only carry a date (sign-offs, change orders from Simpro,
+    // photo batches) go first under "Also today", money and customer rows first among
+    // them; then the timed rows, where a run of one person's punch or questions on one
+    // job (gaps under 30 minutes, 3+ rows) folds into one row that opens the run.
+    const DATE_ONLY_RANK = { co: 0, rt: 1, insp: 2, update: 3, question: 4, note: 5, punch: 6, photo: 7 };
+    const failTag = (e) => { if (e.type !== "insp" || e.tone !== "bad") return ""; const ph = /^Rough/.test(e.label) ? "Rough" : "Final"; const g = d.failGroupOf[`${e.job.id}|${ph}`]; return g ? d.failStatus(g) : ""; };
+    const rowOf = (e) => { const t = failTag(e); return { ...eventRow(e), right: e.dateOnly ? "date only" : odTime(e.at), icon: TYPE_ICON[e.type], tag: t, tagColor: t === "not re-booked" ? OD_R : undefined }; };
     const groups = []; list.forEach(e => { const k = localYmd(e.at); if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, at: e.at, list: [] }); groups[groups.length - 1].list.push(e); });
+    const dayRows = (g) => {
+      const dated = g.list.filter(e => e.dateOnly).sort((a, b) => (DATE_ONLY_RANK[a.type] ?? 9) - (DATE_ONLY_RANK[b.type] ?? 9));
+      const timed = g.list.filter(e => !e.dateOnly);
+      const rows = [];
+      if (dated.length) { rows.push({ divider: g.k === d.today ? "Also today" : "Also that day" }); dated.forEach(e => rows.push(rowOf(e))); if (timed.length) rows.push({ divider: "By time" }); }
+      for (let i = 0; i < timed.length;) {
+        const e = timed[i], who = canon(e.who);
+        let k = i + 1;
+        if (who && ["punch", "question"].includes(e.type)) while (k < timed.length && canon(timed[k].who) === who && timed[k].job.id === e.job.id && timed[k].type === e.type && (timed[k - 1].at - timed[k].at) <= 30*60*1000) k++;
+        const run = timed.slice(i, k);
+        if (run.length >= 3) {
+          const cnt = {}; run.forEach(x => { const l = x.label.replace(/^(Rough|Finish|QC|Return trip) /, ""); cnt[l] = (cnt[l] || 0) + 1; });
+          rows.push({ title: e.job.name, sub: `${odFirst(who)} · ${Object.entries(cnt).map(([l, n]) => `${n} ${l}`).join(", ")}`, right: `${odTime(run[run.length - 1].at)}–${odTime(run[0].at)}`, icon: TYPE_ICON[e.type], color: TYPE_COLOR[e.type],
+            onClick: () => openList(`${e.job.name}: ${odFirst(who)}`, `${odPlural(run.length, "row")} · ${odTime(run[run.length - 1].at)}–${odTime(run[0].at)}`, run.map(rowOf)) });
+        } else run.forEach(x => rows.push(rowOf(x)));
+        i = k;
+      }
+      return rows;
+    };
     const topJobs = d.busyRange.slice(0, 8);
+    const closedN = base.filter(e => e.type === "punch" && e.tone === "good").length, addedN = base.filter(e => e.type === "punch" && e.tone !== "good").length;
+    const inspLogged = base.filter(e => e.type === "insp").length, inspFailed = base.filter(e => e.type === "insp" && e.tone === "bad").length;
+    const quietP = d.people.filter(p => p.status === "quiet");
+    const openQuietList = () => openList("People quiet 3+ days", "Foreman or lead on an active job, nothing logged and no job opened in 3+ days (approved time off left out)", quietP.map(p => ({ title: p.name, sub: `${pulseLine(p)} · ${pulseTag(p)}`, color: OD_R, onClick: () => openPerson(p.name) })));
     main = (<>
-      <div className="od-head"><div><h1>Activity</h1><p>{actDay ? `Everything logged on ${odDow(odDate(actDay))} ${odShort(odDate(actDay))}` : `Everything logged in the last ${range} days`} · tap a row for the job</p></div>
+      <div className="od-head"><div><h1>Activity</h1><p>{actDay ? `Everything logged on ${odDow(odDate(actDay))} ${odShort(odDate(actDay))}` : `Everything logged in the last ${range} days`}{fmLabel ? ` · on ${fmLabel}` : ""} · tap a row for the job</p></div>
         {actDay && <button type="button" className="od-clear" onClick={() => setActDay("")}>Show all {range} days</button>}</div>
       <div className="od-minis">
-        <OdMini title="Updates" color={OD_A} icon="activity" value={base.length} sub={actDay ? "that day" : `last ${range} days`}><OdBars vals={d.perDay.slice(-7).map(p => p.n)} color={OD_A} hi={6} label="Updates per day, last 7 days"/></OdMini>
-        <OdMini title="Punch closed" color={OD_G} icon="openitems" value={base.filter(e => e.type === "punch" && e.tone === "good").length} sub="items" onClick={() => setActFilter("punch")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={OD_G} hi={6} label="Punch items closed per day"/></OdMini>
-        <OdMini title="Photo uploads" color={OD_CYAN} icon="camera" value={base.filter(e => e.type === "photo").length} sub="batches" onClick={() => setActFilter("photo")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "photo" && localYmd(e.at) === p.k).length)} color={OD_WARN} hi={6} label="Photo uploads per day"/></OdMini>
-        <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={base.filter(e => e.type === "insp" && e.tone === "bad").length} sub={actDay ? "that day" : `last ${range} days`} onClick={() => setActFilter("insp")}><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f._at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day"/></OdMini>
+        <OdMini title="Everything logged" color={OD_A} icon="activity" value={base.length} sub={actDay ? "that day" : `last ${range} days`}><OdBars vals={d.perDay.slice(-7).map(p => p.n)} color={OD_A} hi={6} label="Things logged per day, last 7 days"/></OdMini>
+        <OdMini title="Punch closed" color={closedN >= addedN ? OD_G : OD_WARN} icon="openitems" value={closedN} sub={`closed · ${addedN} added`} onClick={() => setActFilter("punch")}><OdBars vals={d.perDay.slice(-7).map(p => d.events.filter(e => e.type === "punch" && e.tone === "good" && localYmd(e.at) === p.k).length)} color={closedN >= addedN ? OD_G : OD_WARN} hi={6} label="Punch items closed per day"/></OdMini>
+        <OdMini title="Open questions" color={OD_O} icon="help" value={d.openQs.length} sub={d.openQs[0] && d.openQs[0].age != null ? `oldest ${d.openQs[0].age} d` : "none waiting"}
+          onClick={() => openList("Open questions", "By job, oldest first · tap one for the job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.at ? when(x.at) : "", color: OD_O, icon: "help", job: x.job })))}>
+          <OdRing pct={d.openQs.length ? Math.min(1, d.openQs.filter(x => (x.age || 0) > 2).length / d.openQs.length) : 0} color={OD_O} label="Share of open questions older than 2 days"/></OdMini>
+        <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={inspFailed} sub={`failed of ${inspLogged} logged`} onClick={() => setActFilter("insp")}><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f._at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day"/></OdMini>
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">Recent activity<small>{list.length === 200 ? "newest 200" : odPlural(list.length, "row")}</small>
+        <div className="od-ct">Recent activity<small>{matched.length > list.length ? `newest ${list.length} of ${matched.length}` : odPlural(list.length, "row")}</small>
           <div className="od-filters" role="group" aria-label="Filter by type">
             <button type="button" aria-pressed={actFilter === "all"} onClick={() => setActFilter("all")}>All</button>
             {typeCounts.map(t => <button type="button" key={t.k} aria-pressed={actFilter === t.k} onClick={() => setActFilter(actFilter === t.k ? "all" : t.k)}>{TYPE_NAME[t.k]} <span>{t.n}</span></button>)}
@@ -46643,26 +47129,28 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         </div>
         <div className="od-frow">
           <input className="od-q" type="search" value={actQ} onChange={e => setActQ(e.target.value)} placeholder="Filter by job or what happened" aria-label="Filter activity"/>
-          <select className="od-sel light" value={actPerson} onChange={e => setActPerson(e.target.value)} aria-label="Filter by person">
-            <option value="">Everyone</option>{personNames.map(n => <option key={n} value={n}>{n}</option>)}
+          <select className="od-sel light" value={actPerson} onChange={e => setActPerson(e.target.value)} aria-label="Done by">
+            <option value="">Done by: everyone</option>{personNames.map(n => <option key={n} value={n}>Done by: {n}</option>)}
           </select>
         </div>
+        {foreman ? <div className="od-hint">Showing work on {fmLabel} (the Foreman filter above). "Done by" picks who logged it.</div> : null}
         {groups.map(g => (
           <div key={g.k}>
-            <div className="od-dayh">{g.k === d.today ? "Today" : `${odDow(g.at)} ${odShort(g.at)}`}<span>{odPlural(g.list.length, "update")}</span></div>
-            <Rows rows={g.list.map(e => ({ ...eventRow(e), right: e.dateOnly ? "" : odTime(e.at), icon: TYPE_ICON[e.type] }))}/>
+            <div className="od-dayh">{g.k === d.today ? "Today" : `${odDow(g.at)} ${odShort(g.at)}`}<span>{odPlural(g.list.length, "thing")} logged</span></div>
+            <Rows rows={dayRows(g)}/>
           </div>
         ))}
         {!groups.length && <div className="od-empty">Nothing matches.</div>}
+        {matched.length > list.length && <button type="button" className="od-more" onClick={() => setActLimit(n => n + 200)}>Show {Math.min(200, matched.length - list.length)} more</button>}
       </div>
     </>);
     right = (<>
       <Me sub="Activity"/>
-      <Stats items={[[d.inRange.length, `Updates, ${range} d`], [onApp, "On app today"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days"]]}/>
+      <Stats items={[[d.inRange.length, `Logged, ${range} d`], [onApp, "Crew on app today", () => pickTab("people")], [quietP.length, "People quiet 3+ d", openQuietList]]}/>
       <Sec>What kind</Sec>
       <div className="od-box light"><OdHBars rows={typeCounts.filter(t => t.n).map(t => ({ name: TYPE_NAME[t.k], note: t.n, v: t.n, color: TYPE_COLOR[t.k], on: actFilter === t.k, onClick: () => setActFilter(actFilter === t.k ? "all" : t.k) }))} empty="Nothing logged."/></div>
       <Sec>Most active jobs</Sec>
-      <div className="od-list">{topJobs.map((t, i) => <OdItem key={i} color={OD_A} icon="hardHat" tag={odPlural(t.n, "update")} title={t.job.name} sub={t.job.foreman || ""} onClick={() => openJob(t.job)}/>)}{!topJobs.length && <div className="od-empty dark">No updates in this range.</div>}</div>
+      <div className="od-list">{topJobs.map((t, i) => <OdItem key={i} color={OD_A} icon="hardHat" tag={`${t.n} logged`} title={t.job.name} sub={t.job.foreman || ""} onClick={() => openJob(t.job)}/>)}{!topJobs.length && <div className="od-empty dark">Nothing logged in this range.</div>}</div>
       <Sec>Team pulse</Sec>
       <Pulse list={d.people.slice(0, 10)}/>
     </>);
@@ -46670,13 +47158,26 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const ws = odAddDays(d.t0, week*7);
     const days = []; for (let i = 0; i < 7; i++) { const dd = odAddDays(ws, i); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
     const types = [["start","Starts"],["insp","Inspections"],["qc","QC walks"],["scan","Scans"],["rt","Return trips"]];
+    // Past their date, oldest first (v542): split inspections vs return trips, and
+    // this month vs older than 30 days, every row saying how late it is.
+    const od = d.overdue.slice().sort((a, b) => a.at - b.at);
+    const odInsp = od.filter(s => s.type === "insp"), odRt = od.filter(s => s.type === "rt"), odOther = od.filter(s => !["insp", "rt"].includes(s.type));
+    const odOld = od.filter(s => d.lateOf(s) > 30).length;
+    const lateRt = d.openRTs.filter(x => x.ri.k === "late");
+    const scanRow = (j) => { const si = d.scanInfo[j.id]; return { title: j.name, sub: `${si.state} · ${j.foreman || "No foreman"}`, tag: si.booking, tagColor: si.bookedAt ? undefined : si.urgent ? OD_R : OD_WARN, color: OD_P, icon: "camera", job: j }; };
+    const needsRow = (n) => ({ title: n.job ? n.job.name : n.name, sub: [n.what, n.job ? (n.job.foreman || "No foreman") : "Upcoming tab", n.last ? `last update ${odAgo(n.last, d.now)}` : n.job ? "no work logged" : "", n.by].filter(Boolean).join(" · "), color: OD_R, icon: "calendar", job: n.job });
+    const upList = () => openList("In the Upcoming tab", `${odPlural(d.up.length, "job")} not started yet · tap the app's Upcoming tab to edit`, d.up.slice().sort((a, b) => String(a.projectedStart || "~").localeCompare(String(b.projectedStart || "~"))).map(u => ({ title: u.name || "Upcoming job", sub: [u.foreman || "No foreman", u.gc, u.startConfirmed ? "start confirmed" : u.projectedStart ? "start projected" : "no start date"].filter(Boolean).join(" · "), right: u.projectedStart ? (() => { const at = odDate(u.projectedStart); return at ? `${odDow(at)} ${odShort(at)}` : String(u.projectedStart); })() : "", color: OD_O, icon: "flag" })));
     main = (<>
-      <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days</p></div></div>
+      <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days{fmLabel ? ` · ${fmLabel}` : ""}</p></div></div>
       <div className="od-minis">
-        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
-        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" onClick={() => openList("Inspections in the next 7 days", "", insp7.map(schedRow))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
-        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" onClick={() => openList("Needs a date", "", d.needsDate.map(n => ({ title: n.job ? n.job.name : n.name, sub: n.what + (n.job && n.job.foreman ? " · " + n.job.foreman : ""), color: OD_R, job: n.job })))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
-        <OdMini title="Past their date" color={OD_WARN} icon="alertTriangle" value={d.overdue.length} sub="no result yet" onClick={() => openList("Past their date", "Dated work with no result", d.overdue.map(schedRow))}><OdRing pct={d.sched.length ? d.overdue.length/d.sched.length : 0} color={OD_WARN} label="Share of dated items past due"/></OdMini>
+        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} hint={starts14.some(s => schedBits(s).bad) ? `${starts14.filter(s => schedBits(s).fm === "No foreman").length ? starts14.filter(s => schedBits(s).fm === "No foreman").length + " with no foreman · " : ""}${starts14.filter(s => schedBits(s).scanMiss).length ? starts14.filter(s => schedBits(s).scanMiss).length + " scan not done" : ""}`.replace(/ · $/, "") : ""}
+          onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
+        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" hint={insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length ? `${insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length} on a job not ready` : ""} onClick={() => openList("Inspections in the next 7 days", "", insp7.map(s => ({ ...schedRow(s), tag: d.notReadyIds.has(s.job && s.job.id) ? "Job not ready" : schedRow(s).tag, tagColor: d.notReadyIds.has(s.job && s.job.id) ? OD_R : undefined })))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
+        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" hint="least recent work first" onClick={() => openList("Needs a date", "Least recent work first", d.needsDate.map(needsRow))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
+        <OdMini title="Past their date" color={OD_WARN} icon="alertTriangle" value={od.length} sub={[odInsp.length && `${odInsp.length} inspection${odInsp.length === 1 ? "" : "s"}`, odRt.length && `${odRt.length} return trip${odRt.length === 1 ? "" : "s"}`, odOther.length && `${odOther.length} other`].filter(Boolean).join(" · ") || "none"}
+          hint={odOld ? `${odOld} older than 30 days` : ""}
+          onClick={() => openList("Past their date", "Oldest first · inspections with no result, then return trips", [...(odInsp.length ? [{ divider: `Inspections, no result logged (${odInsp.length})` }] : []), ...odInsp.map(schedRow), ...(odRt.length ? [{ divider: `Return trips (${odRt.length})` }] : []), ...odRt.map(schedRow), ...(odOther.length ? [{ divider: `QC walks and scans (${odOther.length})` }] : []), ...odOther.map(schedRow)])}>
+          <OdRing pct={d.sched.length ? od.length/d.sched.length : 0} color={OD_WARN} label="Share of dated items past due"/></OdMini>
       </div>
       <div className="od-white od-pad">
         <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(odAddDays(ws, 6))}`}<small>tap an item for the job</small>
@@ -46688,11 +47189,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           {days.map((x, i) => (
             <div className={"col" + (localYmd(x.dd) === d.today ? " today" : "")} key={i}>
               <div className="dh">{localYmd(x.dd) === d.today ? "Today" : odDow(x.dd)} <span>{odShort(x.dd)}</span></div>
-              {x.items.map((s, k) => (
+              {x.items.map((s, k) => { const sb = schedBits(s); return (
                 <button type="button" className="blk" key={k} style={{ "--c": OD_SCHED_COLOR[s.type] }} onClick={s.job ? () => openJob(s.job) : undefined}>
-                  <b>{s.name}</b><small>{s.label}{s.type === "start" && !s.confirmed ? " · projected" : ""}</small>
+                  <b>{s.name}</b><small>{s.label}{s.type === "start" && !s.confirmed ? " · projected" : ""}{sb.fm ? ` · ${sb.fm === "No foreman" ? "No foreman" : odFirst(sb.fm)}` : ""}</small>
+                  {sb.scanMiss ? <small className="bad">Scan not done</small> : sb.fm === "No foreman" ? <small className="bad">No foreman</small> : d.notReadyIds.has(s.job && s.job.id) && s.type === "insp" ? <small className="bad">Job not ready</small> : null}
                 </button>
-              ))}
+              ); })}
               {!x.items.length && <div className="none">—</div>}
             </div>
           ))}
@@ -46701,38 +47203,76 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-row2">
         <div className="od-white od-pad">
           <div className="od-ct">Next 30 days<small>tap a kind to list it</small></div>
-          <OdHBars rows={types.map(([k, l]) => { const its = next30.filter(s => s.type === k); return { name: l, note: its.length, v: its.length, color: OD_SCHED_COLOR[k], onClick: its.length ? () => openList(`${l}, next 30 days`, "", its.map(schedRow)) : undefined }; })} empty="Nothing dated."/>
+          <OdHBars rows={types.map(([k, l]) => {
+            const its = next30.filter(s => s.type === k);
+            if (k === "scan") return { name: l, note: `${its.length} dated · ${d.scans.filter(j => !d.scanInfo[j.id].bookedAt).length} not booked`, v: its.length + d.scans.length, color: OD_SCHED_COLOR[k],
+              onClick: its.length || d.scans.length ? () => openList("Scans", "Dated in the next 30 days, then the jobs that need one", [...its.map(schedRow), ...(d.scans.length ? [{ divider: `Need a scan (${d.scans.length})` }] : []), ...d.scans.map(scanRow)]) : undefined };
+            if (k === "rt") return { name: l, note: `${its.length} dated · ${lateRt.length} past date`, v: its.length + lateRt.length, color: OD_SCHED_COLOR[k],
+              onClick: its.length || lateRt.length ? () => openList("Return trips", odRtSumText(d.rtSum), [...(lateRt.length ? [{ divider: `Past their date (${lateRt.length})` }] : []), ...lateRt.map(x => ({ title: x.job.name, sub: `${x.ri.text}${odText(x.rt.scope) ? " · " + odText(x.rt.scope) : ""}`, tag: `${x.ri.late} d late`, tagColor: OD_R, color: OD_R, icon: "returntrips", job: x.job })), ...(its.length ? [{ divider: `Dated, next 30 days (${its.length})` }] : []), ...its.map(schedRow)]) : undefined };
+            return { name: l, note: its.length, v: its.length, color: OD_SCHED_COLOR[k], onClick: its.length ? () => openList(`${l}, next 30 days`, "", its.map(schedRow)) : undefined };
+          })} empty="Nothing dated."/>
         </div>
         <div className="od-white od-pad">
-          <div className="od-ct">Starts<small>next 14 days</small></div>
+          <div className="od-ct">Starts<small>next 14 days · with the foreman</small></div>
           <Rows rows={starts14.map(s => ({ ...schedRow(s), icon: "flag" }))} empty="No starts dated in the next 14 days."/>
         </div>
       </div>
     </>);
     right = (<>
       <Me sub="Scheduling"/>
-      <Stats items={[[d.active.length, "On the board", () => pickTab("jobs")], [d.up.length, "Upcoming"], [d.scans.length, "Scans due"]]}/>
-      {d.overdue.length > 0 && <><Sec right={`${d.overdue.length}`}>Past their date</Sec><div className="od-list">{d.overdue.slice(-6).reverse().map(schedItem)}</div></>}
-      <Sec right={`${d.needsDate.length}`}>Needs a date</Sec>
-      <div className="od-list">{d.needsDate.slice(0, 8).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={n.job ? n.job.foreman || "" : "Upcoming tab"} onClick={n.job ? () => openJob(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
+      <Stats items={[[d.active.length, "On the board", () => pickTab("jobs")], [d.up.length, "In Upcoming tab", upList], [d.scans.length, "Scans due"]]}/>
+      {od.length > 0 && <><Sec right={`see all ${od.length}`} onRight={() => openList("Past their date", "Oldest first", od.map(schedRow))}>Past their date</Sec><div className="od-list">{od.slice(0, 6).map(schedItem)}</div></>}
+      <Sec right={d.needsDate.length > 8 ? `see all ${d.needsDate.length}` : `${d.needsDate.length}`} onRight={d.needsDate.length > 8 ? () => openList("Needs a date", "Least recent work first", d.needsDate.map(needsRow)) : undefined}>Needs a date</Sec>
+      <div className="od-list">{d.needsDate.slice(0, 8).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={[n.job ? n.job.foreman || "No foreman" : "Upcoming tab", n.last ? `last update ${odAgo(n.last, d.now)}` : n.job ? "no work logged" : "", n.by].filter(Boolean).join(" · ")} onClick={n.job ? () => openJob(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
       <Sec right={`${d.scans.length}`}>Matterport scans due</Sec>
-      <div className="od-list">{d.scans.slice(0, 6).map((j, i) => <OdItem key={i} color={OD_P} icon="camera" tag={`Rough ${parseStage(j.roughStage)}%`} title={j.name} sub="Scan before drywall" onClick={() => openJob(j)}/>)}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
+      <div className="od-list">{d.scans.slice(0, 6).map((j, i) => { const si = d.scanInfo[j.id]; return <OdItem key={i} color={OD_P} icon="camera" tag={si.done ? "Rough done" : `Rough ${parseStage(j.roughStage)}%`} tagColor={si.urgent ? OD_R : undefined} title={j.name} sub={`${si.booking} · ${si.state}`} onClick={() => openJob(j)}/>; })}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
     </>);
   } else if (tab === "quality") {
-    const fRows = Object.entries(d.byForeman).filter(([n]) => n !== "No foreman").map(([n, v]) => ({ n, ...v })).sort((a, b) => b.open - a.open);
+    // Punch by foreman (v542): the one roster, a "No foreman" row when it has items,
+    // no 0/0 rows, jobs and open-per-job beside the raw counts, amber when open > closed.
+    const fRows = Object.entries(d.byForeman).map(([n, v]) => ({ n, ...v })).filter(r => r.open || r.closed)
+      .sort((a, b) => (a.n === "No foreman" ? 1 : 0) - (b.n === "No foreman" ? 1 : 0) || b.open - a.open);
     const fMax = Math.max(1, ...fRows.map(r => r.open + r.closed));
     const fpLo = d.months.every(m => m.v == null || m.v >= 50) ? 50 : 0;
     const buckets = [["0–7 days", 0, 7, OD_G], ["8–14 days", 8, 14, OD_SLATE], ["15–30 days", 15, 30, OD_O], ["Over 30 days", 31, 1e9, OD_R]].map(([l, a, b, c]) => ({ l, c, items: d.openPunch.filter(p => p.age != null && p.age >= a && p.age <= b) }));
     const noAge = d.openPunch.filter(p => p.age == null);
     if (noAge.length) buckets.push({ l: "No date", c: OD_GREY, items: noAge });
     const serious = d.openPunch.filter(p => p.serious);
+    const over30 = buckets[3].items.length;
+    const fpColor = d.fp90 == null ? OD_G : d.fp90 >= 90 ? OD_G : d.fp90 >= 75 ? OD_WARN : OD_R;
+    const failedFirst = d.in90.filter(f => !f.pass).length;
+    // Inspections in the next 7 days and whether a QC walk was logged before them.
+    const QC_DONE = ["pass", "fixed", "completed"];
+    const inspNext = insp7.map(s => { const fin = /Final/.test(s.label); const qs = s.job ? (fin ? s.job.finishQcStatus : s.job.qcStatus) : ""; return { s, walked: QC_DONE.includes(qs || ""), qs }; })
+      .sort((a, b) => (a.walked ? 1 : 0) - (b.walked ? 1 : 0) || a.s.at - b.s.at);
+    const unwalked = inspNext.filter(x => !x.walked).length;
+    // Punch that blocks a final: jobs in finish (or past their finish start).
+    const nearFinal = d.active.filter(j => { const s = d.secOf(j); return s && ["finish", "finishDue", "finishHold"].includes(s.key) && d.info[j.id].punch.length; })
+      .map(j => ({ j, items: d.info[j.id].punch, oldest: Math.max(0, ...d.info[j.id].punch.map(p => p.age || 0)) })).sort((a, b) => b.oldest - a.oldest);
+    const nearN = nearFinal.reduce((n, x) => n + x.items.length, 0);
+    const finalsNotRebooked = d.notRebooked.filter(g => g.ph === "Final").length;
+    const rtRow = (x) => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo, x.rt.fromCOId ? "from a change order" : x.rt.fromQCFail ? "from QC" : ""].filter(Boolean).join(" · ") || "Return trip",
+      tag: x.ri.k === "late" ? `${x.ri.late} d late · ${x.ri.text}` : x.ri.text, tagColor: x.ri.k === "late" ? OD_R : x.ri.k === "none" ? OD_WARN : undefined, right: odRtLabel(x.rt), color: OD_R, icon: "returntrips", job: x.job });
+    const failRow = (g) => ({ title: g.job.name, tag: `${g.ph} · ${g.job.foreman || "No foreman"}${g.n > 1 ? ` · failed ${g.n} times, ${odShort(g.first)} to ${odShort(g.last)}` : ""}`,
+      sub: g.items.length ? g.items.slice(0, 2).join(" · ") : g.noList ? `No correction list — ask ${g.job.foreman || "the foreman"}` : "No items listed",
+      right: d.failStatus(g), rightColor: g.passAfter ? OD_G : g.rebook ? undefined : OD_R, color: OD_R, icon: "x", job: g.job });
     main = (<>
-      <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase</p></div></div>
+      <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase{fmLabel ? ` · ${fmLabel}` : ""}</p></div></div>
       <div className="od-minis">
-        <OdMini title="First-pass, 90 days" color={OD_G} icon="checkCircle" value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={odPlural(d.in90.length, "inspection")} onClick={() => openList("First inspections, last 90 days", d.fp90 == null ? "" : `${d.fp90}% passed the first time`, d.in90.slice().sort((a, b) => b.at - a.at).map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed first time" : "failed first time"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}><OdRing pct={(d.fp90 || 0)/100} color={OD_G} label="First-pass rate"/></OdMini>
-        <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch.length} sub={`${serious.length} serious`} onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}><OdBars vals={buckets.map(b => b.items.length)} color={OD_O} hi={3} label="Open punch by age"/></OdMini>
-        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.openRTs.length} sub={`${d.openRTs.filter(x => odRtDate(x.rt)).length} scheduled`} onClick={() => openList("Open return trips", "", d.openRTs.map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ") || "Return trip", tag: x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "", right: odRtLabel(x.rt), color: OD_R, job: x.job })))}><OdRing pct={d.openRTs.length ? d.openRTs.filter(x => odRtDate(x.rt)).length/d.openRTs.length : 0} color={OD_R} label="Share of open return trips scheduled"/></OdMini>
+        <OdMini title="First-pass, 90 days" color={fpColor} icon={fpColor === OD_G ? "checkCircle" : "alertTriangle"} value={d.fp90 == null ? "—" : `${d.fp90}%`} sub={d.in90.length ? `${failedFirst} of ${d.in90.length} failed first time` : "none logged"} hint="target 90%" onClick={() => openList("First inspections, last 90 days", d.fp90 == null ? "" : `${d.fp90}% passed the first time · target 90%`, d.in90.slice().sort((a, b) => b.at - a.at).map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed first time" : "failed first time"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}><OdRing pct={(d.fp90 || 0)/100} color={fpColor} label="First-pass rate"/></OdMini>
+        <OdMini title="Open punch items" color={OD_O} icon="openitems" value={d.openPunch.length} sub={`${over30} over 30 days`} onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}><OdBars vals={buckets.map(b => b.items.length)} color={OD_O} hi={3} label="Open punch by age"/></OdMini>
+        <OdMini title="Open return trips" color={OD_R} icon="returntrips" value={d.rtSum.open} sub={`${d.rtSum.late} past date · ${d.rtSum.booked} booked`} hint={odRtSumText(d.rtSum)} onClick={() => openList("Open return trips", `${odRtSumText(d.rtSum)} · late first`, d.openRTs.map(rtRow))}><OdRing pct={d.rtSum.open ? d.rtSum.booked/d.rtSum.open : 0} color={OD_R} label="Share of open return trips booked ahead"/></OdMini>
         <OdMini title="QC walks open" color={OD_B} icon="clipboard" value={d.qcRows.length} sub={`${d.qcRows.filter(r => r.st === "scheduled").length} scheduled`} onClick={() => openList("Open QC walks", "", d.qcRows.map(r => ({ title: r.job.name, sub: `${r.phase} · ${OD_QC_BUCKET[r.st]}`, right: r.at ? odShort(r.at) : "", color: OD_B, job: r.job })))}><OdRing pct={d.qcRows.length ? d.qcRows.filter(r => r.st === "scheduled").length/d.qcRows.length : 0} color={OD_B} label="Share of QC walks scheduled"/></OdMini>
+      </div>
+      <div className="od-row2">
+        <div className="od-white od-pad">
+          <div className="od-ct">Inspections next 7 days<small>{inspNext.length ? `${inspNext.length} booked · ${unwalked} without a QC walk` : "none booked"}</small></div>
+          <Rows rows={inspNext.map(({ s, walked, qs }) => ({ ...schedRow(s), icon: "checkCircle", tag: walked ? "QC walked" : qs ? `QC ${odQcText(qs).toLowerCase()}` : "No QC walk logged", tagColor: walked ? OD_G : OD_R, sub: [s.job && (s.job.foreman || "No foreman"), d.notReadyIds.has(s.job && s.job.id) ? "job not ready" : ""].filter(Boolean).join(" · ") }))} empty="No inspections booked in the next 7 days."/>
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Punch on jobs near final<small>{nearN ? `${nearN} items on ${odPlural(nearFinal.length, "job")} · oldest first` : ""}</small></div>
+          <Rows rows={nearFinal.slice(0, 8).map(x => ({ title: x.j.name, sub: `${x.j.foreman || "No foreman"} · ${d.secOf(x.j).label}${d.secOf(x.j).note ? " " + d.secOf(x.j).note : ""}`, right: `${x.items.length} · ${x.oldest} d`, color: OD_O, icon: "openitems", onClick: () => openList(`${x.j.name}: open punch`, "Oldest first", punchRows(x.items)) }))} empty="No open punch on jobs in finish."/>
+        </div>
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
@@ -46753,35 +47293,36 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">Punch by foreman<small>open now · closed in 30 days · tap a name</small></div>
+          <div className="od-ct">Punch by foreman<small>open now · closed in 30 days · jobs · tap a name</small></div>
           <div className="od-board">
-            {fRows.map(r => (
-              <button type="button" className="r" key={r.n} onClick={() => openList(`${r.n}: open punch`, `${r.open} open · ${r.closed} closed in 30 days`, punchRows(r.items))}>
-                <i className="av sm">{(r.n[0] || "?").toUpperCase()}</i><span className="nm"><b>{r.n}</b><small>{r.open} open · {r.closed} closed</small></span>
-                <span className="bar"><i style={{ width: `${(r.closed/fMax)*100}%`, background: OD_G }}/><i style={{ width: `${(r.open/fMax)*100}%`, background: OD_O }}/></span>
+            {fRows.map(r => { const per = r.jobs ? (r.open / r.jobs).toFixed(1) : "0"; const behind = r.open > r.closed; return (
+              <button type="button" className="r" key={r.n} onClick={() => openList(`${r.n}: open punch`, `${r.open} open · ${r.closed} closed in 30 days · ${odPlural(r.jobs, "active job")}`, punchRows(r.items))}>
+                <i className="av sm" style={r.n === "No foreman" ? { background: OD_GREY } : null}>{(r.n[0] || "?").toUpperCase()}</i><span className="nm"><b>{r.n}</b><small style={behind ? { color: OD_WARN, fontWeight: 700 } : null}>{r.open} open · {r.closed} closed · {odPlural(r.jobs, "job")} · {per}/job</small></span>
+                <span className="bar"><i style={{ width: `${(r.closed/fMax)*100}%`, background: OD_G }}/><i style={{ width: `${(r.open/fMax)*100}%`, background: behind ? OD_WARN : OD_O }}/></span>
               </button>
-            ))}
+            ); })}
             {!fRows.length && <div className="od-empty">No punch items on active jobs.</div>}
           </div>
-          {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span></div>}
+          {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span><span style={{ "--c": OD_WARN }}>Open more than closed</span></div>}
         </div>
         <div className="od-white od-pad">
-          <div className="od-ct">Failed inspections<small>latest</small></div>
-          <Rows rows={d.fails.slice(0, 8).map(f => ({ title: f.job.name, sub: (f.items || []).length ? (f.items || []).map(it => odText(it && (it.text || it))).filter(Boolean).slice(0, 2).join(" · ") : "No items listed", tag: `${f.ph}${f.by ? " · " + f.by : ""}`, right: odShort(f._at), color: OD_R, icon: "x", job: f.job }))} empty="No failed inspections logged."/>
+          <div className="od-ct">Failed inspections<small>{finalsNotRebooked ? `${odPlural(finalsNotRebooked, "failed final")} not re-booked` : d.failOpenG.length ? "latest first" : ""}</small></div>
+          <Rows rows={d.failOpenG.slice(0, 8).map(failRow)} empty="No failed inspections waiting on a re-inspection."/>
+          {d.failGroups.length > d.failOpenG.length && <button type="button" className="od-more" onClick={() => openList("Failed inspections that passed later", "", d.failGroups.filter(g => g.passAfter).map(failRow))}>{d.failGroups.length - d.failOpenG.length} passed on a later inspection</button>}
         </div>
       </div>
     </>);
     right = (<>
       <Me sub="Quality"/>
-      <Stats items={[[d.fp90 == null ? "—" : `${d.fp90}%`, "First-pass"], [d.active.length ? (d.openPunch.length / Math.max(1, new Set(d.openPunch.map(p => p.job.id)).size)).toFixed(1) : "0", "Punch / job"], [d.fails.filter(f => d.now - f._at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
-      <Sec right={`${d.openRTs.length}`}>Open return trips</Sec>
-      <div className="od-list">{d.openRTs.slice(0, 6).map((x, i) => { return <OdItem key={i} color={OD_R} icon="returntrips" tag={x.rt.fromQCFail ? "From QC" : x.rt.fromCOId ? "From a CO" : "Return trip"} title={x.job.name} sub={[odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · ")} when={odRtLabel(x.rt)} onClick={() => openJob(x.job)}/>; })}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
+      <Stats items={[[d.notRebooked.length, "Fails not re-booked", () => openList("Failed, not re-booked", "No pass since and no new target date", d.notRebooked.map(failRow))], [d.openPunch.length ? (d.openPunch.length / Math.max(1, new Set(d.openPunch.map(p => p.job.id)).size)).toFixed(1) : "0", `punch per job with punch (${new Set(d.openPunch.map(p => p.job.id)).size} of ${d.active.length})`], [d.fails.filter(f => d.now - f._at < 30*OD_DAY).length, "Fails, 30 days"]]}/>
+      <Sec right={d.openRTs.length > 6 ? `see all ${d.openRTs.length}` : `${d.openRTs.length}`} onRight={d.openRTs.length > 6 ? () => openList("Open return trips", `${odRtSumText(d.rtSum)} · late first`, d.openRTs.map(rtRow)) : undefined}>Open return trips</Sec>
+      <div className="od-list">{d.openRTs.slice(0, 6).map((x, i) => <OdItem key={i} color={OD_R} icon="returntrips" tag={x.ri.k === "late" ? `${x.ri.late} d late` : x.ri.k === "booked" ? "Booked" : x.ri.k === "tobook" ? "To book" : "No date"} tagColor={x.ri.k === "late" ? OD_R : undefined} title={x.job.name} sub={[x.ri.text, odText(x.rt.scope), x.rt.fromCOId ? "from a change order" : ""].filter(Boolean).join(" · ")} when={odRtLabel(x.rt)} onClick={() => openJob(x.job)}/>)}{!d.openRTs.length && <div className="od-empty dark">No open return trips.</div>}</div>
       <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
       <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${OD_QC_BUCKET[r.st]}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
   } else if (tab === "people") {
-    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: odFirst(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_A, onClick: () => n === "Unassigned"
-      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_A })))
+    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: n === "Unassigned" ? n : d.shortName(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_A, onClick: () => n === "Unassigned"
+      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_A, onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) })))
       : openPerson(n) })).sort((a, b) => b.v - a.v).slice(0, 10);
     const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 10);
     const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
@@ -46795,44 +47336,73 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const current = devList.filter(v => latestBuild && v.build >= latestBuild).length;
     const behind = devList.filter(v => !latestBuild || v.build < latestBuild);
     const shownDevices = showAllDevices ? devList : behind.slice(0, 8);
+    // The two clocks (v542): a phone that opened the app today while its owner hasn't
+    // touched a job in 3+ days is the row to call.
+    const appOnly = devList.filter(v => v.name && localYmd(v.seen) === d.today).map(v => ({ v, p: d.people.find(p => sameName(p.name, v.name)) }))
+      .filter(x => x.p && ["quiet", "idle", "gone"].includes(x.p.status));
+    const quietP = d.people.filter(p => p.status === "quiet"), goneP = d.people.filter(p => p.status === "gone");
+    const missing = d.people.filter(p => p.status !== "active");
+    const missRank = { quiet: 0, earlier: 1, idle: 2, off: 3, gone: 4 };
+    const quietRows = () => [
+      ...quietP.map(p => ({ title: p.name, sub: `${pulseLine(p)} · ${pulseTag(p)}`, color: OD_R, onClick: () => openPerson(p.name) })),
+      ...(goneP.length ? [{ divider: `Not seen in 30+ days (${goneP.length}) — deactivate in Settings → Team if they've left` }] : []),
+      ...goneP.map(p => ({ title: p.name, sub: p.last ? `last on a job ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "not seen in 30 days", color: OD_GREY, onClick: () => openPerson(p.name) })),
+    ];
+    // A time-off request with what it collides with: the person's dated work in the
+    // range and anyone already approved off on those days.
+    const toRange = (n) => { const s = odDate(n.dueDate || n.start || ""); const m = /(\d{1,2}\/\d{1,2}\/\d{2,4}).*?(\d{1,2}\/\d{1,2}\/\d{2,4})/.exec(odText(n.text)); const a = m ? odDate(m[1]) : s, b = m ? odDate(m[2]) : s; return { a, b }; };
+    const toContext = (n) => {
+      const who = n.requestedBy || ""; const { a, b } = toRange(n); if (!a) return "";
+      const inR = (at) => at && localYmd(at) >= localYmd(a) && localYmd(at) <= localYmd(b || a);
+      const work = d.sched.filter(s => s.job && (sameName(s.job.foreman, who) || sameName(s.job.lead, who)) && inR(s.at));
+      const others = (d.ptoList || []).filter(p => !sameName(p.name, who) && p.start <= localYmd(b || a) && (p.end || p.start) >= localYmd(a));
+      return [work.length ? `${odPlural(work.length, "dated item")} on their jobs then: ${work.slice(0, 2).map(s => `${s.label} ${s.name} ${odShort(s.at)}`).join(", ")}` : "nothing dated on their jobs then",
+        others.length ? `also off: ${others.map(p => odFirst(p.name)).join(", ")}` : ""].filter(Boolean).join(" · ");
+    };
     main = (<>
       <div className="od-head"><div><h1>People</h1><p>Who is on the app, what is on their plate, and which phones need an update · tap anyone</p></div></div>
       <div className="od-minis">
-        <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.people.length}`} onClick={() => openList("On the app today", "", d.people.filter(p => p.status === "active").map(p => ({ title: p.name, sub: `${odPlural(p.todayN, "update")} · opened ${odPlural(p.openedN, "job")}`, right: p.last ? odTime(p.last) : "", color: OD_G, onClick: () => openPerson(p.name) })))}><OdRing pct={d.people.length ? onApp/d.people.length : 0} color={OD_G} label={`${onApp} of ${d.people.length} on the app today`}/></OdMini>
-        <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`} onClick={() => openList("Open My Day tasks", `${urgentN} urgent`, d.openNeeds.slice().sort((a, b) => (needPriority(a) === "urgent" ? 0 : 1) - (needPriority(b) === "urgent" ? 0 : 1)).map(t => ({ title: odText(t.text) || "Task", sub: [needAssignee(t) && "On " + odFirst(needAssignee(t)), t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B })))}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label="Share of open tasks that are urgent"/></OdMini>
-        <OdMini title="Time off waiting" color={OD_A} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Decide these on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
+        <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.teamN}`} hint={goneP.length || d.people.some(p => p.status === "off") ? `not counting ${[d.people.filter(p => p.status === "off").length && `${d.people.filter(p => p.status === "off").length} off`, goneP.length && `${goneP.length} not seen 30+ d`].filter(Boolean).join(" or ")}` : ""}
+          onClick={() => openList("Not on the app today", `${odPlural(missing.length, "person")} · quiet ones first`, missing.slice().sort((a, b) => (missRank[a.status] ?? 9) - (missRank[b.status] ?? 9)).map(p => ({ title: p.name, sub: `${pulseLine(p)} · ${pulseTag(p)}`, color: p.status === "quiet" ? OD_R : OD_GREY, onClick: () => openPerson(p.name) })))}>
+          <OdRing pct={d.teamN ? onApp/d.teamN : 0} color={OD_G} label={`${onApp} of ${d.teamN} on the app today`}/></OdMini>
+        <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`} onClick={() => openList("Open My Day tasks", `${urgentN} urgent · tap one to open it on My Day`, d.openNeeds.slice().sort((a, b) => (needPriority(a) === "urgent" ? 0 : 1) - (needPriority(b) === "urgent" ? 0 : 1)).map(t => ({ title: odText(t.text) || "Task", sub: [needAssignee(t) && "On " + odFirst(needAssignee(t)), t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B, onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) })))}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label="Share of open tasks that are urgent"/></OdMini>
+        <OdMini title="Time off waiting" color={OD_A} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Tap one to decide it on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: [n.requestedBy, toContext(n)].filter(Boolean).join(" · "), right: n.dueDate || "", color: OD_O, icon: "calendar", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(n.id)}`) }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
         <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => setShowAllDevices(true)}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">Updates by person<small>last 7 days · tap a square</small></div>
+          <div className="od-ct">Activity by person<small>things logged, last 7 days · tap a square</small></div>
           {heat.length ? (
             <div className="od-heat" style={{ gridTemplateColumns: `86px repeat(7, minmax(0,1fr))` }}>
               <div/>{dayDates.map((dd, i) => <div className="h" key={i}>{odDow(dd)}</div>)}
-              {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{odFirst(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
-                return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "update")}`}
-                  onClick={() => openList(`${odFirst(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, odPlural(v, "update"), p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
-                  style={{ background: v ? `rgba(102,168,255,${(0.12 + a*0.4).toFixed(2)})` : "rgba(255,255,255,.04)", color: v ? "#fff" : "#8B95A7", boxShadow: v && a > 0.75 ? "inset 0 0 0 1.5px #66A8FF" : "none" }}>{v || "–"}</button>; })])}
+              {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{d.shortName(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
+                return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "thing")} logged`}
+                  onClick={() => openList(`${d.shortName(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, `${odPlural(v, "thing")} logged`, p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
+                  style={{ background: v ? `rgba(37,99,201,${(0.1 + a*0.5).toFixed(2)})` : "rgba(27,43,74,.04)", color: v ? (a > 0.55 ? "#fff" : C.text) : OD_GREY, boxShadow: v && a > 0.75 ? `inset 0 0 0 1.5px ${OD_A}` : "none" }}>{v || "–"}</button>; })])}
             </div>
-          ) : <div className="od-empty">No updates logged this week.</div>}
+          ) : <div className="od-empty">Nothing logged this week.</div>}
         </div>
         <div className="od-white od-pad">
           <div className="od-ct">My Day load<small>open tasks · tap a name</small></div>
           <OdHBars rows={loadRows} empty="No open My Day tasks."/>
         </div>
       </div>
-      <Sec right="green = today, gold = last 3 days">Team pulse</Sec>
-      <Pulse list={d.people}/>
+      <Sec right="red = quiet 3+ days · green = today · blue = last 3 days">Team pulse</Sec>
+      <Pulse list={foreman && foreman !== OD_NOFM ? d.people.filter(p => sameName(p.name, foreman) || d.live.some(j => (d.evById[j.id] || []).some(e => e.who && sameName(e.who, p.name)))) : d.people}/>
     </>);
     right = (<>
       <Me sub="Team"/>
-      <Stats items={[[d.people.length, "Team"], [d.foremenP.length, "Foremen"], [d.people.filter(p => p.status === "quiet").length, "Quiet 3+ days", () => openList("Quiet for 3+ days", "No updates or job opens", d.people.filter(p => p.status === "quiet").map(p => ({ title: p.name, sub: p.last ? `Last seen ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days", color: "#8C847D", onClick: () => openPerson(p.name) })))]]}/>
+      <Stats items={[[d.teamN, "Team"], [d.roster.length, "Foremen", () => openList("Foremen", "Titled foreman or jr foreman, or foreman on an active job · fix a title in Settings → Team", d.roster.map(n => { const p = d.people.find(x => sameName(x.name, n)); const jn = d.allActive.filter(j => sameName(j.foreman, n)).length; return { title: n, sub: `${p ? pulseTag(p) : "Foreman"} · ${odPlural(jn, "active job")}`, color: OD_A, onClick: () => openPerson(n) }; }))], [quietP.length, "Quiet 3+ days", () => openList("Quiet for 3+ days", "Foreman or lead on an active job, nothing logged and no job opened (approved time off left out)", quietRows())]]}/>
+      {appOnly.length > 0 && <><Sec right={`${appOnly.length}`}>On the app, no job touched</Sec>
+        <div className="od-list">{appOnly.map(({ v, p }, i) => <OdItem key={i} color={OD_R} icon="phone" tag={`App opened ${odAgo(v.seen, d.now)}`} tagColor={OD_R} title={p.name} sub={p.last ? `no job touched since ${odShort(p.last)}` : "no job touched in 30 days"} onClick={() => openPerson(p.name)}/>)}</div></>}
+      {d.ptoWeek.length > 0 && <><Sec right={`${d.ptoWeek.length}`}>Out today / this week</Sec>
+        <div className="od-list">{d.ptoWeek.map((p, i) => <OdItem key={i} color={OD_SLATE} icon="calendar" tag={p.start <= d.today ? "Out today" : "Out"} title={p.name} sub={p.note || "Time off"} when={`${odShort(odDate(p.start) || d.now)}${p.end && p.end !== p.start ? "–" + odShort(odDate(p.end) || d.now) : ""}`}/>)}</div></>}
       <Sec right={`${d.timeOff.length}`}>Time off waiting</Sec>
-      <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_A} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub="Decide it on My Day" when={at ? `${odDow(at)} ${odShort(at)}` : ""}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
+      <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_A} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub={toContext(n) || "Tap to decide it on My Day"} when={at ? `${odDow(at)} ${odShort(at)}` : ""} onClick={() => openApp(`/?view=myday&need=${encodeURIComponent(n.id)}`)}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
       <Sec right={showAllDevices ? "behind only" : "show all"} onRight={() => setShowAllDevices(s => !s)}>{showAllDevices ? "All devices" : "Devices behind"}</Sec>
       <div className="od-box">
         {devices == null ? <div className="od-empty dark">Loading devices…</div> : shownDevices.map(v => (
-          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">{odAgo(v.seen, d.now)}</span><em className={latestBuild && v.build >= latestBuild ? "ok" : ""}>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
+          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">app opened {odAgo(v.seen, d.now)}</span><em className={latestBuild && v.build >= latestBuild ? "ok" : ""}>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
         ))}
         {devices != null && !shownDevices.length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
       </div>
@@ -46842,64 +47412,98 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
     const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
     const go = (url) => { try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {} };
-    // Plan Intake
-    const cutoff = d.now.getTime() - 14*OD_DAY;
-    const fl = (findings || []).map(f => ({ ...f, _at: odDate(f.createdAt) })).filter(f => f._at && f._at.getTime() >= cutoff);
-    const needs = fl.filter(f => PLAN_NEEDS.includes(f.type) && !f.seen);
+    // Plan Intake (v542: "waiting" = not yet filed/dismissed/matched, not "not seen yet").
+    const fl = plan.fl;
+    const needs = plan.waiting.slice().sort((a, b) => b._at - a._at);
     const filed = fl.filter(f => f.type === "plans_filed");
     const filesN = filed.reduce((n, f) => { const m = /^(\d+) files? filed/.exec(f.summary || ""); return n + (m ? +m[1] : 1); }, 0);
     const folders = fl.filter(f => OD_PLAN_FOLDER.includes(f.type));
     const walks = fl.filter(f => OD_PLAN_WALK.includes(f.type));
     const lastPlan = fl.length ? fl[0]._at : null;
-    const planColor = (f) => PLAN_NEEDS.includes(f.type) ? (f.seen ? OD_WARN : OD_R) : f.type === "plans_filed" ? OD_G : OD_B;
+    const planColor = (f) => PLAN_NEEDS.includes(f.type) ? (plan.isWaiting(f) ? OD_R : OD_GREY) : f.type === "plans_filed" ? OD_G : OD_B;
     const planIcon = (f) => f.type === "plans_filed" ? "fileText" : OD_PLAN_WALK.includes(f.type) ? "mapPin" : OD_PLAN_FOLDER.includes(f.type) ? "folder" : "alertTriangle";
-    const planOpen = (f) => { const j = jobByNo(f.number); openList(`${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, at2(f._at), [
-      { title: odText(f.summary) || "—", sub: [f.from && "From " + f.from, f.bestGuess && "Best guess: " + f.bestGuess, f.seen && f.seenBy && "Seen by " + odFirst(f.seenBy)].filter(Boolean).join(" · "), color: planColor(f), icon: planIcon(f) },
-      ...(f.links || []).filter(l => l && l.url).map(l => ({ title: `Open ${String(l.label || "link").toLowerCase()}`, sub: l.label === "Email" ? "Gmail" : l.label === "Simpro" ? "Simpro" : "Google Drive", color: OD_B, icon: "external", onClick: () => go(l.url) })),
-      ...(j ? [{ title: `Open ${j.name}`, sub: "Job panel", color: OD_A, icon: "hardHat", job: j }] : []),
-      ...(f.canFile && !f.seen ? [{ title: "File it from Today → Plans in the app", sub: "The Plans card has the File it form for this plan", color: OD_WARN, icon: "info" }] : []),
-    ]); };
     const pNum = (n) => /^#?Q?\d+$/i.test(String(n || "").trim()) ? planNum(String(n).trim()) : "No number";
-    const planRow = (f) => ({ title: `${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`, sub: odText(f.summary), right: at2(f._at), color: planColor(f), icon: planIcon(f), onClick: () => planOpen(f) });
+    const planOpen = (f) => setSheet({ kind: "plan", id: f.id });
+    const planRow = (f) => { const w = plan.isWaiting(f), age = planAge(f); return { title: `${PLAN_LABEL[f.type] || f.type} · ${pNum(f.number)}`,
+      sub: `${odText(f.summary)}${f.altGuess ? ` · or ${planNum(f.altGuess)} (${f.altWhy || "same sender"})` : ""}`,
+      tag: PLAN_NEEDS.includes(f.type) ? (w ? `Waiting ${age} d` : plan.resolved(f) ? "Done" : "Seen") : "", tagColor: w ? OD_R : undefined,
+      right: at2(f._at), color: planColor(f), icon: planIcon(f), onClick: () => planOpen(f) }; };
     const planList = planShow === "needs" ? needs : planShow === "filed" ? filed : planShow === "folders" ? [...folders, ...walks].sort((a, b) => b._at - a._at) : fl;
     const planDays = []; planList.forEach(f => { const k = localYmd(f._at); const g = planDays[planDays.length - 1]; if (g && g.k === k) g.list.push(f); else planDays.push({ k, at: f._at, list: [f] }); });
     // Appliance Loads
     const arows = (appl && appl.rows) || [];
     // Same test as the sheet's Summary "Items with TBD amps" column.
     const isTbd = (r) => /^tbd$/i.test(r.load);
+    const isTypical = (r) => /^typical/i.test(r.conf);
     const ajobs = []; arows.forEach(r => { let g = ajobs.find(x => x.no === r.no); if (!g) { g = { no: r.no, label: r.label, rows: [], amps: 0, notIn: 0, likely: 0, tbd: 0, typical: 0 }; ajobs.push(g); }
-      g.rows.push(r); g.amps += r.total || 0; if (r.inCC.startsWith("not")) g.notIn++; else if (r.inCC === "likely") g.likely++; if (isTbd(r)) g.tbd++; if (/^typical/i.test(r.conf)) g.typical++; });
+      g.rows.push(r); g.amps += r.total || 0; if (r.inCC.startsWith("not")) g.notIn++; else if (r.inCC === "likely") g.likely++; if (isTbd(r)) g.tbd++; if (isTypical(r)) g.typical++; });
     ajobs.forEach(g => { g.job = jobByNo(g.no); });
     ajobs.sort((a, b) => (b.notIn + b.likely + b.tbd) - (a.notIn + a.likely + a.tbd) || Number(b.no) - Number(a.no));
     const aSum = (k) => ajobs.reduce((n, g) => n + g[k], 0);
-    const applItem = (r) => ({ title: r.item + (r.qty && r.qty !== "1" ? ` × ${r.qty}` : ""), sub: [r.loc, r.model, r.inCC.startsWith("not") ? "Not in CC yet" : r.inCC === "likely" ? `Likely in CC as ${r.cc || "?"}` : r.cc && `In CC as ${r.cc}`, isTbd(r) && "no amps found"].filter(Boolean).join(" · "),
+    const toCheck = aSum("notIn") + aSum("likely");
+    const worstTypical = ajobs.slice().sort((a, b) => b.typical - a.typical)[0];
+    const applItem = (r) => ({ title: r.item + (r.qty && r.qty !== "1" ? ` × ${r.qty}` : ""), sub: [r.loc, r.model, r.inCC.startsWith("not") ? "Not in Home Runs yet" : r.inCC === "likely" ? `Probably in Home Runs as ${r.cc || "?"} (unconfirmed)` : r.cc && `In Home Runs as ${r.cc}`, isTbd(r) && "no amps found", isTypical(r) && "amps assumed (typical)"].filter(Boolean).join(" · "),
       right: isTbd(r) ? "TBD" : r.load ? `${r.load} A` : "", color: r.inCC.startsWith("not") ? OD_R : r.inCC === "likely" ? OD_WARN : isTbd(r) ? OD_R : OD_G, icon: "zap", onClick: r.link ? () => go(r.link) : undefined });
-    const applOpen = (g) => openList(g.label, `${odPlural(g.rows.length, "item")} · ${Math.round(g.amps)} A connected · tap an item for its source file`, [
-      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: "Job panel", color: OD_A, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_WARN, icon: "info" }]),
+    // "Ask <foreman> to import" (v542): one My Day task on the job, through the same
+    // stamped needs write My Day uses. Asks first.
+    const askImport = async (g) => {
+      const j = g.job; if (!j) return;
+      const fm = j.foreman && !SBV2_EXCLUDE_NAME(j.foreman) ? j.foreman : "";
+      const nowIso = new Date().toISOString(), meName = (identity && identity.name) || "";
+      const need = { id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), kind: "need",
+        text: `Import the appliances into Home Runs: ${g.notIn} not in yet${g.likely ? `, ${g.likely} to confirm` : ""} (Home Runs tab → Import appliances)`,
+        dueBucket: "week", dueDate: "", snoozedUntil: "", priority: "", assignedTo: fm, assignedBy: meName, assignedAt: nowIso,
+        foreman: j.foreman || "", jobId: j.id, jobName: j.name || "", status: "open", createdBy: meName, createdAt: nowIso, doneAt: "", doneBy: "" };
+      if (!window.confirm(`Add a My Day task on ${j.name} for ${fm || "nobody yet (unassigned)"}?\n\n"${need.text}"`)) return;
+      try { await setDoc(doc(db, "needs", need.id), stampWrite({ data: need, updated_at: nowIso, saved_by: meName })); toast.success(fm ? `Added to ${odFirst(fm)}'s day` : "Added — unassigned"); }
+      catch (e) { toast.error(`Couldn't add the task: ${(e && e.message) || e}`); }
+    };
+    const applOpen = (g) => openList(g.label, `${odPlural(g.rows.length, "item")} · ${Math.round(g.amps)} A connected${g.typical ? ` (${g.typical} assumed typical)` : ""} · tap an item for its source file`, [
+      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: `Job panel · foreman ${g.job.foreman || "not set"}`, color: OD_A, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_WARN, icon: "info" }]),
+      ...(g.job && (g.notIn || g.likely) ? [{ title: `Ask ${g.job.foreman && !SBV2_EXCLUDE_NAME(g.job.foreman) ? odFirst(g.job.foreman) : "someone"} to import`, sub: "Adds a My Day task on this job: Home Runs tab → Import appliances", color: OD_O, icon: "myday", onClick: () => askImport(g) }] : []),
       ...g.rows.filter(r => r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r)).map(applItem),
       ...g.rows.filter(r => !(r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r))).map(applItem),
     ]);
     const applList = (title, pred) => openList(title, "tap an item for its source file", ajobs.flatMap(g => g.rows.filter(pred).map(r => ({ ...applItem(r), title: `${g.label} · ${r.item}` }))));
+    // Active jobs in rough (or starting rough within 14 days) with no appliance package in the pull.
+    const inSheet = new Set(ajobs.map(g => String(g.no)));
+    const roughSoon = new Set(next14.filter(s => s.type === "start" && /Rough/.test(s.label) && s.job).map(s => s.job.id));
+    const noPackage = appl && appl.rows ? d.allActive.filter(j => j.simproNo && !inSheet.has(String(j.simproNo).trim()) && ((d.secOf(j) && ["rough", "roughDue"].includes(d.secOf(j).key)) || roughSoon.has(j.id))) : [];
     const nPlan = odNextRun(OD_RUNS.plan, d.now), nAppl = odNextRun(OD_RUNS.appl, d.now);
-    const chips = [["all", `All ${fl.length}`], ["needs", `Needs you ${needs.length}`], ["filed", `Filed ${filed.length}`], ["folders", `Folders & walks ${folders.length + walks.length}`]];
+    const chips = [["all", `All ${fl.length}`], ["needs", `Waiting ${needs.length}`], ["filed", `Filed ${filed.length}`], ["folders", `Folders & walks ${folders.length + walks.length}`]];
+    // Run now (v542) — only the app functions, through their existing test triggers.
+    const RUN_FN = { packet: "sendTestFridayPacket", lead: "sendTestLeadMeetingPrep", weekly: "sendTestForemanMeetingPrep" };
+    const RUN_ASK = {
+      packet: "Make a Friday Packet now?\n\nIt makes a real doc in Drive and pushes it to you only. The billed-since-last-packet list does not move.",
+      lead: "Make a Lead Meeting Prep doc now?\n\nIt makes a real doc in Drive and pushes it to you.",
+      weekly: "Run the Tuesday 4 PM prep now?\n\nIt adds a section to the running Foreman + Lead notes doc and makes a Weekly Lead Meeting doc. Tuesday's scheduled run will still add its own section.",
+    };
+    const runNow = async (k) => {
+      if (!window.confirm(RUN_ASK[k])) return;
+      setRunBusy(k);
+      try { const r = await httpsCallable(functions, RUN_FN[k])({}); const ok = !(r && r.data && r.data.ok === false); (ok ? toast.success : toast.error)(ok ? "Done — the doc is in Drive" : `It ran but failed: ${(r.data && r.data.error) || "error"}`); setDocsTick(t => t + 1); }
+      catch (e) { toast.error(`Couldn't run it: ${(e && e.message) || e}`); }
+      finally { setRunBusy(""); }
+    };
     main = (<>
       <div className="od-head"><div><h1>Automations</h1><p>Your automated docs, plus what Plan Intake and the Appliance Loads pull produced · live</p></div></div>
       <div className="od-minis">
         <OdMini title="Plans filed, 14 days" color={OD_G} icon="fileText" value={findings === undefined ? "…" : filesN} sub={`${filed.length} ${filed.length === 1 ? "batch" : "batches"}`} onClick={() => setPlanShow("filed")}><OdBars vals={[13,12,11,10,9,8,7,6,5,4,3,2,1,0].map(i => filed.filter(f => localYmd(f._at) === localYmd(odAddDays(d.t0, -i))).length)} color={OD_G} hi={13} label="Plan filings per day, last 14 days"/></OdMini>
-        <OdMini title="Plans need you" color={OD_R} icon="alertTriangle" value={findings === undefined ? "…" : needs.length} sub="not seen yet" onClick={() => setPlanShow("needs")}><OdRing pct={fl.length ? needs.length/fl.length : 0} color={OD_R} label="Share of plan findings that need you"/></OdMini>
-        <OdMini title="Not in CC yet" color={OD_O} icon="zap" value={appl === undefined ? "…" : aSum("notIn")} sub={`${aSum("likely")} likely`} onClick={() => applList("Appliances not in CC Home Runs yet", r => r.inCC.startsWith("not") || r.inCC === "likely")}><OdRing pct={arows.length ? (aSum("notIn") + aSum("likely"))/arows.length : 0} color={OD_O} label="Share of appliances not confirmed in Home Runs"/></OdMini>
-        <OdMini title="Appliances, no amps" color={OD_WARN} icon="help" value={appl === undefined ? "…" : aSum("tbd")} sub={`of ${arows.length}`} onClick={() => applList("Appliances with no amps found", isTbd)}><OdRing pct={arows.length ? aSum("tbd")/arows.length : 0} color={OD_WARN} label="Share of appliances with no amps"/></OdMini>
+        <OdMini title="Plans waiting" color={OD_R} icon="alertTriangle" value={findings === undefined ? "…" : needs.length} sub={plan.oldest ? `oldest ${planAge(plan.oldest)} d` : "none"} hint={plan.oldest ? `${plan.oldest.filename || pNum(plan.oldest.number)}` : ""} onClick={() => setPlanShow("needs")}><OdRing pct={fl.length ? needs.length/fl.length : 0} color={OD_R} label="Share of plan findings still waiting"/></OdMini>
+        <OdMini title="To check in Home Runs" color={OD_O} icon="zap" value={appl === undefined ? "…" : toCheck} sub={`${aSum("notIn")} not in · ${aSum("likely")} unconfirmed`} hint={arows.length ? `of ${arows.length} appliances` : ""} onClick={() => applList("Appliances to check in Home Runs", r => r.inCC.startsWith("not") || r.inCC === "likely")}><OdRing pct={arows.length ? toCheck/arows.length : 0} color={OD_O} label="Share of appliances to check in Home Runs"/></OdMini>
+        <OdMini title="Specs to confirm" color={OD_WARN} icon="help" value={appl === undefined ? "…" : aSum("typical")} sub={`of ${arows.length} · amps assumed`} hint={[aSum("tbd") ? `${aSum("tbd")} with no amps at all` : "none missing amps", worstTypical && worstTypical.typical > aSum("typical") / 2 ? `${worstTypical.label} ${worstTypical.typical}` : ""].filter(Boolean).join(" · ")} onClick={() => applList("Appliances on assumed (typical) amps", r => isTypical(r) || isTbd(r))}><OdRing pct={arows.length ? aSum("typical")/arows.length : 0} color={OD_WARN} label="Share of appliances on assumed amps"/></OdMini>
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">Automated docs<small>tap to open in Google Drive</small></div>
+        <div className="od-ct">Automated docs<small>tap to open in Google Drive{latestDocs && latestDocs._failed ? " · the newest-doc lookup failed" : ""}</small><div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setDocsTick(t => t + 1)}>Check again</button></div></div>
         <div className="od-docs">
-          {OD_DOCS.map(x => { const lt = x.latest && latestDocs[x.latest] && latestDocs[x.latest].url ? latestDocs[x.latest] : null, made = lt && odDate(lt.createdTime); return (
+          {OD_DOCS.map(x => { const st = docStat(x), lt = st.doc; return (
             <div className="od-doc" key={x.k}>
               <a className="go" href={lt ? lt.url : x.url} target="_blank" rel="noopener noreferrer">
                 <span className="k"><Icon name={lt ? "fileText" : x.folder ? "folderOpen" : x.sheet ? "dollarSign" : "fileText"} size={16}/></span>
-                <span className="m"><b>{x.title}</b><small>{lt ? `Latest: ${lt.name}${made ? " · made " + at2(made) : ""}` : x.what}</small><small className="w">{x.when} · {x.by}{x.k === "packet" && packetAt && !lt ? ` · last made ${at2(packetAt)}` : ""}</small></span>
+                <span className="m"><b>{x.title}</b><small>{lt ? `Latest: ${lt.name}` : x.what}</small>{st.text ? <small className={"st " + (st.tone || "")}>{st.text}</small> : null}<small className="w">{x.when} · {x.by}</small></span>
               </a>
-              {lt ? <a className="fold" href={x.url} target="_blank" rel="noopener noreferrer" title="Open the folder" aria-label={`Open the ${x.title} folder`}><Icon name="folderOpen" size={14}/></a> : <span className="fold"><Icon name="external" size={13}/></span>}
+              {RUN_FN[x.k] ? <button type="button" className="od-mini-btn run" disabled={!!runBusy} onClick={() => runNow(x.k)}>{runBusy === x.k ? "Running…" : "Run now"}</button>
+                : lt ? <a className="fold" href={x.url} target="_blank" rel="noopener noreferrer" title="Open the folder" aria-label={`Open the ${x.title} folder`}><Icon name="folderOpen" size={14}/></a> : <span className="fold"><Icon name="external" size={13}/></span>}
             </div>
           ); })}
         </div>
@@ -46916,19 +47520,20 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {findings !== null && findings !== undefined && !planList.length && <div className="od-empty">{planShow === "needs" ? "Nothing waiting on you." : "Nothing in the last 14 days."}</div>}
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">Appliance Loads<small>{appl && appl.rows ? `${odPlural(ajobs.length, "job")} · ${arows.length} items · ${Math.round(aSum("amps")).toLocaleString()} A connected` : appl === undefined ? "loading…" : ""}{nAppl ? ` · next pull ${at2(nAppl)}` : ""}</small>
+        <div className="od-ct">Appliance Loads<small>{appl && appl.rows ? `${odPlural(ajobs.length, "job")} · ${arows.length} items · ${Math.round(aSum("amps")).toLocaleString()} A connected${aSum("typical") ? ` (${aSum("typical")} on assumed amps)` : ""}` : appl === undefined ? "loading…" : ""}{nAppl ? ` · next pull ${at2(nAppl)}` : ""}</small>
           <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setApplTick(t => t + 1)}>Refresh</button><button type="button" className="od-mini-btn" onClick={() => go(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`)}>Open sheet</button></div></div>
+        {noPackage.length > 0 && <div className="od-warn wide">No appliance package yet (in rough or starting rough within 14 days): {noPackage.map((j, i) => <Fragment key={j.id}>{i ? ", " : ""}<button type="button" className="od-inlink" onClick={() => openJob(j)}>{j.name}</button></Fragment>)}</div>}
         {appl && appl.err ? <div className="od-empty">{appl.err}</div> : (
           <div className="od-tablewrap"><div className="od-table appl">
             <div className="tr hd"><span className="c">Job</span><span className="c">Items</span><span className="c">Amps</span><span className="c">Not in CC</span><span className="c">Likely</span><span className="c">No amps</span><span className="c">Typical</span></div>
             {ajobs.map(g => (
               <button type="button" className="tr" key={g.no} onClick={() => applOpen(g)}>
-                <span className="c nm"><b>{g.label}</b><small>{g.job ? g.job.name : "no app job with this number"}</small></span>
+                <span className="c nm"><b>{g.label}</b><small>{g.job ? `${g.job.name} · ${g.job.foreman ? odFirst(g.job.foreman) : "no foreman"}` : "no app job with this number"}</small></span>
                 <span className="c num">{g.rows.length}</span><span className="c num">{Math.round(g.amps * 10) / 10}</span>
                 <span className="c num" style={g.notIn ? { color: OD_R, fontWeight: 700 } : null}>{g.notIn || "—"}</span>
                 <span className="c num" style={g.likely ? { color: OD_WARN, fontWeight: 700 } : null}>{g.likely || "—"}</span>
                 <span className="c num" style={g.tbd ? { color: OD_R, fontWeight: 700 } : null}>{g.tbd || "—"}</span>
-                <span className="c num">{g.typical || "—"}</span>
+                <span className="c num" style={g.typical ? { color: OD_WARN, fontWeight: 700 } : null}>{g.typical || "—"}</span>
               </button>
             ))}
             {appl === undefined && <div className="od-empty">Loading the sheet…</div>}
@@ -46938,10 +47543,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
     right = (<>
       <Me sub="Automations"/>
-      <Stats items={[[needs.length, "Plans need you", () => setPlanShow("needs")], [filesN, "Plans filed, 14 d", () => setPlanShow("filed")], [aSum("notIn"), "Not in CC yet"]]}/>
-      <Sec right={`${needs.length}`}>Needs you</Sec>
+      <Stats items={[[needs.length, "Plans waiting", () => setPlanShow("needs")], [filesN, "Plans filed, 14 d", () => setPlanShow("filed")], [toCheck, "To check in Home Runs"]]}/>
+      <Sec right={`${needs.length}`}>Waiting on you</Sec>
       <div className="od-list">
-        {needs.slice(0, 8).map(f => <OdItem key={f.id} color={OD_R} icon={planIcon(f)} tag={PLAN_LABEL[f.type] || f.type} title={f.filename || pNum(f.number)} sub={odText(f.summary)} when={odAgo(f._at, d.now)} onClick={() => planOpen(f)}/>)}
+        {needs.slice(0, 8).map(f => <OdItem key={f.id} color={OD_R} icon={planIcon(f)} tag={`${PLAN_LABEL[f.type] || f.type} · ${planAge(f)} d`} title={f.filename || pNum(f.number)} sub={odText(f.summary)} when={odAgo(f._at, d.now)} onClick={() => planOpen(f)}/>)}
         {!needs.length && <div className="od-empty dark">{findings === undefined ? "Loading…" : "Nothing from Plan Intake is waiting on you."}</div>}
       </div>
       <Sec>When they run</Sec>
@@ -46952,9 +47557,48 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
   }
 
-  // ── sheet (job / person / list) ──
+  // ── sheet (job / person / list / plan) ──
   let sheetEl = null;
-  if (sheet && sheet.kind === "job") {
+  if (sheet && sheet.kind === "plan") {
+    // A plan-intake finding (v542): its links, the job it points at, and — while it
+    // waits — File it (planFileByHand, name + PIN, server re-checks the hat) and
+    // Not ours (planDismissByHand, same checks). Either one stamps it resolved.
+    const f = (findings || []).map(x => ({ ...x, _at: odDate(x.createdAt) })).find(x => x.id === sheet.id);
+    if (f) {
+      const pNum = (n) => /^#?Q?\d+$/i.test(String(n || "").trim()) ? planNum(String(n).trim()) : "No number";
+      const jobOf = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
+      const j = jobOf(f.bestGuess || f.number), j2 = f.altGuess ? jobOf(f.altGuess) : null;
+      const waiting = plan.isWaiting(f);
+      const notOurs = async () => {
+        if (!window.confirm("Not ours: move this PDF to _Plan Inbox/Dismissed and clear it from the list?")) return;
+        setPlanBusy(true);
+        try { await gcAdminCallable("planDismissByHand", identity)({ item: f.item, reason: `dismissed by ${(identity && identity.name) || "office"} from the dashboard` }); toast.success("Dismissed"); setSheet(null); }
+        catch (e) { toast.error((e && e.message) || "Couldn't dismiss it"); }
+        finally { setPlanBusy(false); }
+      };
+      sheetEl = (
+        <OdSheet title={`${PLAN_LABEL[f.type] || f.type} · ${pNum(f.bestGuess || f.number)}`} sub={`${f._at ? `${odWhen({ at: f._at }, d.now)}` : ""}${waiting ? ` · waiting ${planAge(f)} d` : ""}`} onClose={() => setSheet(null)}>
+          <div className="od-note"><small>{f.filename || "Plan intake"}</small>{odText(f.summary)}</div>
+          {(f.from || f.bestGuess || f.altGuess) && <div className="od-facts">
+            <div><small>From</small><b>{f.from || "—"}</b></div>
+            <div><small>Best guess</small><b>{f.bestGuess ? planNum(f.bestGuess) : "—"}</b></div>
+            <div><small>Or</small><b>{f.altGuess ? `${planNum(f.altGuess)}${f.altWhy ? " · " + f.altWhy : ""}` : "—"}</b></div>
+          </div>}
+          {waiting && f.type === "unmatched_plan" && f.canFile && f.item && (<>
+            <div className="od-sh">File it</div>
+            <PlanFileForm f={f} identity={identity} onDone={() => setSheet(null)}/>
+            <button type="button" className="od-more" disabled={planBusy} onClick={notOurs}>{planBusy ? "Dismissing…" : "Not ours — dismiss it"}</button>
+          </>)}
+          <div className="od-sh">Open</div>
+          <Rows rows={[
+            ...(f.links || []).filter(l => l && l.url).map(l => ({ title: `Open ${String(l.label || "link").toLowerCase()}`, sub: l.label === "Email" ? "Gmail" : l.label === "Simpro" ? "Simpro" : "Google Drive", color: OD_B, icon: "external", onClick: () => { try { window.open(l.url, "_blank", "noopener,noreferrer"); } catch (e) {} } })),
+            ...(j ? [{ title: `Open ${j.name}`, sub: `Job panel · ${j.foreman || "no foreman"}`, color: OD_A, icon: "hardHat", job: j }] : []),
+            ...(j2 && (!j || j2.id !== j.id) ? [{ title: `Open ${j2.name}`, sub: "The other likely job", color: OD_A, icon: "hardHat", job: j2 }] : []),
+          ]} empty="No links on this one."/>
+        </OdSheet>
+      );
+    }
+  } else if (sheet && sheet.kind === "job") {
     const j = d.allLive.find(x => x.id === sheet.id) || (jobs || []).find(x => x && x.id === sheet.id);
     if (j) {
       const inf = d.info[j.id] || odJobInfo(j, d.now), s = d.secOf(j), ev = (d.evById[j.id] || []).slice(0, 15), up = d.sched.filter(x => x.job && x.job.id === j.id);
@@ -46972,6 +47616,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             {fact("Last work logged", d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "Nothing logged")}
           </div>
           {j.statusUpdate ? <div className="od-note"><small>Status update{j.statusUpdateBy ? " · " + j.statusUpdateBy : ""}</small>{odText(j.statusUpdate)}</div> : null}
+          {(j.roughWaitingOn || j.finishWaitingOn) ? <div className="od-note"><small>Waiting on</small>{[j.roughWaitingOn && `Rough: ${odText(j.roughWaitingOn)}`, j.finishWaitingOn && `Finish: ${odText(j.finishWaitingOn)}`].filter(Boolean).join(" · ")}</div> : null}
+          {planWaitingOn(j).length > 0 && <><div className="od-sh">Plans waiting to be filed <span>{planWaitingOn(j).length}</span></div><Rows rows={planWaitingOn(j).map(f => ({ title: f.filename || PLAN_LABEL[f.type] || "Plan", sub: odText(f.summary), right: `${planAge(f)} d`, color: OD_R, icon: "fileText", onClick: () => setSheet({ kind: "plan", id: f.id }) }))}/></>}
+          {inf.questions.length > 0 && <><div className="od-sh">Open questions <span>{inf.questions.length}</span></div><Rows rows={inf.questions.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(x => ({ title: x.text, sub: `${x.ph}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help" }))}/></>}
           {inf.failOpen.length > 0 && <><div className="od-sh">Failed inspection items to fix <span>{inf.failOpen.length}</span></div><Rows rows={inf.failOpen.map(x => ({ title: x.text, sub: x.ph + " inspection", color: OD_R, icon: "x" }))}/></>}
           <div className="od-sh">Coming up <span>{up.length}</span></div>
           <Rows rows={up.map(x => ({ title: x.label, sub: x.type === "start" ? (x.confirmed ? "Confirmed" : "Projected") : x.detail || "", right: `${odDow(x.at)} ${odShort(x.at)}`, color: OD_SCHED_COLOR[x.type], icon: OD_SCHED_ICON[x.type] }))} empty="No dates set."/>
@@ -47018,11 +47665,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   return (
     <div className="odash">
       <style>{`
-        .odash{--pan:rgba(27,32,48,.8);--inset:rgba(8,11,18,.42);--line:rgba(255,255,255,.08);--ink:${D.textBright};--dim:#A3ADBD;--faint:#8F9AAD;
-          --card:linear-gradient(180deg,#222839,#1C2130);--card-solid:#20263A;--cink:${D.textBright};--cdim:#A3ADBD;--cline:#2E3548;--hov:rgba(255,255,255,.05);--trk:rgba(255,255,255,.09);
-          --o:${OD_A};--on-o:${OD_ON_A};--o-soft:rgba(102,168,255,.14);--o-ink:#8EC0FF;
-          color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:dark;
-          background:radial-gradient(55% 45% at 12% 6%,rgba(47,91,217,.2),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(102,168,255,.1),transparent 70%),linear-gradient(180deg,#1B2030,#141821)}
+        .odash{--pan:rgba(255,255,255,.66);--inset:rgba(27,43,74,.045);--line:rgba(27,43,74,.1);--ink:${C.text};--dim:${C.dim};--faint:${C.faint};
+          --card:${C.card};--card-solid:${C.card};--cink:${C.text};--cdim:${C.dim};--cline:${C.border};--hov:rgba(37,99,201,.06);--trk:rgba(27,43,74,.08);
+          --o:${OD_A};--on-o:${OD_ON_A};--o-soft:rgba(37,99,201,.1);--o-ink:#1E4FA8;
+          color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:light;
+          background:radial-gradient(55% 45% at 12% 6%,rgba(47,91,217,.09),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(37,99,201,.06),transparent 70%),linear-gradient(180deg,#F7F9FC,#EDF1F6)}
         .odash *{box-sizing:border-box}
         .odash button{font:inherit;color:inherit}
         .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
@@ -47030,45 +47677,49 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-tabs::-webkit-scrollbar{display:none}
         .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
         .odash .od-tabs button:hover{color:var(--ink)}
-        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:var(--on-o);box-shadow:0 6px 14px -6px rgba(102,168,255,.6)}
+        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:var(--on-o);box-shadow:0 6px 14px -6px rgba(37,99,201,.45)}
         .odash .od-help{display:inline-flex;align-items:center}
         .odash .od-help > span > span{display:none}
         .odash .od-help button{width:34px;height:34px;justify-content:center;background:var(--inset)!important;border:1px solid var(--line)!important;color:var(--o)!important}
-        .odash .od-help button:hover{border-color:rgba(102,168,255,.5)!important}
+        .odash .od-help button:hover{border-color:rgba(37,99,201,.45)!important}
         .odash .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);white-space:nowrap}
         .odash .od-top .live{margin-left:auto}
         .odash .live::before{content:"";width:8px;height:8px;border-radius:50%;background:${D.live};box-shadow:0 0 0 4px rgba(52,209,127,.2)}
         .odash .od-ctrl .live{display:none}
         .odash .od-fpanel{display:contents}
         .odash .od-fbtn{display:none;align-items:center;gap:7px;border:1px solid var(--line);background:var(--inset);color:var(--ink);border-radius:999px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer}
-        .odash .od-fbtn[aria-expanded="true"]{border-color:rgba(102,168,255,.5);color:var(--o-ink)}
+        .odash .od-fbtn[aria-expanded="true"]{border-color:rgba(37,99,201,.45);color:var(--o-ink)}
         .odash .od-fbtn .ct{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--o);color:var(--on-o);font-size:11.5px;font-weight:800}
         .odash .od-ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-        .odash .od-sel{background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;max-width:220px}
-        .odash .od-sel.light{background:var(--inset);border-color:var(--cline);color:var(--cink);color-scheme:dark}
+        .odash .od-sel{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;max-width:220px;color-scheme:light}
+        .odash .od-sel.light{background:var(--card);border-color:var(--cline);color:var(--cink);color-scheme:light}
         .odash .od-seg{display:inline-flex;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
         .odash .od-seg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
-        .odash .od-seg button[aria-pressed="true"]{background:rgba(255,255,255,.14);color:var(--ink)}
+        .odash .od-seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(27,43,74,.14)}
+        .odash .od-seg.off{opacity:.45}.odash .od-seg.off button{cursor:default}
         .odash .od-find{position:relative;flex:1;min-width:200px;max-width:380px;margin-left:auto}
-        .odash .od-find input{width:100%;background:var(--inset);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:12.5px;outline:none}
+        .odash .od-find input{width:100%;background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:12.5px;outline:none}
         .odash .od-find input::placeholder{color:var(--faint)}
-        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:#1E2433;color:var(--cink);border:1px solid var(--cline);border-radius:14px;box-shadow:0 18px 40px -12px rgba(0,0,0,.6);overflow:hidden}
+        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:var(--card);color:var(--cink);border:1px solid var(--cline);border-radius:14px;box-shadow:0 18px 40px -12px rgba(27,43,74,.28);overflow:hidden}
         .odash .od-find .hits button{display:flex;flex-direction:column;align-items:flex-start;width:100%;border:0;background:transparent;padding:9px 14px;text-align:left;cursor:pointer;border-bottom:1px solid var(--cline)}
         .odash .od-find .hits button:hover{background:var(--hov)}
         .odash .od-find .hits b{font-size:13px}.odash .od-find .hits small{font-size:11.5px;color:var(--cdim)}
         .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:start}
-        .odash .od-panel{background:var(--pan);border:1px solid var(--line);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+        .odash .od-panel{background:var(--pan);border:1px solid rgba(27,43,74,.08);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
         .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
         .odash .od-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
         .odash .od-head p{margin:3px 0 0;font-size:12.5px;color:var(--dim)}
-        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#FFC4A6;background:rgba(240,138,85,.14);border:1px solid rgba(240,138,85,.4);border-radius:12px;padding:5px 10px;max-width:420px}
+        .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#8A3A12;background:rgba(180,83,26,.09);border:1px solid rgba(180,83,26,.32);border-radius:12px;padding:5px 10px;max-width:420px}
+        .odash .od-warn.wide{margin:0;max-width:none;font-size:12.5px;font-weight:600;line-height:1.5}
+        .odash .od-inlink{all:unset;cursor:pointer;font-weight:700;text-decoration:underline}
         .odash .od-clear{margin-left:auto;border:1px solid var(--line);background:var(--inset);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
-        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:1px solid var(--cline);text-align:left;box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 14px 28px -18px rgba(0,0,0,.85)}
+        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:1px solid var(--cline);text-align:left;box-shadow:0 1px 2px rgba(27,43,74,.05),0 12px 26px -20px rgba(27,43,74,.28)}
+        .odash .od-needyou{border-color:rgba(196,59,59,.28);box-shadow:inset 3px 0 0 ${OD_R},0 1px 2px rgba(27,43,74,.05)}
         .odash .od-pad{padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
         .odash .od-minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
         .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),box-shadow .25s}
         .odash .od-tap{cursor:pointer}
-        .odash .od-tap:hover{transform:translateY(-4px);border-color:rgba(102,168,255,.35);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 20px 32px -16px rgba(0,0,0,.9)}
+        .odash .od-tap:hover{transform:translateY(-4px);border-color:rgba(37,99,201,.35);box-shadow:0 18px 30px -18px rgba(27,43,74,.35)}
         .odash .od-mini .t{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:700}
         .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
         .odash .od-mini .b{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:auto;flex-wrap:wrap}
@@ -47095,7 +47746,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-busy small{font-size:11.5px;color:var(--cdim)}
         .odash .od-link{all:unset;cursor:pointer;font-size:13px;color:var(--cink)}
         .odash .od-link:hover b{text-decoration:underline}
-        .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:rgba(255,123,123,.14);color:#FF9A9A;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
+        .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:rgba(196,59,59,.1);color:${OD_R};border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
         .odash .od-sec{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14px;color:var(--ink)}
         .odash .od-sec span::before{content:"";display:inline-block;width:3px;height:15px;border-radius:2px;background:var(--o);margin-right:9px;vertical-align:-2px}
         .odash .od-sec small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--dim)}
@@ -47105,18 +47756,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-crew > div{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
         .odash .od-crew b{font-size:13.5px}
         .odash .od-crew p{margin:0;font-size:11.5px;color:var(--cdim);line-height:1.35}
+        .odash .od-crew p.trouble{color:${OD_R};font-weight:700}
         .odash .od-crew .day{align-self:flex-start;margin-top:5px;font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 9px;background:var(--trk)}
         .odash .od-crew.hot{background:var(--o);color:var(--on-o);border-color:transparent}
-        .odash .od-crew.hot p{color:#14243D}
-        .odash .od-crew.hot .day{background:rgba(11,21,38,.16)}
+        .odash .od-crew.hot p{color:rgba(255,255,255,.9)}
+        .odash .od-crew.hot .day{background:rgba(255,255,255,.2)}
         .odash .od-start{padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0}
         .odash .od-start .dd{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-start b{font-size:14px}
         .odash .od-start p{margin:0;font-size:11.5px;color:var(--cdim)}
         .odash .od-start.hot{background:var(--o);color:var(--on-o);border-color:transparent}
-        .odash .od-start.hot .dd,.odash .od-start.hot p{color:#14243D}
+        .odash .od-start.hot .dd,.odash .od-start.hot p{color:rgba(255,255,255,.9)}
         .odash .od-me{display:flex;align-items:center;gap:10px}
-        .odash .av{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#2F5BD9;color:#fff;font-style:normal;font-weight:800;font-size:14px;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.22)}
+        .odash .av{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:50%;background:${C.accent};color:#fff;font-style:normal;font-weight:800;font-size:14px;flex:none;box-shadow:0 0 0 2px #fff}
         .odash .av.sm{width:30px;height:30px;font-size:12px;box-shadow:none}
         .odash .od-me b{display:block;font-size:14px}
         .odash .od-me small{display:block;font-size:11.5px;color:var(--dim)}
@@ -47132,18 +47784,18 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-cal .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px 0;text-align:center;font-size:11.5px}
         .odash .od-cal .dow{color:var(--faint);font-size:11.5px;padding-bottom:4px}
         .odash .od-cal .d{width:28px;height:28px;margin:0 auto;border-radius:50%;display:grid;place-items:center;color:var(--dim);font-variant-numeric:tabular-nums;border:0;background:transparent;font-size:11.5px}
-        .odash .od-cal button.d{cursor:pointer;color:#0B1526;font-weight:800}
+        .odash .od-cal button.d{cursor:pointer;color:#fff;font-weight:800}
         .odash .od-cal button.d:hover{transform:scale(1.12)}
         .odash .od-cal .d.today{box-shadow:inset 0 0 0 1.5px var(--ink);color:var(--ink);font-weight:800}
-        .odash .od-cal button.d.today{color:#0B1526;box-shadow:0 0 0 2px var(--ink)}
+        .odash .od-cal button.d.today{color:#fff;box-shadow:0 0 0 2px var(--ink)}
         .odash .od-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--dim)}
         .odash .od-legend.light{color:var(--cdim);margin-top:0}
         .odash .od-legend span{display:inline-flex;align-items:center;gap:5px}
         .odash .od-legend span::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c)}
         .odash .od-list{display:flex;flex-direction:column;gap:8px}
-        .odash .od-item{display:flex;align-items:center;gap:10px;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:14px;padding:9px 10px;text-align:left;cursor:pointer;min-width:0}
+        .odash .od-item{display:flex;align-items:center;gap:10px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:9px 10px;text-align:left;cursor:pointer;min-width:0}
         .odash .od-item:disabled{cursor:default}
-        .odash .od-item:not(:disabled):hover{background:rgba(255,255,255,.07)}
+        .odash .od-item:not(:disabled):hover{background:var(--hov)}
         .odash .od-item .th{width:38px;height:38px;border-radius:10px;flex:none;display:grid;place-items:center;background:color-mix(in srgb,var(--c) 16%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--c) 28%,transparent)}
         .odash .od-item .tx{min-width:0;flex:1;display:flex;flex-direction:column}
         .odash .od-item em{font-style:normal;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
@@ -47165,10 +47817,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-chips button[aria-pressed="true"]{background:var(--o);border-color:transparent;color:var(--on-o)}
         .odash .od-frow{display:flex;gap:8px;flex-wrap:wrap}
         .odash .od-frow .od-q{flex:1;min-width:180px}
-        .odash .od-q{width:100%;border:1px solid var(--cline);background:var(--inset);border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none;color-scheme:dark}
+        .odash .od-q{width:100%;border:1px solid var(--cline);background:var(--card);border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;color:var(--cink);outline:none;color-scheme:light}
         .odash .od-q:focus{border-color:var(--o)}
         .odash .od-dayh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cdim);padding:12px 0 2px;border-bottom:1px solid var(--cline)}
         .odash .od-dayh span{margin-left:auto;font-weight:600;letter-spacing:0;text-transform:none}
+        .odash .od-dayh.sub{font-size:11.5px;padding-top:8px;color:var(--o-ink);border-bottom-style:dashed}
+        .odash .od-more,.od-sheet .od-more{align-self:flex-start;margin-top:8px;border:1px solid var(--cline);background:var(--card);color:var(--o-ink);border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
         .odash .od-rows{display:flex;flex-direction:column}
         .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%;color:var(--cink)}
         .odash .od-row:disabled{cursor:default}
@@ -47180,17 +47834,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-row .m small{font-size:12px;color:var(--cdim);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
         .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
         .odash .od-pulse{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:1px solid var(--cline);box-shadow:inset 0 1px 0 rgba(255,255,255,.05);text-align:left;cursor:pointer}
+        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:1px solid var(--cline);box-shadow:0 1px 2px rgba(27,43,74,.05);text-align:left;cursor:pointer}
         .odash .od-person:hover{background:var(--hov)}
         .odash .od-person > div{min-width:0;flex:1}
         .odash .od-person b{display:block;font-size:13px}
         .odash .od-person small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-person em{display:block;font-style:normal;font-size:11.5px;font-weight:700;color:var(--o-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-person.quiet{border-color:rgba(196,59,59,.35)}
         .odash .beat{width:9px;height:9px;border-radius:50%;background:var(--c);flex:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 22%,transparent)}
         .odash .od-nav{margin-left:auto;display:inline-flex;gap:4px}
         .odash .od-nav button{border:1px solid var(--cline);background:var(--inset);border-radius:999px;min-width:30px;height:28px;padding:0 10px;display:grid;place-items:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--cink)}
         .odash .od-weekwrap{overflow-x:auto}
         .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
-        .odash .od-week .col{background:var(--inset);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+        .odash .od-week .col{background:rgba(27,43,74,.035);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
         .odash .od-week .col.today{background:var(--o-soft)}
         .odash .od-week .dh{font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-week .col.today .dh{color:var(--o-ink)}
@@ -47198,6 +47854,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-week .blk{border:0;text-align:left;cursor:pointer;border-radius:8px;padding:6px 8px;border-left:3px solid var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);min-width:0;color:var(--cink)}
         .odash .od-week .blk b{font-size:12px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
         .odash .od-week .blk small{display:block;font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-week .blk small.bad{color:${OD_R};font-weight:700}
         .odash .od-week .none{color:var(--faint);font-size:12px;text-align:center;margin-top:20px}
         .odash .od-board{display:flex;flex-direction:column}
         .odash .od-board .r{display:grid;grid-template-columns:30px minmax(0,1fr) minmax(80px,40%);gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;color:var(--cink)}
@@ -47217,14 +47874,14 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-heat .n{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--cink);padding:0}
         .odash .od-heat .c{height:28px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-variant-numeric:tabular-nums;border:0;cursor:pointer}
         .odash .od-heat .c:disabled{cursor:default}
-        .odash .od-box{background:var(--inset);border:1px solid var(--line);border-radius:16px;padding:4px 12px}
+        .odash .od-box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:4px 12px}
         .odash .od-box.light{background:var(--card);border:1px solid var(--cline);padding:8px}
         .odash .od-dev{display:flex;align-items:center;gap:8px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line)}
         .odash .od-dev:last-child{border-bottom:0}
         .odash .od-dev .nm{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
         .odash .od-dev .sn{color:var(--dim);font-size:11.5px;white-space:nowrap}
-        .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11.5px;color:#FF8A7A;background:rgba(229,72,77,.16);border-radius:999px;padding:2px 8px}
-        .odash .od-dev em.ok{color:#5FE0A0;background:rgba(47,191,113,.16)}
+        .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11.5px;color:${OD_R};background:rgba(196,59,59,.1);border-radius:999px;padding:2px 8px}
+        .odash .od-dev em.ok{color:${OD_G};background:rgba(24,128,74,.1)}
         .odash .od-tablewrap{overflow-x:auto}
         .odash .od-table{min-width:760px;display:flex;flex-direction:column}
         .odash .od-table .tr{display:grid;grid-template-columns:minmax(180px,2fr) 1fr 1.2fr 64px 56px 1.1fr 1fr;gap:8px;align-items:center;padding:9px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;width:100%;color:var(--cink);font-size:12.5px}
@@ -47238,7 +47895,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-table.appl .hd .c{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-ct-actions{margin-left:auto;display:flex;gap:6px}
         .odash .od-docs{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin-top:10px}
-        .odash .od-doc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 6px 4px 4px;border:1px solid var(--cline);border-radius:12px;background:var(--inset)}
+        .odash .od-doc{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 6px 4px 4px;border:1px solid var(--cline);border-radius:12px;background:var(--card)}
         .odash .od-doc .go{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:center;padding:6px 8px;border-radius:9px;color:var(--cink);text-decoration:none;min-width:0}
         .odash .od-doc .go:hover{background:var(--hov)}
         .odash .od-doc .fold{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;color:var(--cdim)}
@@ -47247,10 +47904,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-doc .m{min-width:0;display:flex;flex-direction:column;gap:1px}
         .odash .od-doc .m b{font-size:13px}
         .odash .od-doc .m small{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .odash .od-doc .m small.w{color:#F5A57E;font-weight:600}
-        .odash .od-mini-btn{border:1px solid var(--cline);background:var(--inset);color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+        .odash .od-doc .m small.w{color:var(--cdim);font-weight:600}
+        .odash .od-doc .m small.st{font-weight:700;color:var(--cdim)}.odash .od-doc .m small.st.good{color:${OD_G}}.odash .od-doc .m small.st.bad{color:${OD_R}}.odash .od-doc .m small.st.warn{color:${OD_O}}
+        .odash .od-mini-btn.run{white-space:nowrap}.odash .od-mini-btn:disabled{opacity:.55;cursor:default}
+        .odash .od-mini-btn{border:1px solid var(--cline);background:var(--card);color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
         .odash .od-mini-btn:hover{background:var(--hov)}
         .odash .od-table .c small{color:var(--cdim);font-size:11.5px}
+        .odash .od-table .c small.flag{display:block;color:${OD_R};font-weight:700}
+        .odash .od-table .c small.sp{display:block;font-weight:600;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table .c.num{display:flex;flex-direction:column}
         .odash .od-table .c.st small{display:block;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .odash .od-table .nm{display:flex;flex-direction:column}
         .odash .od-table .nm b{overflow:hidden;text-overflow:ellipsis}
@@ -47267,35 +47929,35 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-sess .t{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--cdim);white-space:nowrap}
         .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
         .odash .od-empty.dark{color:var(--dim)}
-        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(5,8,14,.62);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
-        .od-sheet{width:min(560px,100%);height:100%;background:#181D29;color:${D.textBright};border-left:1px solid #2E3548;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(0,0,0,.6);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
+        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(27,33,45,.34);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+        .od-sheet{width:min(560px,100%);height:100%;background:#F7F9FC;color:${C.text};border-left:1px solid ${C.border};display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(27,43,74,.35);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
         @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
-        .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid #2E3548;background:#1E2433}
+        .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid ${C.border};background:${C.card}}
         .od-sheet-h .tt{flex:1;min-width:0;display:flex;flex-direction:column}
-        .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:#A3ADBD}
-        .od-sheet-h .x{border:0;background:rgba(255,255,255,.08);border-radius:999px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;flex:none;color:${D.textBright}}
-        .od-sheet-h .go{border:0;background:#66A8FF;color:#0B1526;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
+        .od-sheet-h b{font-size:17px}.od-sheet-h small{font-size:12px;color:${C.dim}}
+        .od-sheet-h .x{border:0;background:${C.slateBg};border-radius:999px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;flex:none;color:${C.text}}
+        .od-sheet-h .go{border:0;background:${OD_A};color:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;flex:none}
         .od-sheet-b{flex:1;overflow-y:auto;padding:12px 18px calc(24px + env(safe-area-inset-bottom,0px))}
         .odash .od-facts,.od-sheet .od-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:6px}
-        .od-sheet .od-facts div{background:#20263A;border:1px solid #2E3548;border-radius:12px;padding:8px 10px;min-width:0}
-        .od-sheet .od-facts small{display:block;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#A3ADBD}
+        .od-sheet .od-facts div{background:${C.card};border:1px solid ${C.border};border-radius:12px;padding:8px 10px;min-width:0}
+        .od-sheet .od-facts small{display:block;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:${C.dim}}
         .od-sheet .od-facts b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .od-sheet .od-note{background:var(--o-soft);border-radius:12px;padding:9px 12px;font-size:13px;margin:6px 0}
         .od-sheet .od-note small{display:block;font-size:11.5px;font-weight:700;color:var(--o-ink);text-transform:uppercase;letter-spacing:.05em}
-        .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#A3ADBD;padding:16px 0 4px;border-bottom:1px solid #2E3548}
+        .od-sheet .od-sh{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:${C.dim};padding:16px 0 4px;border-bottom:1px solid ${C.border}}
         .od-sheet .od-sh span{margin-left:auto;font-weight:700}
         .od-sheet .od-rows{display:flex;flex-direction:column}
-        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid #2E3548;background:transparent;text-align:left;cursor:pointer;width:100%;color:${D.textBright};font:inherit}
+        .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid ${C.border};background:transparent;text-align:left;cursor:pointer;width:100%;color:${C.text};font:inherit}
         .od-sheet .od-row:disabled{cursor:default}
-        .od-sheet .od-row:not(:disabled):hover{background:rgba(255,255,255,.05)}
+        .od-sheet .od-row:not(:disabled):hover{background:rgba(37,99,201,.06)}
         .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
         .od-sheet .od-row .m{min-width:0;display:flex;flex-direction:column}
         .od-sheet .od-row .m b{font-size:13px;overflow:hidden;text-overflow:ellipsis}
         .od-sheet .od-row .m em{font-style:normal;font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--o-ink)}
-        .od-sheet .od-row .m small{font-size:12px;color:#A3ADBD}
-        .od-sheet .od-row .t{font-size:11.5px;color:#A3ADBD;white-space:nowrap}
-        .od-sheet .od-empty{color:#A3ADBD;font-size:12.5px;padding:10px 2px}
-        .odash button:focus-visible,.odash input:focus-visible,.odash select:focus-visible,.od-sheet button:focus-visible{outline:2px solid var(--o, #66A8FF);outline-offset:2px}
+        .od-sheet .od-row .m small{font-size:12px;color:${C.dim}}
+        .od-sheet .od-row .t{font-size:11.5px;color:${C.dim};white-space:nowrap}
+        .od-sheet .od-empty{color:${C.dim};font-size:12.5px;padding:10px 2px}
+        .odash button:focus-visible,.odash input:focus-visible,.odash select:focus-visible,.od-sheet button:focus-visible{outline:2px solid var(--o, ${OD_A});outline-offset:2px}
         @media (max-width:1100px){.odash .od-grid{grid-template-columns:minmax(0,1fr)}.odash .od-minis{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media (max-width:700px){.odash{padding:10px;border-radius:16px}.odash .od-panel{padding:14px}.odash .od-row2,.odash .od-plan{grid-template-columns:minmax(0,1fr)}
           .odash .od-find{max-width:none;margin-left:0;flex-basis:100%}
@@ -47332,10 +47994,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           </button>
           <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"}</span>
           <div className="od-fpanel" id="od-fpanel">
-            <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Foreman">
+            <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Jobs run by">
               <option value="">All foremen</option>{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}
+              {d.noForemanJobs.length > 0 || foreman === OD_NOFM ? <option value={OD_NOFM}>No active foreman (all)</option> : null}
+              {d.offTeam.length > 0 && <optgroup label="Named on jobs, not an active foreman">{d.offTeam.map(f => <option key={f} value={f}>{f}</option>)}</optgroup>}
             </select>
-            <span className="od-seg" role="group" aria-label="Date range">{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} onClick={() => pickRange(r)}>{r} days</button>)}</span>
+            <span className={"od-seg" + (rangeApplies ? "" : " off")} role="group" aria-label={rangeApplies ? "Date range" : "Date range (does not apply on this tab)"} title={rangeApplies ? "" : "The day range only changes Overview's chart and the Activity tab"}>{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} aria-disabled={!rangeApplies} onClick={() => pickRange(r)}>{r} days</button>)}</span>
             <div className="od-find">
               <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
               {searchHits.length > 0 && <div className="hits">{searchHits.map(j => (
@@ -47373,35 +48037,39 @@ if (IS_DASH_PAGE) {
     if (l) l.setAttribute("href", "/dashboard-manifest.json");
     const t = document.querySelector('meta[name="apple-mobile-web-app-title"]');
     if (t) t.setAttribute("content", "Dashboard");
+    // v542: a light page — the phone's status bar matches it, not the crew app's dark one.
+    const th = document.querySelector('meta[name="theme-color"]');
+    if (th) th.setAttribute("content", "#EEF2F7");
   } catch (e) {}
 }
 function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
   const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
+  const openApp = (url) => { if (url) window.location.href = url; };
   return (
     <div className="od-page">
       <style>{`
-        .od-page{min-height:100vh;background:${D.bg1};color:${D.textBright};font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
+        .od-page{min-height:100vh;background:#EEF2F7;color:${C.text};font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
         .od-page-h{max-width:1400px;margin:0 auto 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-        .od-brand{display:inline-flex;align-items:center;gap:9px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:23px;letter-spacing:.04em;line-height:1;color:${D.textBright}}
-        .od-brand .mk{width:32px;height:32px;border-radius:10px;background:#66A8FF;display:grid;place-items:center;flex:none;box-shadow:0 6px 14px -8px rgba(102,168,255,.8)}
-        .od-brand .sub{color:#A3ADBD}
+        .od-brand{display:inline-flex;align-items:center;gap:9px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:23px;letter-spacing:.04em;line-height:1;color:${C.text}}
+        .od-brand .mk{width:32px;height:32px;border-radius:10px;background:${OD_A};display:grid;place-items:center;flex:none;box-shadow:0 6px 14px -8px rgba(37,99,201,.7)}
+        .od-brand .sub{color:${C.dim}}
         .od-page-r{margin-left:auto;display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
-        .od-mode{display:inline-flex;background:rgba(8,11,18,.42);border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:3px;gap:2px}
-        .od-mode button{border:0;border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:transparent;color:#A3ADBD}
-        .od-mode button[aria-pressed="true"]{background:#66A8FF;color:#0B1526}
-        .od-app{color:${D.textBright};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
-        .od-app:hover{border-color:rgba(102,168,255,.5)}
+        .od-mode{display:inline-flex;background:${C.card};border:1px solid rgba(27,43,74,.12);border-radius:999px;padding:3px;gap:2px}
+        .od-mode button{border:0;border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:transparent;color:${C.dim}}
+        .od-mode button[aria-pressed="true"]{background:${OD_A};color:#fff}
+        .od-app{color:${C.text};background:${C.card};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(27,43,74,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
+        .od-app:hover{border-color:rgba(37,99,201,.45)}
         .od-app .s{display:none}
-        .od-page-h button:focus-visible,.od-page-h a:focus-visible{outline:2px solid #66A8FF;outline-offset:2px}
-        .od-private{max-width:520px;margin:40px auto;background:linear-gradient(180deg,#222839,#1C2130);border:1px solid #2E3548;color:${D.textBright};border-radius:16px;padding:20px}
-        .od-private div{font-size:14px;color:#A3ADBD;margin-top:6px}
-        .od-private a{display:inline-block;margin-top:12px;color:#8EC0FF;font-weight:700}
+        .od-page-h button:focus-visible,.od-page-h a:focus-visible{outline:2px solid ${OD_A};outline-offset:2px}
+        .od-private{max-width:520px;margin:40px auto;background:${C.card};border:1px solid ${C.border};color:${C.text};border-radius:16px;padding:20px}
+        .od-private div{font-size:14px;color:${C.dim};margin-top:6px}
+        .od-private a{display:inline-block;margin-top:12px;color:${OD_A};font-weight:700}
         @media (max-width:600px){.od-brand .sub,.od-app .l{display:none}.od-app .s{display:inline}.od-mode button{padding:6px 10px}}
       `}</style>
       <div className="od-page-h">
         <span className="od-brand">
-          <span className="mk"><Icon name="zap" size={16} color="#0B1526"/></span>
+          <span className="mk"><Icon name="zap" size={16} color="#fff"/></span>
           Homestead <span className="sub">Dashboard</span>
         </span>
         <span className="od-page-r">
@@ -47415,7 +48083,7 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
         </span>
       </div>
       {ok ? (
-        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob}/></OdBoundary>
+        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob} onOpenApp={openApp}/></OdBoundary>
       ) : (
         <div className="od-private">
           <b>This page is private.</b>
@@ -55879,10 +56547,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-15 · App SW version: v541
+**Last manifest update:** 2026-10-15 · App SW version: v542
 
 ---
 
+- **Dashboard information audit: Needs you on the landing tab, money on the cash lines, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status — and a light page** · 'shipped 2026-10-15' · 'SW v542' · 'odModel' · 'OfficeDash' · 'planIntake' · Koy, after the 2026-10-14 information audit of '/dashboard' (*"audit and tell me what is useful, bad info, irrelevant info, or what info i need displayed for maximum efficiency … i want it light mode not dark"*), then *"do all recs"*. Report: command-center repo 'docs/visual-audit-2026-10-09/DASHBOARD-INFO-AUDIT-2026-10-14.md' (7 reviewers, 7 skeptics, 1 cross-tab critic; 62 of 94 findings held). **The page is light** (white cards, slate ink, steel-blue accent; every hue re-picked to read ≥ 4.5:1 on white; the sheet, the page shell, the manifest and the status-bar colour follow). **One model:** every number now comes from one pure function 'odModel' (plus 'odPlanModel', 'odDocStatus'), run on real job shapes by the new 'scripts/odash-model-test.js'. **Overview:** a **Needs you** block above Needs attention — plans waiting to be filed (oldest age), time-off requests to decide (opens My Day on the request), your urgent tasks, crew questions not answered (this week · oldest), jobs with no active foreman *and why* (no foreman set, deactivated on the team list, outside contractor — on 2026-10-15 Vasa Mataafa's record is deactivated while he is named on 11 active jobs), QC walks needing a walk, automated docs that didn't run. Money from Simpro: "Ready to invoice 6 · $41k" and "change orders waiting 60+ days … on N jobs, job value $X", lists sorted by dollars (job value is the proxy: COs carry no amount). Change orders split by state with the ones on finished jobs counted apart; the CO list grouped by job, most first. Inspections caption says how many passed their target with no result; the greeting reports yesterday before noon; stage counts under the Active-jobs bars; "Most activity" replaces "Busiest job" and names open questions, punch and unfinished prep; foreman cards worst first with quiet jobs / late return trips / unlogged inspections, header "N of M foremen posted today". New Needs attention lines: Needs a date, inspection booked on a job not ready, pre-drywall scan not logged (rough done or finish starting), failed inspection with no correction list. **One foreman list** for the cards, dropdown, Jobs rail, Quality and People: titled foreman / jr foreman, or a team member named on an active job; blank, Unassigned, TBD, Paul or someone off the team → "No active foreman" (filterable, plus a "Named on jobs, not an active foreman" group). **Return trips** read one way everywhere ('odRtInfo'): late (visit passed, or schedule-by passed), booked, to book, no date — "10 open · 4 past date · 1 booked · 5 no date", late first with "N d late". **Failed rough** gets its own stage, "Rough inspection failed · re-inspect not booked / re-inspect 10/17", is asked for a re-inspection date instead of a finish start, and a target set after a fail shows on the schedule as a re-inspection. **Jobs:** Quiet 21+ d and Finished-COs-open chips; waiting-on reason under the stage; COs split to send / waiting (red / pink); "Rough insp. not called"; inspection-not-ready tint; plan-waiting tag. **Activity:** inspection events de-duplicated like the rest of the page (5 → the real count); Open questions card; date-only rows first under "Also today"; one person's run of punch on one job folds into one row; Show 200 more; "Everything logged" vs "Daily updates"; nickname map (abe → Abraham). **Schedule:** past-due split inspections / return trips, oldest first, days late; scans and return trips dated vs not booked / past date; foreman on starts; scan-not-done cross-check; Needs a date sorted by least recent work with the GC's needs-by window; Upcoming opens a list. **Quality:** first-pass coloured against 90%; Inspections next 7 days with QC-walk coverage; Punch on jobs near final; failed inspections grouped per job/phase with passed / re-inspect / not re-booked and a live-items fallback; punch by foreman with jobs and per-job. **People:** approved time off (settings/crewPTO) — "Out this week", never "quiet"; not seen 30+ days left out of the on-app ratio; quiet = foreman or lead on an active job, listed first; "last on a job" vs "app opened"; "On the app, no job touched"; time-off requests show the person's dated work and who else is off; duplicate first names get an initial. **Automations:** plans wait until filed / dismissed / matched (not until Seen); File it and **Not ours** right in the drawer; second guess from the sender's history; doc cards say made / did not run / failed, **Run now** on packet, lead and weekly; "To check in Home Runs" and "Specs to confirm"; jobs in rough with no appliance package; foreman on each appliance row and **Ask <foreman> to import** (one My Day task). The day-range buttons go grey on tabs they don't change. **Crew app:** a **Waiting on…** line under the rough and finish status when On Hold or Awaiting Start Date ('roughWaitingOn' / 'finishWaitingOn'); **Didn't happen** clears an inspection target that passed with no result; Today → Plans keeps File it until the plan is filed or dismissed. **Server:** plan findings are stamped 'resolved' when filed, dismissed or matched; unmatched plans are re-opened (max 3×) when a new job / quote / quote folder appears; unmatched findings carry 'altGuess'; new 'planDismissByHand' callable (same gate as planFileByHand); 'stampAutoRun' writes 'settings/autoDocRuns' for fridayPacket, leadMeetingPrep, foremanMeetingPrep and their test triggers; the Friday Packet and new **'dailySimproTotals'** (weekdays 6:15, field-masked job read, cap 80) write 'settings/simproTotals'. Tests: 'scripts/odash-model-test.js' (roster, return trips, failed rough, dedupe, questions, money, people, plans, docs, money candidates; also run read-only on the live data, 129 jobs in 0.1 s) and 'scripts/planintake-resolve-test.js' (second guess, resolve without stubs, re-open caps), both in prebuild. Guides: 'dashboard.html' rewritten; 'rough.html', 'finish.html'. **Deploy:** 'firebase deploy --only functions:planDismissByHand,functions:planFileByHand,functions:planRoutineApi,functions:planIntakeWatcher,functions:fridayPacket,functions:sendTestFridayPacket,functions:leadMeetingPrep,functions:sendTestLeadMeetingPrep,functions:foremanMeetingPrep,functions:sendTestForemanMeetingPrep,functions:dailySimproTotals' before the push. **Why it won't lose data:** the dashboard reads; its four buttons ask first and go through existing gates (plan callables with name + PIN; the stamped needs write; the existing test triggers). The crew-app writes are two optional text fields and clearing one date, all through the job's 'u()' save with the version-lock stamp ('normalizeJob' keeps unknown fields). Server writes are additive: two new settings docs, 'resolved*' / 'reopen*' / 'altGuess' fields, and a queue status flip from unmatched to open; no job write, no rules change, Drive is still move-only.
 - **Crew POs: a Custom option — tell CED exactly what you need** · 'shipped 2026-10-15' · 'SW v541' · Koy: *"there is no way to order something that they dont stock. I need to be able to put a custom message in the email. right now there is only for pick up or deleivery … those arent helpful options for that"* — then *"i dont like the special order option. i just want a custom box option"*. "Get it" on both send screens (the Material Tracking card's **Send to CED** sheet and **New order from the bid** → Review) is now **Will call · Deliver to job · Custom**. Custom swaps the date for a **What should CED do?** box (500 characters; Send stays grey until it has text); the sender's words replace the will-call / deliver line everywhere it went before: bold in the email, the PO form's *Delivery & Special Instructions*, and the top of Simpro's Supplier Notes. No due date is set on the Simpro PO for a Custom send. The card keeps the words as 'poCustom' and shows them as **Told CED: …**; a bid order's cards each carry them. Server: 'functions/materialPO/rules.js' 'getMode' / 'cleanCustom' (one line, control characters out, capped at 500) and 'pickupLine({get, date, custom})'; 'sendMaterialPO' and 'sendMaterialOrder' accept 'get:"custom"' + 'custom' and refuse an empty Custom box before any PO exists (Finish sending on an order is never blocked by it). The words are written to the send record before the PO is made, so a retried email carries the first words and never makes a second PO or a second email. Tests: 'scripts/materialpo-test.js' (modes, cleanup, cap, escaping in Supplier Notes and the email) and 'scripts/materialpo-sim.js' +4 scenarios (custom card send end to end with no DueDate, empty box refused from both screens, custom order across two POs, failed email retried keeps the first words); both mutation-checked. Guides: 'rough.html', 'finish.html'. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder'** (backward compatible: older app versions never send 'custom'). **Why it won't lose data:** one additive card field ('poCustom') through the existing order-card save; the function changes only choose the wording of the pickup line; no rules, loaders or other save paths touched.
 - **My Day redesign: four tabs, quiet rows, and a Snoozed fold — one place for everything, nothing shown twice** · 'shipped 2026-10-14' · 'SW v541' · 'MyDay' · 'myDaySections' · 'taskSnoozes' · Koy: *"im still getting lost here in the my day sections. too messy and hard to tell whats going on…"*, *"snoozed items hidden or collapsed somewhere until they un snooze"*, *"make sure this is the most logical and best way to display info."* He approved a clickable mockup first (vault: '08-Specs/My Day Redesign Spec.md'). **What changed:** My Day is now **four tabs — To do · Waiting on others · Team (head or covering only) · Done**. **To do** is one list in time order: **Pinned** (only when something is pinned), then **Overdue · Today** (open) and **This week · Later** (folded), each header with its count and 'N urgent' / 'N working' / 'N new' badges; a **Group** menu (sliders icon) switches the list to **Time / Job / Type / Who sent it** and holds **Select several…**; a search icon opens the search box. Bottom folds, all closed: **Snoozed** (with **Wake now**), **Older reminders**, **QC tracker**, **Office messages**. Every row is quiet — a circle to finish, the title, one grey line (job link · from · kind · due) — and **tapping a row opens it**: Working on it · Reply/Note · Snooze (the choices open inside the row) · Open job · the decision buttons; **More…** holds Mark urgent, Pin, Photo, Move/Push to…, Edit, Void, Nudge. Swipe right = done, swipe left = snooze. The job name is a link. **Waiting on others** is in chase order — Not started → Waiting → Working, all open — and non-head people get a folded **On <head>** (one fold per job, "+ Add for <head>"). **Team** has one folded section per person with overdue and done-this-week badges (the old Team pulse, Person view and "With others" in one place). **Done** is one list, last 30 days, with "you asked" on things others finished for you and Reopen where allowed. Pushes open the right tab and row ('myDayJumpTarget'); the bell's "See all in My Day" opens the Office messages fold. Each **Waiting on others** row names who it's on (**To Gage** / **Unassigned**, and the letter circle reads that name aloud) and a **Not started** row has **Nudge** one tap away in the open row; the **Office messages** fold header shows unread / new replies / need Got it (one helper, 'officeMsgCounts', feeds both that header and the office card); while searching only sections with a match show and the tab numbers count matches; a "done by X · verify" reminder is never hidden by a snooze. **Removed or moved:** the **View** switch (Category / Job / Person) and the **Sort** switch (v539) → replaced by the Group menu; the **job-chip strip** → gone (Group: Job); **Focus today** → **Pinned**; **New for you** and **New since** → a blue dot on the row plus 'N new' badges; **Sent** and **Sent · finished** → **Waiting on others** and **Done**; **Team pulse**, **Person view** and **With others** → **Team**; the hidden-stale strip → **Older reminders**; the office message history → the **Office messages** fold; the two-column desktop layout and the right column of buttons → one centred column. **Snooze now really hides:** a snoozed automatic reminder used to only move its due date, so it kept showing. Snooze now also writes 'job.taskSnoozes[taskId] = ymd' in the same 'onUpdateJob' patch as 'taskDueDates', and the row sits in **Snoozed** until that day; **Wake now** sets the marker back to empty and the due date to today in one patch; Undo restores both maps. Snoozed task docs ('snoozedUntil') now show in Snoozed instead of vanishing. A snooze from an old build (due date only, no marker) never hides a row. **Tests:** new pure helpers 'myDaySections', 'isAutoSnoozed', 'autoSnoozePatch', 'autoWakePatch', 'sentChaseOrder', 'mergeDoneRows', 'myDayGroupPref' (reads the old 'myday.view' / 'myday.sort' once and maps them), 'myDayJumpTarget', vm-tested in 'scripts/needs-dryrun.js' (mutation-checked); the built app was render-checked headless at phone and desktop width. **Guide updated:** 'public/sops/myday.html' rewritten for the new layout (and the Sent mention in 'public/sops/needs.html'). **Why it won't lose data:** 'taskSnoozes' is an additive optional map written together with 'taskDueDates' through the existing 'onUpdateJob' save path (version-lock stamp kept; 'normalizeJob' keeps unknown fields); every other change is presentation — row builders, routing, hats, delegation, stale rules, the batch engine, pushes, save paths and the Needs tab are untouched.
 - **Punch share link: the GC can leave a note on an item ("ready now"), the office taps Got it** · 'shipped 2026-10-15' · 'SW v541' · 'punchNotes' · 'PunchNotesCtx' · 'functions/punchNotes.js' · needs 'firebase deploy --only functions:onQuestionAnswered' for the phone alert · Koy: *"need the recipient to be able to leave a note on a punch item, like if we have something we say we are waiting on they can say its ready now."* On the punch share page (rough, finish, QC) every open item has **Leave a note**; on an item marked Waiting it reads **Ready now? Leave a note** and offers a one-tap **Ready now**. The recipient sees their own notes under the item, and **Seen by Homestead** once the office has read them. Each link only sees its own notes (keyed by the link's '?s=' id). **In the app** the note shows under the item in a light steel box ("NOTE FROM THE SHARE LINK · Justin - PM: Ready now · Oct 15, 2:14 PM") with a **Got it** button; after Got it it stays as one quiet grey line ("seen by Koy"). Floors and rooms start folded, so their headers show **1 note** next to open / waiting. **Phone alert:** a new note pushes the job's lead and foreman (and the book's coordinator), new toggle *Note left on a punch share link* in Settings → Notifications (on by default), riding the existing 'onQuestionAnswered' trigger on 'homeowner_requests'; at most 5 pushes per save; Got it never pushes. Office preview ('preview=1') can't write. Guide updated: 'public/sops/rough.html'. **Gate:** 'scripts/punchnotes-test.js' (prebuild, 20 checks). **Why it won't lose data:** notes live on 'homeowner_requests/{jobId}.punchNotes', never on 'jobs/{id}' (the Kweller rule for outside writes); every write goes through 'saveHomeownerRequest' (re-reads the doc under a lock, writes only 'punchNotes', keeps a version snapshot); a retried send reuses its note id so it can't post twice; Got it only adds 'ackBy'/'ackAt', it never deletes a note. No punch item, save path or rule changed (the 'homeowner_requests' rule already allows these writes).

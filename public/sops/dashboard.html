@@ -52,11 +52,11 @@
   <div class="tldr">
     <h2>The 30-second version</h2>
     <p>The <b>Dashboard</b> is Koy's own page at <b>homestead-electric.vercel.app/dashboard</b>. It is not a tab
-    in the app, and it only opens for Koy's login. It is read-only and reads the same
-    jobs, team and My Day tasks the rest of the app already has, so it is live: when someone closes a
-    punch item or logs an inspection, the numbers move. It follows the <b>Residential / Commercial</b>
-    switch like every other screen. Tap any job row or card to open that job. Nothing on this screen
-    changes a job.</p>
+    in the app, and it only opens for Koy's login. It reads the same jobs, team and My Day tasks the rest of the
+    app already has, so it is live: when someone closes a punch item or logs an inspection, the numbers move. It
+    follows the <b>Residential / Commercial</b> switch like every other screen. The page is light (white cards on a
+    pale background). <b>Needs you</b> at the top of the Overview is the short list of decisions only you make; the
+    rest of the page is what is slipping. Tap any line, card or job to see the list behind it.</p>
   </div>
 
   <div class="rules">
@@ -70,84 +70,95 @@
   icon is called <b>Dashboard</b> and opens straight to it, separate from the crew app's icon.</p></div>
 
   <div class="call tip"><span class="lbl">Tap anything</span><p>Every job opens a panel with everything open on it
-  (punch, change orders, return trips, inspections, dates, recent activity) and an <b>Open in app</b> button. Every number
-  card opens the list behind it, every person opens their tasks and jobs. Use the row under the tabs to pick one
-  foreman, switch between 7, 14 and 30 days, or find a job by name, number, address or GC. On a phone those sit behind one <b>Filters</b> button: it
-  starts closed and shows a count when a filter is on. The small <b>?</b> at the top opens this guide.</p></div>
+  (punch, change orders, return trips, inspections, open questions, plans waiting, dates, recent activity) and an
+  <b>Open in app</b> button. Every number card opens the list behind it, every person opens their tasks and jobs. The
+  row under the tabs picks one foreman (or <b>No active foreman</b>), switches between 7, 14 and 30 days, or finds a job
+  by name, number, address or GC. The day buttons only change the Overview chart and the Activity tab, so they go grey
+  on the other tabs. On a phone those sit behind one <b>Filters</b> button. The small <b>?</b> opens this guide.</p></div>
+
+  <div class="call warn"><span class="lbl">Four buttons that do something</span><p>Everything else only reads. These
+  four act, and each one asks first: <b>File it</b> and <b>Not ours</b> on a plan waiting to be filed (Automations),
+  <b>Ask &lt;foreman&gt; to import</b> on an appliance job (adds one My Day task on that job), and <b>Run now</b> on the
+  Friday Packet, Lead Meeting Prep and Weekly Lead Meeting cards (makes the real doc now).</p></div>
 
   <h2 class="sec">The tabs</h2>
 
   <div class="step"><div class="num">1</div><div class="body">
     <h3>Overview</h3>
-    <p>Active jobs, inspections passed in the last 30 days, open change orders (and how many are waiting
-    on the GC), and open punch items. The chart is the number of updates logged per day for the last two
-    weeks. <b>Busiest job</b> is the job with the most updates today (or this week when today is quiet).
-    <b>Needs attention</b> lists the worst first: red lines are overdue dates, failed items and change orders the GC has sat on 60+ days (money at risk), then orange dates (starts passed or not confirmed), pink stale work (status behind the work, old inspection targets, return trips with no date, quiet jobs), blue to-dos and green ready-to-invoice; a line shows its oldest item's age.
-    <b>Foremen today</b> shows each foreman's active jobs, open punch and updates per day for the last
-    week. On the right: this month's calendar with every dated start, inspection, QC walk and return
-    trip, and the next 14 days of scheduled work.</p>
+    <p><b>Needs you</b> (only when something is waiting): plans waiting to be filed, time-off requests to decide,
+    your urgent My Day tasks, crew questions not answered, jobs with no active foreman (and why: no foreman set, a
+    deactivated team member, an outside contractor), QC walks that need a walk, and automated docs that didn't run.
+    Each line opens its list; a time-off request or task opens straight on My Day in the app.
+    Below that: active jobs (with the count per stage under the bars), inspections in the last 30 days (and how many
+    passed their target with no result logged), open change orders split by state (to send, waiting on the GC,
+    approved, scheduled, on finished jobs), and open punch. Before noon the greeting reports <b>yesterday</b>. The chart
+    is everything logged per day. <b>Needs attention</b> lists the chases worst first; the money lines carry the job
+    value from Simpro ("Ready to invoice 6 · $41k"). <b>Most activity</b> names the busiest job with its open questions
+    and punch. <b>Foremen</b> has one card per foreman, worst first, each with the jobs that are quiet 5+ days, return
+    trips past their date and inspections not logged; the header says how many posted today.</p>
   </div></div>
 
   <div class="step"><div class="num">1b</div><div class="body">
     <h3>Jobs</h3>
     <p>Every active job in one table: foreman, where the work is, open punch, open change orders, next date and
-    the last work logged. <b>Where it is</b> goes by the crew's rough and finish status, not the Job Board's
-    sections, so a job with rough underway shows "Rough in progress" even if prep isn't fully checked off. Unfinished
-    prep shows as its own "Prep not finished" note. If a start date passed and nobody moved the status, the job says
-    "start date passed". If daily updates or closed punch were logged while the status still says not started, the job
-    goes where the work is and is flagged. Tap a column to sort, a chip or bar to filter, a row to open the job.
-    <b>Needs attention</b> on the Overview lists what is slipping: status behind the work, jobs ready to invoice,
-    change orders waiting on the GC 60+ days, inspection dates passed with no result, start dates passed, return trips
-    past their date or with no date, failed items not fixed, unconfirmed starts in the next 3 days, change orders still
-    to send, and jobs in progress with no work logged in 5+ days. Opening a job doesn't count as work.</p>
+    the last work logged. <b>Where it is</b> goes by the crew's rough and finish status. A rough whose inspection
+    failed with no pass since shows <b>Rough inspection failed</b> with "re-inspect not booked" or the new date, not
+    "Rough done". On hold or awaiting a date, the row shows what it is <b>waiting on</b> (from the line the crew fills
+    in under the status). The change-order cell splits to send and waiting (red when one is still to send). Next date
+    says <b>Rough insp. not called</b> in red at 85% rough with no target, and goes red when an inspection is booked
+    within a week on a job that isn't ready. Chips: <b>Quiet 21+ d</b> (underway, nothing logged in three weeks) and
+    <b>Finished, COs open</b>. A job with a plan waiting to be filed says so under its name.</p>
   </div></div>
 
   <div class="step"><div class="num">2</div><div class="body">
     <h3>Activity</h3>
-    <p>Everything logged on the jobs in the last 30 days, newest first: punch items added and closed,
-    change orders added, sent to the GC, quoted and moved in Simpro, inspection passes and fails, return trips and
-    their punch, questions asked and answered, job notes, daily and status updates, and photos (one line per job and
-    day; photos carry no uploader name, so they show the day only). Use the filter buttons or type a job, person
-    or word to narrow it. Team pulse on the right shows who has been on the app today.</p>
+    <p>Everything logged on the jobs, newest first. Rows that only carry a date (return-trip sign-offs, change orders
+    from Simpro, photo batches) sit at the top of their day under <b>Also today</b>, change orders first. A run of one
+    person's punch or questions on one job folds into one row ("Louis · 14 punch closed, 6 punch added · 8:55–10:19
+    PM"); tap it for the rows. <b>Show 200 more</b> pages further back. Cards: everything logged, punch closed against
+    added, <b>open questions</b> (oldest first) and failed inspections out of those logged; a failed one says whether a
+    re-inspection is booked. "Daily updates" means the foremen's daily and status updates only.</p>
   </div></div>
 
   <div class="step"><div class="num">3</div><div class="body">
     <h3>Schedule</h3>
-    <p>The next 7 days as columns, with starts (orange), inspections (green), QC walks (blue), Matterport
-    scans (purple) and return trips (red). Starts show <b>projected</b> until the date is confirmed on the
-    job card. On the right: anything past its date, jobs that need their next date, and Matterport scans
-    that are due (rough at 85% or more, finish not started).</p>
+    <p>The next 7 days as columns. Starts name the foreman (red <b>No foreman</b> when blank) and say <b>Scan not
+    done</b> when the pre-drywall scan isn't logged. <b>Past their date</b> splits inspections from return trips, oldest
+    first, each saying how many days late. Next 30 days shows scans and return trips both ways: dated, and not booked
+    or past their date. <b>Needs a date</b> is sorted by the least recent work and shows the GC's needs-by window. Scans
+    due show the rough %, whether one is booked, and red when the rough is done or the finish starts soon.</p>
   </div></div>
 
   <div class="step"><div class="num">4</div><div class="body">
     <h3>Quality</h3>
-    <p><b>First-pass</b> counts each job's first rough and first final inspection: did it pass the first
-    time. The chart shows that rate by month against a 90% line. <b>Failed inspections</b> lists the latest
-    fails with the items to fix. <b>Punch by foreman</b> compares open punch with items closed in the last
-    30 days. On the right: open return trips and open QC walks.</p>
+    <p><b>First-pass</b> is green at 90% or better, pink 75–89%, red below, with how many failed the first time.
+    Return trips are counted one way on every tab (open · past date · booked · to book · no date), late first.
+    <b>Inspections next 7 days</b> shows which have a QC walk logged before them. <b>Punch on jobs near final</b> lists
+    the punch that blocks a final. <b>Failed inspections</b> shows one row per job and phase with what happened since
+    (passed, re-inspect booked, or not re-booked) and, when the Fail was tapped before the items were typed, "No
+    correction list — ask the foreman". <b>Punch by foreman</b> shows jobs and punch per job, pink when open beats closed.</p>
   </div></div>
 
   <div class="step"><div class="num">5</div><div class="body">
     <h3>People</h3>
-    <p>Who has been on the app today, open My Day tasks (and how many are urgent), time-off requests still
-    waiting, and how many phones are on the latest version. <b>Updates by person</b> is a 7-day grid of how
-    much each person logged. <b>My Day load</b> is open tasks per person. On the right: the time-off
-    requests (decide them on My Day as usual) and the devices that are behind on updates.</p>
+    <p>"On the app today" leaves out people on approved time off and people not seen in 30 days; tap it for who
+    isn't on. <b>Team pulse</b> lists quiet people first (a foreman or lead on an active job with nothing logged in 3+
+    days, shown red) with their title and jobs. "Last on a job" is when they last opened or logged on a job;
+    <b>app opened</b> in the device list is when their phone last opened the app. <b>On the app, no job touched</b>
+    is the call list: phones that opened the app today whose owner hasn't touched a job in 3+ days. Time-off requests
+    show what that person has dated in those days and who else is off; tap one to decide it on My Day.</p>
   </div></div>
 
   <div class="step"><div class="num">6</div><div class="body">
     <h3>Automations</h3>
-    <p><b>Automated docs</b> at the top: one tap opens each doc or folder your automations write to, with when
-    it runs: your Bonus Tracker, the Weekly Lead Meeting doc (hours vs bid with only the margins that moved since last week), the Friday Packet and Lead Meeting Prep folder, the Foreman + Lead notes doc, the Monday Office Meeting
-    folder, the Weekly Strategy prep, the lead meeting notes, your First 90 Days plan, the Appliance Loads sheet and
-    Job Plans. The Weekly Lead Meeting, Friday Packet, Lead Meeting Prep, Monday Office Meeting and Weekly Strategy cards open the newest doc (its name and when it was made show on the card); the small folder button beside it opens the whole folder. Below that, what your two Claude automations produced, live. <b>Plan Intake</b> (7 AM, 12 PM and 4 PM) lists the last
-    14 days by day: plans filed into a job or quote, folders made, site walks matched, and plans it wasn't sure
-    where to file. Filter to <b>Needs you</b>, <b>Filed</b> or <b>Folders &amp; walks</b>; tap a line for its
-    folder, file, email and job. File an unsure plan from Today &rarr; Plans in the app. <b>Appliance Loads</b>
-    (nightly, about 1 AM) shows one row per job from the master sheet: items, connected amps, how many are not in
-    the job's Home Runs yet, likely matches, items with no amps found, and typical values. Tap a job for its
-    appliances (the ones needing attention first); tap an appliance to open the file it came from. Refresh
-    re-reads the sheet; Open sheet opens it in Google Sheets.</p>
+    <p><b>Automated docs</b>: one tap opens each doc or folder, and each card says <b>made Tue 6:02 AM</b> in green,
+    <b>did not run Tue 6:00 AM</b> or the error in red, or "could not list the folder". Friday Packet, Lead Meeting Prep
+    and Weekly Lead Meeting have <b>Run now</b>. <b>Plan Intake</b>: a plan stays <b>Waiting</b> until it is filed,
+    dismissed or matched, not just seen. Tap one to file it right there (best guess filled in, with a second guess from
+    the sender's past files) or to say <b>Not ours</b>. A plan the Routine couldn't place gets another look once its new
+    job or quote shows up. <b>Appliance Loads</b>: "To check in Home Runs" (not in plus unconfirmed) and <b>Specs to
+    confirm</b> (amps assumed as typical). A line lists jobs in rough with no appliance package yet. Each job row names
+    the foreman; tap it for <b>Ask &lt;foreman&gt; to import</b>.</p>
   </div></div>
 
   <div class="call tip"><span class="lbl">Tip</span><p>The tab you were on is remembered on that device,
@@ -157,17 +168,18 @@
   <div class="qa">
     <div class="row"><p class="q">It says "This page is private."</p><p class="a">The page only opens for
     Koy's login. Pick Koy on the PIN screen, or open the app instead.</p></div>
-    <div class="row"><p class="q">Why is there no money tab?</p><p class="a">Billing totals and what
-    GCs owe live in Simpro, not in this app. Change order dollar amounts aren't stored on the job card
-    either, so the dashboard counts change orders instead of adding up dollars.</p></div>
-    <div class="row"><p class="q">A photo count looks low.</p><p class="a">Only photos that carry the time
-    they were taken are counted. Older uploads without a time stamp still show on the job, just not here.</p></div>
+    <div class="row"><p class="q">Where do the dollar amounts come from?</p><p class="a">From Simpro, once a day
+    on weekdays (and with the Friday Packet): the job's total including tax. Change orders carry no amount in the app,
+    so a change-order line shows the job's value as a guide to which call is worth the most.</p></div>
+    <div class="row"><p class="q">A job says "No active foreman" but it has a foreman.</p><p class="a">The name on the
+    job isn't an active foreman on Settings → Team (deactivated, an outside contractor, or Paul / TBD). Reassign the
+    job, or fix the person's record in Settings → Team.</p></div>
     <div class="row"><p class="q">A person shows "Not seen in 30 days" but they use the app.</p><p class="a">The
     dashboard sees what people log on jobs and when they open a job card. Someone who only reads My Day
-    and never opens a job or logs anything won't show as active.</p></div>
+    and never opens a job or logs anything won't show as active. Their phone still shows under "app opened".</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names)</div>
+  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status)</div>
 </div>
 </body>
 </html>
