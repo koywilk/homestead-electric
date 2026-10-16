@@ -929,6 +929,38 @@ exports.notifyTimeOffRequest = functions.https.onCall(async (data) => {
   return { ok: true, notified: sends.length };
 });
 
+// ─────────────────────────────────────────────────────────────
+// TIME-OFF DECISION → the requester (v549, UX batch 2)
+// Approve / Deny used to tell nobody: the requester kept opening Time Off to
+// check. Both decision paths (Time Off page, My Day row) write
+// settings/timeOffRequests, so this trigger diffs before/after and pushes each
+// requester whose request changed status (approved, not approved, or back to
+// pending after an Undo). Pure diff in ./timeOffDecision.js
+// (scripts/timeoff-decision-test.js). Gated by the requester's
+// `timeoff_decided` pref (default on). Read-only on Firestore apart from the
+// inbox records deliver() always writes.
+// ─────────────────────────────────────────────────────────────
+const { timeOffDecisionPushes } = require("./timeOffDecision.js");
+exports.onTimeOffDecision = functions.firestore
+  .document("settings/timeOffRequests")
+  .onUpdate(async (change) => {
+    const before = (change.before.data() || {}).list || [];
+    const after = (change.after.data() || {}).list || [];
+    const pushes = timeOffDecisionPushes(before, after, new Date());
+    if (!pushes.length) return null;
+    const users = await getUsers();
+    await Promise.all(pushes.map(async (p) => {
+      const user = userByName(users, String(p.requesterName).toLowerCase().trim());
+      if (!user) {
+        functions.logger.warn("[timeoff] requester not in team list — decision not delivered", { name: p.requesterName, status: p.status });
+        return;
+      }
+      await deliverIfWanted(user, "timeoff_decided", { title: p.title, body: p.body, jobId: "", section: "timeoff" });
+    }));
+    functions.logger.info("[timeoff] decision pushes", { count: pushes.length, statuses: pushes.map((p) => p.status) });
+    return null;
+  });
+
 async function sendToName(name, notification) {
   if (!name || name === "Unassigned") return;
   const users = await getUsers();

@@ -11,7 +11,7 @@ import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/funct
 import SafeHtml from "./sanitizeHtml";
 import { syncPostHogIdentity } from "./posthog";
 import { readableInk } from "./a11y";
-import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, useHeSwUpdate, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
+import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
 // ── HTML sanitization boundary (Stage 2a, 2026-07-31) ────────────────────────
 // Rich text is the STORAGE FORMAT here (RichEditor writes contenteditable HTML
@@ -2439,6 +2439,204 @@ function matterportScanNeeded(job) {
   if (job.hiddenSections?.matterport) return false; // v439: Job Sections → Matterport off
   if (job.matterportLinks?.length || job.matterportLink) return false;
   return parseStage(job.roughStage) >= 85 && parseStage(job.finishStage) === 0;
+}
+
+// v549 (UX batch 2, "say what happened"): one pure plan for a Rough / Finish
+// stage change, shared by both stage selects so the screen can say what the
+// change set off. Keeps every side effect the inline handlers had (QC task,
+// prep, invoice fire/reset, Matterport, QC flip, status) and adds Koy's two
+// 2026-10-16 calls: (1) dropping below 85% clears Ready to invoice unless the
+// other phase still justifies it (an invoice already sent has
+// readyToInvoice=false anyway, so it is never touched); (2) a job on hold keeps
+// its hold and its status — only 100% (complete) moves it. Returns
+// { blocked:{count, text} } when 100% is refused, else
+// { patch, title, lines } where lines are the plain-words summary.
+// Pure; exercised by scripts/stage-change-test.js.
+function stageChangePlan(job, phase, v, counts = {}) {
+  const j = job || {};
+  const pct = parseInt(v) || 0;
+  const P = phase === "finish" ? "Finish" : "Rough";
+  const foreman = (j.foreman || "").trim();
+  const firstName = foreman ? foreman.split(" ")[0] : "";
+  const today = new Date().toLocaleDateString("en-US");
+  const lines = [];
+  if (phase === "finish") {
+    if (v === "100%") {
+      const fo = counts.openPunch || 0, qo = counts.openQc || 0;
+      if (fo + qo > 0) {
+        const parts = [];
+        if (fo > 0) parts.push(`${fo} finish punch item${fo !== 1 ? "s" : ""}`);
+        if (qo > 0) parts.push(`${qo} QC item${qo !== 1 ? "s" : ""}`);
+        return { blocked: { count: fo + qo, text: `${parts.join(" and ")} still open on ${j.name || "this job"}.` } };
+      }
+    }
+    const onHold = !!j.finishOnHold || j.finishStatus === "waiting";
+    const invoiceFire = pct >= 85 && !j.finishInvoiceFired ? { finishInvoiceFired: true, finishInvoiceDismissed: false, readyToInvoice: true, readyToInvoiceDate: today } : {};
+    const invoiceReset = pct < 85 ? { finishInvoiceFired: false, finishInvoiceDismissed: false } : {};
+    const invoiceClear = pct < 85 && j.readyToInvoice && (parseStage(j.roughStage) < 85 || j.invoiceSent) ? { readyToInvoice: false, readyToInvoiceDate: "" } : {};
+    const finishQcFlip = (pct >= 80 || v === "100%") && !j.finishQcStatus ? { finishQcStatus: "needs" } : {};
+    const status = v === "100%" ? { finishStatus: "complete", ...(onHold ? { finishOnHold: false } : {}) } : (pct > 0 && !onHold ? { finishStatus: "inprogress" } : {});
+    const patch = { finishStage: v, ...invoiceFire, ...invoiceReset, ...invoiceClear, ...finishQcFlip, ...status };
+    if (invoiceFire.readyToInvoice) lines.push(`Ready to invoice: on. The office${firstName ? " and " + firstName : ""} get a push.`);
+    if (invoiceClear.readyToInvoice === false) lines.push(`Ready to invoice is off.${j.readyToInvoiceDate ? " It was on since " + j.readyToInvoiceDate + "." : ""}`);
+    if (finishQcFlip.finishQcStatus) lines.push("Final QC walk: needs scheduling now.");
+    if (v === "100%") lines.push("Finish marked complete.");
+    else if (onHold && pct > 0) lines.push("Still on hold. Take it off in Status when the crew is back.");
+    return { patch, title: lines.length ? `${P} ${v} · here's what that set off` : `${P} ${v}`, lines: lines.length ? lines : ["Nothing else changed."] };
+  }
+  if (v === "100%" && (counts.openPunch || 0) > 0) {
+    const n = counts.openPunch;
+    return { blocked: { count: n, text: `${n} punch item${n !== 1 ? "s are" : " is"} still open on ${j.name || "this job"}.` } };
+  }
+  const onHold = !!j.roughOnHold || j.roughStatus === "waiting";
+  const qcFire = pct >= 80 && !j.roughQCTaskFired ? { roughQCTaskFired: true } : {};
+  const prepDone = pct > 0 && j.prepStage !== "Job Prep Complete" ? { prepStage: "Job Prep Complete" } : {};
+  const invoiceFire = pct >= 85 && !j.roughInvoiceFired ? { roughInvoiceFired: true, roughInvoiceDismissed: false, readyToInvoice: true, readyToInvoiceDate: today } : {};
+  const invoiceReset = pct < 85 ? { roughInvoiceFired: false, roughInvoiceDismissed: false } : {};
+  const invoiceClear = pct < 85 && j.readyToInvoice && parseStage(j.finishStage) < 85 ? { readyToInvoice: false, readyToInvoiceDate: "" } : {};
+  const matterportFlip = (pct >= 85 && parseStage(j.finishStage) === 0 && !j.matterportStatus && !(j.matterportLinks?.length || j.matterportLink) && !j.hiddenSections?.matterport) ? { matterportStatus: "needs" } : {};
+  const qcFlip = ((pct >= 80 && !j.roughQCTaskFired) || (v === "100%" && j.roughStatus !== "complete")) && !j.qcStatus ? { qcStatus: "needs" } : {};
+  const status = v === "100%" ? { roughStatus: "complete", ...(onHold ? { roughOnHold: false } : {}) } : (pct > 0 && !onHold ? { roughStatus: "inprogress" } : {});
+  const patch = { roughStage: v, ...qcFire, ...prepDone, ...invoiceFire, ...invoiceReset, ...invoiceClear, ...matterportFlip, ...qcFlip, ...status };
+  if (invoiceFire.readyToInvoice) lines.push(`Ready to invoice: on. The office${firstName ? " and " + firstName : ""} get a push.`);
+  if (invoiceClear.readyToInvoice === false) lines.push(`Ready to invoice is off.${j.readyToInvoiceDate ? " It was on since " + j.readyToInvoiceDate + "." : ""}`);
+  if (qcFlip.qcStatus) lines.push("QC walk: needs scheduling now.");
+  else if (qcFire.roughQCTaskFired && j.qcStatus) {
+    const q = QC_STATUSES.find(s => s.value === j.qcStatus);
+    lines.push(`QC walk: already ${(q ? q.label.replace(/^QC /, "") : j.qcStatus).toLowerCase()}${j.qcStatusDate ? " (" + j.qcStatusDate + ")" : ""}, no change.`);
+  }
+  if (matterportFlip.matterportStatus) lines.push("Matterport scan: needed now.");
+  if (prepDone.prepStage) lines.push("Job Prep marked complete.");
+  if (v === "100%") lines.push("Rough marked complete.");
+  else if (onHold && pct > 0) lines.push("Still on hold. Take it off in Status when the crew is back.");
+  return { patch, title: lines.length ? `${P} ${v} · here's what that set off` : `${P} ${v}`, lines: lines.length ? lines : ["Nothing else changed."] };
+}
+
+// v549 (UX batch 2): a punch / QC photo that failed to upload used to just
+// stop spinning (the catch only logged). Same wording family as the return-trip
+// uploader, plus a red Retry chip on the item that keeps the picked files.
+function uploadFailMessage(n, itemText) {
+  const what = n > 1 ? `${n} photos didn't upload` : "Photo didn't upload";
+  const t = String(itemText || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+  const to = t ? ` to "${t.length > 40 ? t.slice(0, 40) + "…" : t}"` : "";
+  const fix = (typeof navigator !== "undefined" && navigator.onLine === false) ? "No signal right now. Tap Retry when you have signal." : "Check your connection, then tap Retry.";
+  return `${what}${to}. ${fix}`;
+}
+function UploadRetryChip({ onRetry }) {
+  return (
+    <button type="button" onClick={onRetry} title="These photos didn't upload. Tap to try again."
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, minHeight: "var(--he-tap, 40px)", padding: "2px 10px", borderRadius: 99, flexShrink: 0,
+        border: `1.5px dashed ${C.red}`, background: `${C.red}12`, color: C.red, fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>
+      Didn't upload · Retry
+    </button>
+  );
+}
+
+// v549 (UX batch 2): the "Scheduled" line of a return trip's Text / Email /
+// Chat message. It used to read t.date, which the trip card never writes, so
+// every trip went out as "not yet set". Reads the card's own date first
+// (rtStatusDate, written by the SCHEDULED FOR / SCHEDULE BY picker), then the
+// Crew Planner's scheduledDate, then the legacy date. Spells the weekday out;
+// adds the year only when it isn't this year. Pure; scripts/trip-text-test.js.
+function tripScheduleLine(t, now = new Date()) {
+  const r = t || {};
+  const raw = String(r.rtStatusDate || r.scheduledDate || r.date || "").trim();
+  if (!raw) return "Scheduled: not yet set";
+  let d = null, m;
+  if ((m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) d = new Date(+m[3], +m[1] - 1, +m[2]);
+  else if ((m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/))) d = new Date(+m[1], +m[2] - 1, +m[3]);
+  let when = raw;
+  if (d && !isNaN(d.getTime())) {
+    const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    when = `${DOW[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== now.getFullYear() ? ", " + d.getFullYear() : ""}`;
+  }
+  return `${r.rtStatus === "needs" ? "Schedule by" : "Scheduled for"} ${when}`;
+}
+
+// v549 (UX batch 2): what a non-clean QC verdict would put on a return trip.
+// Only open QC-walk items (fromQC, not done, not voided) from THIS phase's
+// punch — a rough verdict no longer sweeps finish items onto the rough trip.
+// existingIdx = an open QC trip already on the job (fromQCFail, or the legacy
+// "QC Fail" scope prefix); newItems = the items that trip doesn't carry yet
+// (matched by originItemId). Pure; exercised by scripts/qc-trip-test.js.
+function qcTripPlan(job, phase) {
+  const j = job || {};
+  const punch = phase === "finish" ? j.finishPunch : j.roughPunch;
+  const items = [];
+  if (punch && typeof punch === "object") {
+    const floors = [...["upper", "main", "basement"].map(k => punch[k]), ...((punch.extras || []).map(e => e && e.key ? punch[e.key] : null))].filter(Boolean);
+    const take = (i) => { if (i && i.fromQC && !i.done && !i.voided) items.push({ ...i, __phase: phase }); };
+    floors.forEach(fl => {
+      (fl.general || []).forEach(take);
+      (fl.rooms || []).forEach(r => (r.items || []).forEach(take));
+      (fl.hotcheck || []).forEach(take);
+    });
+  }
+  const trips = Array.isArray(j.returnTrips) ? j.returnTrips : [];
+  const existingIdx = trips.findIndex(r => r && !r.signedOff && (r.fromQCFail === true || (typeof r.scope === "string" && r.scope.startsWith("QC Fail"))));
+  const onTrip = existingIdx >= 0 ? new Set((trips[existingIdx].punch || []).map(p => p && p.originItemId).filter(Boolean)) : new Set();
+  const newItems = existingIdx >= 0 ? items.filter(i => !onTrip.has(i.id)) : items;
+  return { items, existingIdx, newItems, nextTripNo: trips.length + 1 };
+}
+
+// v549: the QC verdict question as a bottom sheet with two real answers. A tap
+// outside does nothing (it used to count as "Crew on site has it"); Go back
+// leaves the verdict unchanged.
+function QcTripSheet({ ask, onAnswer }) {
+  if (!ask) return null;
+  const { verdictLabel, phaseLabel, jobName, plan } = ask;
+  const n = plan.existingIdx >= 0 ? plan.newItems.length : plan.items.length;
+  const items = (k) => `${k} QC item${k === 1 ? "" : "s"}`;
+  const opt = (primary) => ({ textAlign: "left", minHeight: 56, padding: "10px 14px", borderRadius: 10, display: "grid", gap: 2, cursor: "pointer", fontFamily: "inherit", fontSize: 15, fontWeight: 700,
+    border: primary ? "none" : `1px solid ${C.border}`, background: primary ? C.accent : C.card, color: primary ? "#fff" : C.text });
+  const sub = (primary) => ({ fontWeight: 500, fontSize: 13, color: primary ? "#E4EBFB" : C.dim });
+  return (
+    <div className="he-scrim" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 99999, display: "flex", flexDirection: "column", justifyContent: ON_MOBILE ? "flex-end" : "center", alignItems: ON_MOBILE ? "stretch" : "center" }}>
+      <div role="dialog" aria-modal="true" aria-label={`${verdictLabel} — return trip`} className={ON_MOBILE ? "he-sheet" : "he-dialog"}
+        style={{ background: C.surface, borderRadius: ON_MOBILE ? "18px 18px 0 0" : 16, width: ON_MOBILE ? "100%" : "min(480px, calc(100vw - 32px))", maxHeight: "92vh", overflowY: "auto", boxShadow: "0 -8px 40px rgba(0,0,0,0.45)" }}>
+        <div style={{ padding: "13px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700, color: C.dim, letterSpacing: "0.06em", textTransform: "uppercase" }}>{verdictLabel} · {jobName} · {phaseLabel}</div>
+        <div style={{ padding: "14px 16px", display: "grid", gap: 10 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
+            {plan.existingIdx >= 0 ? `This job already has an open QC trip (Return Trip #${plan.existingIdx + 1})` : n > 0 ? `Who fixes the ${items(n)}?` : "Make a return trip for this walk?"}
+          </div>
+          {plan.existingIdx >= 0 ? (
+            <button style={opt(true)} onClick={() => onAnswer("rt")}>{n > 0 ? `Add ${items(n)} to Return Trip #${plan.existingIdx + 1}` : `Keep Return Trip #${plan.existingIdx + 1} as it is`}
+              <span style={sub(true)}>{n > 0 ? "Only the items it doesn't have yet" : "It already has every open QC item"}</span></button>
+          ) : (
+            <button style={opt(true)} onClick={() => onAnswer("rt")}>Make a return trip
+              <span style={sub(true)}>Return Trip #{plan.nextTripNo}{n > 0 ? ` with ${items(n)}` : ""}, needs scheduling</span></button>
+          )}
+          <button style={opt(false)} onClick={() => onAnswer("crew")}>Crew on site has it
+            <span style={sub(false)}>The crew still on {jobName} fixes {n === 1 ? "it" : "them"}. No trip.</span></button>
+          <div style={{ fontSize: 13, color: C.dim }}>{phaseLabel} QC items only. {phaseLabel === "Rough" ? "Finish" : "Rough"} punch stays where it is.</div>
+          <button onClick={() => onAnswer(null)} style={{ justifySelf: "start", background: "none", border: "none", color: C.dim, fontSize: 14, fontWeight: 600, minHeight: "var(--he-tap, 40px)", padding: "0 4px", cursor: "pointer", fontFamily: "inherit" }}>Go back — keep the old verdict</button>
+        </div>
+        <div style={{ height: "env(safe-area-inset-bottom,16px)" }} />
+      </div>
+    </div>
+  );
+}
+
+// v549: the card under a stage select that says what the change set off, or —
+// when 100% is refused for open punch — why, with a button to the list.
+function StageChangeNote({ note, onShowPunch, onClose }) {
+  if (!note) return null;
+  if (note.blocked) return (
+    <div role="alert" style={{background:`${C.red}14`,border:`1px solid ${C.red}`,borderRadius:10,padding:"10px 12px",margin:"8px 0 4px",display:"grid",gap:8,fontSize:13.5,color:C.text}}>
+      <div><b style={{color:C.red}}>{note.phaseLabel} can't be 100% yet.</b> {note.blocked.text}</div>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button onClick={onShowPunch} style={{minHeight:"var(--he-tap, 40px)",padding:"8px 14px",borderRadius:9,border:"none",background:C.accent,color:"#fff",fontWeight:700,fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Show open punch ({note.blocked.count})</button>
+        <button onClick={onClose} style={{minHeight:"var(--he-tap, 40px)",padding:"8px 14px",borderRadius:9,border:`1px solid ${C.border}`,background:C.card,color:C.dim,fontWeight:600,fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Close</button>
+      </div>
+    </div>
+  );
+  return (
+    <div role="status" style={{background:C.steelBg,border:`1px solid ${C.steelLine}`,borderRadius:10,padding:"10px 12px",margin:"8px 0 4px",fontSize:13.5,color:C.text,position:"relative"}}>
+      <div style={{fontWeight:700,fontSize:14,paddingRight:36}}>{note.title}</div>
+      <ul style={{margin:"4px 0 0",paddingLeft:18,display:"grid",gap:2}}>{note.lines.map((l,i)=><li key={i}>{l}</li>)}</ul>
+      <button aria-label="Close summary" onClick={onClose} style={{position:"absolute",top:2,right:2,minWidth:"var(--he-tap, 40px)",minHeight:"var(--he-tap, 40px)",background:"none",border:"none",color:C.faint,fontSize:16,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+    </div>
+  );
 }
 
 const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0","#1","#2","#3","#4"];
@@ -5167,6 +5365,8 @@ const NOTIF_CATEGORIES = [
   ]},
   { label:"Time Off", items:[
     { key:"timeoff_requested", label:"Time off requested (your crew)",        roles:["admin","manager","foreman"] },
+    // v549: onTimeOffDecision pushes the requester (approved / not approved / back to pending).
+    { key:"timeoff_decided",   label:"Your time off approved or not",         roles:["admin","manager","foreman","lead","crew"] },
   ]},
   { label:"Reminders", items:[
     { key:"renudge",           label:"Manual reminder from a teammate",       roles:["admin","manager","foreman","lead","crew"] },
@@ -6169,13 +6369,16 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
 
 // Collapsible section wrapper — collapsed by default
 
-function Section({label, color=C.dim, action=null, defaultOpen=false, children}) {
+function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, openSignal=0, children}) {
 
   const [open, setOpen] = useState(defaultOpen);
+  // v549: a parent can open the section and scroll to it (the stage summary's
+  // "Show open punch" button) by bumping openSignal.
+  useEffect(() => { if (openSignal) setOpen(true); }, [openSignal]);
 
   return (
 
-    <div style={{marginBottom:4}}>
+    <div id={anchorId} style={{marginBottom:4}}>
 
       <div onClick={()=>setOpen(o=>!o)}
 
@@ -12113,6 +12316,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
   const [materialText,    setMaterialText]    = useState('');
   const [mobileSheet,   setMobileSheet]   = useState(null);
   const [uploadingId,   setUploadingId]   = useState(null);
+  const [failedUp,      setFailedUp]      = useState({}); // v549: itemId → files that didn't upload (Retry)
   // Multi-select for bulk-assigning. When selectMode is on, each item shows
   // a checkbox; the toolbar at the top shows "N selected · Assign to:" picker.
   // Stays scoped to this PunchItems instance — selection in one room/section
@@ -12139,7 +12343,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
   const handlePhotoUpload = async (itemId, files) => {
     if(!files||!files.length||!jobId) return;
     setUploadingId(itemId);
-    const newPhotos = [];
+    const newPhotos = [], failed = [];
     for(const file of Array.from(files)) {
       try {
         const photoId = uid();
@@ -12153,8 +12357,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
         await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url, storagePath, type:file.type||""});
-      } catch(e) { console.error('Punch photo upload failed:', e); }
+      } catch(e) { console.error('Punch photo upload failed:', e); failed.push(file); }
     }
+    setFailedUp(f => { const n = { ...f }; if (failed.length) n[itemId] = failed; else delete n[itemId]; return n; });
+    if (failed.length) toast.error(uploadFailMessage(failed.length, (safeItems.find(i => i.id === itemId) || {}).text), { duration: 9000 });
     if(newPhotos.length) {
       onChange(safeItems.map(i => i.id===itemId ? {...i, photos:[...(i.photos||[]),...newPhotos]} : i));
     }
@@ -12462,6 +12668,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 </span>
               </label>
             )}
+            {jobId && failedUp[item.id] && uploadingId!==item.id && <UploadRetryChip onRetry={()=>handlePhotoUpload(item.id, failedUp[item.id])}/>}
 
             <button onClick={async () => { if(!await showConfirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
               style={{minWidth:"var(--he-tap, 32px)", background: 'none', border: 'none', color: C.faint, cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>✕</button>
@@ -13241,6 +13448,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
   const [addText,      setAddText]      = useState('');
   const [newRoomName,  setNewRoomName]  = useState('');
   const [uploadingId,  setUploadingId]  = useState(null);
+  const [failedUp,     setFailedUp]     = useState({}); // v549: itemId → {files, floorKey, roomId} that didn't upload (Retry)
   const [editingItem,  setEditingItem]  = useState(null); // {fk, roomId, itemId}
   const [editText,     setEditText]     = useState('');
   const [undoToast,    setUndoToast]    = useState(null); // {fk, roomId, item, index, timer}
@@ -13308,7 +13516,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
   const addPhoto = async (floorKey, roomId, itemId, files) => {
     if(!files?.length || !jobId) return;
     setUploadingId(itemId);
-    const newPhotos = [];
+    const newPhotos = [], failed = [];
     for(const file of Array.from(files)) {
       try {
         const photoId = uid();
@@ -13317,8 +13525,10 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url});
-      } catch(e) { console.error('QC photo upload failed:', e); }
+      } catch(e) { console.error('QC photo upload failed:', e); failed.push(file); }
     }
+    setFailedUp(f => { const n = { ...f }; if (failed.length) n[itemId] = { files: failed, floorKey, roomId }; else delete n[itemId]; return n; });
+    if (failed.length) toast.error(uploadFailMessage(failed.length, ""), { duration: 9000 });
     if(newPhotos.length) {
       const floor = getFloor(floorKey);
       const addPh = items => items.map(i=>i.id===itemId?{...i,photos:[...(i.photos||[]),...newPhotos]}:i);
@@ -13586,6 +13796,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
             </label>
           );
         })()}
+        {jobId && failedUp[item.id] && uploadingId!==item.id && <UploadRetryChip onRetry={()=>{ const f=failedUp[item.id]; addPhoto(f.floorKey, f.roomId, item.id, f.files); }}/>}
         {!item.done && (
           <button onClick={()=>openVoidModal(fk, roomId, item.id, item.text)}
             title="Not actually a QC item — void with reason"
@@ -17220,7 +17431,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
     const out = [];
     out.push(`RETURN TRIP #${i+1} — ${jobName}`);
-    out.push(`Scheduled: ${t.date || "not yet set"}`);
+    out.push(tripScheduleLine(t));
     out.push(`Assigned:  ${t.assignedTo || "unassigned"}`);
     if (scope)    { out.push("", "SCOPE", scope); }
     if (task)     { out.push("", "TASK", task); }
@@ -29962,7 +30173,7 @@ function _isFullyDone(job) {
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[], onUpdateOtherJob=null}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[], onUpdateOtherJob=null, offline=false}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -30464,6 +30675,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const questionThreadsRef = useRef(null); questionThreadsRef.current = questionThreads;   // v466: read by the ccquestions listener (stale-closure-safe)
 
   const [refreshing, setRefreshing] = useState(false);
+  // v549: what the last stage change set off (summary card under the stage
+  // select), and a bump counter that opens + scrolls to that phase's punch list.
+  const [stageNote, setStageNote] = useState(null);
+  const [punchOpenSig, setPunchOpenSig] = useState({ rough: 0, finish: 0 });
+  const [qcAsk, setQcAsk] = useState(null); // v549: the QC verdict → return trip sheet
 
   const [simproFinancials, setSimproFinancials] = useState(null);
   useEffect(() => {
@@ -31178,6 +31394,84 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return floors.reduce((t,k) => t + countFloor(punch[k]), 0);
   };
 
+  // v549: one handler for both stage selects — save the plan's patch, show what
+  // it set off, and offer the shared Undo bar (re-issues the exact prior values).
+  const applyStage = (phase, v) => {
+    const counts = phase === "finish"
+      ? { openPunch: punchOpen(job.finishPunch), openQc: punchOpen(job.qcPunch) }
+      : { openPunch: punchOpen(job.roughPunch) };
+    const plan = stageChangePlan(job, phase, v, counts);
+    const phaseLabel = phase === "finish" ? "Finish" : "Rough";
+    if (plan.blocked) { setStageNote({ phase, phaseLabel, blocked: plan.blocked }); return; }
+    const prev = {};
+    Object.keys(plan.patch).forEach(k => { prev[k] = job[k] !== undefined ? job[k] : (typeof plan.patch[k] === "boolean" ? false : ""); });
+    u(plan.patch);
+    setStageNote({ phase, phaseLabel, title: plan.title, lines: plan.lines });
+    heUndo(`${phaseLabel} ${v} saved`, () => { u(prev); setStageNote(null); });
+  };
+  // v549: one runner for both QC pickers. A non-clean verdict asks (sheet, no
+  // tap-outside), then writes the verdict + the phase-suffixed choice stamp in
+  // ONE u() patch exactly as before; "rt" makes a trip from THIS phase's open
+  // QC items, or adds the missing ones to an already-open QC trip; every path
+  // ends in a message. Go back = nothing written.
+  const runQcVerdict = async (phase, v, basePatch) => {
+    const patch = { ...basePatch };
+    if (v === "fail" || v === "passed_items") {
+      const plan = qcTripPlan(job, phase);
+      const phaseLabel = phase === "finish" ? "Finish" : "Rough";
+      const verdictLabel = `${phase === "finish" ? "Finish " : ""}${v === "fail" ? "QC Fail" : "QC Passed with Items"}`;
+      const answer = await new Promise(resolve => setQcAsk({ verdictLabel, phaseLabel, jobName: job.name || "this job", plan, resolve }));
+      if (!answer) return;
+      const toClone = (x) => ({
+        id: uid(), text: x.text || "", done: false, fromQC: true,
+        severity: x.severity, originItemId: x.id, originPhase: x.__phase,
+        ...punchStamp(),
+        photos: Array.isArray(x.photos) ? x.photos.slice() : [],
+        materialNeeded: x.materialNeeded || "", materialSource: x.materialSource || "",
+      });
+      const nItems = (k) => `${k} QC item${k === 1 ? "" : "s"}`;
+      if (answer === "rt") {
+        const trips = job.returnTrips || [];
+        if (plan.existingIdx >= 0) {
+          const no = plan.existingIdx + 1;
+          if (plan.newItems.length) {
+            patch.returnTrips = trips.map((r, i) => i === plan.existingIdx ? { ...r, punch: [...(r.punch || []), ...plan.newItems.map(toClone)] } : r);
+            heFlyToTab("Return Trips", `${nItems(plan.newItems.length)} → Return Trip #${no}`);
+            toast.success(`Added ${nItems(plan.newItems.length)} to Return Trip #${no} on ${job.name || "this job"}.`);
+          } else {
+            toast.info(`Return Trip #${no} already has every open QC item. Nothing added.`);
+          }
+        } else {
+          const newRT = {
+            id: uid(), date: "", scope: v === "fail" ? "QC Fail — return trip needed" : "QC Items — return trip",
+            material: "", punch: plan.items.map(toClone),
+            photos: [], assignedTo: "",
+            signedOff: false, signedOffBy: "", signedOffDate: "",
+            needsSchedule: true, needsScheduleDate: "",
+            rtScheduled: false, scheduledDate: "",
+            rtStatus: "needs", fromQCFail: true,
+          };
+          patch.returnTrips = [...trips, newRT];
+          heFlyToTab("Return Trips", `${nItems(plan.items.length)} → Return Trips`);
+          toast.success(`Return Trip #${plan.nextTripNo} made on ${job.name || "this job"}${plan.items.length ? ` with ${nItems(plan.items.length)}` : ""} · needs scheduling.`);
+        }
+      } else {
+        toast.info(`Logged: crew on site has it. No trip made.`);
+      }
+      const P = phase === "finish" ? "Finish" : "Rough";
+      patch[`qcRtChoice${P}`] = answer === "rt" ? "rt" : "crew";
+      patch[`qcRtChoice${P}By`] = identity?.name || "";
+      patch[`qcRtChoice${P}At`] = new Date().toISOString();
+    }
+    u(patch);
+  };
+
+  const showOpenPunch = (phase) => {
+    setPunchOpenSig(s => ({ ...s, [phase]: (s[phase] || 0) + 1 }));
+    setStageNote(null);
+    setTimeout(() => { document.getElementById(`he-punch-${phase}`)?.scrollIntoView({ behavior: "smooth", block: "start" }); }, 60);
+  };
+
   const openCount = ['roughPunch','finishPunch'].reduce((total,key)=>{
     const p = job?.[key]||{};
     const extraCount = (p.extras||[]).reduce((s,e)=>s+countFloor(p[e.key]||{}),0);
@@ -31512,6 +31806,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   display:"inline-flex",alignItems:"center",gap:5,fontFamily:"inherit",fontSize:13,fontWeight:700}}>
                 <Icon name="plus" size={13} stroke={2.5}/> Need
               </button>
+            )}
+            {/* v549: the job layer covers the header's LIVE/OFFLINE chip and the
+                offline banner, so the job says it itself. */}
+            {offline && (
+              <span role="status" title="No signal. Your changes are saved on this phone and go up when signal comes back."
+                style={{display:"inline-flex",alignItems:"center",gap:5,borderRadius:99,padding:"4px 10px",fontSize:12.5,fontWeight:700,
+                  color:C.slateInk||C.slate,background:C.slateBg,border:`1px solid ${C.slateLine}`,whiteSpace:"nowrap"}}>Offline</span>
             )}
             <button onClick={refreshJob} title="Refresh" aria-label="Refresh job" className="he-tap-sq"
 
@@ -31866,7 +32167,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};/* Auto-flip matterport to "needs" when rough hits 85% and finish hasn't started — the before-drywall scan window (v424), early enough to schedule. Skip if matterport is already set or a scan is uploaded. */const matterportFlip=(pct>=85&&parseStage(job.finishStage)===0&&!job.matterportStatus&&!(job.matterportLinks?.length||job.matterportLink)&&!job.hiddenSections?.matterport)?{matterportStatus:"needs"}:{};/* Auto-flip QC to "needs" when stage hits 80% (same trigger as the auto Schedule QC task) OR when stage hits 100%. Skip if QC has any status already (scheduled / pass / fail / fixed / completed) so user-set values aren't clobbered. */const qcFlip=((pct>=80&&!job.roughQCTaskFired)||(v==="100%"&&job.roughStatus!=="complete"))&&!job.qcStatus?{qcStatus:"needs"}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...matterportFlip,...qcFlip,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>applyStage("rough", e.target.value)} options={ROUGH_STAGES}/>
+                {stageNote?.phase==="rough" && <StageChangeNote note={stageNote} onShowPunch={()=>showOpenPunch("rough")} onClose={()=>setStageNote(null)}/>}
 
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
@@ -31898,7 +32200,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
 
-              <Section label="Punch List" color={C.rough} action={
+              <Section label="Punch List" color={C.rough} anchorId="he-punch-rough" openSignal={punchOpenSig.rough} action={
                 <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}
                   filter={job.roughPunchFilter||null} filterLabel={job.roughPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({roughPunchFilter:v,roughPunchFilterLabel:lbl})}
                   shares={job.roughPunchShares||[]} onSaveShares={v=>u({roughPunchShares:v})}/>
@@ -32206,7 +32508,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);toast.warn(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};const finishQcFlip=((pct>=80)||(v==="100%"))&&!job.finishQcStatus?{finishQcStatus:"needs"}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...finishQcFlip,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>applyStage("finish", e.target.value)} options={FINISH_STAGES}/>
+                {stageNote?.phase==="finish" && <StageChangeNote note={stageNote} onShowPunch={()=>showOpenPunch("finish")} onClose={()=>setStageNote(null)}/>}
                 <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
                 {/* J8 — Job Notes (primary capture surface for Finish phase). */}
                 <JobNotesSection
@@ -32230,7 +32533,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 />
               </Section>
 
-              <Section label="Punch List" color={C.finish} action={
+              <Section label="Punch List" color={C.finish} anchorId="he-punch-finish" openSignal={punchOpenSig.finish} action={
                 <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}
                   filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}
                   shares={job.finishPunchShares||[]} onSaveShares={v=>u({finishPunchShares:v})}/>
@@ -33857,100 +34160,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // Extracted verbatim from the select's old inline onChange so the
                 // suggestion chip below can trigger the EXACT same write (RT
                 // auto-create included) as picking the option by hand.
-                const applyQcStatus = async (v) => {
-                  const patch={qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""};
-                  // Task 6 (2026-08-10): severity sets the VERDICT (fail vs passed
-                  // items); only a human on the ground knows site reality, so the
-                  // return trip is no longer auto-created — it's an explicit choice,
-                  // prompted for BOTH non-clean verdicts (not just fail, the whole
-                  // point of this redesign). Confirm builds the RT below (construction
-                  // unchanged from the old auto-create, just gated behind the prompt
-                  // and scope-per-verdict). Cancel means the crew on site has it —
-                  // that's a legitimate choice too, not an aborted action, so it still
-                  // records the choice and still writes the verdict.
-                  if (v==="fail" || v==="passed_items") {
-                    const makeRt = await showConfirm({
-                      title: v==="fail" ? "QC Fail — return trip needed?" : "QC Passed with Items — return trip needed?",
-                      message: "Severity set the verdict. Site reality sets the return trip: if nobody is coming back to this job, make it a return trip so the items can't get missed. If a crew is on site, they handle it in stride.",
-                      confirmLabel: "Create return trip",
-                      cancelLabel: "Crew on site has it",
-                      danger: false,
-                    });
-                    if (makeRt) {
-                      // Dedupe keys off the fromQCFail flag OR the legacy "QC Fail"
-                      // scope-string prefix (pre-Task-6 RTs predate the flag). String
-                      // alone would miss an open passed_items RT — its scope ("QC
-                      // Items — return trip") never starts with "QC Fail" — so both
-                      // verdicts now check the flag first.
-                      const existingQCFailRT = (job.returnTrips||[]).some(r =>
-                        r && !r.signedOff && (r.fromQCFail === true || (typeof r.scope==="string" && r.scope.startsWith("QC Fail"))));
-                      if (!existingQCFailRT) {
-                        const openQC = [];
-                        const grab = (punch, phase) => {
-                          if (!punch) return;
-                          const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-                            ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
-                          // Voided items are filtered out — they're no longer considered QC.
-                          allFloors.forEach(fl => {
-                            if (!fl) return;
-                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
-                            (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
-                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
-                          });
-                        };
-                        grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
-                        const newRT = {
-                          id:uid(), date:"", scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",
-                          material:"",
-                          // Copy photos, materialNeeded/source, AND the source item
-                          // id onto each RT punch item so (a) crew can see the
-                          // pictures in context and (b) check-off syncs back to
-                          // the original fromQC entry in roughPunch/finishPunch.
-                          punch: openQC.map(x=>({
-                            id:uid(),
-                            text:x.text||"",
-                            done:false,
-                            fromQC:true,
-                            severity: x.severity, // carry serious/minor onto the RT clone
-                            originItemId: x.id,
-                            originPhase: x.__phase,
-                            ...punchStamp(), // when the RT clone was made, not the source item
-                            photos: Array.isArray(x.photos) ? x.photos.slice() : [],
-                            materialNeeded: x.materialNeeded||"",
-                            materialSource: x.materialSource||"",
-                          })),
-                          photos:[], assignedTo:"",
-                          signedOff:false, signedOffBy:"", signedOffDate:"",
-                          needsSchedule:true, needsScheduleDate:"",
-                          rtScheduled:false, scheduledDate:"",
-                          rtStatus:"needs",
-                          fromQCFail:true,
-                        };
-                        patch.returnTrips=[...(job.returnTrips||[]), newRT];
-                        heFlyToTab("Return Trips", `${openQC.length} item${openQC.length===1?"":"s"} → Return Trips`);
-                        toast.success(`${v==="fail"?"QC Fail":"QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
-                      }
-                    }
-                    // Record the choice itself — additive fields, same u() patch as
-                    // the verdict so it's one Firestore write, not two racing the
-                    // debounced save funnel. See qcStrandedItems (module scope) for
-                    // the read-only safety net this choice feeds.
-                    //
-                    // FIX ROUND 1 (2026-08-10, review Critical finding): PHASE-
-                    // SUFFIXED, not the flat qcRtChoice/qcRtChoiceBy/qcRtChoiceAt
-                    // this task originally shipped. The flat shape meant a later
-                    // finish-phase choice silently overwrote an earlier rough-phase
-                    // one, so a job that got "crew" on rough and later "rt" on
-                    // finish would report qcRtChoice==="rt" job-wide — hiding
-                    // rough's abandoned items from the stranded tripwire even
-                    // though nobody ever came back for them. Each phase now owns
-                    // its own choice.
-                    patch.qcRtChoiceRough = makeRt ? "rt" : "crew";
-                    patch.qcRtChoiceRoughBy = identity?.name || "";
-                    patch.qcRtChoiceRoughAt = new Date().toISOString();
-                  }
-                  u(patch);
-                };
+                const applyQcStatus = (v) => runQcVerdict("rough", v, {qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""});
                 return (
                   <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
                     <div style={{fontSize:12,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>ROUGH QC STATUS</div>
@@ -34004,46 +34214,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // Extracted verbatim from the select's old inline onChange so the
                 // suggestion chip below can trigger the EXACT same write (RT
                 // auto-create included) as picking the option by hand.
-                const applyFinishQcStatus = async (v) => {
-                  const patch={finishQcStatus:v,finishQcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.finishQcStatusDate:""};
-                  // Task 6 (2026-08-10) — same redesign as the rough picker's
-                  // applyQcStatus above (see its comment for the full rationale):
-                  // return trip is now an explicit confirm choice, fired for BOTH
-                  // non-clean verdicts, recorded either way in the same patch.
-                  if(v==="fail" || v==="passed_items"){
-                    const makeRt = await showConfirm({
-                      title: v==="fail" ? "QC Fail — return trip needed?" : "QC Passed with Items — return trip needed?",
-                      message: "Severity set the verdict. Site reality sets the return trip: if nobody is coming back to this job, make it a return trip so the items can't get missed. If a crew is on site, they handle it in stride.",
-                      confirmLabel: "Create return trip",
-                      cancelLabel: "Crew on site has it",
-                      danger: false,
-                    });
-                    if (makeRt) {
-                      // Flag-first dedupe — see applyQcStatus above for why the
-                      // string-only check would miss a passed_items RT.
-                      const existing=(job.returnTrips||[]).some(r=>r && !r.signedOff && (r.fromQCFail===true || (typeof r.scope==="string" && r.scope.startsWith("QC Fail"))));
-                      if(!existing){
-                        const openQC=[];
-                        const fls=[...["upper","main","basement"].map(k=>job.finishPunch&&job.finishPunch[k]).filter(Boolean),...(((job.finishPunch&&job.finishPunch.extras)||[]).map(x=>x&&x.key?job.finishPunch[x.key]:null).filter(Boolean))];
-                        fls.forEach(fl=>{ if(!fl) return;
-                          (fl.general||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
-                          (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
-                          (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
-                        });
-                        const newRT={id:uid(),date:"",scope: v==="fail" ? "QC Fail — return trip needed" : "QC Items — return trip",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,severity:x.severity,originItemId:x.id,originPhase:x.__phase,...punchStamp(),photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
-                        patch.returnTrips=[...(job.returnTrips||[]),newRT];
-                        heFlyToTab("Return Trips", `${openQC.length} item${openQC.length===1?"":"s"} → Return Trips`);
-                        toast.success(`${v==="fail"?"Finish QC Fail":"Finish QC Passed with Items"} logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
-                      }
-                    }
-                    // FIX ROUND 1 (2026-08-10) — phase-suffixed, see the rough
-                    // handler's applyQcStatus above for the full rationale.
-                    patch.qcRtChoiceFinish = makeRt ? "rt" : "crew";
-                    patch.qcRtChoiceFinishBy = identity?.name || "";
-                    patch.qcRtChoiceFinishAt = new Date().toISOString();
-                  }
-                  u(patch);
-                };
+                const applyFinishQcStatus = (v) => runQcVerdict("finish", v, {finishQcStatus:v,finishQcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.finishQcStatusDate:""});
                 return (
                   <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
                     <div style={{fontSize:12,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FINISH QC STATUS</div>
@@ -34825,6 +34996,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
 
       )}
+
+      <QcTripSheet ask={qcAsk} onAnswer={(a)=>{ const r=qcAsk&&qcAsk.resolve; setQcAsk(null); if(r) r(a); }}/>
 
 
     {needsSchedModal && (
@@ -57206,9 +57379,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-16 · App SW version: v548
+**Last manifest update:** 2026-10-16 · App SW version: v549
 
 ---
+
+- **Say what happened (UX backlog batch 2): the stage % says what it set off, the QC verdict asks once and always answers, the trip text has the real date, offline is calm inside a job, one update prompt, time-off answers reach the person who asked, failed photo uploads say so** · 'shipped 2026-10-16' · 'SW v549' · 'stageChangePlan' · 'StageChangeNote' · 'qcTripPlan' · 'QcTripSheet' · 'tripScheduleLine' · 'HeSaveHud offline' · 'retrySaves' · 'canDecideTimeOff' · 'onTimeOffDecision' · 'functions/timeOffDecision.js' · 'uploadFailMessage' · 'UploadRetryChip' · Batch 2 of the combined 2026-10-14 usability backlog ('docs/ux-backlog-combined-2026-10-14.md', items #6, #9, #10, #14, #25, #26, #44, #67), built to the approved real-data mockup 'docs/mockups/batch2-say-what-happened.html' (claude.ai/artifact/BhtpNLD9r95Q45HbwU5i2h); Koy: *"Approved as drawn, yes to all three decisions."* **(1) Stage %:** both stage selects call one pure 'stageChangePlan(job, phase, v, counts)' that keeps every side effect the inline handlers had (QC task at 80%, Job Prep complete, Ready to invoice at 85%, Matterport at 85% with finish at 0, QC needs-scheduling, status) and returns a plain-words summary shown in a 'StageChangeNote' card under the select (*"Rough 85% · here's what that set off — Ready to invoice: on. The office and Keegan get a push. Matterport scan: needed now. QC walk: already scheduled, no change."*) with the shared Undo bar (re-issues the exact prior values). Koy's decisions: **below 85% turns Ready to invoice off** ('readyToInvoice:false, readyToInvoiceDate:""') unless the other phase still justifies it (rough drop keeps it while finish ≥ 85%; finish drop keeps it while rough ≥ 85% and no invoice was sent yet — a sent invoice already has readyToInvoice false); **a job on hold keeps its hold and status** when the % moves (only 100% = Complete clears the hold, same as the Status select). 100% with open punch shows *"Rough can't be 100% yet. N punch items are still open"* with **Show open punch (N)**, which opens and scrolls to the folded Punch List ('Section' got optional 'anchorId' + 'openSignal'). Gate 'scripts/stage-change-test.js': Miller #1438 and Skyridge Lot 208 #1419 as they were on 2026-10-16, plus a 1,536-case parity sweep proving every old side effect is unchanged for a job not on hold (mutation-checked). **(2) QC verdict:** 'showConfirm' (tap outside = "Crew on site has it") is replaced by 'QcTripSheet': two answers, no tap-outside, *Go back — keep the old verdict* writes nothing. 'qcTripPlan(job, phase)' takes open QC-walk items (fromQC, not done/voided) from **this phase only** (rough no longer sweeps finish items); if an open QC trip already exists it offers *Add N QC items to Return Trip #X* (only items the trip lacks, by originItemId) instead of silently doing nothing; every answer ends in a toast. Verdict + phase-suffixed 'qcRtChoice*' stamp stay one 'u()' patch, shared by both pickers ('runQcVerdict'). Gate 'scripts/qc-trip-test.js'. **(3) Trip text:** Text / Email / Chat Trip read 't.date', which the card never writes, so every trip said *"Scheduled: not yet set"*. 'tripScheduleLine' reads 'rtStatusDate' (the card's SCHEDULED FOR / SCHEDULE BY picker), then 'scheduledDate', then 'date': *"Scheduled for Tue, Oct 27"* / *"Schedule by Mon, Oct 12"*. Gate 'scripts/trip-text-test.js' (Wade Residence RT #3). **(4) Offline:** display only. While the device is offline, saving / failed / pending shows as a calm steel pill *"Saved on this phone · N jobs waiting"* instead of *"Save failed · tap to retry"* flipping every 5 s; the job header gets an **Offline** chip (the job layer covers the nav chip and banner); when the queue drains after reconnect, *"Back online · Miller synced"*. The header SAVING / NOT SAVED chips and Job Board sync chips read the same display status. **Tap to retry now retries:** 'flushSaves' only flushed jobs with a live save timer, which a failed save never has; 'retrySaves' re-drives every still-pending job exactly like the automatic 5 s retry (pending patch, no save already queued). No save, queue or merge code changed. **(5) One update prompt:** the v497 *"Update ready · tap to reload"* bar is gone (it covered the version card's Later and reloaded without saving first); the version card (Update now saves first / Later) is the only prompt; 'useHeSwUpdate' is no longer called. **(6) Time off:** new trigger **'onTimeOffDecision'** (settings/timeOffRequests onUpdate; pure diff in 'functions/timeOffDecision.js', gate 'scripts/timeoff-decision-test.js') pushes the requester on approve (*"Time off approved · Fri, Nov 20 – Fri, Nov 27 (unpaid) · approved by Koy. It's on the crew schedule."*), not approved, a changed decision, or back to pending after an Undo; skips self-decisions; new pref 'timeoff_decided' (default on). Time Off page: 44 px Approve / Deny, the shared Undo bar (restores the request exactly, reading the live lists), **Change to approved / not approved** on decided cards, Remove through 'showConfirm', *denied* shown as *not approved*. **One approver rule** in both places, 'canDecideTimeOff': Head of Residential + admins (the page allowed admins + the requester's coordinator; My Day allowed head + admins + managers — "manager" access is held by foremen, so it was narrowed to head + admins; every current coordinator is an admin, so nobody who decides time off today loses it). **(7) Photo uploads:** punch ('PunchItems.handlePhotoUpload') and QC walk ('QCWalkSection.addPhoto') failures now toast *"Photo didn't upload to "Coach lights". Check your connection, then tap Retry."* and leave a red **Didn't upload · Retry** chip on the item that keeps the picked files. Guides: 'rough.html', 'jobinfo.html' (QC / Matterport thresholds were wrong: 85%, not 100%), 'qc.html', 'returntrips.html', 'myday.html'. Crew brief 'docs/crew-briefs/v549.md'. **Needs 'firebase deploy --only functions:onTimeOffDecision'** (until then decisions just don't push, exactly as before). **Why it won't lose data:** every change is display, a clearer prompt, or a stricter check: the stage patch is the same as before plus only the Ready-to-invoice clear (proved by the parity sweep), the QC verdict writes the same fields in one patch (and Go back writes nothing), the trip text is read-only, offline display reads the existing queue and 'retrySaves' calls 'saveJob' under the same guard the automatic retry uses, time-off writes go through the same 'mergeSaveSettingsFields' funnel against the live list, the new trigger only reads 'settings/timeOffRequests' and writes inbox records, and the photo Retry re-runs the same uploader; no rules or loader change.
 
 - **Store-run receipts: snap the Home Depot / ACE / Amazon receipt on the card and it lands on that PO in Simpro** · 'shipped 2026-10-16' · 'SW v548' · 'attachStoreReceipt' · 'functions/materialPO/receipt.js' · 'shrinkReceiptPhoto' · 'receiptState' · Koy asked whether a crew's Home Depot receipt could go from the app onto its Simpro PO. Live data (2026-10-15): only 2 of the last 25 store POs had a receipt (added by hand by the office, 8 and 18 days later), 15 of 25 still showed $0 cost, and crews still make store POs in Simpro Mobile and type the number on the card, so this works on **any** store-run card with a PO #. Koy's calls (2026-10-16): a reminder on Picked up, never a block; no typed receipt total; anyone who can send POs can attach; no missing-receipts list yet, just a receipt column on Bid Items → Orders. Mockup: claude.ai/artifact/XQtGUzyKbYTEmL7WkzAr3M. **The card:** a Home Depot / ACE / Amazon card with a PO # (Material Tracking on Rough, Finish and the commercial Materials tab) shows an orange **No receipt yet** box with **Add receipt photo** (people with 'materials.sendPO'). The sheet checks the number with Simpro as it opens ('checkOnly'), offers **Take photo** / **Choose photo**, shrinks the photo in the browser (long side 2000 px, JPEG, down to about 1 MB in up to six tries; over 5.5 MB it refuses), shows **Goes on PO #### in Simpro · Job · phase · store**, and **Attach to PO ####** sends it with the same send motion as Get a PO number. Then the box turns green: a tiny thumbnail (about 2 KB, kept on the card; the photo itself lives only on the PO), **Receipt on PO ####**, who · when · in Simpro, and **Add another photo**. The card header shows **Receipt**, **Not a PO #**, or (once picked up) **No receipt**. **Picked up** on a store card with a PO # and no receipt asks once per card per session, *Got the receipt? Snap it now.* (Add receipt photo / Not now); Picked up is already saved. **Server:** new callable **'attachStoreReceipt'** (requireMember + live PIN like 'sendMaterialPO'; same 'gc_config/material_po' switch: 'off' stops it, test = admins only, live = 'liveAccess'; plus 'receipts:"off"' to stop only receipts). It reads 'GET /vendorOrders/{po}' and refuses, in plain words, anything that isn't a Home Depot / ACE Hardware / Amazon PO on this job's Simpro job ('AssignedTo.Job'), or is voided — e.g. Battle Creek's card holding 1412 gets *"1412 isn't a Home Depot PO on this job. It looks like the job number. Fix the PO number on the card, then add the photo."*; the card then remembers 'receiptBadPo' so Orders shows **Not a PO #** until the number changes. Then 'POST /vendorOrders/{id}/attachments/files/' with '{Filename, Base64Data}' (proven on test PO 7285 on 2026-10-16: byte-identical round trip). API uploads show an empty AddedBy in Simpro, so the name and day ride in the filename: 'PO 7024 receipt – Braden Davis – 2026-09-02.jpg' (the 2nd photo on a PO is 'receipt 2'). **Retry safety:** the app mints one id per photo; the server claims 'material_receipt_log/{job_phase_card__r_<id>}' in a transaction (function-only, the rules' catch-all denies clients), writes the PO and filename down before the upload, and a lost Simpro answer is marked unknown and looked up on the PO's attachments by filename before any re-upload; a second tap waits for the first and gets the same answer. The photo never touches Firestore (the claim keeps its md5 and size). **Card data:** inside the order object only — 'receipts: [{id, name, by, at, simproFileId, po, thumb}]' and 'receiptBadPo' — written through 'onPatchOrder' (the job's live copy, 'jobRef.current'). **Bid Items → Orders:** each store-run row gets a receipt chip (Receipt / 2 receipts / No receipt / Not a PO #). Gate: new 'scripts/receipt-sim.js' in prebuild (12 scenarios on the real handler + the app's helpers pulled from App.js: good attach and filename, 2nd photo, PO box formats, the 1412 job-number refusal with nothing uploaded, another job / CED / no such PO / voided / not a number, check-only, three simultaneous taps → one file, lost answer recovered without a 2nd upload, Simpro refusal then retry, a 12 MP photo shrunk to ≤ ~1 MB and an 11 MB payload refused by the server, who may attach, badge + once-only reminder; mutation-checked). Guides: rough, finish, biditems, materials. Vault: [[Crew POs from the App]]. **Needs 'firebase deploy --only functions:attachStoreReceipt' before the app push** (until then the sheet says it couldn't check, and Attach fails with a plain error; nothing is saved on the card). **Why it won't lose data:** no new top-level job field; two new keys inside existing order objects, written through the normal save against the live job copy; nothing is deleted or overwritten; the only server writes are the function-only 'material_receipt_log' docs and the new file on the Simpro PO; no rules change.
 - **Friday Strategy prep laid out the way Koy edits it: Notes first, every job a small tree with a Plan line, Blocked = GC + office only, Money / headline / DATE PASSED / OVERDUE rows gone** · 'shipped 2026-10-16' · 'SW v547' · 'strategyPrep' · 'functions/strategyPrep.js renderLines' · 'BLOCKED_GROUPS_SHOWN' · Koy hand-edited the 2026-10-15 TEST doc and said *"I changed the test friday pull to exactly how i want it structured and templated in the future pulls."* The pure builder is unchanged (same reads, same buckets, same state, same counts); only **renderLines** changed, to that doc. **Layout:** no grey pre-line, no three-line headline; **Carried** prints only when Josh's doc was read and something carries (a failed read is logged and shown on the dashboard card, never printed as a share hint). **Schedule next week:** a free *Notes* list (one empty bullet to type in) → **Scheduled** (was Booked), each job as name › status › *Plan* › crew · days in green → **Need to be scheduled next week** (was In progress, nobody booked), each job as red *NO CREW* + bold name › status with last update / punch / questions / waiting › *Plan*, a blank line between jobs → **Starts** as AT RISK / CONFIRMED / PROJECTED / UPCOMING / HARD DATE NEEDED trees (start line, nobody booked + roles, prep, where the lead is, *Plan*); OVERDUE and DUE rows no longer print → Dates that moved (DATE PASSED rows no longer print) → On the calendar → **People** with *Out:* as a parent and one person per child, capacity, conflicts. **Blocked:** only *GC / builder* and *Us (office owes the field)* print (Homeowner / designer, Material, Inspection, Other trades, On hold, Sold work not on the calendar, Other are still computed for state and the dashboard, never printed; *Cleared* follows the same filter). **Coming up:** one job per line (the week label rides on the first), *No date yet* one per line, then **QC to schedule** folded in as a sub-list (name · foreman › why · punch › *Plan*); the In prep / Plan intake / Near done rows are gone. **Money** is not printed (moneyRows still runs for the margin state). Last week and the Action items table unchanged. Nesting = leading tabs in the inserted text (what the Docs API reads as list level, same as the Wednesday doc); every colour span is offset past them; the plain-text fallback indents them. Koy's rule answers (2026-10-16): print every nobody-booked job and he culls by hand; Blocked = GC + Us for good; Money, DATE PASSED, OVERDUE / DUE and the three Coming-up summary rows are gone for good; Carried comes back by itself once Josh shares the doc. **Tests:** 'scripts/strategyprep-test.js' (252 checks, prebuild, also 'TZ=UTC') — 21 layout assertions rewritten to the tree shape, a new v547 block checks the trees, the span offsets inside 'docsRequests', the two-group Blocked filter, the omitted sections and the orchestrator splice; 'scripts/strategyprep-dryrun.js --doc' rendered a PREVIEW from live data for Koy's sign-off. Guide 'dashboard.html' updated. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:strategyPrep,functions:sendTestStrategyPrep' (autoDocsLatest unchanged). **Why it won't lose data:** rendering only — no read, bucket, state or save path changed; the orchestrator's one edit moves the data-warning line to the top and indents the fallback HTML.
@@ -57910,8 +58085,20 @@ function parseAppMapManifest(md) {
   return sections;
 }
 
+// v549 (UX batch 2, Koy 2026-10-16): ONE time-off approver rule for the Time
+// Off page and My Day — the Head of Residential and admins. (The page used to
+// allow admins + the requester's coordinator; My Day allowed head + admins +
+// managers. Every coordinator is an admin, and "manager" access is held by
+// foremen, who shouldn't approve the whole crew's — or their own — time off.)
+function canDecideTimeOff(identity, users) {
+  if (!identity) return false;
+  if (getAccess(identity) === "admin") return true;
+  const head = resiHeadName(users || []);
+  return !!(head && sameName(head, identity.name));
+}
+
 // ── Time Off ──────────────────────────────────────────────────────────────
-// Crew request time off; admins + the requester's coordinator approve/deny.
+// Crew request time off; the head of residential + admins approve/deny (v549: canDecideTimeOff).
 // Stored in settings/timeOffRequests (settings is open read/write, so NO rules
 // change needed). Approving mirrors the entry into settings/crewPTO so it shows
 // on the existing Crew Planner calendar — same list the planner already reads.
@@ -57962,21 +58149,16 @@ function TimeOffPage({ identity = null, users = [] }) {
   // Merge-save (data safety): requests are id'd — a crew member submitting
   // while an approver decides another request no longer last-write-wins the list.
   const _saveRequests = (list) => mergeSaveSettingsFields("timeOffRequests", { list });
+  // v549: the Undo bar runs seconds later — read the live lists, never the
+  // copy captured when the button was tapped.
+  const requestsRef = useRef(requests); requestsRef.current = requests;
+  const ptoRef = useRef(ptoList); ptoRef.current = ptoList;
 
-  // Coordinator detection + book scoping: a person's coordinator is their own
-  // (if foreman) or their foreman's (crew/lead via foremanId).
-  const coordinatorNames = useMemo(() => new Set((users||[]).filter(u=>(u.title||u.role)==="foreman" && u.coordinator).map(u=>u.coordinator)), [users]);
-  const iAmCoordinator = coordinatorNames.has(me);
+  // v549: one approver rule everywhere (canDecideTimeOff — head of residential
+  // + admins); the old coordinator-book scoping is gone with the books.
   const isAdmin = access === "admin";
-  const coordOfPerson = (name) => {
-    const u = (users||[]).find(x => x.name === name);
-    if (!u) return "";
-    if ((u.title||u.role)==="foreman" && u.coordinator) return u.coordinator;
-    if (u.foremanId) { const fm = (users||[]).find(x => x.id === u.foremanId); return (fm && fm.coordinator) || ""; }
-    return "";
-  };
-  const canApproveReq = (r) => isAdmin || (iAmCoordinator && coordOfPerson(r.name) === me);
-  const isApprover = isAdmin || iAmCoordinator;
+  const isApprover = canDecideTimeOff(identity, users);
+  const canApproveReq = () => isApprover;
 
   const submitRequest = async () => {
     if (!me) { toast.error("Pick who you are first."); return; }
@@ -58021,29 +58203,40 @@ function TimeOffPage({ identity = null, users = [] }) {
     setSubmitting(false);
   };
 
-  const decide = async (r, status) => {
+  // v549: "pending" is the Undo path (decidedBy/At cleared, the board task
+  // reopened). Every status change reaches the requester as a push via the
+  // onTimeOffDecision trigger, so the toast is replaced by the Undo bar.
+  const decide = async (r, status, { undo = false } = {}) => {
     try {
-      await _saveRequests(requests.map(x => x.id===r.id ? { ...x, status, decidedBy:me, decidedAt:new Date().toISOString() } : x));
+      const reopen = status === "pending";
+      // Undo restores the request exactly as it was (its own decidedBy / At).
+      const fields = undo ? { status, decidedBy: r.decidedBy || "", decidedAt: r.decidedAt || "" }
+        : { status, decidedBy: me, decidedAt: new Date().toISOString() };
+      await _saveRequests((requestsRef.current||[]).map(x => x.id===r.id ? { ...x, ...fields } : x));
       // Clear the head's My Day board task now that it's been acted on. Field-
       // surgical (never a full-doc overwrite); silent (doneBy=head, createdBy
       // empty → onNeedWrite branch 2 can't fire). Older requests predating this
       // routing have no such doc → updateDoc 404s, caught and ignored.
-      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), stampWrite({ "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me })); } catch(_) {}
-      if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
+      try { const di=new Date().toISOString(); await updateDoc(doc(db,"needs","toneed_"+r.id), stampWrite(reopen ? { "data.status":"open", "data.doneBy":"", "data.doneAt":"", updated_at:di, saved_by:me } : { "data.status":"done", "data.doneBy":me, "data.doneAt":di, updated_at:di, saved_by:me })); } catch(_) {}
+      const pto = ptoRef.current || [];
+      if (status === "approved" && !pto.some(p => p.timeoffId === r.id)) {
         const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off", usePaid:r.usePaid!==false };
-        await mergeSaveSettingsFields("crewPTO", { list:[...(ptoList||[]), entry] });
+        await mergeSaveSettingsFields("crewPTO", { list:[...pto, entry] });
       }
       if (status !== "approved") {
         // pull any previously-mirrored PTO entry back out if it's being un-approved
-        const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
-        if (filtered.length !== (ptoList||[]).length) await mergeSaveSettingsFields("crewPTO", { list:filtered });
+        const filtered = pto.filter(p => p.timeoffId !== r.id);
+        if (filtered.length !== pto.length) await mergeSaveSettingsFields("crewPTO", { list:filtered });
       }
-      toast.success(status==="approved" ? "Approved — added to the calendar." : "Request "+status+".");
-    } catch(e) { toast.error("Update failed: "+(e?.message||"")); }
+      if (undo) return;
+      const who = (r.name||"").split(" ")[0] || "They";
+      heUndo(status==="approved" ? `Approved · on the schedule · ${who} gets a notification` : `Not approved · ${who} gets a notification`,
+        () => decide(r, r.status || "pending", { undo: true }));
+    } catch(e) { toast.error("Not saved — the request didn't change. Check your connection and try again."); }
   };
 
   const deleteRequest = async (r) => {
-    if (!window.confirm("Remove this request?")) return;
+    if (!await showConfirm({ title:"Remove this request?", message:`${r.name} · ${(r.end && r.end !== r.start) ? `${r.start} → ${r.end}` : r.start}. It comes off the list${r.status==="approved"?" and the crew schedule":""}.`, confirmLabel:"Remove request", danger:true })) return;
     try {
       await _saveRequests(requests.filter(x => x.id !== r.id));
       // Drop the head's board task too (the request is gone). Best-effort — a
@@ -58061,7 +58254,7 @@ function TimeOffPage({ identity = null, users = [] }) {
   const STATUS = {
     pending: { bg:C.slateBg, color:C.slateInk, border:C.slateLine, label:"pending" },
     approved:{ bg:"#DEEFE6", color:"#2C5C40", border:"#CDE6D7", label:"approved" },
-    denied:  { bg:"#F3E2E2", color:"#9A3030", border:"#EAD2D2", label:"denied" },
+    denied:  { bg:"#F3E2E2", color:"#9A3030", border:"#EAD2D2", label:"not approved" },
   };
   const statusPill = (st) => { const c = STATUS[st]||STATUS.pending; return <span style={{fontSize:12.5, fontWeight:600, color:c.color, background:c.bg, border:`1px solid ${c.border}`, borderRadius:99, padding:"1px 9px"}}>{c.label}</span>; };
   const card = (r, withActions) => (
@@ -58074,21 +58267,26 @@ function TimeOffPage({ identity = null, users = [] }) {
           ? <span style={{fontSize:12.5, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px"}}>UNPAID</span>
           : <span style={{fontSize:12.5, fontWeight:700, color:C.accent, background:`${C.accent}14`, border:`1px solid ${C.accent}33`, borderRadius:99, padding:"1px 8px"}}>PTO</span>}
         <span style={{flex:1}}/>
-        {withActions && r.status==="pending" && (<>
-          <button onClick={()=>decide(r,"approved")} style={{padding:"4px 12px", fontSize:13, fontWeight:700, border:"none", borderRadius:7, background:"#2C5C40", color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>Approve</button>
-          <button onClick={()=>decide(r,"denied")} style={{padding:"4px 12px", fontSize:13, fontWeight:600, border:`1px solid ${C.border}`, borderRadius:7, background:"transparent", color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>Deny</button>
-        </>)}
-        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{padding:"3px 8px", fontSize:12.5, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.faint, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
+        {isApprover && r.status!=="pending" && r.name!==me && (
+          <button onClick={()=>decide(r, r.status==="approved" ? "denied" : "approved")} style={{minHeight:"var(--he-tap, 40px)", padding:"4px 12px", fontSize:13, fontWeight:600, border:`1px solid ${C.border}`, borderRadius:7, background:"transparent", color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>{r.status==="approved" ? "Change to not approved" : "Change to approved"}</button>
+        )}
+        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{minHeight:"var(--he-tap, 40px)", padding:"3px 10px", fontSize:12.5, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.faint, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
       </div>
+      {withActions && r.status==="pending" && (
+        <div style={{display:"flex", gap:8, marginTop:8, flexWrap:"wrap"}}>
+          <button onClick={()=>decide(r,"approved")} style={{flex:"1 1 140px", minHeight:44, padding:"8px 14px", fontSize:14, fontWeight:700, border:"none", borderRadius:9, background:"#2C5C40", color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>Approve</button>
+          <button onClick={()=>decide(r,"denied")} style={{flex:"1 1 140px", minHeight:44, padding:"8px 14px", fontSize:14, fontWeight:600, border:`1px solid ${C.border}`, borderRadius:9, background:C.card, color:C.text, cursor:"pointer", fontFamily:"inherit"}}>Deny</button>
+        </div>
+      )}
       {r.note && <div style={{fontSize:13, color:C.dim, marginTop:4}}>{r.note}</div>}
-      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:12.5, color:C.faint, marginTop:3}}>{r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
+      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:12.5, color:C.faint, marginTop:3}}>{r.status==="denied"?"not approved":r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
     </div>
   );
 
   return (
     <div style={{padding:"18px 26px 60px", maxWidth:760, margin:"0 auto"}}>
       <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:30, letterSpacing:"0.05em", color:C.text, marginBottom:4}}>TIME OFF</div>
-      <div style={{fontSize:13, color:C.dim, marginBottom:18}}>Request days off — your coordinator or the office approves, and approved days show on the crew schedule.</div>
+      <div style={{fontSize:13, color:C.dim, marginBottom:18}}>Request days off. The office approves, you get a notification with the answer, and approved days show on the crew schedule.</div>
 
       {/* Request form */}
       <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"14px 16px", marginBottom:16}}>
@@ -58124,7 +58322,7 @@ function TimeOffPage({ identity = null, users = [] }) {
           <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:6}}>
             <span style={{fontSize:14, fontWeight:600}}>Pending approvals</span>
             <span style={{fontSize:12.5, color:C.slateInk, background:C.slateBg, border:"1px solid #C9D1DC", borderRadius:99, padding:"1px 8px"}}>{pending.length}</span>
-            <span style={{fontSize:12.5, color:C.faint}}>{isAdmin?"all crew":"your book"}</span>
+            <span style={{fontSize:12.5, color:C.faint}}>all crew</span>
           </div>
           {pending.length===0 ? <div style={{fontSize:14, color:C.dim, padding:"8px 0"}}>Nothing waiting on you.</div> : pending.map(r=>card(r, true))}
           {decided.length>0 && (
@@ -64396,7 +64594,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
     // doc with timeoffId) is decided RIGHT HERE — Approve / Deny make the same
     // writes the Time Off page does, then close this doc. Approvers only.
     const isTimeOff = !!n.timeoffId;
-    const canDecideTimeOff = isTimeOff && !readOnly && (iAmHead || ["admin", "manager"].includes(getAccess(identity)));
+    const canDecideTimeOff = isTimeOff && !readOnly && (iAmHead || getAccess(identity) === "admin"); // v549: same rule as canDecideTimeOff() on the Time Off page
     const decideTimeOff = async (status) => {
       try {
         const res = await decideTimeOffFromBoard(n.timeoffId, status, me);
@@ -69218,6 +69416,46 @@ function App() {
   };
 
 
+  // ── v549 (UX batch 2): offline is its own calm state, not a failure ─────────
+  // Offline, a transaction save fails at once and the 5 s retry flips the pill
+  // Saving… → Save failed every few seconds, though the edit is safe in
+  // pendingPatches / he_pending_patches and replays on reconnect. Display only:
+  // while offline, saving/error/pending shows as "Saved on this phone · N jobs
+  // waiting". Nothing about saving, the queue or the merge changes.
+  const pendingJobIds = () => Object.keys(pendingPatches.current || {})
+    .filter(jid => Object.keys(pendingPatches.current[jid] || {}).length > 0);
+  const [pendingCount, setPendingCount] = useState(0);
+  const offlineNamesRef = useRef(null);
+  useEffect(() => {
+    const ids = pendingJobIds();
+    setPendingCount(ids.length);
+    if (!isOnline) {
+      if (ids.length) offlineNamesRef.current = ids.map(id => ((jobsRef.current || []).find(j => j.id === id) || {}).name).filter(Boolean);
+      return;
+    }
+    // Back online and the queue drained cleanly: say which jobs went up.
+    if (offlineNamesRef.current && ids.length === 0 && syncStatus !== "saving" && syncStatus !== "error") {
+      const names = offlineNamesRef.current; offlineNamesRef.current = null;
+      const what = !names.length ? "your changes" : names.length <= 2 ? names.join(" and ") : `${names[0]}, ${names[1]} and ${names.length - 2} more`;
+      try { toast.success(`Back online · ${what} synced`); } catch {}
+    }
+  }, [syncStatus, isOnline]); // eslint-disable-line
+  const hudStatus = (!isOnline && (syncStatus === "saving" || syncStatus === "error" || pendingCount > 0)) ? "offline" : syncStatus;
+  const offlineLabel = pendingCount > 0 ? `Saved on this phone · ${pendingCount} job${pendingCount === 1 ? "" : "s"} waiting` : "Offline · saved on this phone";
+  // "Save failed · tap to retry" used to call flushSaves, which only flushes jobs
+  // with a live save timer — after a failure there is none, so the tap did
+  // nothing. Re-drive every still-pending job exactly the way the automatic 5 s
+  // retry does (same guard: a pending patch and no save already queued).
+  const retrySaves = () => {
+    flushSaves();
+    pendingJobIds().forEach(jid => {
+      if (saveTimers.current[jid]) return;
+      const job = (jobsRef.current || []).find(j => j.id === jid);
+      if (job) saveJob(job);
+    });
+  };
+
+
   const flushSaves = () => {
 
     // Flush a pending Upcoming-list save too — same accepted fire-and-forget
@@ -69298,7 +69536,6 @@ function App() {
     });
 
   };
-
 
   // Save on background/close
 
@@ -69826,9 +70063,9 @@ function App() {
 
   const pendingCOs = jobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
 
-  const syncColor  = {idle:C.muted,saving:C.accent,saved:C.dim,error:C.red}[syncStatus];
+  const syncColor  = {idle:C.muted,saving:C.accent,saved:C.dim,error:C.red,offline:C.slate}[hudStatus];
 
-  const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"Saved",error:"Save failed"}[syncStatus];
+  const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"Saved",error:"Save failed",offline:"Saved on this phone"}[hudStatus];
 
 
   // view: "home" = main page, "foreman" = foreman-specific page
@@ -69913,7 +70150,6 @@ function App() {
   // v497 A: G1 the view slides in from the direction of travel; G2 update-ready banner; G6 Job Board FLIP.
   const _navOrder = useMemo(() => [...NAV_MAIN_TABS.map(t => t.key), ...NAV_MORE_TABS.map(t => t.key), "settings", "foreman"], []);
   useHeViewSlide(view, _navOrder);
-  const _swUpdate = useHeSwUpdate();
   const _homeRoot = useRef(null);
   useHeFlip(_homeRoot);
   const navClick = (key) => {
@@ -70529,7 +70765,7 @@ function App() {
       <HEUndoHost/>
       <HEPhotoLightboxHost/>
       <HEToastHost/>
-      <HeSaveHud status={syncStatus} onRetry={flushSaves}/>
+      <HeSaveHud status={hudStatus} offlineLabel={offlineLabel} onRetry={retrySaves}/>
 
       {/* Backup observability banner (Kweller hardening Layer 5). Red strip
           for admin/manager when the nightly Firestore backup has never run or
@@ -70882,12 +71118,10 @@ function App() {
 
 
 
-      {/* v497 A (G2): a new version has downloaded — one tap reloads into it. */}
-      {_swUpdate && (
-        <div className="he-updbar" role="status" onClick={()=>window.location.reload()}>
-          <span>Update ready</span><span style={{opacity:.75,fontWeight:600}}>tap to reload</span>
-        </div>
-      )}
+      {/* v549: the v497 "Update ready · tap to reload" bar is gone. It sat on top of
+          the version card below (hiding Later) and reloaded without saving first.
+          The card ("A new version is ready" · Update now / Later) is the only
+          prompt; the 2-minute version check raises it. */}
       {/* ── COMMAND NAV (dark console) ── */}
       <div data-he-nav="1" className="he-hdr" style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
         {/* ROW 1 — flag wordmark + live status */}
@@ -70897,7 +71131,7 @@ function App() {
           </div>
           <div onClick={goHome} className="flagtext flag-stripes he-hdr-word" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
-            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#66A8FF";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 11px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{syncStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#66A8FF",border:"1px solid #66A8FF66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{syncStatus==="error"&&<span style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
+            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#66A8FF";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 11px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{hudStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#66A8FF",border:"1px solid #66A8FF66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{hudStatus==="error"&&<span style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
             <span className="he-hdr-jobs" style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span className="he-hdr-jobs" style={{font:"500 11px system-ui",color:D.text}}>{jobs.length} active jobs</span>
           </div>
@@ -71418,7 +71652,7 @@ function App() {
                 <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
                   <span style={{fontSize:12.5,color:C.dim}}>{jobs.length} job sites</span>
                   <span style={{width:3,height:3,borderRadius:"50%",background:C.border,display:"inline-block"}}/>
-                  <HeSyncChip status={syncStatus} label={syncLabel} color={syncColor} onRetry={flushSaves} style={{fontSize:12.5,fontWeight:500}}/>
+                  <HeSyncChip status={hudStatus} label={syncLabel} color={syncColor} onRetry={retrySaves} style={{fontSize:12.5,fontWeight:500}}/>
                 </div>
               </div>
 
@@ -71986,7 +72220,7 @@ function App() {
 
               <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
 
-                <HeSyncChip status={syncStatus} label={syncLabel} color={syncColor} onRetry={flushSaves} style={{fontSize:12.5,fontWeight:500}}/>
+                <HeSyncChip status={hudStatus} label={syncLabel} color={syncColor} onRetry={retrySaves} style={{fontSize:12.5,fontWeight:500}}/>
 
                 <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=activeForeman;setAllJobs(js=>[j,...js]);setSelected(j);}}
 
@@ -72302,6 +72536,7 @@ function App() {
             initialTab={openTab} users={users} identity={identity} needs={needs}
             jobs={jobs}
             onUpdateOtherJob={(jobId,patch)=>{ const other=allJobs.find(j=>j.id===jobId); if(other && jobId!==selected.id) updateJob({...other,...patch},patch); }}
+            offline={!isOnline}
             onQuickAdd={(preset)=>setQuickAdd(preset||{})}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
@@ -72423,7 +72658,7 @@ function App() {
                       <div style={{fontSize:12.5,color:C.dim}}>{cJobs.length} job{cJobs.length!==1?"s":""}</div>
                       {!isContractor&&(
                         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-                          <HeSyncChip status={syncStatus} label={syncLabel} color={syncColor} onRetry={flushSaves} style={{fontSize:12.5,fontWeight:500}}/>
+                          <HeSyncChip status={hudStatus} label={syncLabel} color={syncColor} onRetry={retrySaves} style={{fontSize:12.5,fontWeight:500}}/>
                           <button onClick={()=>{const j=stampDivision(blankJob());j.foreman=contractor.name;setAllJobs(js=>[j,...js]);setSelected(j);}}
                             style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
                               fontWeight:700,padding:"9px 20px",fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>

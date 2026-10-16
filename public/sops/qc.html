@@ -113,9 +113,13 @@
     <div class="num">5</div>
     <div class="body">
       <h3>Answer the return-trip question</h3>
-      <p>On anything that isn't a clean pass, the app asks: <b>Create return trip</b> or
-      <b>Crew on site has it</b>. The rule: <b>nobody on site → it's a return trip, every
-      time.</b> Crew still working the job → they take the list, no RT needed.</p>
+      <p>On anything that isn't a clean pass, a sheet asks who fixes the walk's items:
+      <b>Make a return trip</b> or <b>Crew on site has it</b>. The rule: <b>nobody on site →
+      it's a return trip, every time.</b> Crew still working the job → they take the list, no
+      RT needed. Tapping outside the sheet does nothing; <b>Go back</b> leaves the old verdict.
+      A rough walk only puts rough QC items on the trip (finish punch stays put). If the job
+      already has an open QC trip, the sheet offers to add the new items to that trip instead
+      of making a second one. Either way a message says what happened.</p>
     </div>
   </div>
 
@@ -160,7 +164,7 @@
     <div class="num">·</div>
     <div class="body">
       <h3>Return trip path</h3>
-      <p>Choosing <b>Create return trip</b> builds the RT with the walk's items on it.
+      <p>Choosing <b>Make a return trip</b> builds the RT with the walk's items on it.
       It shows on the Return Trips tab, and until someone gives it a date it sits on the
       Unscheduled Return Trips list and in the Forecast's Attention view under
       <b>READY TO SCHEDULE</b> — the items get closed on the RT like any punch list.</p>

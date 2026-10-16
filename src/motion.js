@@ -176,19 +176,21 @@ export function HeSyncChip({ status, label, color, onRetry, style }) {
 /* ─────────────────── Save HUD: the save state, visible everywhere ─────────────────── */
 // The header chips live in the Job Board headers, which a job card (a full-screen overlay) covers. This one pill is
 // mounted once at the App root above every overlay. Text only; hidden when idle. A failed save stays up and is tappable.
-export function HeSaveHud({ status, onRetry }) {
+// v549: "offline" is its own calm state (steel outline, not tappable): the edit is safe on the phone
+// and goes up on reconnect. offlineLabel says how many jobs are waiting.
+export function HeSaveHud({ status, onRetry, offlineLabel }) {
   // "Saved" is held for 3 s here, independent of the app's own 2 s return to idle, so it is easy to catch.
   // A new save or a failure replaces it at once.
   const [hold, setHold] = useState(false), timer = useRef(null);
   useEffect(() => {
     if (status === "saved") { setHold(true); clearTimeout(timer.current); timer.current = setTimeout(() => setHold(false), 3000); }
-    else if (status === "saving" || status === "error") { setHold(false); clearTimeout(timer.current); }
+    else if (status === "saving" || status === "error" || status === "offline") { setHold(false); clearTimeout(timer.current); }
   }, [status]);
   useEffect(() => () => clearTimeout(timer.current), []);
   const eff = status === "idle" && hold ? "saved" : status;
-  const label = { saving: "Saving…", saved: "Saved", error: "Save failed · tap to retry" }[eff];
+  const label = { saving: "Saving…", saved: "Saved", error: "Save failed · tap to retry", offline: offlineLabel || "Offline · saved on this phone" }[eff];
   if (!label) return null;
-  const color = { saving: "#8DBDFF", saved: "#5FE39C", error: "#FF9B9B" }[eff];
+  const color = { saving: "#8DBDFF", saved: "#5FE39C", error: "#FF9B9B", offline: "#8DBDFF" }[eff];
   return h("div", { className: "he-savehud" + (eff === "error" ? " he-hud-err" : eff === "saved" ? " he-hud-ok" : ""), role: "status", "aria-live": "polite" },
     h(HeSyncChip, { status: eff, label, color, onRetry, style: { fontSize: 15, fontWeight: 600, gap: 7 } }));
 }
