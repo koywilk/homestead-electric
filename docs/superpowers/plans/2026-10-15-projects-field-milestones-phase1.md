@@ -31,7 +31,7 @@
 ## Deviations from the spec (Koy must OK these at plan review)
 
 1. **Three small server pieces move into Phase 1** (the spec had only the rule before the preview). Without them the preview would misbehave on live data:
-   - `ensureJobDriveFolder` (live trigger) would create a **top-level Drive folder for every test building**. Guard: skip jobs with `projectGroupId`.
+   - `ensureJobDriveFolder` (live trigger) **links by fuzzy name, not only creates**: a test building could get linked onto the project's existing Drive folder (wrong links), or get its own top-level folder created. Guard: skip jobs with `projectGroupId` (the client admin Drive Sync loop has the same guard).
    - The Add Building picker needs the Simpro job's real folder names. No callable lists them today. New **read-only** `listSimproJobFolders`.
    - Friday Packet + foreman meeting prep map Simpro # → job with last-one-wins. Guard them with the same "joinable" rule as the client.
 2. **Simpro lead is a job flag** (`simproLead: true`), not `project.leadJobId`. A building that *shares* the project's number (has `simproFolder`) only joins Simpro lookups if it's the lead. Site / Shared (no `simproFolder`) and own-number buildings always join. This keeps the rule a pure one-liner every lookup can call.
@@ -1230,15 +1230,17 @@ git commit -m "Projects + field milestones (SW v542)"
 
 - [ ] **Step 1: Show Koy the full diff + a two-line summary per file** (memory rule: full diff before any one-paste). Wait for his OK.
 
-- [ ] **Step 2 (Koy OK required): Deploy rules + the four functions.**
+- [ ] **Step 2 (Koy OK required): Deploy rules + the seven functions.** Koy's packet / lead-prep dry-run sign-off first (scripts/packet-dryrun.js needs live data — Koy runs it). Deploy BEFORE any building exists on live data.
 
 ```bash
 cd /Users/koyhomestead/he-worktrees/projects-milestones
 firebase deploy --only firestore:rules --project homestead-electric
-FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:ensureJobDriveFolder,functions:listSimproJobFolders,functions:fridayPacket,functions:foremanMeetingPrep --project homestead-electric
+FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:ensureJobDriveFolder,functions:nightlyDriveSync,functions:listSimproJobFolders,functions:fridayPacket,functions:sendTestFridayPacket,functions:foremanMeetingPrep,functions:sendTestForemanMeetingPrep --project homestead-electric
 ```
 
-Before running, confirm the exact exported names of the Friday Packet and foreman-prep functions with `grep -n "^exports\.\(friday\|foreman\|sendTestForeman\)" functions/index.js` and deploy every export that wraps those two modules. Expected: `Deploy complete!` for both.
+The list matches FEATURES.md. Expected: `Deploy complete!` for both.
+
+- [ ] **Step 2b: Rebase onto current origin/main** (`git fetch origin main && git rebase origin/main`), resolve, re-run `CI=true npm run build`. The preview writes to production, so it must not run code older than production. Re-version SW/FEATURES at merge time if v542 is taken.
 
 - [ ] **Step 3 (Koy OK required): Push the branch → Vercel preview.**
 
@@ -1250,9 +1252,9 @@ The pre-push hook runs the full CI build. Vercel builds the preview automaticall
 
 - [ ] **Step 4: Koy makes the Share link** in the Vercel dashboard for that deployment (Share button). It bypasses Vercel login for that one deployment, without changing project settings. That's his account action. Give him the dashboard URL (`inspectorUrl`).
 
-- [ ] **Step 5 (with Koy): Set up "ZZ Preview – Projects Test"** on the preview: pick or create a **test job with no Simpro #** → Make this a project → add 3 buildings. Bosses get the Share link plus a two-line note: "Click anything inside ZZ Preview – Projects Test. It's live data, so stay out of real jobs."
+- [ ] **Step 5 (with Koy): Set up "ZZ Preview – Projects Test"** on the preview: pick or create a **test job with NO GC (or a GC with no active portal link), foreman "Unassigned", and NO Simpro #** → Make this a project → add 3 buildings. The Friday Packet runs Fri 5:30am, so keep the test buildings Unassigned. Tell the crew the ZZ rows are a test. Bosses get the Share link plus a two-line note: "Click anything inside ZZ Preview – Projects Test. It's live data, so stay out of real jobs."
 
-- [ ] **Step 6: Afterwards.** Archive the ZZ project and archive its building jobs through the app's normal archive action. Never delete. Then the vault log and crew brief per CLAUDE.md, when the work ships to `main` (merge is a separate Koy-approved step after the bosses review).
+- [ ] **Step 6: Afterwards.** There is NO archive action for jobs: the app's Delete hard-deletes (recoverable via the recovery ledger + PITR). Koy chooses: delete the ZZ jobs (recoverable) or keep them. Archive the ZZ project record via the project page's **Archive project** button (project records are never deleted). Then the vault log and crew brief per CLAUDE.md, when the work ships to `main` (merge is a separate Koy-approved step after the bosses review).
 
 ---
 

@@ -26619,6 +26619,9 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
   // 2. Match folders to jobs that don't already have a driveFolderId
   const results = { matched: [], skipped: [], ambiguous: [] };
   for (const job of jobs) {
+    // Projects spec 2026-10-15: a building's folder is made INSIDE its project folder in
+    // Phase 2; fuzzy name matching would link it to the project's own folder instead.
+    if (job.projectGroupId) continue;
     if (job.driveFolderId) { results.skipped.push(job.name); continue; }
     const matches = driveFolders.filter(df => namesMatch(df.name, job.name));
     if (matches.length === 1) {
@@ -26914,6 +26917,7 @@ function DriveFilesSection({ job, onUpdate, onCount = null }) {
         if (cancelled) return;
         setError(e.message || "Network error loading Drive files");
         setLoading(false);
+        if (onCount) onCount(0);
       });
     return () => { cancelled = true; };
   }, [folderId, job.docPull && job.docPull.finishedAt]);   // v413: re-list once a Simpro pull finishes
@@ -36055,17 +36059,21 @@ function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob
   const list = Object.keys(byProject).map(id => (ctx.projects || []).find(p => p.id === id)).filter(Boolean)
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
   if (!list.length) return null;
+  // A search / filter that hides some of a project's buildings opens the group by itself
+  // (same "narrowed" idea ProjectGroupRow uses); the header click still flips the user's own state.
+  const narrowedAny = list.some(p => projectBuildings(byProject[p.id], p.id).length < projectBuildings(ctx.allJobs, p.id).length);
+  const open = narrowedAny || !collapsed;
   const ink = readableInk(PROJECT_COLOR, C.bg);
   return (
     <div style={{marginBottom:24}}>
-      <div onClick={() => setCollapsed(c => !c)} role="button" aria-expanded={!collapsed}
+      <div onClick={() => setCollapsed(c => !c)} role="button" aria-expanded={open}
         style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,paddingBottom:8,borderBottom:`2px solid ${PROJECT_COLOR}33`,cursor:"pointer",userSelect:"none",minHeight:40}}>
         <div style={{width:8,height:8,borderRadius:"50%",background:PROJECT_COLOR,flexShrink:0}}/>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:ink}}>PROJECTS</div>
         <div style={{background:`${PROJECT_COLOR}18`,border:`1px solid ${PROJECT_COLOR}33`,borderRadius:99,padding:"2px 10px",fontSize:12.5,color:ink,fontWeight:700}}>{list.length}</div>
-        <div style={{marginLeft:"auto",color:ink,fontSize:14,fontWeight:700}}>{collapsed ? "▸" : "▾"}</div>
+        <div style={{marginLeft:"auto",color:ink,fontSize:14,fontWeight:700}}>{open ? "▾" : "▸"}</div>
       </div>
-      {!collapsed && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc}/>)}
+      {open && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc}/>)}
     </div>
   );
 }
@@ -36134,7 +36142,18 @@ function SimproFolderPicker({ simproNo, value, onChange, usedBy = {} }) {
   if (state.loading) return <div style={{fontSize:13,color:C.dim,marginTop:6}}>Reading Simpro folders…</div>;
   if (!state.folders) return (
     <div>
-      <input value={draft} onChange={e => setDraft(e.target.value)} onBlur={() => { if (draft.trim() !== String(value || "").trim()) onChange(draft.trim()); }}
+      <input value={draft} onChange={e => setDraft(e.target.value)} onBlur={() => {
+          const t = draft.trim();
+          if (t === String(value || "").trim()) return;
+          // A shared, non-lead building must never end up with an empty folder (that makes it
+          // joinable → a 2nd job answering one Simpro #). Empty never reaches onChange.
+          if (!t) {
+            if (String(value || "").trim()) { setDraft(value || ""); toast.info("A building that shares the project's Simpro # needs a folder name."); }
+            else setDraft("");
+            return;
+          }
+          onChange(t);
+        }}
         onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
         placeholder="Simpro folder name, e.g. House 3" style={field}/>
       <div style={warn}><b>Couldn't read Simpro's folders</b> ({state.error}). Type the folder name exactly as it is in Simpro. If it doesn't match, this building's plans land in Shared / Unsorted.</div>
@@ -36317,8 +36336,11 @@ function JobProjectSection({ job, ctx, onPatch }) {
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
         <button type="button" style={btn} onClick={() => ctx.openProject(project.id)}>Open project page</button>
         {ctx.canManage && <button type="button" style={btn} onClick={async () => {
-          if (!(await showConfirm({ title:`Take this job out of ${project.name}?`, message:"It becomes a normal job again. Nothing on it is deleted.", confirmLabel:"Leave project" }))) return;
-          onPatch({ projectGroupId:"", simproFolder:"", simproLead:false, projectRole:"" });
+          // A building that shares the project's Simpro # (and isn't the Site or the lead) must not
+          // leave still holding that number, or it becomes a 2nd job answering it.
+          const stopsSharing = !!(project.simproNo && String(job.simproNo || "") === String(project.simproNo) && job.projectRole !== "site" && !job.simproLead);
+          if (!(await showConfirm({ title:`Take this job out of ${project.name}?`, message:`It becomes a normal job again. Nothing on it is deleted.${stopsSharing ? ` It also stops sharing Simpro #${project.simproNo}.` : ""}`, confirmLabel:"Leave project" }))) return;
+          onPatch({ projectGroupId:"", simproFolder:"", simproLead:false, projectRole:"", ...(stopsSharing ? { simproNo:"" } : {}) });
         }}>Leave project</button>}
       </div>
       <div style={{fontSize:13,color:C.dim,marginTop:6}}>Leaving never deletes anything — this job just becomes standalone again.</div>
