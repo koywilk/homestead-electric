@@ -183,7 +183,9 @@ service cloud.firestore {
     match /notifications/{userKey}/items/{itemId} {
       allow read: if true;
       allow create: if false;
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      // v551 (UX batch 0): the app also stamps when / how an item was read, in a
+      // second write after the read flip. Still nothing else on the item changes.
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt', 'readVia']);
       allow delete: if true;
     }
 
