@@ -46566,6 +46566,8 @@ const OD_A = "#2563C9", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6
 // Foreman filter value for "jobs with no foreman" (blank, Unassigned, TBD, Paul, or
 // someone no longer on the team). Never a real name.
 const OD_NOFM = "__none__";
+// v551: an approved CO whose parent Simpro job is billed in full.
+const OD_CO_BILLED = "Billed — mark done?";
 const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
 const OD_DAY = 24*60*60*1000;
 // Calendar days, not 24-hour steps: the fall-back Sunday is 25 hours long.
@@ -46621,6 +46623,11 @@ function odRtInfo(rt, t0) {
 const odRtSumText = (s) => [`${s.open} open`, s.late && `${s.late} past date`, s.booked && `${s.booked} booked`, s.tobook && `${s.tobook} to book`, s.none && `${s.none} no date`].filter(Boolean).join(" · ");
 // Money from Simpro (settings/simproTotals, written by the Friday Packet and the
 // daily dailySimproTotals run): the job's total including tax, by Simpro number.
+// v551 (decisions audit 2026-10-17): a job Simpro has billed 99.5%+ counts as
+// fully billed (rounding on the last invoice leaves a few cents).
+const OD_BILLED_PCT = 99.5;
+// Simpro stages that mean the job is closed out there.
+const OD_SIM_CLOSED = ["Invoiced", "Complete"];
 const odMoney = (n) => n == null ? "" : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `$${Math.round(n / 1e3)}k` : n >= 1e3 ? `$${(n / 1e3).toFixed(1)}k` : `$${Math.round(n)}`;
 // Short nicknames people type on the crew app, folded into the team member's
 // full name in the Activity person filter (abe → Abraham).
@@ -47052,6 +47059,29 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   const secOf = (j) => (j && phaseById[j.id]) || null;
   const isDone = (j) => { const s = secOf(j); return !!s && s.key === "complete"; };
 
+  // Money and billing from Simpro (settings/simproTotals, by Simpro number). v551
+  // (decisions audit 2026-10-17, DASHBOARD-DECISIONS-AUDIT-2026-10-17.md): each job
+  // also carries what Simpro has billed (inv, invPct) and its Stage, and change
+  // orders carry their Simpro quote total (simTotals.quotes, by quote number).
+  const byNo = (simTotals && simTotals.byNo) || {};
+  const quoteTotals = (simTotals && simTotals.quotes) || {};
+  const simOf = (j) => { const k = String((j && j.simproNo) || "").trim(); return (k && byNo[k]) || null; };
+  const moneyOf = (j) => { const t = simOf(j); return t && typeof t.total === "number" ? t.total : null; };
+  const billedPct = (j) => { const t = simOf(j); return t && typeof t.invPct === "number" ? t.invPct : null; };
+  const fullyBilled = (j) => (billedPct(j) ?? -1) >= OD_BILLED_PCT;
+  // Left to bill = Simpro Total − InvoicedValue; null until the pull has read the job's billing.
+  const leftOf = (j) => { const t = simOf(j); return t && typeof t.total === "number" && typeof t.inv === "number" ? Math.max(0, t.total - t.inv) : null; };
+  // Closed in Simpro: Stage Invoiced / Complete and fully billed while the app still has
+  // the job open. Those jobs leave the active, punch, quiet and no-foreman counts and wait
+  // in Needs you ("Closed in Simpro — close it here?") for Koy to finish them here.
+  const simClosed = (j) => { const t = simOf(j); return !!t && OD_SIM_CLOSED.includes(t.stage) && fullyBilled(j) && !isDone(j); };
+  const isOpen = (j) => !isDone(j) && !simClosed(j);
+  const quoteNo = (co) => String((co && co.quoteNumber) || "").replace(/^#/, "").trim();
+  const quoteOf = (co) => { const t = quoteNo(co) && quoteTotals[quoteNo(co)]; return t && typeof t.total === "number" ? t.total : null; };
+  // An approved change order folds into its parent Simpro job, so a parent billed in
+  // full means the CO was billed too: "Billed — mark done?", not work to book.
+  const coBilledOf = (x) => !!x && !!x.co && x.co.coStatus === "approved" && fullyBilled(x.job);
+
   // Team first, so every tab shares one foreman list.
   const accRank = { admin: 0, manager: 1, standard: 2 };
   const staff = []; const staffKey = new Set();
@@ -47066,14 +47096,15 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   const roster = [];
   const addR = (n) => { const s = String(n || "").trim(); if (s && !SBV2_EXCLUDE_NAME(s) && !roster.some(x => sameName(x, s))) roster.push(s); };
   staff.forEach(u => { if (["foreman", "jrforeman"].includes(titleOf(u))) addR(u.name); });
-  allLive.forEach(j => { if (isDone(j)) return; const u = staff.find(x => sameName(x.name, j.foreman)); if (u) addR(u.name); });
+  allLive.forEach(j => { if (!isOpen(j)) return; const u = staff.find(x => sameName(x.name, j.foreman)); if (u) addR(u.name); });
   roster.sort((a, b) => a.localeCompare(b));
   const fmName = (j) => (j && roster.find(n => sameName(n, j.foreman))) || "";
   const live = foreman === OD_NOFM ? allLive.filter(j => !fmName(j)) : foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
   const up = (upcoming || []).filter(u => u && (!foreman || (foreman === OD_NOFM ? !roster.some(n => sameName(n, u.foreman)) : sameName(u.foreman, foreman))));
   const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
-  const active = live.filter(j => !isDone(j));
-  const allActive = allLive.filter(j => !isDone(j));
+  const active = live.filter(isOpen);
+  const allActive = allLive.filter(isOpen);
+  const closedSim = live.filter(simClosed).sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
   const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
   const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
 
@@ -47091,16 +47122,18 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   const sched = odBuildSchedule(live, up, today);
   const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
 
-  // Money (Simpro job totals incl. tax, by Simpro number). Job value is the proxy
-  // for a change order's worth: COs carry no amount in the app.
-  const byNo = (simTotals && simTotals.byNo) || {};
-  const moneyOf = (j) => { const k = String((j && j.simproNo) || "").trim(); const t = k && byNo[k]; return t && typeof t.total === "number" ? t.total : null; };
 
   const openPunch = active.flatMap(j => info[j.id].punch);
   const openCOs = live.flatMap(j => info[j.id].openCos.map(co => ({ co, job: j })));
   const coWaiting = openCOs.filter(x => x.co.coStatus === "pending").length;
-  const coBy = { needs_sending: 0, pending: 0, approved: 0, scheduled: 0, other: 0 };
-  openCOs.forEach(x => { const k = x.co.coStatus || ""; coBy[["needs_sending","pending","approved","scheduled"].includes(k) ? k : "other"]++; });
+  const coBy = { needs_sending: 0, pending: 0, approved: 0, billed: 0, scheduled: 0, other: 0 };
+  openCOs.forEach(x => { const k = x.co.coStatus || ""; coBy[coBilledOf(x) ? "billed" : ["needs_sending","pending","approved","scheduled"].includes(k) ? k : "other"]++; });
+  const coBilled = openCOs.filter(coBilledOf);
+  // Ready to invoice (v551): what's left to bill, not the job total; a job Simpro has
+  // billed in full drops off (counted in rtiBilled); days since it was flagged ready.
+  const rtiAll = live.filter(j => j.readyToInvoice && !j.invoiceDismissed);
+  const rtiBilled = rtiAll.filter(fullyBilled);
+  const rtiIdle = (j) => { const at = odDate(j.readyToInvoiceDate); return at ? Math.max(0, odDaysBetween(at, t0)) : null; };
   const coOnDone = openCOs.filter(x => isDone(x.job));
   const coAge = (co) => odDate(co.submittedAt || co.createdAt || co.date);
   const openRTs = live.flatMap(j => info[j.id].openRts.map(rt => ({ rt, job: j, ri: odRtInfo(rt, t0) })));
@@ -47202,12 +47235,22 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
     { k: "stale", label: "Status is behind the work logged", color: OD_WARN, icon: "alertTriangle",
       rows: active.filter(j => secOf(j) && secOf(j).stale).map(j => ({ title: j.name, sub: secOf(j).note, job: j, color: OD_WARN })) },
     { k: "invoice", label: "Ready to invoice", color: OD_G, icon: "dollarSign",
-      rows: live.filter(j => j.readyToInvoice && !j.invoiceDismissed).map(j => ({ title: j.name, sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo].filter(Boolean).join(" · "), right: odMoney(moneyOf(j)), money: moneyOf(j), job: j, color: OD_G }))
-        .sort((a, b) => (b.money || 0) - (a.money || 0)) },
+      rows: rtiAll.filter(j => !fullyBilled(j)).map(j => {
+        const left = leftOf(j), pct = billedPct(j), idle = rtiIdle(j);
+        return { title: j.name, right: odMoney(left), money: left, idle, job: j, color: OD_G,
+          sub: [j.quickJob ? "Quick job" : j.tempPed ? "Temp ped" : secOf(j) ? secOf(j).label : "", j.simproNo && "#" + j.simproNo,
+            left != null ? `left to bill${pct > 0 ? ` · ${Math.round(pct)}% billed` : ""}` : simOf(j) ? "left to bill after the next Simpro pull" : j.simproNo ? "not in the Simpro pull yet" : "no Simpro #",
+            idle != null && `ready ${idle} d`].filter(Boolean).join(" · ") };
+      }).sort((a, b) => ((b.money || 0) - (a.money || 0)) || ((b.idle || 0) - (a.idle || 0))) },
     { k: "coOld", label: "Change orders waiting on the GC 60+ days", color: OD_R, icon: "changeorders",
-      rows: openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: coAge(x.co) })).filter(x => x.at && now - x.at > 60*OD_DAY)
-        .map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}${moneyOf(x.job) != null ? ` · job value ${odMoney(moneyOf(x.job))}` : ""}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, money: moneyOf(x.job), age: now - x.at, job: x.job, color: OD_B }))
-        .sort((a, b) => ((b.money || 0) - (a.money || 0)) || (b.age - a.age)) },
+      rows: (() => {
+        const old = openCOs.filter(x => x.co.coStatus === "pending").map(x => ({ ...x, at: coAge(x.co) })).filter(x => x.at && now - x.at > 60*OD_DAY);
+        // Several COs can sit on one Simpro quote (Thayne: 14 on one): say so, and count that quote once.
+        const perQ = {}; old.forEach(x => { const q = quoteNo(x.co); if (q) perQ[q] = (perQ[q] || 0) + 1; });
+        return old.map(x => { const q = quoteOf(x.co), qn = quoteNo(x.co), shared = qn && perQ[qn] > 1 ? `, one quote for ${perQ[qn]} COs` : "";
+          return { title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}${q != null ? ` · quote ${odMoney(q)}${shared}` : qn ? ` · Quote ${qn}, no $ yet` : " · no Simpro quote #"}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, money: q, quote: qn, age: now - x.at, job: x.job, color: OD_B }; })
+          .sort((a, b) => ((b.money || 0) - (a.money || 0)) || (b.age - a.age));
+      })() },
     { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_WARN, icon: "checkCircle",
       rows: overdue.filter(s => s.type === "insp" && now - s.at > 30*OD_DAY).map(s => ({ title: s.name, sub: `${s.label} · target was ${odShort(s.at)}`, right: `${lateOf(s)} d`, job: s.job, color: OD_WARN })) },
     { k: "overdue", label: "Inspection date passed, no result logged", color: OD_R, icon: "alertTriangle",
@@ -47226,6 +47269,8 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
       rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
     { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
       rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
+    { k: "coBilled", label: "Approved change orders Simpro has billed — mark done?", color: OD_B, icon: "changeorders",
+      rows: coBilled.map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""} · Billed: job ${Math.round(billedPct(x.job))}% invoiced in Simpro · mark the CO done`, job: x.job, color: OD_B })) },
     { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
       rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
     { k: "rtNoDate", label: "Return trips with no date", color: OD_WARN, icon: "returntrips",
@@ -47241,8 +47286,12 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   ];
   const attnBy = {}; attnAll.forEach(a => { attnBy[a.k] = a; });
   const sumMoney = (rows) => { const seen = new Set(); let s = 0, n = 0; rows.forEach(r => { if (r.job && !seen.has(r.job.id)) { seen.add(r.job.id); n++; if (r.money != null) s += r.money; } }); return { s, n }; };
-  { const m = sumMoney(attnBy.invoice.rows); if (m.s) attnBy.invoice.extra = odMoney(m.s); }
-  { const m = sumMoney(attnBy.coOld.rows); if (attnBy.coOld.rows.length) attnBy.coOld.extra = `on ${odPlural(m.n, "job")}${m.s ? `, job value ${odMoney(m.s)}` : ""}`; }
+  { const m = sumMoney(attnBy.invoice.rows), idle = Math.max(-1, ...attnBy.invoice.rows.map(r => r.idle ?? -1));
+    attnBy.invoice.extra = [m.s && `${odMoney(m.s)} left to bill`, idle >= 0 && `oldest ready ${idle} d`, rtiBilled.length && `${rtiBilled.length} billed in full in Simpro, not shown`].filter(Boolean).join(" · "); }
+  // The quotes' $ (each Simpro quote once, however many COs sit on it), not the job value.
+  { const rows = attnBy.coOld.rows, jobsN = new Set(rows.map(r => r.job && r.job.id)).size, noQ = rows.filter(r => r.money == null).length;
+    const qSeen = new Set(); let q = 0; rows.forEach(r => { if (r.money != null && !qSeen.has(r.quote)) { qSeen.add(r.quote); q += r.money; } });
+    if (rows.length) attnBy.coOld.extra = `on ${odPlural(jobsN, "job")}${q ? `, quotes ${odMoney(q)}` : ""}${noQ && q ? ` (${noQ} with no quote $)` : ""}`; }
   const attn = attnAll.filter(a => a.rows.length);
   // v538: worst first — red (overdue, money at risk), then orange (dates), gold (stale), blue (to do), green (money in).
   const ATTN_SEV = { [OD_R]: 0, [OD_O]: 1, [OD_WARN]: 2, [OD_B]: 3, [OD_G]: 4 };
@@ -47311,7 +47360,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   if (busy) { const bj = busy.job; busy.qs = (info[bj.id] || { questions: [] }).questions.length; busy.punch = (info[bj.id] || { punch: [] }).punch.length; busy.prep = prepOpen(bj); }
 
   return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
-    openPunch, openCOs, coWaiting, coBy, coOnDone, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
+    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simOf, leftOf, billedPct, fullyBilled, quoteOf, rtiAll, rtiBilled, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
     overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
     people, teamN, shortName, foremenP, noForemanJobs, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
 }
@@ -47612,6 +47661,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       open: () => openList("Open questions", "Oldest first, by job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job }))) },
     { k: "nofm", label: "Jobs with no active foreman", icon: "hardHat", color: OD_O, n: d.noForemanJobs.length, extra: d.noFmText,
       open: () => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `Foreman set to ${j.foreman} — ${d.whyNoFm(j.foreman)}` : "No foreman set", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id] && d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_O, job: j }))) },
+    // v551: Simpro has closed these out (Invoiced / Complete, billed in full) while the app
+    // still has them open. They no longer count as active; each one waits here until it
+    // is finished in the app, so its punch, change orders and return trips stop counting.
+    { k: "simClosed", label: "Closed in Simpro — close it here?", icon: "checkCircle", color: OD_B, n: d.closedSim.length,
+      extra: (() => { const p = d.closedSim.reduce((t, j) => t + d.info[j.id].punch.length, 0), c = d.closedSim.reduce((t, j) => t + d.info[j.id].openCos.length, 0); return [p && `${p} punch`, c && odPlural(c, "open CO")].filter(Boolean).join(" · ") + (p || c ? " still on them" : ""); })(),
+      open: () => openList("Closed in Simpro — close it here?", "Simpro has invoiced these in full. They are already left out of active jobs, open punch, quiet jobs, no-foreman jobs, crew questions and needs-a-date. Open each one and mark it finished here (answer or clear its crew questions first).", d.closedSim.map(j => {
+        const t = d.simOf(j), inf = d.info[j.id];
+        return { title: j.name, sub: [`Simpro: ${t.stage}${t.status ? " · " + t.status : ""} · ${Math.round(d.billedPct(j))}% billed`, `here: ${d.secOf(j) ? d.secOf(j).label : "open"}`, inf.punch.length && `${inf.punch.length} punch`, inf.openCos.length && odPlural(inf.openCos.length, "open CO"), inf.openRts.length && odPlural(inf.openRts.length, "open return trip"), inf.questions.length && odPlural(inf.questions.length, "crew question")].filter(Boolean).join(" · "),
+          right: j.simproNo ? "#" + j.simproNo : "", color: OD_B, icon: "checkCircle", job: j };
+      })) },
     { k: "qc", label: "QC walks that need a walk", icon: "clipboard", color: OD_B, n: d.qcRows.filter(r => r.st === "needs" || r.st === "overdue").length, extra: "",
       open: () => openList("QC walks that need a walk", "", d.qcRows.filter(r => r.st === "needs" || r.st === "overdue").map(r => ({ title: r.job.name, sub: `${r.phase} · ${OD_QC_BUCKET[r.st]} · ${r.job.foreman || "No foreman"}`, right: r.at ? odShort(r.at) : "", color: OD_B, icon: "clipboard", job: r.job }))) },
     { k: "docs", label: "Automated docs that did not run", icon: "fileText", color: OD_R, n: docsMissed.length, extra: docsMissed.map(o => o.x.title).join(", "),
@@ -47629,7 +47688,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const morning = d.now.getHours() < 12;
     const greetEv = morning ? d.evYest : d.evToday;
     const greetLine = `${morning ? "Yesterday: " : ""}${odPlural(greetEv.length, "thing")} logged ${morning ? "" : "today "}across ${odPlural(new Set(greetEv.map(e => e.job.id)).size, "job")}`;
-    const coCap = [d.coBy.needs_sending && `${d.coBy.needs_sending} to send`, d.coBy.approved && `${d.coBy.approved} approved`, d.coBy.scheduled && `${d.coBy.scheduled} scheduled`, d.coBy.other && `${d.coBy.other} no status`, d.coOnDone.length && `${d.coOnDone.length} on finished jobs`].filter(Boolean).join(" · ");
+    const coCap = [d.coBy.needs_sending && `${d.coBy.needs_sending} to send`, d.coBy.approved && `${d.coBy.approved} approved`, d.coBy.billed && `${d.coBy.billed} billed, mark done`, d.coBy.scheduled && `${d.coBy.scheduled} scheduled`, d.coBy.other && `${d.coBy.other} no status`, d.coOnDone.length && `${d.coOnDone.length} on finished jobs`].filter(Boolean).join(" · ");
     const coCount = {}; d.openCOs.forEach(x => { coCount[x.job.id] = (coCount[x.job.id] || 0) + 1; });
     const coStatusRank = { needs_sending: 0, pending: 1, approved: 2, scheduled: 3 };
     const stageCap = d.bySec.slice(0, 5).map(s => `${s.short || s.label} ${s.jobs.length}`).join(" · ") + (d.bySec.length > 5 ? ` · +${d.bySec.slice(5).reduce((n, s) => n + s.jobs.length, 0)}` : "");
@@ -47654,7 +47713,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         </div>
       )}
       <div className="od-minis">
-        <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint={stageCap} value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
+        <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint={stageCap + (d.closedSim.length ? ` · ${d.closedSim.length} closed in Simpro not counted` : "")} value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
           onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
           <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_A} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
         </OdMini>
@@ -47669,7 +47728,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`} hint={coCap}
           onClick={() => openList("Open change orders", `Grouped by job, most first · ${d.coWaiting} waiting on the GC${coCap ? " · " + coCap : ""}`, d.openCOs.slice()
             .sort((a, b) => (coCount[b.job.id] - coCount[a.job.id]) || String(a.job.name).localeCompare(String(b.job.name)) || ((coStatusRank[a.co.coStatus] ?? 9) - (coStatusRank[b.co.coStatus] ?? 9)))
-            .map(x => ({ title: `${x.job.name}${coCount[x.job.id] > 1 ? ` (${coCount[x.job.id]})` : ""}`, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}${d.isDone(x.job) ? " · job finished" : ""}`, tag: OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_WARN : OD_B, job: x.job })))}>
+            .map(x => ({ title: `${x.job.name}${coCount[x.job.id] > 1 ? ` (${coCount[x.job.id]})` : ""}`, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}${d.isDone(x.job) ? " · job finished" : ""}`, tag: d.coBilledOf(x) ? OD_CO_BILLED : OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_WARN : OD_B, job: x.job })))}>
           <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
         </OdMini>
         <OdMini title="Open punch items" color={OD_R} icon="openitems" hint="bars: by foreman, most first" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
@@ -48383,6 +48442,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             {fact("Rough inspection", j.roughInspectionResult ? (j.roughInspectionResult === "pass" ? "Passed" : "Failed") : j.fourWayTargetDate ? "Target " + j.fourWayTargetDate : "")}
             {fact("Final inspection", j.finalInspectionResult ? (j.finalInspectionResult === "pass" ? "Passed" : "Failed") : j.finalInspectionTargetDate ? "Target " + j.finalInspectionTargetDate : "")}
             {fact("Last work logged", d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "Nothing logged")}
+            {d.simOf(j) && d.billedPct(j) != null ? fact("Simpro", [d.simOf(j).stage, `${Math.round(d.billedPct(j))}% billed`, d.leftOf(j) ? `${odMoney(d.leftOf(j))} left to bill` : ""].filter(Boolean).join(" · ")) : null}
           </div>
           {j.statusUpdate ? <div className="od-note"><small>Status update{j.statusUpdateBy ? " · " + j.statusUpdateBy : ""}</small>{odText(j.statusUpdate)}</div> : null}
           {(j.roughWaitingOn || j.finishWaitingOn) ? <div className="od-note"><small>Waiting on</small>{[j.roughWaitingOn && `Rough: ${odText(j.roughWaitingOn)}`, j.finishWaitingOn && `Finish: ${odText(j.finishWaitingOn)}`].filter(Boolean).join(" · ")}</div> : null}
@@ -48394,7 +48454,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <div className="od-sh">Open punch <span>{inf.punch.length}</span></div>
           <Rows rows={inf.punch.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).slice(0, 25).map(p => ({ title: p.text, sub: `${p.phase}${p.room ? " · " + p.room : ""}${p.who ? " · on " + odFirst(p.who) : ""}`, tag: [p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · "), right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, icon: "openitems" }))} empty="No open punch."/>
           <div className="od-sh">Change orders <span>{inf.cos.length}</span></div>
-          <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders" }))} empty="No change orders."/>
+          <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [d.coBilledOf({ co, job: j }) ? OD_CO_BILLED : OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders" }))} empty="No change orders."/>
           <div className="od-sh">Return trips <span>{inf.rts.length}</span></div>
           <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOff ? (rt.signedOffDate || "") : odRtLabel(rt), color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips" }))} empty="No return trips."/>
           <div className="od-sh">Inspections <span>{inf.atts.length}</span></div>
@@ -57379,10 +57439,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-16 · App SW version: v550
+**Last manifest update:** 2026-10-17 · App SW version: v551
 
 ---
 
+- **Dashboard money and closed-out jobs from Simpro's billing: Ready to invoice = what's left to bill (billed-in-full jobs drop off, days ready shown), "Closed in Simpro — close it here?", approved change orders Simpro billed = "Billed — mark done?", 60+ day change orders show their quote $** · 'shipped 2026-10-17' · 'SW v551' · 'odModel' · 'OD_BILLED_PCT' · 'OD_SIM_CLOSED' · 'OD_CO_BILLED' · 'dailySimproTotals' · 'fetchSimproTotals' · 'fetchSimproQuotes' · 'collectMoneyCandidates' · 'collectQuoteCandidates' · Items 1–4 of section 7 of the 2026-10-17 decisions-up audit (command-center repo 'docs/visual-audit-2026-10-09/DASHBOARD-DECISIONS-AUDIT-2026-10-17.md'), which found against live Simpro that the $57k ready-to-invoice figure counted 4 jobs already 100% billed and Skyridge 208 at its $52.9k job total with $20.2k left, 15 of 58 "active" jobs closed out in Simpro, 15 approved COs on fully billed jobs, and the 60+ day CO line saying "job value $1.5M" for quotes worth about $13k. **Server:** 'fetchSimproTotals' also reads 'Stage', 'Status', 'Totals.InvoicedValue' and 'Totals.InvoicePercentage' (same '/jobs/?ID=' call, 429 retried) and stores 'inv', 'invPct', 'stage', 'status' beside 'total' / 'margin'; new 'fetchSimproQuotes' reads '/quotes/{no}' totals. 'collectMoneyCandidates' now takes every ready-to-invoice job first and never drops one for the cap, then COs pending 55+ days, jobs with approved COs, finished jobs with open COs, then every open job (cap 250; "finished" matches the dashboard: quick job invoiced / complete, temp ped completed, finish complete or 100%); new 'collectQuoteCandidates' (quote numbers of COs pending 55+ days, '#' dropped). 'dailySimproTotals' (weekdays 6:15) reads three more job fields in its field mask and writes 'settings/simproTotals' '{at, source, byNo, quotes}' (merge). Live dry run 2026-10-17: 71 jobs and 12 quotes in 4.6 s, about 8 KB. **Dashboard ('odModel'):** a job is **fully billed** at 99.5%+ ('OD_BILLED_PCT'); **closed in Simpro** = Stage Invoiced / Complete and fully billed while the app still has it open. Those jobs leave everything counted from active jobs: active, open punch, quiet, no foreman, foreman cards, crew questions and needs-a-date (still on the job, still in the No foreman filter; live 10/17: questions 79 → 67, needs a date 17 → 15) and wait in a new **Needs you** line, **Closed in Simpro — close it here?**, each row with the Simpro stage and status, where the app has it, and the punch / COs / return trips / crew questions still open on it; the Active jobs hint says how many were left out. **Ready to invoice** shows Simpro Total − InvoicedValue (left to bill) with the billed %, hides jobs billed in full ("4 billed in full in Simpro, not shown"), and shows days since it was flagged ('readyToInvoiceDate', "ready 16 d"; the line says "oldest ready N d"); a job with no billing numbers yet says "not in the Simpro pull yet" or "left to bill after the next Simpro pull" instead of showing the job total. **Approved COs on a job Simpro billed in full** (approved COs fold into the parent job) count as 'coBy.billed', are tagged **Billed — mark done?** in the Open change orders list and the job sheet, and get a Needs attention line *Approved change orders Simpro has billed — mark done?*. **CO waiting on the GC 60+ days** shows each CO's Simpro quote $ and sums each quote once ("on 10 jobs, quotes $14k"; Thayne's 14 COs sit on one quote: "one quote for 14 COs"); a CO with no quote number says so. The job sheet gets a **Simpro** fact (stage · billed % · left to bill). Live dry run (read-only) 2026-10-17: active 58 → 43, open punch 621 → 566, no foreman 14 → 8, quiet 15 → 6, the same 15 closed-in-Simpro jobs as the audit, Ready to invoice 3 · $90k left (Miller $70k, Skyridge $20k, Overhead Temp Power $94) with the 4 billed temp peds / heater hidden, 16 billed COs. Gate: 'scripts/odash-model-test.js' sections 6, 10, 12, 13 (left to bill, days ready, old-format entries, quote $ and shared quotes, closed in Simpro leaving each count, billed COs, candidates and the cap). Guide 'dashboard.html'. Crew brief 'docs/crew-briefs/v551.md'. **Needs 'firebase deploy --only functions:dailySimproTotals' before the push**; the new numbers appear after its next 6:15 run (until then old entries show no $ rather than the job total). **Why it won't lose data:** the dashboard only reads; nothing on it writes a job (closing a job or marking a CO done is still done on the job, by a person). The function's only write is the same 'settings/simproTotals' doc with more fields per entry and a new 'quotes' map (merge, no job write, Simpro GETs only); no loader, rule or job field change.
 - **Scoreboard tab = the standalone Homestead Scoreboard (finished jobs only, percentages only, nightly from Simpro)** · 'shipped 2026-10-16' · 'SW v550' · 'ScoreboardV5' · 'scoreboardNightly' · 'sendTestScoreboardPull' · 'public/scoreboard/index.html' · Koy (2026-10-16): *"can we replace the scoreboard currently in the CC with this one"* — the board he has been sharing as a link since 2026-09-28 now renders inside the Scoreboard tab (still **admin-only**, 'scoreboard.editWeights'; Koy keeps the gate until everyone approves). **What it scores:** only Simpro jobs in a done stage (Complete / Invoiced / Archived), **100% invoiced**, with real costs posted, completed inside the season window (This year default); jobs under $2,500 and temp / extras (temp power, temp ped, phase, T&M, EV charger, light change, whip, STC) are out unless the header toggles let them in. **Headline = plain average** net margin ('NettMargin.Actual'), graded 15 / 10. **Score out of 100: Margin 50** (avg ÷ 30) · **Beat the bid 30** (share of jobs whose actual met 'NettMargin.Estimate') · **Labor 20** (per job: at / under bid hours full, 25% over half, 50% over none); QC items per job show on the person card as information only (walker-dependent, so not scored). **Everybody = team jobs only** (the three residential teams; Commercial on its own tab); people not on a team are not shown and their jobs are out of every number. **In progress** (every Stage=Progress job) sits on each person's card marked not scored and in three panels (still in rough · post-rough · finishing), never in a number. **No money anywhere.** **Branded look:** dark deck band with the longhorn, podium, race-to-15% lanes, month leader, person cards with win / loss strips. **Who gets credit:** the app job's foreman OR lead (matched to Simpro by 'simproNo'), else Simpro technician; **Fix who gets credit** (footer) lets an admin take a job off a person or add one and **Save for everyone** → 'settings/scoreboardCorrections' '{list:[{job,name,set,note}]}'. **Data:** 'scoreboardNightly' (5:20 AM MT) pulls Simpro read-only and writes one slim cache doc 'settings/scoreboardCompleted' '{generated_at, done:[…], prog:[…], counts}' (refuses to overwrite when fewer than 90% of listed jobs come back; refuses over the doc size limit); the header shows the pull date and turns red past 7 days (the frozen-cache lesson); **Pull from Simpro now** (admins) calls 'sendTestScoreboardPull'. The page is the same template as the shared link ('~/Desktop/homestead-scoreboard', 'node build.js --app'; rules in 'shape.js', shared by both), fed over 'postMessage' (same-origin checks both ways; corrections sanitized before the write). Service worker: '/scoreboard/' joins '/sops/' and '/tools/' as a real document, never served the app shell offline. Guide 'public/sops/scoreboard.html' (new). 'ScoreboardV4' stays as dead code like V2 / V3. **Why it won't lose data:** read-only over jobs and Simpro; the only writes are two NEW 'settings/' docs ('scoreboardCompleted' from the function, 'scoreboardCorrections' from admins) covered by the existing 'settings/{docId}' rule — no job field, loader, rule or existing function touched; the function keeps the previous cache on a short or oversized pull.
 - **Say what happened (UX backlog batch 2): the stage % says what it set off, the QC verdict asks once and always answers, the trip text has the real date, offline is calm inside a job, one update prompt, time-off answers reach the person who asked, failed photo uploads say so** · 'shipped 2026-10-16' · 'SW v549' · 'stageChangePlan' · 'StageChangeNote' · 'qcTripPlan' · 'QcTripSheet' · 'tripScheduleLine' · 'HeSaveHud offline' · 'retrySaves' · 'canDecideTimeOff' · 'onTimeOffDecision' · 'functions/timeOffDecision.js' · 'uploadFailMessage' · 'UploadRetryChip' · Batch 2 of the combined 2026-10-14 usability backlog ('docs/ux-backlog-combined-2026-10-14.md', items #6, #9, #10, #14, #25, #26, #44, #67), built to the approved real-data mockup 'docs/mockups/batch2-say-what-happened.html' (claude.ai/artifact/BhtpNLD9r95Q45HbwU5i2h); Koy: *"Approved as drawn, yes to all three decisions."* **(1) Stage %:** both stage selects call one pure 'stageChangePlan(job, phase, v, counts)' that keeps every side effect the inline handlers had (QC task at 80%, Job Prep complete, Ready to invoice at 85%, Matterport at 85% with finish at 0, QC needs-scheduling, status) and returns a plain-words summary shown in a 'StageChangeNote' card under the select (*"Rough 85% · here's what that set off — Ready to invoice: on. The office and Keegan get a push. Matterport scan: needed now. QC walk: already scheduled, no change."*) with the shared Undo bar (re-issues the exact prior values). Koy's decisions: **below 85% turns Ready to invoice off** ('readyToInvoice:false, readyToInvoiceDate:""') unless the other phase still justifies it (rough drop keeps it while finish ≥ 85%; finish drop keeps it while rough ≥ 85% and no invoice was sent yet — a sent invoice already has readyToInvoice false); **a job on hold keeps its hold and status** when the % moves (only 100% = Complete clears the hold, same as the Status select). 100% with open punch shows *"Rough can't be 100% yet. N punch items are still open"* with **Show open punch (N)**, which opens and scrolls to the folded Punch List ('Section' got optional 'anchorId' + 'openSignal'). Gate 'scripts/stage-change-test.js': Miller #1438 and Skyridge Lot 208 #1419 as they were on 2026-10-16, plus a 1,536-case parity sweep proving every old side effect is unchanged for a job not on hold (mutation-checked). **(2) QC verdict:** 'showConfirm' (tap outside = "Crew on site has it") is replaced by 'QcTripSheet': two answers, no tap-outside, *Go back — keep the old verdict* writes nothing. 'qcTripPlan(job, phase)' takes open QC-walk items (fromQC, not done/voided) from **this phase only** (rough no longer sweeps finish items); if an open QC trip already exists it offers *Add N QC items to Return Trip #X* (only items the trip lacks, by originItemId) instead of silently doing nothing; every answer ends in a toast. Verdict + phase-suffixed 'qcRtChoice*' stamp stay one 'u()' patch, shared by both pickers ('runQcVerdict'). Gate 'scripts/qc-trip-test.js'. **(3) Trip text:** Text / Email / Chat Trip read 't.date', which the card never writes, so every trip said *"Scheduled: not yet set"*. 'tripScheduleLine' reads 'rtStatusDate' (the card's SCHEDULED FOR / SCHEDULE BY picker), then 'scheduledDate', then 'date': *"Scheduled for Tue, Oct 27"* / *"Schedule by Mon, Oct 12"*. Gate 'scripts/trip-text-test.js' (Wade Residence RT #3). **(4) Offline:** display only. While the device is offline, saving / failed / pending shows as a calm steel pill *"Saved on this phone · N jobs waiting"* instead of *"Save failed · tap to retry"* flipping every 5 s; the job header gets an **Offline** chip (the job layer covers the nav chip and banner); when the queue drains after reconnect, *"Back online · Miller synced"*. The header SAVING / NOT SAVED chips and Job Board sync chips read the same display status. **Tap to retry now retries:** 'flushSaves' only flushed jobs with a live save timer, which a failed save never has; 'retrySaves' re-drives every still-pending job exactly like the automatic 5 s retry (pending patch, no save already queued). No save, queue or merge code changed. **(5) One update prompt:** the v497 *"Update ready · tap to reload"* bar is gone (it covered the version card's Later and reloaded without saving first); the version card (Update now saves first / Later) is the only prompt; 'useHeSwUpdate' is no longer called. **(6) Time off:** new trigger **'onTimeOffDecision'** (settings/timeOffRequests onUpdate; pure diff in 'functions/timeOffDecision.js', gate 'scripts/timeoff-decision-test.js') pushes the requester on approve (*"Time off approved · Fri, Nov 20 – Fri, Nov 27 (unpaid) · approved by Koy. It's on the crew schedule."*), not approved, a changed decision, or back to pending after an Undo; skips self-decisions; new pref 'timeoff_decided' (default on). Time Off page: 44 px Approve / Deny, the shared Undo bar (restores the request exactly, reading the live lists), **Change to approved / not approved** on decided cards, Remove through 'showConfirm', *denied* shown as *not approved*. **One approver rule** in both places, 'canDecideTimeOff': Head of Residential + admins (the page allowed admins + the requester's coordinator; My Day allowed head + admins + managers — "manager" access is held by foremen, so it was narrowed to head + admins; every current coordinator is an admin, so nobody who decides time off today loses it). **(7) Photo uploads:** punch ('PunchItems.handlePhotoUpload') and QC walk ('QCWalkSection.addPhoto') failures now toast *"Photo didn't upload to "Coach lights". Check your connection, then tap Retry."* and leave a red **Didn't upload · Retry** chip on the item that keeps the picked files. Guides: 'rough.html', 'jobinfo.html' (QC / Matterport thresholds were wrong: 85%, not 100%), 'qc.html', 'returntrips.html', 'myday.html'. Crew brief 'docs/crew-briefs/v549.md'. **Needs 'firebase deploy --only functions:onTimeOffDecision'** (until then decisions just don't push, exactly as before). **Why it won't lose data:** every change is display, a clearer prompt, or a stricter check: the stage patch is the same as before plus only the Ready-to-invoice clear (proved by the parity sweep), the QC verdict writes the same fields in one patch (and Go back writes nothing), the trip text is read-only, offline display reads the existing queue and 'retrySaves' calls 'saveJob' under the same guard the automatic retry uses, time-off writes go through the same 'mergeSaveSettingsFields' funnel against the live list, the new trigger only reads 'settings/timeOffRequests' and writes inbox records, and the photo Retry re-runs the same uploader; no rules or loader change.
 

@@ -4844,18 +4844,27 @@ exports.scheduledSimproCandidateRefresh = functions.pubsub
 // Live Simpro Totals for a list of job numbers (concurrency 5) — the job's total
 // incl. tax and its margin. Parsing mirrors getSimproJobFinancials (Actual===100 →
 // no costs tracked yet → use Estimate). A job whose fetch fails is left out.
+// v551 (decisions audit 2026-10-17): also what Simpro has billed (InvoicedValue,
+// InvoicePercentage) and where the job sits (Stage, Status), so the dashboard can
+// say "left to bill" and "closed in Simpro". A 429 waits and tries again.
 // Used by dailySimproTotals (v542); the Friday Packet that shared it was retired 2026-10-15.
+async function _simproGetJson(path) {
+  for (let a = 0; a < 3; a++) {
+    const resp = await fetch(`${SIMPRO_BASE}${path}`, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }, signal: AbortSignal.timeout(20000) });
+    if (resp.status === 429) { await new Promise(r => setTimeout(r, 1500 * (a + 1))); continue; }
+    if (!resp.ok) return null;
+    return resp.json();
+  }
+  return null;
+}
 async function fetchSimproTotals(sns) {
   const out = {};
   const CHUNK = 5;
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
   for (let i = 0; i < sns.length; i += CHUNK) {
     await Promise.all(sns.slice(i, i + CHUNK).map(async (sn) => {
       try {
-        const resp = await fetch(`${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Total,Totals`, {
-          headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
-        });
-        if (!resp.ok) return;
-        const results = await resp.json();
+        const results = await _simproGetJson(`/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Stage,Status,Total,Totals`);
         const sj = Array.isArray(results) ? results[0] : null;
         if (!sj) return;
         const t = sj.Totals || {};
@@ -4867,8 +4876,31 @@ async function fetchSimproTotals(sns) {
           total: (typeof top.IncTax === "number") ? top.IncTax : (typeof t.IncTax === "number" ? t.IncTax : null),
           margin: hasRealActual ? actual : estimate,
           isEstimate: !hasRealActual,
+          inv: num(t.InvoicedValue),
+          invPct: num(t.InvoicePercentage),
+          stage: String(sj.Stage || ""),
+          status: String((sj.Status && sj.Status.Name) || ""),
         };
       } catch (e) { /* one job's fetch failing just means no number for it */ }
+    }));
+  }
+  return out;
+}
+
+// v551: Simpro quote totals for change orders (the dashboard's "waiting on the GC
+// 60+ days" line shows what the quotes are worth, not the whole job). Keyed by the
+// quote number on the CO. A quote whose fetch fails is left out.
+async function fetchSimproQuotes(qns) {
+  const out = {};
+  const CHUNK = 5;
+  for (let i = 0; i < qns.length; i += CHUNK) {
+    await Promise.all(qns.slice(i, i + CHUNK).map(async (qn) => {
+      try {
+        const r = await _simproGetJson(`/quotes/${encodeURIComponent(qn)}?columns=ID,Stage,Status,Total`);
+        if (!r || typeof r !== "object" || Array.isArray(r)) return;
+        const top = r.Total || {};
+        out[qn] = { total: typeof top.IncTax === "number" ? top.IncTax : null, stage: String(r.Stage || ""), status: String((r.Status && r.Status.Name) || "") };
+      } catch (e) { /* no number for this quote */ }
     }));
   }
   return out;
@@ -4893,11 +4925,14 @@ async function stampAutoRun(key, run, { test = false } = {}) {
 
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — weekdays 6:15am Mountain Time (v542)
-// Simpro job totals for the office dashboard's money lines ("Ready to invoice ·
-// $41k", "change orders waiting 60+ days … job value $X"): ready-to-invoice jobs,
-// jobs with a change order sent 60+ days ago, and finished jobs still carrying open
-// change orders (fridayPacket.collectMoneyCandidates, cap 80). Reads the jobs with a
-// field mask (not whole docs: the 256 MiB cliff), reads Simpro, and writes ONE doc:
+// Simpro job totals for the office dashboard's money lines. v551 (decisions audit
+// 2026-10-17): every ready-to-invoice job (never capped), every open job (for
+// "Closed in Simpro"), jobs with approved change orders (billed in Simpro?), jobs
+// with a change order sent 55+ days ago, and finished jobs still carrying open
+// change orders (fridayPacket.collectMoneyCandidates, cap 250) — each with what
+// Simpro has billed and its Stage — plus the Simpro quote totals of change orders
+// waiting on the GC 55+ days (collectQuoteCandidates). Reads the jobs with a field
+// mask (not whole docs: the 256 MiB cliff), reads Simpro, and writes ONE doc:
 // settings/simproTotals (merge). No job write.
 // ─────────────────────────────────────────────────────────────
 exports.dailySimproTotals = functions
@@ -4906,12 +4941,16 @@ exports.dailySimproTotals = functions
   .timeZone(TZ)
   .onRun(async () => {
     const snap = await db.collection("jobs").select("data.name", "data.type", "data.archived", "data.archivedAt", "data.deleted", "data.simproNo",
-      "data.readyToInvoice", "data.invoiceDismissed", "data.finishStatus", "data.finishStage", "data.changeOrders").get();
+      "data.readyToInvoice", "data.invoiceDismissed", "data.finishStatus", "data.finishStage", "data.changeOrders",
+      "data.quickJob", "data.quickJobStatus", "data.tempPed", "data.tempPedStatus").get();
     const jobs = snap.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) }));
-    const wanted = fridayPacketLib.collectMoneyCandidates(jobs, new Date());
+    const now = new Date();
+    const wanted = fridayPacketLib.collectMoneyCandidates(jobs, now);
     const byNo = await fetchSimproTotals(wanted);
-    await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo }, { merge: true });
-    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length });
+    const quoteNos = fridayPacketLib.collectQuoteCandidates(jobs, now);
+    const quotes = await fetchSimproQuotes(quoteNos);
+    await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo, quotes }, { merge: true });
+    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length, quotesWanted: quoteNos.length, quotesGot: Object.keys(quotes).length });
     return null;
   });
 

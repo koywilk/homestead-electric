@@ -191,18 +191,45 @@ function collectSimproCandidates(jobs, cap = 50) {
 
 // v542 — jobs worth a Simpro Totals fetch for the office dashboard's money lines:
 // ready to invoice (not dismissed), a change order sent 60+ days ago, or finished
-// with change orders still open. Simpro # required; quotes, archived and deleted
-// jobs out; ready-to-invoice first; capped.
-function collectMoneyCandidates(jobs, now = new Date(), cap = 80) {
+// with change orders still open (v551 adds approved COs and every open job, below).
+// Simpro # required; quotes, archived and deleted jobs out; ready-to-invoice first
+// and never capped; the rest capped.
+function collectMoneyCandidates(jobs, now = new Date(), cap = 250) {
   const live = (jobs || []).filter(j => j && j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt && String(j.simproNo || "").trim());
   const openCo = (co) => !!co && !["completed", "converted", "denied"].includes(co.coStatus || "");
-  const pendingOld = (co) => { if (!co || co.coStatus !== "pending") return false; const t = Date.parse(co.submittedAt || co.createdAt || co.date || ""); return !!t && now - t > 60 * 86400e3; };
-  const done = (j) => j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
+  const pendingOld = (co) => { if (!co || co.coStatus !== "pending") return false; const t = Date.parse(co.submittedAt || co.createdAt || co.date || ""); return !!t && now - t > 55 * 86400e3; };
+  // Same "finished" as the dashboard's odPhase: quick job invoiced/complete, temp ped completed, finish complete or 100%.
+  const done = (j) => j.quickJob ? ["complete", "invoice"].includes(j.quickJobStatus || "") : j.tempPed ? j.tempPedStatus === "completed" : (j.finishStatus === "complete" || parseInt(j.finishStage) === 100);
+  // v551 (decisions audit 2026-10-17): every ready-to-invoice job comes first and is
+  // never capped (left to bill, days idle); then change orders (60+ day quotes,
+  // approved COs whose parent job Simpro may have billed, finished jobs with open
+  // COs); then every open job, so "Closed in Simpro" sees each one's Stage and billed %.
   const rti = live.filter(j => j.readyToInvoice && !j.invoiceDismissed);
   const old = live.filter(j => (j.changeOrders || []).some(pendingOld));
+  const approved = live.filter(j => (j.changeOrders || []).some(co => co && co.coStatus === "approved"));
   const doneCo = live.filter(j => done(j) && (j.changeOrders || []).some(openCo));
+  const open = live.filter(j => !done(j));
   const out = [], seen = new Set();
-  [...rti, ...old, ...doneCo].forEach(j => { const sn = String(j.simproNo).trim(); if (seen.has(sn) || out.length >= cap) return; seen.add(sn); out.push(sn); });
+  const add = (j, capped) => { const sn = String(j.simproNo).trim(); if (seen.has(sn) || (capped && out.length >= cap)) return; seen.add(sn); out.push(sn); };
+  rti.forEach(j => add(j, false));
+  [...old, ...approved, ...doneCo, ...open].forEach(j => add(j, true));
+  return out;
+}
+
+// v551: the Simpro quote numbers behind change orders sent to the GC 55+ days ago
+// (the dashboard's 60+ day line shows their quote $; 55 so a CO crossing 60 days
+// between pulls already has its number). Quote numbers are digits; "#" is dropped.
+function collectQuoteCandidates(jobs, now = new Date(), cap = 120) {
+  const live = (jobs || []).filter(j => j && j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt);
+  const out = [], seen = new Set();
+  live.forEach(j => (j.changeOrders || []).forEach(co => {
+    if (!co || co.coStatus !== "pending") return;
+    const t = Date.parse(co.submittedAt || co.createdAt || co.date || "");
+    if (!t || now - t <= 55 * 86400e3) return;
+    const q = String(co.quoteNumber || "").replace(/^#/, "").trim();
+    if (!/^\d+$/.test(q) || seen.has(q) || out.length >= cap) return;
+    seen.add(q); out.push(q);
+  }));
   return out;
 }
 
@@ -736,4 +763,4 @@ ${weekHtml}
 </div>`;
 }
 
-module.exports = { buildModel, renderHtml, resolveRecipients, collectSimproCandidates, collectMoneyCandidates, TZ, MARGIN_TARGET };
+module.exports = { buildModel, renderHtml, resolveRecipients, collectSimproCandidates, collectMoneyCandidates, collectQuoteCandidates, TZ, MARGIN_TARGET };

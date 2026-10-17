@@ -13,11 +13,17 @@
  *      on the schedule, no finish-start ask while not re-booked.
  *   4. DEDUPE — back-to-back Fail taps count once in Activity too.
  *   5. QUESTIONS — open = not done and not answered.
- *   6. MONEY — ready to invoice and 60+ day change orders carry the job value.
+ *   6. MONEY — ready to invoice shows what's left to bill (Simpro Total −
+ *      InvoicedValue) and days ready; billed-in-full jobs drop off; 60+ day
+ *      change orders carry their Simpro quote $, not the job value (v551).
  *   7. PEOPLE — quiet needs an active job; approved time off is "off"; 30+ days is
  *      "gone"; neither counts in the on-app denominator.
  *   8. PLANS — an unmatched plan waits until filed/dismissed, not until Seen.
  *   9. DOCS — "did not run" when the last due time passed with nothing made.
+ *  12. CLOSED IN SIMPRO — Invoiced / Complete at 100% billed leaves the active,
+ *      punch, quiet and no-foreman counts and waits in "close it here?" (v551).
+ *  13. BILLED COs — an approved CO on a job Simpro billed in full is "Billed —
+ *      mark done?", not work to book (v551).
  * Also exported (require it) for a read-only run on real data.
  */
 "use strict";
@@ -102,10 +108,11 @@ if (require.main === module) {
   const base = { roughPunch: {}, finishPunch: {}, qcPunch: {}, changeOrders: [], returnTrips: [], prepDone: true };
   const jobs = [
     { ...base, id: "j1", name: "Webb", foreman: "Abraham Tristan", simproNo: "1304", roughStatus: "complete", finishStatus: "inprogress", finishStage: "80%",
-      readyToInvoice: true, finishUpdates: [{ createdAt: ago(1).toISOString(), text: "x", addedBy: "Abraham Tristan" }] },
+      readyToInvoice: true, readyToInvoiceDate: "10/1/2026", finishUpdates: [{ createdAt: ago(1).toISOString(), text: "x", addedBy: "Abraham Tristan" }] },
     { ...base, id: "j2", name: "Mangum", foreman: "Vasa Mataafa", simproNo: "920", roughStatus: "inprogress", roughStage: "70%",
       roughUpdates: [{ createdAt: ago(10).toISOString(), text: "x", addedBy: "Vasa Mataafa" }],
-      changeOrders: [{ id: "c1", coStatus: "pending", submittedAt: ago(90).toISOString(), desc: "Add cans" }, { id: "c2", coStatus: "needs_sending", desc: "Move box" }],
+      changeOrders: [{ id: "c1", coStatus: "pending", submittedAt: ago(90).toISOString(), desc: "Add cans", quoteNumber: "5501" }, { id: "c2", coStatus: "needs_sending", desc: "Move box" },
+        { id: "c5", coStatus: "pending", submittedAt: ago(70).toISOString(), desc: "Fan box", quoteNumber: "#5502" }],
       returnTrips: [
         { id: "r1", scope: "Floor outlets", rtStatus: "needs", rtStatusDate: ymd(ago(3)) },            // schedule-by passed → late 3
         { id: "r2", scope: "Fans", rtStatus: "scheduled", rtStatusDate: ymd(ago(10)) },                 // visit passed → late 10
@@ -125,6 +132,17 @@ if (require.main === module) {
       finishProjectedStart: ymd(ago(-3)) },
     { ...base, id: "j9", name: "Ashcraft", foreman: "Old Foreman", roughStatus: "inprogress", roughStage: "40%" },
     { ...base, id: "j10", name: "", foreman: "Unassigned", roughStatus: "" },                 // empty shell record: ignored
+    // v551 (decisions audit 2026-10-17) — the shapes the audit found against live Simpro:
+    { ...base, id: "j11", name: "Sandlin Temp Ped", tempPed: true, simproNo: "1400", readyToInvoice: true, readyToInvoiceDate: "9/21/2026" },   // billed 100%, Simpro Invoiced
+    { ...base, id: "j12", name: "Cowdrey", foreman: "Abraham Tristan", simproNo: "777", roughStatus: "complete", finishStatus: "inprogress", finishStage: "60%",   // closed in Simpro
+      finishPunch: { main: { general: [{ id: "p1", text: "Cover plate" }, { id: "p2", text: "Label panel" }] } },
+      finishQuestions: { main: [{ question: "Which plate?", addedAt: ago(30).toISOString(), addedBy: "Louis" }] },
+      changeOrders: [{ id: "c6", coStatus: "approved", desc: "Extra can", quoteNumber: "6001" }] },
+    { ...base, id: "j13", name: "Maddox", foreman: "Unassigned", simproNo: "778", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%" },   // closed in Simpro, no foreman
+    { ...base, id: "j14", name: "Skyridge 208", foreman: "Abraham Tristan", simproNo: "1500", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%",
+      readyToInvoice: true, finishUpdates: [{ createdAt: ago(1).toISOString(), text: "x", addedBy: "Abraham Tristan" }] },   // 62% billed
+    { ...base, id: "j15", name: "Miller Ready", foreman: "Abraham Tristan", simproNo: "1600", roughStatus: "complete", finishStatus: "inprogress", finishStage: "90%", readyToInvoice: true },   // not pulled yet
+    { ...base, id: "j16", name: "Lot 23", foreman: "Abraham Tristan", simproNo: "1700", roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%" },   // Complete but 80% billed: still open
     { ...base, id: "j8", name: "Nguyen", foreman: "Abraham Tristan", roughStatus: "complete", finishStatus: "inprogress", finishStage: "95%", finalInspectionResult: "fail",
       finalInspectionAttempts: [{ date: ymd(ago(5)), result: "fail", items: [] }, { date: ymd(ago(5)), result: "fail", items: [] }] },
   ];
@@ -133,7 +151,19 @@ if (require.main === module) {
   const presence = { "Joel Old": new Date(2026, 7, 6).toISOString() };
   jobs[0].presence = presence;
   const pto = [{ name: "James Livingston", start: "2026-10-14", end: "2026-10-16", note: "PTO" }];
-  const simTotals = { byNo: { "1304": { total: 41000 }, "920": { total: 63000 } } };
+  const simTotals = {
+    byNo: {
+      "1304": { total: 41000, inv: 20500, invPct: 50, stage: "Progress", status: "Job - In Progress" },
+      "920": { total: 63000, inv: 0, invPct: 0, stage: "Progress" },
+      "881": { total: 9000, inv: 9000, invPct: 100, stage: "Progress" },                 // Thayne: billed in full, still in progress
+      "1400": { total: 400, inv: 400, invPct: 100, stage: "Invoiced", status: "Receipts Reviewed" },
+      "777": { total: 88000, inv: 88000, invPct: 100, stage: "Invoiced", status: "Receipts Reviewed" },
+      "778": { total: 52000, inv: 51990, invPct: 99.98, stage: "Invoiced", status: "Receipts Reviewed" },
+      "1500": { total: 52877, inv: 32643, invPct: 61.73, stage: "Progress" },
+      "1700": { total: 30000, inv: 24000, invPct: 80, stage: "Complete", status: "Job - Ready to Invoice" },
+    },
+    quotes: { "5501": { total: 9800, stage: "Pending" }, "5502": { total: 3500, stage: "Pending" } },
+  };
   const d = X.odModel({ jobs, users, needs, upcoming: [], foreman: "", range: 14, pto, simTotals, now });
 
   // 1. ROSTER
@@ -145,7 +175,8 @@ if (require.main === module) {
   eq(d.offTeam, ["Old Foreman", "Paul"], "names on jobs off the roster stay filterable");
   assert.ok(!d.allLive.some(j => !j.name), "nameless records are skipped");
   const nf = X.odModel({ jobs, users, needs, upcoming: [], foreman: X.OD_NOFM, range: 14, pto, simTotals, now });
-  eq(nf.live.map(j => j.name).sort(), ["Ashcraft", "Peterson", "Thayne"], "No foreman filter lists exactly those");
+  eq(nf.live.map(j => j.name).sort(), ["Ashcraft", "Maddox", "Peterson", "Sandlin Temp Ped", "Thayne"], "No foreman filter: those, plus closed-in-Simpro jobs with no foreman (v551)");
+  eq(nf.active.map(j => j.name).sort(), ["Ashcraft", "Peterson", "Thayne"], "…of which only the open ones are active");
   assert.ok(d.byForeman["No foreman"] && !d.byForeman["Paul"], "Quality punch-by-foreman uses the same roster");
 
   // 2. RETURN TRIPS
@@ -175,10 +206,33 @@ if (require.main === module) {
   // 5. QUESTIONS
   assert.strictEqual(d.openQs.length, 1); assert.strictEqual(d.openQs[0].age, 1, "46 hours = 1 full day, like punch ages");
 
-  // 6. MONEY
-  assert.strictEqual(d.attnBy.invoice.extra, "$41k");
-  assert.ok(/on 1 job, job value \$63k/.test(d.attnBy.coOld.extra), d.attnBy.coOld.extra);
-  eq(d.coBy, { needs_sending: 1, pending: 2, approved: 1, scheduled: 0, other: 0 });
+  // 6. MONEY — left to bill, days ready, billed-in-full off the list (v551).
+  const inv = d.attnBy.invoice.rows;
+  eq(inv.map(r => r.title), ["Webb", "Skyridge 208", "Miller Ready"], "most left to bill first; the billed-in-full temp ped is not listed");
+  assert.strictEqual(Math.round(inv[1].money), 20234, "Skyridge: $52,877 total − $32,643 billed = $20,234 left, not the $52.9k job total");
+  assert.strictEqual(inv[0].money, 20500, "Webb: half billed");
+  assert.ok(/left to bill · 50% billed · ready 14 d/.test(inv[0].sub), inv[0].sub);
+  assert.strictEqual(inv[0].idle, 14, "ready since 10/1 → 14 days on 10/15");
+  assert.strictEqual(inv[2].money, null); assert.ok(/not in the Simpro pull yet/.test(inv[2].sub), inv[2].sub);
+  assert.ok(/^\$41k left to bill · oldest ready 14 d · 1 billed in full in Simpro, not shown$/.test(d.attnBy.invoice.extra), d.attnBy.invoice.extra);
+  eq(d.rtiBilled.map(j => j.name), ["Sandlin Temp Ped"]);
+  const oldFmt = X.odModel({ jobs: [jobs[0]], users, needs: [], upcoming: [], simTotals: { byNo: { "1304": { total: 41000 } } }, now });
+  assert.strictEqual(oldFmt.attnBy.invoice.rows[0].money, null, "an entry from before v551 (total only) shows no $ instead of the job total");
+  assert.ok(/left to bill after the next Simpro pull/.test(oldFmt.attnBy.invoice.rows[0].sub));
+  // 60+ day change orders: quote $, summed per change order.
+  const co60 = d.attnBy.coOld.rows;
+  eq(co60.map(r => r.money), [9800, 3500], "each CO carries its own quote total, most first");
+  assert.ok(/quote \$9\.8k/.test(co60[0].sub) && !/job value/.test(co60[0].sub), co60[0].sub);
+  assert.strictEqual(d.attnBy.coOld.extra, "on 1 job, quotes $13k", "quotes $9.8k + $3.5k, not the $63k job value");
+  // Thayne (live, 10/17): 14 COs on one Simpro quote — the quote counts once.
+  const shared = { ...base, id: "js", name: "Thayne", simproNo: "881", changeOrders: [1, 2, 3].map(i => ({ id: "s" + i, coStatus: "pending", submittedAt: ago(123).toISOString(), desc: "Outlet " + i, quoteNumber: "7001" })) };
+  const sq = X.odModel({ jobs: [shared], users, needs: [], upcoming: [], simTotals: { byNo: {}, quotes: { "7001": { total: 2300 } } }, now });
+  assert.strictEqual(sq.attnBy.coOld.extra, "on 1 job, quotes $2.3k", "one quote under three COs counts once");
+  assert.ok(/quote \$2\.3k, one quote for 3 COs/.test(sq.attnBy.coOld.rows[0].sub), sq.attnBy.coOld.rows[0].sub);
+  const noQ = X.odModel({ jobs: [jobs[1]], users, needs: [], upcoming: [], simTotals: { byNo: {}, quotes: {} }, now });
+  assert.ok(/Quote 5501, no \$ yet/.test(noQ.attnBy.coOld.rows[0].sub), noQ.attnBy.coOld.rows[0].sub);
+  assert.strictEqual(noQ.attnBy.coOld.extra, "on 1 job");
+  eq(d.coBy, { needs_sending: 1, pending: 3, approved: 0, billed: 2, scheduled: 0, other: 0 });
   assert.strictEqual(d.coOnDone.length, 1, "open CO on a finished job is counted apart");
 
   // 7. PEOPLE
@@ -217,19 +271,52 @@ if (require.main === module) {
   assert.ok(!X.OD_DOCS.some(x => ["packet", "lead", "weekly", "strategy"].includes(x.k)), "retired doc keys are gone (packet / lead / weekly / strategy)");
   eq(X.OD_DOCS.filter(x => x.latest).map(x => x.latest), ["monday", "wednesday", "friday"], "latest keys match functions/autoDocs.js AUTO_DOC_SOURCES");
 
-  // 10. MONEY CANDIDATES (functions/fridayPacket.js, what dailySimproTotals fetches)
+  // 12. CLOSED IN SIMPRO (v551)
+  eq(d.closedSim.map(j => j.name), ["Cowdrey", "Maddox", "Sandlin Temp Ped"], "Invoiced / Complete at 99.5%+ while open here");
+  const act = d.active.map(j => j.name);
+  assert.ok(!act.includes("Cowdrey") && !act.includes("Maddox") && !act.includes("Sandlin Temp Ped"), "closed in Simpro is not active");
+  assert.ok(act.includes("Lot 23"), "Simpro Complete at 80% billed stays active");
+  assert.ok(act.includes("Thayne"), "billed in full but still in progress in Simpro stays active");
+  assert.ok(!d.openPunch.some(p => p.job.name === "Cowdrey"), "its punch leaves the open-punch count");
+  assert.strictEqual(d.info.j12.punch.length, 2, "the punch is still there on the job");
+  assert.ok(!d.attnBy.quiet.rows.some(r => r.job.name === "Cowdrey" || r.job.name === "Maddox"), "not a quiet job");
+  assert.ok(!d.noForemanJobs.some(j => j.name === "Maddox"), "not a no-foreman job");
+  assert.ok(!d.openQs.some(x => x.job.name === "Cowdrey") && d.info.j12.questions.length === 1, "its crew question leaves the count but stays on the job");
+  assert.ok(!d.byForeman["Abraham Tristan"].items.some(p => p.job.name === "Cowdrey"), "foreman card punch leaves it out");
+  const noSim = X.odModel({ jobs, users, needs, upcoming: [], foreman: "", range: 14, pto, simTotals: null, now });
+  assert.ok(noSim.active.some(j => j.name === "Cowdrey") && !noSim.closedSim.length, "with no Simpro pull nothing is hidden");
+
+  // 13. BILLED COs (v551) — the parent job is what Simpro bills.
+  eq(d.coBilled.map(x => x.job.name).sort(), ["Cowdrey", "Thayne"], "approved COs on jobs billed in full");
+  assert.strictEqual(d.attnBy.coBilled.label, "Approved change orders Simpro has billed — mark done?");
+  assert.ok(/Billed: job 100% invoiced in Simpro · mark the CO done/.test(d.attnBy.coBilled.rows[0].sub), d.attnBy.coBilled.rows[0].sub);
+  const partly = X.odModel({ jobs: [jobs[3]], users, needs: [], upcoming: [], simTotals: { byNo: { "881": { total: 9000, inv: 4000, invPct: 44, stage: "Progress" } } }, now });
+  eq([partly.coBy.approved, partly.coBy.billed, partly.attnBy.coBilled.rows.length], [1, 0, 0], "a partly billed job's approved CO is still work to book");
+
+  // 10. MONEY CANDIDATES (functions/fridayPacket.js, what dailySimproTotals fetches) — v551:
+  //     every ready-to-invoice job first and uncapped, then COs, then every open job.
   const fp = require("../functions/fridayPacket.js");
-  const mc = fp.collectMoneyCandidates([
-    { simproNo: "1", readyToInvoice: true },
-    { simproNo: "2", readyToInvoice: true, invoiceDismissed: true },
-    { simproNo: "3", changeOrders: [{ coStatus: "pending", submittedAt: ago(61).toISOString() }] },
-    { simproNo: "4", changeOrders: [{ coStatus: "pending", submittedAt: ago(10).toISOString() }] },
+  const cand = [
+    { simproNo: "1", readyToInvoice: true, finishStatus: "complete" },
+    { simproNo: "2", readyToInvoice: true, invoiceDismissed: true, finishStatus: "complete" },
+    { simproNo: "3", finishStatus: "complete", changeOrders: [{ coStatus: "pending", submittedAt: ago(61).toISOString(), quoteNumber: "901" }] },
+    { simproNo: "4", finishStatus: "complete", changeOrders: [{ coStatus: "pending", submittedAt: ago(10).toISOString(), quoteNumber: "902" }] },
     { simproNo: "5", finishStatus: "complete", changeOrders: [{ coStatus: "approved" }] },
     { simproNo: "6", finishStatus: "complete", changeOrders: [{ coStatus: "completed" }] },
     { simproNo: "7", type: "quote", readyToInvoice: true },
     { simproNo: "", readyToInvoice: true },
-  ], now);
-  eq(mc, ["1", "3", "5"], "ready to invoice, CO waiting 60+ d, finished with open COs");
+    { simproNo: "8", roughStatus: "inprogress" },                                    // open job → Stage / billed %
+    { simproNo: "9", quickJob: true, quickJobStatus: "invoice" },                     // quick job invoiced = finished
+    { simproNo: "10", tempPed: true, tempPedStatus: "" },                             // temp ped not completed = open
+    { simproNo: "11", archived: true, roughStatus: "inprogress" },
+    { simproNo: "12", finishStatus: "complete", changeOrders: [{ coStatus: "pending", submittedAt: ago(57).toISOString(), quoteNumber: "#903" }, { coStatus: "pending", submittedAt: ago(80).toISOString(), quoteNumber: "901" }] },
+  ];
+  eq(fp.collectMoneyCandidates(cand, now), ["1", "3", "12", "5", "4", "8", "10"], "ready to invoice, 55+ d COs, approved COs, finished with open COs, open jobs; not finished jobs with nothing open");
+  const many = Array.from({ length: 300 }, (_, i) => ({ simproNo: String(1000 + i), roughStatus: "inprogress" }));
+  const capped = fp.collectMoneyCandidates([...many, { simproNo: "77", readyToInvoice: true, finishStatus: "complete" }], now);
+  assert.strictEqual(capped.length, 250, "250 Simpro reads at most; ready to invoice always gets in");
+  assert.strictEqual(capped[0], "77", "ready to invoice first even when listed last");
+  eq(fp.collectQuoteCandidates(cand, now), ["901", "903"], "quotes of COs pending 55+ days, '#' dropped, once each");
 
   // 11. WHO OPENS THE PAGE (v543): any active admin, by access or legacy role; nobody else.
   assert.strictEqual(X.canOpenDash({ id: "koy", name: "Koy Wilkinson", access: "admin" }), true);
