@@ -4847,6 +4847,7 @@ exports.scheduledSimproCandidateRefresh = functions.pubsub
 // v551 (decisions audit 2026-10-17): also what Simpro has billed (InvoicedValue,
 // InvoicePercentage) and where the job sits (Stage, Status), so the dashboard can
 // say "left to bill" and "closed in Simpro". A 429 waits and tries again.
+// v552: plus the job's Technicians (names), the suggested foreman on a job with none.
 // Used by dailySimproTotals (v542); the Friday Packet that shared it was retired 2026-10-15.
 async function _simproGetJson(path) {
   for (let a = 0; a < 3; a++) {
@@ -4864,7 +4865,7 @@ async function fetchSimproTotals(sns) {
   for (let i = 0; i < sns.length; i += CHUNK) {
     await Promise.all(sns.slice(i, i + CHUNK).map(async (sn) => {
       try {
-        const results = await _simproGetJson(`/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Stage,Status,Total,Totals`);
+        const results = await _simproGetJson(`/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Stage,Status,Total,Totals,Technicians`);
         const sj = Array.isArray(results) ? results[0] : null;
         if (!sj) return;
         const t = sj.Totals || {};
@@ -4880,6 +4881,8 @@ async function fetchSimproTotals(sns) {
           invPct: num(t.InvoicePercentage),
           stage: String(sj.Stage || ""),
           status: String((sj.Status && sj.Status.Name) || ""),
+          // v552: Simpro's technicians, the dashboard's suggested foreman for a job with none.
+          techs: (Array.isArray(sj.Technicians) ? sj.Technicians : []).map(x => String((x && x.Name) || "").trim()).filter(Boolean).slice(0, 4),
         };
       } catch (e) { /* one job's fetch failing just means no number for it */ }
     }));

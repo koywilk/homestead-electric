@@ -9,7 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
-import { syncPostHogIdentity } from "./posthog";
+import { syncPostHogIdentity, trackDash } from "./posthog";
 import { readableInk } from "./a11y";
 import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
 
@@ -34648,6 +34648,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </div>
 
+              {/* v552 (decisions audit item 6): the office person who owns this job's
+                  customer and calendar. Admins set it; blank = follows the foreman's
+                  book (Settings → Team → Coordinator). The dashboard filters on it. */}
+              {getAccess(identity || {}) === "admin" && (
+                <div>
+                  <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Coordinator</div>
+                  <Sel value={job.coordinator||""} onChange={e=>u({coordinator:e.target.value})}
+                    options={[{value:"",label:"Foreman's book (Settings → Team)"}, ...new Set([...OD_COORDS, String(job.coordinator||"").trim()].filter(Boolean))]}/>
+                </div>
+              )}
+
               <div>
 
                 <div style={{fontSize:12,color:C.dim,marginBottom:3}}>Lead</div>
@@ -46566,6 +46577,25 @@ const OD_A = "#2563C9", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6
 // Foreman filter value for "jobs with no foreman" (blank, Unassigned, TBD, Paul, or
 // someone no longer on the team). Never a real name.
 const OD_NOFM = "__none__";
+// v552 (decisions audit 2026-10-17, item 6): the four office people who own a job's
+// customer and calendar. A job's coordinator is set on the job (admins), else it
+// follows its foreman's book (Settings → Team → Coordinator).
+const OD_COORDS = ["Koy Wilkinson", "Josh Cloward", "Brady Nelson", "Justin Cloward"];
+const OD_NOCOORD = "__nocoord__";
+// v552 (item 7): what "Move / unconfirm" writes for a rough or finish start. Same
+// rule as the Job Info Confirmed button (unconfirm turns "Start Date Set" back into
+// "Awaiting Start Date"); "Scheduled" also counts as confirmed on the dashboard, so
+// unconfirming goes back to Awaiting Start Date from there too. Dates are M/D/YYYY
+// like the rest of the job. Pure: the dashboard test runs it.
+function odStartPatch(j, ph, { date = "", confirm = false } = {}) {
+  const st = ph + "Status", cf = ph + "StartConfirmed", ps = ph + "ProjectedStart";
+  const p = {};
+  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) p[ps] = `${+m[2]}/${+m[3]}/${m[1]}`;
+  if (confirm) { p[cf] = true; p[st] = "date_confirmed"; }
+  else { p[cf] = false; if (["date_confirmed", "scheduled"].includes(j && j[st])) p[st] = "waiting_date"; }
+  return p;
+}
 // v551: an approved CO whose parent Simpro job is billed in full.
 const OD_CO_BILLED = "Billed — mark done?";
 const OD_CO_LABEL = { needs_sending:"needs sending", pending:"sent, waiting on GC", approved:"approved", scheduled:"scheduled", completed:"completed", converted:"converted to a return trip", denied:"denied" };
@@ -47049,7 +47079,7 @@ const odDaysBetween = (a, b) => Math.round((new Date(b.getFullYear(), b.getMonth
 // list for every tab, one reading of return trips, open questions, failed
 // inspections grouped with their re-inspection, money from Simpro, and the
 // Needs attention lines the audit asked for.
-function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto = [], simTotals = null, now = new Date() }) {
+function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "", range = 14, pto = [], simTotals = null, now = new Date() }) {
   const today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const secs = OD_PHASES;
   // A record with no name is an empty shell, not a job (the app's own lists skip them too).
@@ -47099,8 +47129,14 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   allLive.forEach(j => { if (!isOpen(j)) return; const u = staff.find(x => sameName(x.name, j.foreman)); if (u) addR(u.name); });
   roster.sort((a, b) => a.localeCompare(b));
   const fmName = (j) => (j && roster.find(n => sameName(n, j.foreman))) || "";
-  const live = foreman === OD_NOFM ? allLive.filter(j => !fmName(j)) : foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive;
-  const up = (upcoming || []).filter(u => u && (!foreman || (foreman === OD_NOFM ? !roster.some(n => sameName(n, u.foreman)) : sameName(u.foreman, foreman))));
+  // v552: the coordinator a job belongs to — set on the job, else its foreman's book.
+  const bookOf = {}; (users || []).forEach(u => { if (u && u.coordinator && String(u.name || "").trim()) bookOf[String(u.name).trim().toLowerCase()] = String(u.coordinator).trim(); });
+  const coordOf = (j) => { const own = String((j && j.coordinator) || "").trim(); if (own) return { name: own, via: "job" };
+    const b = bookOf[String((j && j.foreman) || "").trim().toLowerCase()]; return b ? { name: b, via: "book" } : { name: "", via: "" }; };
+  const coordOk = (j) => !coordinator || (coordinator === OD_NOCOORD ? !coordOf(j).name : sameName(coordOf(j).name, coordinator));
+  const coordinators = [...OD_COORDS]; allLive.forEach(j => { const c = coordOf(j).name; if (c && !coordinators.some(x => sameName(x, c))) coordinators.push(c); });
+  const live = (foreman === OD_NOFM ? allLive.filter(j => !fmName(j)) : foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive).filter(coordOk);
+  const up = (upcoming || []).filter(u => u && (!foreman || (foreman === OD_NOFM ? !roster.some(n => sameName(n, u.foreman)) : sameName(u.foreman, foreman))) && coordOk(u));
   const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
   const active = live.filter(isOpen);
   const allActive = allLive.filter(isOpen);
@@ -47209,7 +47245,9 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
     else if (parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult && rs !== "complete") row("Rough inspection", "rough");
   });
   needsDate.sort((a, b) => (a.last ? a.last.getTime() : 0) - (b.last ? b.last.getTime() : 0));
-  up.forEach(u => { if (!u.projectedStart) needsDate.push({ job: null, name: u.name, what: "Upcoming job start", by: "", last: null }); });
+  // v552 (item 8): one "Needs a date" everywhere — jobs on the board only. Upcoming-tab
+  // jobs with no start date are their own count (upNoDate), not mixed in.
+  const upNoDate = up.filter(u => !u.projectedStart);
   const finishStartOf = {}; sched.forEach(s => { if (s.type === "start" && s.label === "Finish start" && s.job && s.at >= t0 && !finishStartOf[s.job.id]) finishStartOf[s.job.id] = s; });
   const scans = active.filter(j => matterportScanNeeded(j)).sort((a, b) => parseStage(b.roughStage) - parseStage(a.roughStage));
   const scanInfo = {};
@@ -47276,7 +47314,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
     { k: "rtNoDate", label: "Return trips with no date", color: OD_WARN, icon: "returntrips",
       rows: openRTs.filter(x => x.ri.k === "none").map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_WARN })) },
     { k: "needsDate", label: "Needs a date", color: OD_WARN, icon: "calendar",
-      rows: needsDate.filter(n => n.job).map(n => ({ title: n.job.name, sub: [n.what, n.job.foreman || "No foreman", n.last ? `last work ${odAgo(n.last, now)}` : "no work logged", n.by].filter(Boolean).join(" · "), job: n.job, color: OD_WARN })) },
+      rows: needsDate.map(n => ({ title: n.job.name, sub: [n.what, n.job.foreman || "No foreman", n.last ? `last work ${odAgo(n.last, now)}` : "no work logged", n.by].filter(Boolean).join(" · "), job: n.job, color: OD_WARN })) },
     { k: "quiet", label: "In progress, no update in 5+ days", color: OD_WARN, icon: "clock",
       rows: active.filter(j => secOf(j) && OD_UNDERWAY.includes(secOf(j).key) && !secOf(j).stale && (!lastAct[j.id] || now - lastAct[j.id] > 5*OD_DAY))
         .sort((a, b) => (lastAct[a.id] || 0) - (lastAct[b.id] || 0))
@@ -47337,6 +47375,14 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
     if (getAccess(u) === "contractor") return "outside contractor";
     return "not a crew foreman";
   };
+  // v552 (item 5): Simpro's technician on the job as the suggested foreman — only
+  // someone on the foreman list, or else an active team member (not a contractor).
+  const techsOf = (j) => { const t = simOf(j); return (t && Array.isArray(t.techs)) ? t.techs.filter(Boolean) : []; };
+  const suggestFm = (j) => { const ts = techsOf(j);
+    const onRoster = ts.map(n => roster.find(r => sameName(r, n))).find(Boolean);
+    if (onRoster) return onRoster;
+    const u = ts.map(n => staff.find(x => sameName(x.name, n))).find(Boolean);
+    return u ? String(u.name).trim() : ""; };
   const noFmGroups = [];
   noForemanJobs.forEach(j => { const n = String(j.foreman || "").trim(); const k = /^unassigned$/i.test(n) ? "" : n; let g = noFmGroups.find(x => sameName(x.name, k) || (!x.name && !k)); if (!g) { g = { name: k, why: whyNoFm(k), jobs: [] }; noFmGroups.push(g); } g.jobs.push(j); });
   noFmGroups.sort((a, b) => b.jobs.length - a.jobs.length);
@@ -47362,7 +47408,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", range = 14, pto =
   return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
     openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simOf, leftOf, billedPct, fullyBilled, quoteOf, rtiAll, rtiBilled, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
     overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
-    people, teamN, shortName, foremenP, noForemanJobs, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
+    people, teamN, shortName, foremenP, noForemanJobs, techsOf, suggestFm, coordOf, coordinators, upNoDate, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
 }
 
 // Plan intake findings → what still waits on Koy (v542). An unmatched plan or walk
@@ -47419,13 +47465,42 @@ function odDocStatus(x, { latestDocs, runs, now }) {
   return { tone: "", made, due, doc, text: "" };
 }
 
-function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp }) {
+// v552 (item 7): the Move / unconfirm sheet body for one rough or finish start.
+function OdMove({ j, ph, confirmed, cur, onSave }) {
+  const [date, setDate] = useState(cur ? localYmd(cur) : "");
+  const [keep, setKeep] = useState(false);
+  const m = String(date || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const nd = m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+  const same = !!(nd && cur && localYmd(nd) === localYmd(cur));
+  const L = ph === "finish" ? "Finish" : "Rough", name = String(j.name || "").trim();
+  return (
+    <div className="od-move">
+      <p>Did the meeting push this start? Pick the new date. It shows as projected until the customer or GC confirms it.</p>
+      <label className="row"><span>New {L.toLowerCase()} start</span><input type="date" value={date} onChange={e => setDate(e.target.value)}/></label>
+      <label className="chk"><input type="checkbox" checked={keep} onChange={e => setKeep(e.target.checked)}/> Confirmed with the customer or GC</label>
+      <div className="btns">
+        <button type="button" className="pri" disabled={!nd || (same && keep === confirmed)}
+          onClick={() => onSave({ date, confirm: keep }, `${name}: ${L.toLowerCase()} start ${odDow(nd)} ${odShort(nd)}, ${keep ? "confirmed" : "projected"}`)}>
+          {nd ? `${same ? "Save" : "Move to"} ${odDow(nd)} ${odShort(nd)}${keep ? ", confirmed" : ", projected"}` : "Pick a date"}</button>
+        {confirmed && <button type="button" className="sec" onClick={() => onSave({ confirm: false }, `${name}: ${L.toLowerCase()} start unconfirmed`)}>Unconfirm, keep {cur ? `${odDow(cur)} ${odShort(cur)}` : "the date"}</button>}
+      </div>
+      <small>Saves on the job like Job Info does, with Undo. Unconfirming sets the status back to Awaiting Start Date.</small>
+    </div>
+  );
+}
+
+function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
   const [tab, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
-  const pickTab = (t) => { setTab(t); keep("he_odash_tab", t); };
+  // v552 (item 9): dash_open / dash_tab / dash_tap go to PostHog (no autocapture), tied
+  // to the signed-in name by syncPostHogIdentity like every other app event.
+  const pickTab = (t) => { setTab(t); keep("he_odash_tab", t); if (t !== tab) trackDash("dash_tab", { tab: t }); };
+  useEffect(() => { trackDash("dash_open", { tab }); }, []); // eslint-disable-line
   const [foreman, setForeman] = useState(() => read("he_odash_foreman", v => v != null, ""));
   const pickForeman = (f) => { setForeman(f); keep("he_odash_foreman", f); };
+  const [coord, setCoord] = useState(() => read("he_odash_coord", v => v != null, ""));
+  const pickCoord = (c) => { setCoord(c); keep("he_odash_coord", c); };
   const [range, setRange] = useState(() => Number(read("he_odash_range", v => ["7","14","30"].includes(v), "14")));
   const pickRange = (r) => { setRange(r); keep("he_odash_range", String(r)); };
   const [q, setQ] = useState("");
@@ -47509,13 +47584,14 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   }, [tab]);
   // Money: Simpro job totals (settings/simproTotals, written by the Friday Packet
   // and the daily dailySimproTotals function, v542).
+  // v552: read once on every tab — since v551 it decides which jobs count as active
+  // (closed in Simpro), so Schedule / Quality / People must see it too.
   const [simTotals, setSimTotals] = useState(null);
   useEffect(() => {
-    if (!["overview", "jobs"].includes(tab)) return;
     let dead = false;
     getDoc(doc(db, "settings", "simproTotals")).then(snap => { if (!dead) setSimTotals(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
-  }, [tab]);
+  }, []);
   const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
   const [applTick, setApplTick] = useState(0);
   useEffect(() => {
@@ -47526,14 +47602,29 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     return () => { dead = true; };
   }, [tab, applTick]);
 
-  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, range, pto, simTotals, now: new Date() }),
-    [jobs, users, needs, upcoming, mode, tick, foreman, range, pto, simTotals]); // eslint-disable-line
+  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, coordinator: coord, range, pto, simTotals, now: new Date() }),
+    [jobs, users, needs, upcoming, mode, tick, foreman, coord, range, pto, simTotals]); // eslint-disable-line
   const plan = useMemo(() => odPlanModel(findings, new Date()), [findings, tick]); // eslint-disable-line
   const docStat = (x) => odDocStatus(x, { latestDocs, runs: docRuns, now: d.now });
 
   const openJob = (job) => { if (job) setSheet({ kind: "job", id: job.id }); };
   const openPerson = (name) => setSheet({ kind: "person", name });
-  const openList = (title, sub, rows) => setSheet({ kind: "list", title, sub, rows });
+  const openList = (title, sub, rows) => { setSheet({ kind: "list", title, sub, rows }); trackDash("dash_tap", { list: String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60), tab }); };
+  // v552: the dashboard's one-tap writes (Reassign, Move / unconfirm, Coordinator) go through
+  // the app's own job save (onUpdateJob → App.updateJob: patch mode, version lock, saved_by),
+  // admins only, each with the shared 10-second Undo that re-issues the exact prior values.
+  const canWrite = !!onUpdateJob && getAccess(identity || {}) === "admin";
+  const prevOf = (j, patch) => Object.fromEntries(Object.keys(patch).map(k => [k, j[k] ?? (typeof patch[k] === "boolean" ? false : "")]));
+  const writeJob = (j, patch, label) => { const prev = prevOf(j, patch); onUpdateJob(j, patch); heUndo(label, () => onUpdateJob(j, prev)); };
+  const reassign = async (j, name) => {
+    const ok = await showConfirm({ title: `Make ${name} the foreman on ${String(j.name).trim()}?`, message: `Simpro has ${name} as the technician on this job. ${odFirst(name)} gets a push, the same as reassigning in Job Info.`, confirmLabel: `Reassign to ${odFirst(name)}` });
+    if (!ok) return;
+    setSheet(null);
+    writeJob(j, { foreman: name }, `${String(j.name).trim()}: foreman is now ${name}`);
+    trackDash("dash_tap", { list: "reassign", tab });
+  };
+  const moveAct = (s) => canWrite && s && s.type === "start" && s.job && /^(Rough|Finish) start$/.test(s.label)
+    ? { label: s.confirmed ? "Move / unconfirm" : "Move", onClick: () => setSheet({ kind: "move", s }) } : null;
   const goApp = (job) => { if (job && onSelectJob) onSelectJob(job); };
   // A deep link into the app (My Day on a task, a view): /?view=myday&need=<id>.
   const openApp = (url) => { if (onOpenApp) onOpenApp(url); else { try { window.location.href = url; } catch (e) {} } };
@@ -47569,7 +47660,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const schedRow = (s) => { const b = schedBits(s); return { title: s.name,
     sub: [`${s.label}${s.type === "start" ? (s.confirmed ? " · confirmed" : " · projected") : ""}`, b.fm, s.detail, s.type === "rt" && s.by && "schedule-by date"].filter(Boolean).join(" · "),
     tag: [b.late && `${b.late} d late`, b.scanMiss && "Scan not done"].filter(Boolean).join(" · "), tagColor: b.bad ? OD_R : undefined,
-    right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job }; };
+    right: `${odDow(s.at)} ${odShort(s.at)}`, color: OD_SCHED_COLOR[s.type], job: s.job, action: moveAct(s) }; };
   const eventRow = (e) => ({ title: e.job.name, sub: `${e.label}${e.detail ? ": " + e.detail : ""}${e.who ? " · " + odFirst(e.who) : ""}`, right: odWhen(e, d.now), color: e.tone ? TONE[e.tone] : TYPE_COLOR[e.type], job: e.job });
 
   // ── shared pieces ──
@@ -47607,13 +47698,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   };
   const Rows = ({ rows, empty }) => rows.length ? (
     <div className="od-rows">
-      {rows.map((r, i) => r.divider ? <div className="od-dayh sub" key={i}>{r.divider}</div> : (
+      {rows.map((r, i) => { if (r.divider) return <div className="od-dayh sub" key={i}>{r.divider}</div>;
+        const row = (
         <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
           <span className="k" style={{ "--c": r.color || OD_A }}><Icon name={r.icon || "activity"} size={15}/></span>
           <span className="m"><b>{r.title}</b>{r.tag ? <em style={r.tagColor ? { color: r.tagColor } : null}>{r.tag}</em> : null}<small>{r.sub}</small></span>
           <span className="t" style={r.rightColor ? { color: r.rightColor, fontWeight: 700 } : null}>{r.right || ""}</span>
-        </button>
-      ))}
+        </button>);
+        // v552: a row can carry one action button (Reassign, Move / unconfirm) beside it.
+        return r.action ? <div className="od-rowa" key={i}>{row}<button type="button" className="od-act" onClick={r.action.onClick}>{r.action.label}</button></div> : row;
+      })}
     </div>
   ) : <div className="od-empty">{empty || "Nothing here."}</div>;
   // Team pulse (v542): quiet people first, each with the jobs they run; "opened 3 jobs ·
@@ -47642,7 +47736,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </div>
   );
   const search = q.trim().toLowerCase();
-  const nFilters = (foreman ? 1 : 0) + (range !== 14 ? 1 : 0) + (search ? 1 : 0);
+  const nFilters = (foreman ? 1 : 0) + (coord ? 1 : 0) + (range !== 14 ? 1 : 0) + (search ? 1 : 0);
   const searchHits = search ? d.allLive.filter(j => `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(search)).slice(0, 8) : [];
   const planWaitingOn = (j) => (j && j.simproNo && plan.byNo[String(j.simproNo).trim()]) || [];
   // Needs you (v542): the decisions only Koy makes, gathered from four tabs onto the
@@ -47660,7 +47754,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     { k: "questions", label: "Crew questions not answered", icon: "help", color: OD_O, n: d.openQs.length, extra: [`${d.openQs.filter(x => x.age != null && x.age < 7).length} this week`, d.openQs[0] && d.openQs[0].age != null && `oldest ${d.openQs[0].age} d`].filter(Boolean).join(" · "),
       open: () => openList("Open questions", "Oldest first, by job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job }))) },
     { k: "nofm", label: "Jobs with no active foreman", icon: "hardHat", color: OD_O, n: d.noForemanJobs.length, extra: d.noFmText,
-      open: () => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => ({ title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `Foreman set to ${j.foreman} — ${d.whyNoFm(j.foreman)}` : "No foreman set", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "), right: d.info[j.id] && d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_O, job: j }))) },
+      open: () => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => { const sug = d.suggestFm(j), techs = d.techsOf(j);
+        return { title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `${String(j.foreman).trim()} (${d.whyNoFm(j.foreman).replace(" on the team list", "")})` : "No foreman set",
+          techs.length ? `Simpro technician: ${techs.join(", ")}${sug ? "" : " (not on the team)"}` : "no Simpro technician", d.secOf(j) && d.secOf(j).label].filter(Boolean).join(" · "),
+          right: d.info[j.id] && d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: OD_O, job: j,
+          action: canWrite && sug ? { label: `Reassign to ${odFirst(sug)}`, onClick: () => reassign(j, sug) } : null }; })) },
     // v551: Simpro has closed these out (Invoiced / Complete, billed in full) while the app
     // still has them open. They no longer count as active; each one waits here until it
     // is finished in the app, so its punch, change orders and return trips stop counting.
@@ -48000,7 +48098,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} hint={starts14.some(s => schedBits(s).bad) ? `${starts14.filter(s => schedBits(s).fm === "No foreman").length ? starts14.filter(s => schedBits(s).fm === "No foreman").length + " with no foreman · " : ""}${starts14.filter(s => schedBits(s).scanMiss).length ? starts14.filter(s => schedBits(s).scanMiss).length + " scan not done" : ""}`.replace(/ · $/, "") : ""}
           onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
         <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" hint={insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length ? `${insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length} on a job not ready` : ""} onClick={() => openList("Inspections in the next 7 days", "", insp7.map(s => ({ ...schedRow(s), tag: d.notReadyIds.has(s.job && s.job.id) ? "Job not ready" : schedRow(s).tag, tagColor: d.notReadyIds.has(s.job && s.job.id) ? OD_R : undefined })))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
-        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" hint="least recent work first" onClick={() => openList("Needs a date", "Least recent work first", d.needsDate.map(needsRow))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
+        <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" hint={`least recent work first${d.upNoDate.length ? ` · ${odPlural(d.upNoDate.length, "Upcoming-tab job")} with no start date not counted` : ""}`} onClick={() => openList("Needs a date", "Least recent work first", d.needsDate.map(needsRow))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
         <OdMini title="Past their date" color={OD_WARN} icon="alertTriangle" value={od.length} sub={[odInsp.length && `${odInsp.length} inspection${odInsp.length === 1 ? "" : "s"}`, odRt.length && `${odRt.length} return trip${odRt.length === 1 ? "" : "s"}`, odOther.length && `${odOther.length} other`].filter(Boolean).join(" · ") || "none"}
           hint={odOld ? `${odOld} older than 30 days` : ""}
           onClick={() => openList("Past their date", "Oldest first · inspections with no result, then return trips", [...(odInsp.length ? [{ divider: `Inspections, no result logged (${odInsp.length})` }] : []), ...odInsp.map(schedRow), ...(odRt.length ? [{ divider: `Return trips (${odRt.length})` }] : []), ...odRt.map(schedRow), ...(odOther.length ? [{ divider: `QC walks and scans (${odOther.length})` }] : []), ...odOther.map(schedRow)])}>
@@ -48442,15 +48540,27 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             {fact("Rough inspection", j.roughInspectionResult ? (j.roughInspectionResult === "pass" ? "Passed" : "Failed") : j.fourWayTargetDate ? "Target " + j.fourWayTargetDate : "")}
             {fact("Final inspection", j.finalInspectionResult ? (j.finalInspectionResult === "pass" ? "Passed" : "Failed") : j.finalInspectionTargetDate ? "Target " + j.finalInspectionTargetDate : "")}
             {fact("Last work logged", d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "Nothing logged")}
+            {fact("Coordinator", d.coordOf(j).name ? `${d.coordOf(j).name}${d.coordOf(j).via === "book" ? " (foreman's book)" : ""}` : "")}
             {d.simOf(j) && d.billedPct(j) != null ? fact("Simpro", [d.simOf(j).stage, `${Math.round(d.billedPct(j))}% billed`, d.leftOf(j) ? `${odMoney(d.leftOf(j))} left to bill` : ""].filter(Boolean).join(" · ")) : null}
           </div>
+          {canWrite && (
+            <div className="od-edit">
+              <label>Coordinator
+                <select value={String(j.coordinator || "")} onChange={e => writeJob(j, { coordinator: e.target.value }, `${String(j.name).trim()}: coordinator ${e.target.value || "follows the foreman's book"}`)}>
+                  <option value="">{d.coordOf({ foreman: j.foreman }).name ? `Foreman's book (${d.coordOf({ foreman: j.foreman }).name})` : "Not set"}</option>
+                  {[...new Set([...OD_COORDS, String(j.coordinator || "").trim()].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              {!d.fmName(j) && d.suggestFm(j) && <button type="button" className="od-act" onClick={() => reassign(j, d.suggestFm(j))}>Reassign to {d.suggestFm(j)} (Simpro technician)</button>}
+            </div>
+          )}
           {j.statusUpdate ? <div className="od-note"><small>Status update{j.statusUpdateBy ? " · " + j.statusUpdateBy : ""}</small>{odText(j.statusUpdate)}</div> : null}
           {(j.roughWaitingOn || j.finishWaitingOn) ? <div className="od-note"><small>Waiting on</small>{[j.roughWaitingOn && `Rough: ${odText(j.roughWaitingOn)}`, j.finishWaitingOn && `Finish: ${odText(j.finishWaitingOn)}`].filter(Boolean).join(" · ")}</div> : null}
           {planWaitingOn(j).length > 0 && <><div className="od-sh">Plans waiting to be filed <span>{planWaitingOn(j).length}</span></div><Rows rows={planWaitingOn(j).map(f => ({ title: f.filename || PLAN_LABEL[f.type] || "Plan", sub: odText(f.summary), right: `${planAge(f)} d`, color: OD_R, icon: "fileText", onClick: () => setSheet({ kind: "plan", id: f.id }) }))}/></>}
           {inf.questions.length > 0 && <><div className="od-sh">Open questions <span>{inf.questions.length}</span></div><Rows rows={inf.questions.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(x => ({ title: x.text, sub: `${x.ph}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help" }))}/></>}
           {inf.failOpen.length > 0 && <><div className="od-sh">Failed inspection items to fix <span>{inf.failOpen.length}</span></div><Rows rows={inf.failOpen.map(x => ({ title: x.text, sub: x.ph + " inspection", color: OD_R, icon: "x" }))}/></>}
           <div className="od-sh">Coming up <span>{up.length}</span></div>
-          <Rows rows={up.map(x => ({ title: x.label, sub: x.type === "start" ? (x.confirmed ? "Confirmed" : "Projected") : x.detail || "", right: `${odDow(x.at)} ${odShort(x.at)}`, color: OD_SCHED_COLOR[x.type], icon: OD_SCHED_ICON[x.type] }))} empty="No dates set."/>
+          <Rows rows={up.map(x => ({ title: x.label, sub: x.type === "start" ? (x.confirmed ? "Confirmed" : "Projected") : x.detail || "", right: `${odDow(x.at)} ${odShort(x.at)}`, color: OD_SCHED_COLOR[x.type], icon: OD_SCHED_ICON[x.type], action: moveAct(x) }))} empty="No dates set."/>
           <div className="od-sh">Open punch <span>{inf.punch.length}</span></div>
           <Rows rows={inf.punch.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).slice(0, 25).map(p => ({ title: p.text, sub: `${p.phase}${p.room ? " · " + p.room : ""}${p.who ? " · on " + odFirst(p.who) : ""}`, tag: [p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · "), right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, icon: "openitems" }))} empty="No open punch."/>
           <div className="od-sh">Change orders <span>{inf.cos.length}</span></div>
@@ -48481,6 +48591,14 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <Rows rows={theirJobs.map(j => ({ title: j.name, sub: `${d.secOf(j) ? d.secOf(j).label : ""} · ${odPlural(d.info[j.id].punch.length, "open punch item")}`, right: d.lastAct[j.id] ? odAgo(d.lastAct[j.id], d.now) : "", color: d.secOf(j) ? d.secOf(j).color : OD_O, icon: "hardHat", job: j }))} empty="Not foreman or lead on an active job."/>
         <div className="od-sh">Recent activity <span>{p ? Math.min(20, p.mine.length) : 0}</span></div>
         <Rows rows={p ? p.mine.slice(0, 20).map(e => ({ ...eventRow(e), icon: TYPE_ICON[e.type] })) : []} empty="Nothing logged in 30 days."/>
+      </OdSheet>
+    );
+  } else if (sheet && sheet.kind === "move" && sheet.s && sheet.s.job) {
+    const s = sheet.s, j = d.allLive.find(x => x.id === s.job.id) || s.job, ph = /^Finish/.test(s.label) ? "finish" : "rough";
+    const cur = odDate(j[ph + "ProjectedStart"]);
+    sheetEl = (
+      <OdSheet title={`${s.label} · ${String(j.name).trim()}`} sub={`${cur ? `${odDow(cur)} ${odShort(cur)}` : "No date"} · ${s.confirmed ? "confirmed" : "projected"}${j.foreman ? " · " + j.foreman : ""}`} onClose={() => setSheet(null)}>
+        <OdMove j={j} ph={ph} confirmed={!!s.confirmed} cur={cur} onSave={(opts, label) => { setSheet(null); writeJob(j, odStartPatch(j, ph, opts), label); trackDash("dash_tap", { list: "move-start", tab }); }}/>
       </OdSheet>
     );
   } else if (sheet && sheet.kind === "list") {
@@ -48654,6 +48772,26 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-more,.od-sheet .od-more{align-self:flex-start;margin-top:8px;border:1px solid var(--cline);background:var(--card);color:var(--o-ink);border-radius:999px;padding:7px 14px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
         .odash .od-rows{display:flex;flex-direction:column}
         .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%;color:var(--cink)}
+        .odash .od-rowa{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--cline)}
+        .odash .od-rowa>.od-row{border-bottom:0;flex:1;min-width:0}
+        .odash .od-act{flex:none;border:1px solid rgba(37,99,201,.35);background:#fff;color:#1E4FA8;border-radius:999px;padding:8px 12px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;min-height:40px;white-space:nowrap}
+        .odash .od-act:hover{background:rgba(37,99,201,.06)}
+        .odash .od-act:focus-visible{outline:2px solid ${OD_A};outline-offset:2px}
+        .odash .od-edit{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 4px}
+        .odash .od-edit label{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:${C.dim}}
+        .odash .od-edit select{font:inherit;font-size:14px;color:${C.text};border:1px solid ${C.border};border-radius:10px;padding:8px 10px;background:#fff;min-height:40px}
+        .odash .od-move p{margin:4px 0 12px;color:${C.dim};font-size:14px}
+        .odash .od-move .row{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:700;color:${C.dim}}
+        .odash .od-move input[type=date]{font:inherit;font-size:16px;color:${C.text};border:1px solid ${C.border};border-radius:10px;padding:9px 10px;min-height:44px;max-width:240px}
+        .odash .od-move .chk{display:flex;align-items:center;gap:8px;margin:12px 0;font-size:14px;color:${C.text}}
+        .odash .od-move .chk input{width:20px;height:20px}
+        .odash .od-move .btns{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 10px}
+        .odash .od-move .btns button{font:inherit;font-size:14px;font-weight:700;border-radius:999px;padding:10px 16px;min-height:44px;cursor:pointer}
+        .odash .od-move .pri{background:${OD_A};color:#fff;border:0}
+        .odash .od-move .pri:disabled{opacity:.45;cursor:default}
+        .odash .od-move .sec{background:#fff;color:#1E4FA8;border:1px solid rgba(37,99,201,.35)}
+        .odash .od-move small{color:${C.faint};font-size:12px}
+        @media (max-width:600px){.odash .od-rowa{flex-wrap:wrap}.odash .od-rowa>.od-row{flex-basis:100%}.odash .od-rowa>.od-act{margin:0 0 10px 42px}}
         .odash .od-row:disabled{cursor:default}
         .odash .od-row:not(:disabled):hover{background:var(--hov)}
         .odash .od-row .k{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
@@ -48828,6 +48966,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               {d.noForemanJobs.length > 0 || foreman === OD_NOFM ? <option value={OD_NOFM}>No active foreman (all)</option> : null}
               {d.offTeam.length > 0 && <optgroup label="Named on jobs, not an active foreman">{d.offTeam.map(f => <option key={f} value={f}>{f}</option>)}</optgroup>}
             </select>
+            <select className="od-sel" value={coord} onChange={e => pickCoord(e.target.value)} aria-label="Coordinator">
+              <option value="">All coordinators</option>{d.coordinators.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value={OD_NOCOORD}>No coordinator</option>
+            </select>
             <span className={"od-seg" + (rangeApplies ? "" : " off")} role="group" aria-label={rangeApplies ? "Date range" : "Date range (does not apply on this tab)"} title={rangeApplies ? "" : "The day range only changes Overview's chart and the Activity tab"}>{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} aria-disabled={!rangeApplies} onClick={() => pickRange(r)}>{r} days</button>)}</span>
             <div className="od-find">
               <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
@@ -48873,7 +49015,7 @@ if (IS_DASH_PAGE) {
     if (th) th.setAttribute("content", "#EEF2F7");
   } catch (e) {}
 }
-function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial }) {
+function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial, onUpdateJob }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
   const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
   const openApp = (url) => { if (url) window.location.href = url; };
@@ -48914,7 +49056,7 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
         </span>
       </div>
       {ok ? (
-        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob} onOpenApp={openApp}/></OdBoundary>
+        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob} onOpenApp={openApp} onUpdateJob={onUpdateJob}/></OdBoundary>
       ) : (
         <div className="od-private">
           <b>This page is private.</b>
@@ -48922,6 +49064,10 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
           <a href="/">Open the app</a>
         </div>
       )}
+      {/* v552: the dashboard's Reassign / Move / Coordinator ask and offer Undo like the app. */}
+      <HEConfirmHost/>
+      <HEUndoHost/>
+      <HEToastHost/>
     </div>
   );
 }
@@ -57439,10 +57585,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-17 · App SW version: v551
+**Last manifest update:** 2026-10-17 · App SW version: v552
 
 ---
 
+- **Dashboard decisions you can act on: Simpro technician as the suggested foreman with Reassign, a Coordinator on every job with a dashboard filter, Move / unconfirm on starts, one "Needs a date", PostHog usage events** · 'shipped 2026-10-17' · 'SW v552' · 'odModel' · 'OfficeDash' · 'OdMove' · 'odStartPatch' · 'OD_COORDS' · 'OD_NOCOORD' · 'trackDash' · 'fetchSimproTotals' · Items 5–9 of section 7 of the 2026-10-17 decisions-up audit (item 10, Justin's two team records, waits on Koy). **(5) Suggested foreman:** 'fetchSimproTotals' also reads the job's Simpro 'Technicians'; each row in Needs you → *Jobs with no active foreman* shows *Simpro technician: X* and, for an admin, **Reassign to X** (a foreman on the list first, else an active team member; nobody off the team; nothing when Simpro has none). One job per tap, after a confirm (*Make X the foreman on Y? X gets a push, the same as reassigning in Job Info*), with the 10-second Undo. The job sheet offers the same button. Live 10/17: 6 of the 8 jobs get a suggestion (Louis Hoffman on 4 of Vasa's, Jacob Spackman on Shaikh, Gage Lund on Meyers); Thayne and Peterson have no Simpro technician. **(6) Coordinator:** new optional job field 'coordinator' (Koy Wilkinson / Josh Cloward / Brady Nelson / Justin Cloward), set by admins on Job Info (beside Foreman) or on the dashboard's job sheet; left blank everywhere (Simpro's project manager is not a reliable seed). Blank follows the foreman's book (Settings → Team → Coordinator), shown as *(foreman's book)*. New **Coordinator** filter beside the foreman filter (All / each / No coordinator), also applied to Upcoming-tab jobs. Live 10/17: 39 of 43 active jobs have a coordinator through the foremen's books (Brady 17, Koy 13, Josh 9), 4 have none. **(7) Move / unconfirm:** every rough or finish start in the Schedule tab's Starts card, in the starts lists and in a job sheet's *Coming up* gets **Move / unconfirm** (or **Move**): a date picker, *Confirmed with the customer or GC* (off by default), **Move to Mon 10/26, projected** and **Unconfirm, keep Mon 10/19**. 'odStartPatch' writes '<phase>ProjectedStart' (M/D/YYYY), '<phase>StartConfirmed', and turns *Start Date Set* or *Scheduled* back into *Awaiting Start Date* when unconfirmed (the Job Info Confirmed button's rule; *Scheduled* added because the dashboard counts it as confirmed). Namjoshi and Rose (still confirmed for 10/19) were not touched. **(8) One "Needs a date":** jobs on the board only, the same list on Overview, Schedule and Jobs (live: 15 everywhere; it was 17 on Overview and 29 on Schedule); Upcoming-tab jobs with no start date are counted apart ('upNoDate', 12) in the Schedule hint. **(9) PostHog:** 'trackDash' in 'src/posthog.js' sends 'dash_open {tab}', 'dash_tab {tab}' and 'dash_tap {list}' (list = the sheet's title, or 'reassign' / 'move-start'), tied to the signed-in name by the existing 'syncPostHogIdentity'; autocapture stays off. **Also:** the dashboard reads 'settings/simproTotals' on every tab (since v551 it decides which jobs are active, and Schedule showed 58 instead of 43); the standalone '/dashboard' page now mounts the confirm, Undo and toast hosts; a list row can carry one action button (wraps under the row on a phone). **Writes:** the dashboard's three writes go through the app's own job save ('App.updateJob' patch mode: version lock, 'saved_by', the same push triggers), admins only, each with Undo. Gate: 'scripts/odash-model-test.js' section 14 (suggestions, coordinator and its filter, one needs-a-date, the move / unconfirm patch on Namjoshi's and Rose's shapes). Guide 'dashboard.html', 'jobinfo.html'. Crew brief 'docs/crew-briefs/v552.md'. **Needs 'firebase deploy --only functions:dailySimproTotals'** (technicians appear after its next run). **Why it won't lose data:** 'coordinator' is a new optional field inside 'data' (the loader spreads 'data', 'normalizeJob' keeps unknown fields), nothing is seeded or bulk-changed, and every dashboard write is one field set on one job through the normal patch save, with Undo re-issuing the exact prior values. The function only adds a 'techs' list to each entry of the same settings doc; no rule or loader change.
 - **Dashboard money and closed-out jobs from Simpro's billing: Ready to invoice = what's left to bill (billed-in-full jobs drop off, days ready shown), "Closed in Simpro — close it here?", approved change orders Simpro billed = "Billed — mark done?", 60+ day change orders show their quote $** · 'shipped 2026-10-17' · 'SW v551' · 'odModel' · 'OD_BILLED_PCT' · 'OD_SIM_CLOSED' · 'OD_CO_BILLED' · 'dailySimproTotals' · 'fetchSimproTotals' · 'fetchSimproQuotes' · 'collectMoneyCandidates' · 'collectQuoteCandidates' · Items 1–4 of section 7 of the 2026-10-17 decisions-up audit (command-center repo 'docs/visual-audit-2026-10-09/DASHBOARD-DECISIONS-AUDIT-2026-10-17.md'), which found against live Simpro that the $57k ready-to-invoice figure counted 4 jobs already 100% billed and Skyridge 208 at its $52.9k job total with $20.2k left, 15 of 58 "active" jobs closed out in Simpro, 15 approved COs on fully billed jobs, and the 60+ day CO line saying "job value $1.5M" for quotes worth about $13k. **Server:** 'fetchSimproTotals' also reads 'Stage', 'Status', 'Totals.InvoicedValue' and 'Totals.InvoicePercentage' (same '/jobs/?ID=' call, 429 retried) and stores 'inv', 'invPct', 'stage', 'status' beside 'total' / 'margin'; new 'fetchSimproQuotes' reads '/quotes/{no}' totals. 'collectMoneyCandidates' now takes every ready-to-invoice job first and never drops one for the cap, then COs pending 55+ days, jobs with approved COs, finished jobs with open COs, then every open job (cap 250; "finished" matches the dashboard: quick job invoiced / complete, temp ped completed, finish complete or 100%); new 'collectQuoteCandidates' (quote numbers of COs pending 55+ days, '#' dropped). 'dailySimproTotals' (weekdays 6:15) reads three more job fields in its field mask and writes 'settings/simproTotals' '{at, source, byNo, quotes}' (merge). Live dry run 2026-10-17: 71 jobs and 12 quotes in 4.6 s, about 8 KB. **Dashboard ('odModel'):** a job is **fully billed** at 99.5%+ ('OD_BILLED_PCT'); **closed in Simpro** = Stage Invoiced / Complete and fully billed while the app still has it open. Those jobs leave everything counted from active jobs: active, open punch, quiet, no foreman, foreman cards, crew questions and needs-a-date (still on the job, still in the No foreman filter; live 10/17: questions 79 → 67, needs a date 17 → 15) and wait in a new **Needs you** line, **Closed in Simpro — close it here?**, each row with the Simpro stage and status, where the app has it, and the punch / COs / return trips / crew questions still open on it; the Active jobs hint says how many were left out. **Ready to invoice** shows Simpro Total − InvoicedValue (left to bill) with the billed %, hides jobs billed in full ("4 billed in full in Simpro, not shown"), and shows days since it was flagged ('readyToInvoiceDate', "ready 16 d"; the line says "oldest ready N d"); a job with no billing numbers yet says "not in the Simpro pull yet" or "left to bill after the next Simpro pull" instead of showing the job total. **Approved COs on a job Simpro billed in full** (approved COs fold into the parent job) count as 'coBy.billed', are tagged **Billed — mark done?** in the Open change orders list and the job sheet, and get a Needs attention line *Approved change orders Simpro has billed — mark done?*. **CO waiting on the GC 60+ days** shows each CO's Simpro quote $ and sums each quote once ("on 10 jobs, quotes $14k"; Thayne's 14 COs sit on one quote: "one quote for 14 COs"); a CO with no quote number says so. The job sheet gets a **Simpro** fact (stage · billed % · left to bill). Live dry run (read-only) 2026-10-17: active 58 → 43, open punch 621 → 566, no foreman 14 → 8, quiet 15 → 6, the same 15 closed-in-Simpro jobs as the audit, Ready to invoice 3 · $90k left (Miller $70k, Skyridge $20k, Overhead Temp Power $94) with the 4 billed temp peds / heater hidden, 16 billed COs. Gate: 'scripts/odash-model-test.js' sections 6, 10, 12, 13 (left to bill, days ready, old-format entries, quote $ and shared quotes, closed in Simpro leaving each count, billed COs, candidates and the cap). Guide 'dashboard.html'. Crew brief 'docs/crew-briefs/v551.md'. **Needs 'firebase deploy --only functions:dailySimproTotals' before the push**; the new numbers appear after its next 6:15 run (until then old entries show no $ rather than the job total). **Why it won't lose data:** the dashboard only reads; nothing on it writes a job (closing a job or marking a CO done is still done on the job, by a person). The function's only write is the same 'settings/simproTotals' doc with more fields per entry and a new 'quotes' map (merge, no job write, Simpro GETs only); no loader, rule or job field change.
 - **Scoreboard tab = the standalone Homestead Scoreboard (finished jobs only, percentages only, nightly from Simpro)** · 'shipped 2026-10-16' · 'SW v550' · 'ScoreboardV5' · 'scoreboardNightly' · 'sendTestScoreboardPull' · 'public/scoreboard/index.html' · Koy (2026-10-16): *"can we replace the scoreboard currently in the CC with this one"* — the board he has been sharing as a link since 2026-09-28 now renders inside the Scoreboard tab (still **admin-only**, 'scoreboard.editWeights'; Koy keeps the gate until everyone approves). **What it scores:** only Simpro jobs in a done stage (Complete / Invoiced / Archived), **100% invoiced**, with real costs posted, completed inside the season window (This year default); jobs under $2,500 and temp / extras (temp power, temp ped, phase, T&M, EV charger, light change, whip, STC) are out unless the header toggles let them in. **Headline = plain average** net margin ('NettMargin.Actual'), graded 15 / 10. **Score out of 100: Margin 50** (avg ÷ 30) · **Beat the bid 30** (share of jobs whose actual met 'NettMargin.Estimate') · **Labor 20** (per job: at / under bid hours full, 25% over half, 50% over none); QC items per job show on the person card as information only (walker-dependent, so not scored). **Everybody = team jobs only** (the three residential teams; Commercial on its own tab); people not on a team are not shown and their jobs are out of every number. **In progress** (every Stage=Progress job) sits on each person's card marked not scored and in three panels (still in rough · post-rough · finishing), never in a number. **No money anywhere.** **Branded look:** dark deck band with the longhorn, podium, race-to-15% lanes, month leader, person cards with win / loss strips. **Who gets credit:** the app job's foreman OR lead (matched to Simpro by 'simproNo'), else Simpro technician; **Fix who gets credit** (footer) lets an admin take a job off a person or add one and **Save for everyone** → 'settings/scoreboardCorrections' '{list:[{job,name,set,note}]}'. **Data:** 'scoreboardNightly' (5:20 AM MT) pulls Simpro read-only and writes one slim cache doc 'settings/scoreboardCompleted' '{generated_at, done:[…], prog:[…], counts}' (refuses to overwrite when fewer than 90% of listed jobs come back; refuses over the doc size limit); the header shows the pull date and turns red past 7 days (the frozen-cache lesson); **Pull from Simpro now** (admins) calls 'sendTestScoreboardPull'. The page is the same template as the shared link ('~/Desktop/homestead-scoreboard', 'node build.js --app'; rules in 'shape.js', shared by both), fed over 'postMessage' (same-origin checks both ways; corrections sanitized before the write). Service worker: '/scoreboard/' joins '/sops/' and '/tools/' as a real document, never served the app shell offline. Guide 'public/sops/scoreboard.html' (new). 'ScoreboardV4' stays as dead code like V2 / V3. **Why it won't lose data:** read-only over jobs and Simpro; the only writes are two NEW 'settings/' docs ('scoreboardCompleted' from the function, 'scoreboardCorrections' from admins) covered by the existing 'settings/{docId}' rule — no job field, loader, rule or existing function touched; the function keeps the previous cache on a short or oversized pull.
 - **Say what happened (UX backlog batch 2): the stage % says what it set off, the QC verdict asks once and always answers, the trip text has the real date, offline is calm inside a job, one update prompt, time-off answers reach the person who asked, failed photo uploads say so** · 'shipped 2026-10-16' · 'SW v549' · 'stageChangePlan' · 'StageChangeNote' · 'qcTripPlan' · 'QcTripSheet' · 'tripScheduleLine' · 'HeSaveHud offline' · 'retrySaves' · 'canDecideTimeOff' · 'onTimeOffDecision' · 'functions/timeOffDecision.js' · 'uploadFailMessage' · 'UploadRetryChip' · Batch 2 of the combined 2026-10-14 usability backlog ('docs/ux-backlog-combined-2026-10-14.md', items #6, #9, #10, #14, #25, #26, #44, #67), built to the approved real-data mockup 'docs/mockups/batch2-say-what-happened.html' (claude.ai/artifact/BhtpNLD9r95Q45HbwU5i2h); Koy: *"Approved as drawn, yes to all three decisions."* **(1) Stage %:** both stage selects call one pure 'stageChangePlan(job, phase, v, counts)' that keeps every side effect the inline handlers had (QC task at 80%, Job Prep complete, Ready to invoice at 85%, Matterport at 85% with finish at 0, QC needs-scheduling, status) and returns a plain-words summary shown in a 'StageChangeNote' card under the select (*"Rough 85% · here's what that set off — Ready to invoice: on. The office and Keegan get a push. Matterport scan: needed now. QC walk: already scheduled, no change."*) with the shared Undo bar (re-issues the exact prior values). Koy's decisions: **below 85% turns Ready to invoice off** ('readyToInvoice:false, readyToInvoiceDate:""') unless the other phase still justifies it (rough drop keeps it while finish ≥ 85%; finish drop keeps it while rough ≥ 85% and no invoice was sent yet — a sent invoice already has readyToInvoice false); **a job on hold keeps its hold and status** when the % moves (only 100% = Complete clears the hold, same as the Status select). 100% with open punch shows *"Rough can't be 100% yet. N punch items are still open"* with **Show open punch (N)**, which opens and scrolls to the folded Punch List ('Section' got optional 'anchorId' + 'openSignal'). Gate 'scripts/stage-change-test.js': Miller #1438 and Skyridge Lot 208 #1419 as they were on 2026-10-16, plus a 1,536-case parity sweep proving every old side effect is unchanged for a job not on hold (mutation-checked). **(2) QC verdict:** 'showConfirm' (tap outside = "Crew on site has it") is replaced by 'QcTripSheet': two answers, no tap-outside, *Go back — keep the old verdict* writes nothing. 'qcTripPlan(job, phase)' takes open QC-walk items (fromQC, not done/voided) from **this phase only** (rough no longer sweeps finish items); if an open QC trip already exists it offers *Add N QC items to Return Trip #X* (only items the trip lacks, by originItemId) instead of silently doing nothing; every answer ends in a toast. Verdict + phase-suffixed 'qcRtChoice*' stamp stay one 'u()' patch, shared by both pickers ('runQcVerdict'). Gate 'scripts/qc-trip-test.js'. **(3) Trip text:** Text / Email / Chat Trip read 't.date', which the card never writes, so every trip said *"Scheduled: not yet set"*. 'tripScheduleLine' reads 'rtStatusDate' (the card's SCHEDULED FOR / SCHEDULE BY picker), then 'scheduledDate', then 'date': *"Scheduled for Tue, Oct 27"* / *"Schedule by Mon, Oct 12"*. Gate 'scripts/trip-text-test.js' (Wade Residence RT #3). **(4) Offline:** display only. While the device is offline, saving / failed / pending shows as a calm steel pill *"Saved on this phone · N jobs waiting"* instead of *"Save failed · tap to retry"* flipping every 5 s; the job header gets an **Offline** chip (the job layer covers the nav chip and banner); when the queue drains after reconnect, *"Back online · Miller synced"*. The header SAVING / NOT SAVED chips and Job Board sync chips read the same display status. **Tap to retry now retries:** 'flushSaves' only flushed jobs with a live save timer, which a failed save never has; 'retrySaves' re-drives every still-pending job exactly like the automatic 5 s retry (pending patch, no save already queued). No save, queue or merge code changed. **(5) One update prompt:** the v497 *"Update ready · tap to reload"* bar is gone (it covered the version card's Later and reloaded without saving first); the version card (Update now saves first / Later) is the only prompt; 'useHeSwUpdate' is no longer called. **(6) Time off:** new trigger **'onTimeOffDecision'** (settings/timeOffRequests onUpdate; pure diff in 'functions/timeOffDecision.js', gate 'scripts/timeoff-decision-test.js') pushes the requester on approve (*"Time off approved · Fri, Nov 20 – Fri, Nov 27 (unpaid) · approved by Koy. It's on the crew schedule."*), not approved, a changed decision, or back to pending after an Undo; skips self-decisions; new pref 'timeoff_decided' (default on). Time Off page: 44 px Approve / Deny, the shared Undo bar (restores the request exactly, reading the live lists), **Change to approved / not approved** on decided cards, Remove through 'showConfirm', *denied* shown as *not approved*. **One approver rule** in both places, 'canDecideTimeOff': Head of Residential + admins (the page allowed admins + the requester's coordinator; My Day allowed head + admins + managers — "manager" access is held by foremen, so it was narrowed to head + admins; every current coordinator is an admin, so nobody who decides time off today loses it). **(7) Photo uploads:** punch ('PunchItems.handlePhotoUpload') and QC walk ('QCWalkSection.addPhoto') failures now toast *"Photo didn't upload to "Coach lights". Check your connection, then tap Retry."* and leave a red **Didn't upload · Retry** chip on the item that keeps the picked files. Guides: 'rough.html', 'jobinfo.html' (QC / Matterport thresholds were wrong: 85%, not 100%), 'qc.html', 'returntrips.html', 'myday.html'. Crew brief 'docs/crew-briefs/v549.md'. **Needs 'firebase deploy --only functions:onTimeOffDecision'** (until then decisions just don't push, exactly as before). **Why it won't lose data:** every change is display, a clearer prompt, or a stricter check: the stage patch is the same as before plus only the Ready-to-invoice clear (proved by the parity sweep), the QC verdict writes the same fields in one patch (and Go back writes nothing), the trip text is read-only, offline display reads the existing queue and 'retrySaves' calls 'saveJob' under the same guard the automatic retry uses, time-off writes go through the same 'mergeSaveSettingsFields' funnel against the live list, the new trigger only reads 'settings/timeOffRequests' and writes inbox records, and the photo Retry re-runs the same uploader; no rules or loader change.
@@ -70906,7 +71053,8 @@ function App() {
   // ── Standalone dashboard (v530): /dashboard, after the PIN gate and every hook ──
   if (IS_DASH_PAGE) {
     return <DashPage ok={canOpenDash(myLiveRec)} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
-      identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}/>;
+      identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}
+      onUpdateJob={(job, patch) => { const cur = (jobs || []).find(x => x.id === job.id) || job; updateJob({ ...cur, ...patch }, patch); }}/>;
   }
 
   return (

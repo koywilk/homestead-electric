@@ -72,7 +72,8 @@
   <div class="call tip"><span class="lbl">Tap anything</span><p>Every job opens a panel with everything open on it
   (punch, change orders, return trips, inspections, open questions, plans waiting, dates, recent activity) and an
   <b>Open in app</b> button. Every number card opens the list behind it, every person opens their tasks and jobs. The
-  row under the tabs picks one foreman (or <b>No active foreman</b>), switches between 7, 14 and 30 days, or finds a job
+  row under the tabs picks one foreman (or <b>No active foreman</b>), one coordinator (the job's own, else its foreman's
+  book; or <b>No coordinator</b>), switches between 7, 14 and 30 days, or finds a job
   by name, number, address or GC. The day buttons only change the Overview chart and the Activity tab, so they go grey
   on the other tabs. On a phone those sit behind one <b>Filters</b> button. The small <b>?</b> opens this guide.</p></div>
 
@@ -91,6 +92,8 @@
     <b>Closed in Simpro — close it here?</b>: jobs Simpro has invoiced in full that are still open in the app. Those
     jobs no longer count as active, in open punch, quiet jobs, no-foreman jobs, crew questions or needs-a-date; each row
     says what is still open on it. Open each one and mark it finished.
+    In <b>Jobs with no active foreman</b> each job shows Simpro's technician; tap <b>Reassign to …</b> to make that
+    person the foreman (it asks first, they get a push, and Undo puts it back).
     Each line opens its list; a time-off request or task opens straight on My Day in the app.
     Below that: active jobs (with the count per stage under the bars), inspections in the last 30 days (and how many
     passed their target with no result logged), open change orders split by state (to send, waiting on the GC,
@@ -131,7 +134,10 @@
     <p>The next 7 days as columns. Starts name the foreman (red <b>No foreman</b> when blank) and say <b>Scan not
     done</b> when the pre-drywall scan isn't logged. <b>Past their date</b> splits inspections from return trips, oldest
     first, each saying how many days late. Next 30 days shows scans and return trips both ways: dated, and not booked
-    or past their date. <b>Needs a date</b> is sorted by the least recent work and shows the GC's needs-by window. Scans
+    or past their date. <b>Needs a date</b> is the same list on every tab: jobs on the board with no next date, sorted by
+    the least recent work, with the GC's needs-by window (Upcoming-tab jobs with no date are counted apart). Each rough or
+    finish start in <b>Starts</b> (and in a job's Coming up) has <b>Move / unconfirm</b>: pick the new date, say whether
+    the customer or GC confirmed it, or just unconfirm it; it saves on the job with Undo. Scans
     due show the rough %, whether one is booked, and red when the rough is done or the finish starts soon.</p>
   </div></div>
 
@@ -190,7 +196,7 @@
     and never opens a job or logs anything won't show as active. Their phone still shows under "app opened".</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status), updated 2026-10-15 (SW v543: opens for every admin), updated 2026-10-15 (SW v545: Meeting Prep folder — Monday / Wednesday / Friday cards, Friday Strategy prep replaces the Friday Packet), updated 2026-10-16 (SW v547: Friday Strategy prep laid out the way Koy edits it — job trees with Plan lines, Blocked = GC + office only, no Money / headline), updated 2026-10-17 (SW v551: left to bill and days ready from Simpro, Closed in Simpro, billed change orders, quote $ on old change orders)</div>
+  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status), updated 2026-10-15 (SW v543: opens for every admin), updated 2026-10-15 (SW v545: Meeting Prep folder — Monday / Wednesday / Friday cards, Friday Strategy prep replaces the Friday Packet), updated 2026-10-16 (SW v547: Friday Strategy prep laid out the way Koy edits it — job trees with Plan lines, Blocked = GC + office only, no Money / headline), updated 2026-10-17 (SW v551: left to bill and days ready from Simpro, Closed in Simpro, billed change orders, quote $ on old change orders), updated 2026-10-17 (SW v552: Reassign to the Simpro technician, Coordinator filter, Move / unconfirm on starts, one Needs a date)</div>
 </div>
 </body>
 </html>

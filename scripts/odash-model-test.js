@@ -24,6 +24,9 @@
  *      punch, quiet and no-foreman counts and waits in "close it here?" (v551).
  *  13. BILLED COs — an approved CO on a job Simpro billed in full is "Billed —
  *      mark done?", not work to book (v551).
+ *  14. v552 — Simpro technician as the suggested foreman, coordinator (job, else
+ *      the foreman's book) and its filter, one "Needs a date" (jobs only), and
+ *      the Move / unconfirm patch.
  * Also exported (require it) for a read-only run on real data.
  */
 "use strict";
@@ -86,7 +89,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_DOCS, canOpenDash };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, OD_DOCS, canOpenDash };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -317,6 +320,36 @@ if (require.main === module) {
   assert.strictEqual(capped.length, 250, "250 Simpro reads at most; ready to invoice always gets in");
   assert.strictEqual(capped[0], "77", "ready to invoice first even when listed last");
   eq(fp.collectQuoteCandidates(cand, now), ["901", "903"], "quotes of COs pending 55+ days, '#' dropped, once each");
+
+  // 14. v552
+  //  Item 5 — suggested foreman from Simpro's technicians.
+  const tj = (id, name, foreman, sn, extra = {}) => ({ ...base, id, name, foreman, simproNo: sn, roughStatus: "inprogress", roughStage: "40%", ...extra });
+  const sugJobs = [tj("t1", "Vasa job", "Vasa Gone", "3001"), tj("t2", "Tech off team", "Unassigned", "3002"), tj("t3", "Crew tech", "", "3003"), tj("t4", "No tech", "Unassigned", "3004")];
+  const sugUsers = [...users, { id: "vg", name: "Vasa Gone", title: "foreman", active: false }, { id: "cr", name: "Crew Member", title: "crew" }];
+  const sugSim = { byNo: { "3001": { total: 1, inv: 0, invPct: 0, stage: "Progress", techs: ["Zane Watkins"] }, "3002": { total: 1, inv: 0, invPct: 0, stage: "Progress", techs: ["Someone Else"] },
+    "3003": { total: 1, inv: 0, invPct: 0, stage: "Progress", techs: ["Crew Member"] }, "3004": { total: 1, inv: 0, invPct: 0, stage: "Progress" } } };
+  const sd = X.odModel({ jobs: sugJobs, users: sugUsers, needs: [], upcoming: [], simTotals: sugSim, now });
+  eq(sd.noForemanJobs.map(j => [j.name, sd.suggestFm(j)]), [["Vasa job", "Zane Watkins"], ["Tech off team", ""], ["Crew tech", "Crew Member"], ["No tech", ""]],
+    "a foreman on the list first, else an active team member; nobody off the team; nothing when Simpro has no technician");
+  //  Item 6 — coordinator: set on the job, else the foreman's book; filter by it.
+  const cUsers = users.map(u => u.name === "Abraham Tristan" ? { ...u, coordinator: "Josh Cloward" } : u);
+  const cJobs = [tj("c1", "Book job", "Abraham Tristan", ""), tj("c2", "Own job", "Abraham Tristan", "", { coordinator: "Brady Nelson" }), tj("c3", "Nobody's", "Zane Watkins", "")];
+  const cd = X.odModel({ jobs: cJobs, users: cUsers, needs: [], upcoming: [{ name: "Up Abe", foreman: "Abraham Tristan" }, { name: "Up Zane", foreman: "Zane Watkins" }], now });
+  eq(cJobs.map(j => cd.coordOf(j)), [{ name: "Josh Cloward", via: "book" }, { name: "Brady Nelson", via: "job" }, { name: "", via: "" }], "job first, then the foreman's book");
+  eq(X.OD_COORDS, ["Koy Wilkinson", "Josh Cloward", "Brady Nelson", "Justin Cloward"]);
+  const josh = X.odModel({ jobs: cJobs, users: cUsers, needs: [], upcoming: [{ name: "Up Abe", foreman: "Abraham Tristan" }, { name: "Up Zane", foreman: "Zane Watkins" }], coordinator: "Josh Cloward", now });
+  eq([josh.active.map(j => j.name), josh.up.map(u => u.name)], [["Book job"], ["Up Abe"]], "Josh's filter: his book (not the job Brady owns) and his upcoming jobs");
+  eq(X.odModel({ jobs: cJobs, users: cUsers, needs: [], upcoming: [], coordinator: X.OD_NOCOORD, now }).active.map(j => j.name), ["Nobody's"], "No coordinator filter");
+  //  Item 8 — one Needs a date: jobs only; upcoming with no date counted apart.
+  const nd = X.odModel({ jobs: [tj("n1", "Dateless", "Zane Watkins", "", { roughStatus: "", roughStage: "" })], users, needs: [], upcoming: [{ name: "Up none" }, { name: "Up dated", projectedStart: "11/2/2026" }], now });
+  eq([nd.needsDate.map(n => n.job && n.job.name), nd.attnBy.needsDate.rows.length, nd.upNoDate.map(u => u.name)], [["Dateless"], 1, ["Up none"]], "Overview, Schedule and Jobs read the same list");
+  //  Item 7 — Move / unconfirm patch (Namjoshi and Rose on 2026-10-17).
+  const namjoshi = { roughStatus: "date_confirmed", roughProjectedStart: "10/19/2026", roughStartConfirmed: true };
+  eq(X.odStartPatch(namjoshi, "rough", { confirm: false }), { roughStartConfirmed: false, roughStatus: "waiting_date" }, "unconfirm keeps the date, status back to Awaiting Start Date");
+  eq(X.odStartPatch(namjoshi, "rough", { date: "2026-10-26" }), { roughProjectedStart: "10/26/2026", roughStartConfirmed: false, roughStatus: "waiting_date" }, "a moved start is projected");
+  eq(X.odStartPatch({ finishStatus: "date_confirmed" }, "finish", { date: "2026-11-02", confirm: true }), { finishProjectedStart: "11/2/2026", finishStartConfirmed: true, finishStatus: "date_confirmed" }, "move and confirm");
+  eq(X.odStartPatch({ roughStatus: "inprogress" }, "rough", {}), { roughStartConfirmed: false }, "never touches a started status");
+  eq(X.odStartPatch({ roughStatus: "scheduled" }, "rough", { date: "bad" }), { roughStartConfirmed: false, roughStatus: "waiting_date" }, "a bad date writes no date");
 
   // 11. WHO OPENS THE PAGE (v543): any active admin, by access or legacy role; nobody else.
   assert.strictEqual(X.canOpenDash({ id: "koy", name: "Koy Wilkinson", access: "admin" }), true);

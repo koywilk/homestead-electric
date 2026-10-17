@@ -79,3 +79,11 @@ export function syncPostHogIdentity(identity) {
     currentName = name || null;
   } catch (e) { /* see above */ }
 }
+
+// v552: the /dashboard page's own usage (dash_open, dash_tab, dash_tap), so "who
+// uses which part of the dashboard" can be answered. Explicit events only
+// (autocapture stays off); the person is whoever syncPostHogIdentity identified.
+export function trackDash(event, props) {
+  if (!booted) return;
+  try { posthog.capture(event, { ...(props || {}), page: "dashboard" }); } catch (e) { /* see above */ }
+}
