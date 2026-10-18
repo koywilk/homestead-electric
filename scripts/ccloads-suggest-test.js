@@ -17,8 +17,9 @@ const a = src.indexOf(START), b = src.indexOf(END);
 if (a === -1 || b === -1 || b < a) { console.error("ccloads-suggest-test: markers not found in src/App.js"); process.exit(1); }
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection; this.ccLoadSyncPlan = ccLoadSyncPlan; this.ccLoadWantFromField = ccLoadWantFromField;", ctx);
-const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows, ccFloorToSection, ccLoadSyncPlan, ccLoadWantFromField } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection; this.ccLoadSyncPlan = ccLoadSyncPlan; this.ccLoadWantFromField = ccLoadWantFromField; this.CC_LOAD_METHODS = CC_LOAD_METHODS; this.ccLoadMethod = ccLoadMethod; this.ccLoadDest = ccLoadDest; this.ccWallboxImportRows = ccWallboxImportRows; this.ccWallboxOrder = ccWallboxOrder; this.ccKeypadSectionKeys = ccKeypadSectionKeys; this.ccKeypadSectionKey = ccKeypadSectionKey; this.ccKeypadFloor = ccKeypadFloor; this.ccKeypadRowFields = ccKeypadRowFields; this.ccKeypadPrefillPlan = ccKeypadPrefillPlan; this.ccKeypadFillPatch = ccKeypadFillPatch; this.ccKeypadRemovedRows = ccKeypadRemovedRows; this.ccOfficeWritePayload = ccOfficeWritePayload; this.ccKeypadConfirmPatch = ccKeypadConfirmPatch; this.ccKeypadEngravePatch = ccKeypadEngravePatch;", ctx);
+const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows, ccFloorToSection, ccLoadSyncPlan, ccLoadWantFromField,
+  CC_LOAD_METHODS, ccLoadMethod, ccLoadDest, ccWallboxImportRows, ccWallboxOrder, ccKeypadSectionKeys, ccKeypadSectionKey, ccKeypadFloor, ccKeypadRowFields, ccKeypadPrefillPlan, ccKeypadFillPatch, ccKeypadRemovedRows, ccOfficeWritePayload, ccKeypadConfirmPatch, ccKeypadEngravePatch } = ctx;
 
 let fails = 0, n = 0;
 const eq = (name, got, want) => {
@@ -123,7 +124,7 @@ const IM = ccLoadImportRows([
   { id: "dup", name: "Sconce", room: "Entry", control: "panel" },
   { id: "noroom", name: "Lonely", room: "", control: "panel", floor: "attic" },
 ], [{ id: "x", name: "Entry Sconce", fieldLoadId: "dup" }], mk);
-eq("v435: ONLY panelized loads import - switched / dimmer / tape are skipped", IM.rows.map(r => r.name), ["Kitchen Cans", "Lonely"]);
+eq("v435/v554: no `method` (older FieldInk) → today's rule: only control panel imports; switched / dimmer / tape wait", IM.rows.map(r => r.name), ["Kitchen Cans", "Lonely"]);
 eq("skipped = 3 non-panel + already-imported + gone-from-plan", IM.skipped, 5);
 eq("panel loads keep a blank Loads-list type", IM.rows.map(r => r.loadType), ["", ""]);
 eq("FieldInk floor maps to the Loads list floor section; an unknown floor keeps its own name", IM.rows.map(r => r.location), ["Main Level", "attic"]);
@@ -163,13 +164,18 @@ const wctx = {
   serverTimestamp: () => SENTINEL,
   setDoc: async (ref, data, opts) => { calls.push({ ref, data, opts }); },
   _ccDenied: () => {}, console,
+  ccOfficeWritePayload: ctx.ccOfficeWritePayload,
 };
 vm.createContext(wctx);
 const MSTART = "async function publishCcLoadOfficeMany(jobId, patchesById) {";
 const ma = src.indexOf(MSTART);
 const mb = src.indexOf("\n}\n", ma);
 if (ma === -1 || mb === -1) { console.error("ccloads-suggest-test: publishCcLoadOfficeMany not found"); process.exit(1); }
-vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.publishCcLoadOffice = publishCcLoadOffice; this.publishCcLoadOfficeMany = publishCcLoadOfficeMany;", wctx);
+const KSTART = "async function publishCcKeypadOfficeMany(jobId, patchesById) {";
+const ka = src.indexOf(KSTART);
+const kb = src.indexOf("\n}\n", ka);
+if (ka === -1 || kb === -1) { console.error("ccloads-suggest-test: publishCcKeypadOfficeMany not found"); process.exit(1); }
+vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\n" + src.slice(ka, kb + 2) + "\nthis.publishCcLoadOffice = publishCcLoadOffice; this.publishCcLoadOfficeMany = publishCcLoadOfficeMany; this.publishCcKeypadOfficeMany = publishCcKeypadOfficeMany;", wctx);
 
 // ── v450 imported rows follow FieldInk (ccLoadSyncPlan) ─────────────────────
 {
@@ -214,6 +220,119 @@ vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.p
   eq("want = the import rule", ccLoadWantFromField({ name: "Kitchen Cans", room: "Kitchen", floor: "2nd floor" }, FO2), { name: "Kitchen Cans", room: "Kitchen", location: "Upper Level" });
 }
 
+// ── v554 BRIDGE v2 (FieldInk v686): method → list, method → control fallback ──
+{
+  eq("methods are exactly switch | wallbox | panel | tape", CC_LOAD_METHODS, ["switch", "wallbox", "panel", "tape"]);
+  eq("method wins when present", ["switch", "wallbox", "panel", "tape"].map(m => ccLoadMethod({ method: m, control: "switched" })), ["switch", "wallbox", "panel", "tape"]);
+  eq("absent method → fall back to control: panel → panel", ccLoadMethod({ control: "panel" }), "panel");
+  eq("absent method → switched / dimmer / tape stay unplaced (today's rule)", ["switched", "dimmer", "tape", undefined].map(c => ccLoadMethod({ control: c })), [null, null, null, null]);
+  eq("reserved / unknown method (module, system, junk) → the control fallback", [ccLoadMethod({ method: "module", control: "panel" }), ccLoadMethod({ method: "system", control: "dimmer" }), ccLoadMethod({ method: "PANEL", control: "switched" })], ["panel", null, null]);
+  eq("null load is safe", [ccLoadMethod(null), ccLoadDest(null)], [null, null]);
+  eq("dest: panel + tape → Loads list; wallbox + switch → Wallbox devices", ["panel", "tape", "wallbox", "switch"].map(m => ccLoadDest({ method: m })), ["loads", "loads", "wallbox", "wallbox"]);
+  eq("a hard-wired dimmer is method 'switch' → Wallbox devices (control carries the dimming)", ccLoadDest({ method: "switch", control: "dimmer" }), "wallbox");
+
+  const FO3 = ["Main Level", "Basement", "Upper Level"];
+  let k = 0; const mkR = () => ({ id: "r" + (++k), name: "", location: "", loadType: "", watts: "", pulled: false });
+  const BR = [
+    { id: "p1", name: "Cans", room: "Kitchen", control: "panel", method: "panel", floor: "main" },
+    { id: "t1", name: "UCL", room: "Butler", control: "tape", method: "tape", floor: "main", tapeFt: 18.5 },
+    { id: "t2", name: "Cove", room: "Den", control: "tape", method: "tape", tapeFt: null },
+    { id: "w1", name: "Sconces", room: "Entry", control: "dimmer", method: "wallbox", floor: "upper" },
+    { id: "w2", name: "Fan", room: "Entry", control: "switched", method: "wallbox", floor: "upper" },
+    { id: "s1", name: "Closet", room: "Primary", control: "dimmer", method: "switch", floor: "Upper Level" },
+    { id: "s2", name: "Garage", room: "Garage", control: "switched", method: "switch" },
+    { id: "old", name: "Hall", room: "Hall", control: "switched" },           // older iPad: no method
+    { id: "gone", name: "X", room: "Y", control: "panel", method: "panel", removedAt: 9 },
+  ];
+  const L = ccLoadImportRows(BR, [], mkR, FO3);
+  eq("Loads list takes panel + tape only", L.rows.map(r => r.fieldLoadId), ["p1", "t1", "t2"]);
+  eq("tape imports as an LED load", L.rows.map(r => r.loadType), ["", "LED", "LED"]);
+  eq("tape carries tapeFt (a real number, else null); panel rows carry none", L.rows.map(r => r.tapeFt), [undefined, 18.5, null]);
+  eq("RA3 wallbox loads never land on the Loads list", ccLoadImportRows([BR[3], BR[4]], [], mkR, FO3).rows.length, 0);
+  let wid = 0; const mkId = () => "wb" + (++wid);
+  const W = ccWallboxImportRows(BR, [], mkId, FO3);
+  eq("Wallbox devices take wallbox + switch, never panel / tape / no-method / removed", W.rows.map(r => r.fieldLoadId), ["w1", "w2", "s1", "s2"]);
+  eq("device from control: dimmer → Dimmer, else Switch", W.rows.map(r => r.device), ["Dimmer", "Switch", "Dimmer", "Switch"]);
+  eq("method rides on the row (RA3 vs Standard)", W.rows.map(r => r.method), ["wallbox", "wallbox", "switch", "switch"]);
+  eq("a wallbox row is exactly these keys", Object.keys(W.rows[0]).sort(), ["device", "fieldLoadId", "fieldSnap", "id", "location", "method", "name", "origin", "room"]);
+  eq("names carry the room; floors map like the Loads list", W.rows.map(r => [r.name, r.location]), [["Entry Sconces", "Upper Level"], ["Entry Fan", "Upper Level"], ["Primary Closet", "Upper Level"], ["Garage", ""]]);
+  eq("wallbox import is idempotent on fieldLoadId", ccWallboxImportRows(BR, W.rows, mkId, FO3).rows.length, 0);
+  eq("the order counts dimmers / switches per method", ccWallboxOrder(W.rows), { wallbox: { Dimmer: 1, Switch: 1 }, switch: { Dimmer: 1, Switch: 1 } });
+  eq("order ignores unnamed rows; null-safe", [ccWallboxOrder([{ name: " ", method: "wallbox", device: "Dimmer" }]).wallbox.Dimmer, ccWallboxOrder(null).switch.Switch], [0, 0]);
+
+  // sync stays name / room / location only — method and control never raise a change
+  const imported = L.rows[0];
+  eq("method appearing on a load that had none → NO change offered", ccLoadSyncPlan([imported], { p1: { ...BR[0], method: undefined } }, FO3), { auto: [], manual: [] });
+  eq("control flip panel→dimmer with method still panel → no change offered", ccLoadSyncPlan([imported], { p1: { ...BR[0], control: "dimmer" } }, FO3), { auto: [], manual: [] });
+  eq("tape rows follow renames like panel rows", ccLoadSyncPlan([L.rows[1]], { t1: { ...BR[1], room: "Pantry" } }, FO3).auto.map(a => a.patch.room), ["Pantry"]);
+  eq("a Loads-list row whose load became wallbox stops following (it no longer belongs there)", ccLoadSyncPlan([imported], { p1: { ...BR[0], method: "wallbox", room: "Study" } }, FO3), { auto: [], manual: [] });
+  eq("wallbox rows follow renames via dest 'wallbox'", ccLoadSyncPlan(W.rows, { w1: { ...BR[3], room: "Foyer" } }, FO3, "wallbox").auto.map(a => [a.id, a.patch.name]), [["wb1", "Foyer Sconces"]]);
+  eq("…and the Loads-list sync never touches them", ccLoadSyncPlan(W.rows, { w1: { ...BR[3], room: "Foyer" } }, FO3), { auto: [], manual: [] });
+}
+
+// ── v554 KEYPADS: prefill, removedAt, the confirmed lock ─────────────────────
+{
+  const FO4 = ["Main Level", "Basement", "Upper Level", "Loft"];
+  const LOADS = { p1: { name: "Cans", room: "Kitchen" }, w1: { name: "Sconces", room: "Entry" } };
+  const KP = {
+    k1: { label: "KP", kpType: "ra3", sheet: "E1", floor: "main", room: "Kitchen", assigned: [{ key: "p1", loadId: "068-1" }, { key: "ghost", loadId: "070-2" }] },
+    k2: { label: "Entry Keypad", kpType: "panel", sheet: "E2", floor: "upper", room: "Entry", assigned: [{ key: "w1", loadId: "101-1" }] },
+    k3: { label: "Mud", kpType: "ra3", sheet: "Pg 3", floor: null, room: "", assigned: [] },
+    k4: { label: "Old", kpType: "ra3", sheet: "E1", floor: "main", room: "Den", assigned: [], removedAt: 5 },
+    k5: { label: "Loft KP", kpType: "weird", sheet: "E9", floor: "Loft", room: "Loft", assigned: [] },
+  };
+  const pl = { extraFloors: [{ key: "ef1", label: "Loft" }], mainKeypad: [{ id: "m1", num: 1, name: "", status: "" }, { id: "m2", num: 2, name: "Typed by hand", status: "Pulled" }, { id: "m3", num: 3, name: "", status: "" }], upperKeypad: [], confirmedKeypads: {} };
+  eq("section keys = 3 std + extra floors", ccKeypadSectionKeys(pl), ["mainKeypad", "basementKeypad", "upperKeypad", "ef1_keypad"]);
+  eq("section label → key", ["Main Level", "Basement", "Upper Level", "loft", "Attic"].map(x => ccKeypadSectionKey(x, pl.extraFloors)), ["mainKeypad", "basementKeypad", "upperKeypad", "ef1_keypad", null]);
+  eq("keypad floor: office.floor > field floor > the office's sheet floor", [ccKeypadFloor({ floor: "main", office: { floor: "Basement" } }), ccKeypadFloor({ floor: "main" }), ccKeypadFloor({ sheet: "Pg 3" }, { "Pg 3": "Basement" }), ccKeypadFloor({})], ["Basement", "main", "Basement", ""]);
+  const f1 = ccKeypadRowFields("k1", KP.k1, LOADS);
+  eq("row name carries the room; label kept", f1.name, "Kitchen KP");
+  eq("assigned loads JOIN to loads by key (composed name); a key missing from loads keeps its loadId and is marked", f1.assigned, [{ key: "p1", loadId: "068-1", name: "Kitchen Cans" }, { key: "ghost", loadId: "070-2", name: "070-2", missing: true }]);
+  eq("row fields = label/room/sheet/kpType/assigned + origin + fieldKeypadId", Object.keys(f1).sort(), ["assigned", "fieldKeypadId", "kpType", "name", "origin", "room", "sheet"]);
+  eq("unknown kpType → blank", ccKeypadRowFields("k5", KP.k5, LOADS).kpType, "");
+  eq("a real typed label stands as typed; only a generic one (KP / Keypad 2) borrows the room", ["Primary Bed KP", "Mud KP", "Keypad 2", "kp", ""].map(l => ccKeypadRowFields("x", { label: l, room: "Primary Closet" }, {}).name), ["Primary Bed KP", "Mud KP", "Primary Closet Keypad 2", "Primary Closet kp", "Primary Closet KP"]);
+  eq("assigned is capped at 40", ccKeypadRowFields("x", { label: "Big", assigned: Array.from({ length: 50 }, (_, i) => ({ key: "k" + i, loadId: "L" + i })) }, {}).assigned.length, 40);
+  eq("null keypad is safe", ccKeypadRowFields("z", null, null).name, "KP");
+
+  let plan = ccKeypadPrefillPlan(KP, LOADS, pl, FO4, {});
+  eq("plan buckets: k1→main, k2→upper, k5→loft; k3 has no floor; k4 removed", [Object.keys(plan.bySection).sort(), plan.noFloor, plan.removed, plan.add], [["ef1_keypad", "mainKeypad", "upperKeypad"], ["k3"], ["k4"], 3]);
+  eq("…a sheet floor the office set on that sheet's loads places k3", ccKeypadPrefillPlan(KP, LOADS, pl, FO4, { "Pg 3": "Basement" }).bySection.basementKeypad.map(r => r.fieldKeypadId), ["k3"]);
+  const mkKP = (num) => ({ id: "new" + num, num, name: "", status: "" });
+  const patch = ccKeypadFillPatch(pl, plan, mkKP);
+  eq("fill touches only the sections it adds to", Object.keys(patch).sort(), ["ef1_keypad", "mainKeypad", "upperKeypad"]);
+  eq("blank seeded rows fill first; a hand-typed row is never moved or changed", patch.mainKeypad.map(r => [r.id, r.num, r.name, r.status]), [["m1", 1, "Kitchen KP", ""], ["m2", 2, "Typed by hand", "Pulled"], ["m3", 3, "", ""]]);
+  eq("an empty section appends a fresh row", patch.upperKeypad.map(r => [r.id, r.num, r.fieldKeypadId]), [["new1", 1, "k2"]]);
+  eq("review L5: a nameless row that already has a status (Need Specs) is not taken over", ccKeypadFillPatch({ mainKeypad: [{ id: "s1", num: 1, name: "", status: "Need Specs" }] }, { bySection: { mainKeypad: [{ name: "Kitchen KP", fieldKeypadId: "k1" }] } }, mkKP).mainKeypad.map(r => [r.id, r.name, r.status]), [["s1", "", "Need Specs"], ["new2", "Kitchen KP", ""]]);
+  const pl2 = { ...pl, ...patch };
+  plan = ccKeypadPrefillPlan(KP, LOADS, pl2, FO4, {});
+  eq("second Fill is a no-op (idempotent on fieldKeypadId)", [plan.add, plan.already.sort()], [0, ["k1", "k2", "k5"]]);
+  eq("a CONFIRMED section is never filled (the lock stands)", ccKeypadPrefillPlan(KP, LOADS, { ...pl, confirmedKeypads: { mainKeypad: true } }, FO4, {}).locked, ["k1"]);
+  eq("…and its rows untouched by the patch", Object.keys(ccKeypadFillPatch(pl, ccKeypadPrefillPlan(KP, LOADS, { ...pl, confirmedKeypads: { mainKeypad: true } }, FO4, {}), mkKP)).includes("mainKeypad"), false);
+  // removedAt: hidden, never deleted, restorable
+  const gone = { ...KP, k1: { ...KP.k1, removedAt: 77 } };
+  eq("removedAt on a filled keypad → the row is FLAGGED, not dropped", ccKeypadRemovedRows(pl2, gone), [{ sectionKey: "mainKeypad", id: "m1", fieldKeypadId: "k1" }]);
+  eq("…the job's rows are still all there", pl2.mainKeypad.length, 3);
+  eq("removedAt keypad is never prefilled", ccKeypadPrefillPlan({ k4: KP.k4 }, LOADS, pl, FO4, {}).add, 0);
+  eq("FieldInk clears removedAt → it prefills again (restorable)", ccKeypadPrefillPlan({ k4: { ...KP.k4, removedAt: null } }, LOADS, pl, FO4, {}).add, 1);
+  eq("a live keypad whose loads were all removed (assigned []) still prefills", ccKeypadPrefillPlan({ k9: { label: "Empty", floor: "main", assigned: [] } }, {}, pl, FO4, {}).bySection.mainKeypad[0].assigned, []);
+  eq("junk keypad records are skipped; null-safe", [ccKeypadPrefillPlan({ bad: "x", n: null }, null, null, FO4, null).add, ccKeypadRemovedRows(null, null)], [0, []]);
+}
+
+// ── v554 the office sub-object is never written outside `office` ─────────────
+{
+  const ST = { __ts: 1 };
+  eq("payload = { loads: { id: { office:{…, officeUpdatedAt} } } } and nothing else", ccOfficeWritePayload("loads", { a: { dismissed: true } }, ST), { loads: { a: { office: { dismissed: true, officeUpdatedAt: ST } } } });
+  eq("keypads twin", ccOfficeWritePayload("keypads", { k1: { confirmed: true } }, ST), { keypads: { k1: { office: { confirmed: true, officeUpdatedAt: ST } } } });
+  eq("any other map name → null (no write)", [ccOfficeWritePayload("updatedBy", { a: {} }, ST), ccOfficeWritePayload("", { a: {} }, ST), ccOfficeWritePayload("loads.a", { a: {} }, ST)], [null, null, null]);
+  eq("null / array / string patches dropped; nothing valid → null", [ccOfficeWritePayload("loads", { a: null, b: [1], c: "x" }, ST), ccOfficeWritePayload("keypads", null, ST)], [null, null]);
+  eq("a patch that tries to name field-owned keys still lands INSIDE office", Object.keys(ccOfficeWritePayload("loads", { a: { control: "panel", room: "X" } }, ST).loads.a), ["office"]);
+  const DELK = { __del: 1 };
+  eq("confirm patch", ccKeypadConfirmPatch(true, "Koy", 1000, () => DELK), { confirmed: true, confirmedBy: "Koy", confirmedAt: 1000 });
+  eq("un-confirm clears who / when", ccKeypadConfirmPatch(false, "Koy", 1000, () => DELK), { confirmed: false, confirmedBy: DELK, confirmedAt: DELK });
+  eq("engraving patch is keyed by the assigned load key, capped at 40", ccKeypadEngravePatch("p1", "x".repeat(60)).engraving.p1.length, 40);
+  eq("engraving with no key → null", ccKeypadEngravePatch("", "Hi"), null);
+}
+
 (async () => {
   const patch = ccLoadSuggestPatch({ control: "switched" }, "panel", "Koy", T);
   const ok = await wctx.publishCcLoadOffice(1788319922110, "cg_abc", patch);
@@ -222,8 +341,7 @@ vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.p
   const c = calls[0];
   eq("targets ccloads/<jobId> on the field-ink db (id stringified)", c.ref, { db: { __db: "field-ink" }, col: "ccloads", id: "1788319922110" });
   eq("merge:true (deep-merge on the loads MAP, no pre-read)", c.opts, { merge: true });
-  eq("top-level keys are only loads/updatedAt/updatedBy", Object.keys(c.data).sort(), ["loads", "updatedAt", "updatedBy"]);
-  eq("updatedBy is 'office'", c.data.updatedBy, "office");
+  eq("v554: the ONLY top-level key is loads (no updatedAt / updatedBy — those are FieldInk's)", Object.keys(c.data), ["loads"]);
   eq("only the one load id is named", Object.keys(c.data.loads), ["cg_abc"]);
   eq("only the office sub-object is named under the load (no control/name/fixtures/suggestionAck)", Object.keys(c.data.loads.cg_abc), ["office"]);
   eq("office patch = suggested* + officeUpdatedAt stamp, nothing else",
@@ -247,9 +365,18 @@ vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\nthis.p
   eq("multi-write merge:true on ccloads/<jobId>", [calls[0].opts, calls[0].ref.col, calls[0].ref.id], [{ merge: true }, "ccloads", "1788319922110"]);
   eq("multi-write names only the real ids (null patches dropped)", Object.keys(calls[0].data.loads).sort(), ["cg_1", "cg_2"]);
   eq("each id carries only office.{suggested*,officeUpdatedAt}", Object.keys(calls[0].data.loads.cg_2).concat(Object.keys(calls[0].data.loads.cg_2.office).sort()), ["office", "officeUpdatedAt", "suggestedAt", "suggestedBy", "suggestedKind"]);
-  eq("multi-write top-level keys are only loads/updatedAt/updatedBy", Object.keys(calls[0].data).sort(), ["loads", "updatedAt", "updatedBy"]);
+  eq("v554: multi-write top-level key is ONLY loads", Object.keys(calls[0].data), ["loads"]);
   calls.length = 0;
   eq("multi-write with nothing to do is a no-op (no setDoc)", [await wctx.publishCcLoadOfficeMany(1, {}), calls.length], [false, 0]);
+  // v554 keypad office writes: one merge-set naming only keypads.<id>.office
+  calls.length = 0;
+  const okKp = await wctx.publishCcKeypadOfficeMany(1788319922110, { kp_1: ccKeypadConfirmPatch(true, "Koy", T, () => DEL), kp_2: ccKeypadEngravePatch("p1", "Kitchen"), kp_skip: null });
+  eq("keypad write returns true; ONE setDoc, merge:true on ccloads/<jobId>", [okKp, calls.length, calls[0].opts, calls[0].ref.col, calls[0].ref.id], [true, 1, { merge: true }, "ccloads", "1788319922110"]);
+  eq("keypad write: the ONLY top-level key is keypads", Object.keys(calls[0].data), ["keypads"]);
+  eq("keypad write: only real ids, each carrying ONLY office", [Object.keys(calls[0].data.keypads).sort(), Object.keys(calls[0].data.keypads.kp_1), Object.keys(calls[0].data.keypads.kp_2)], [["kp_1", "kp_2"], ["office"], ["office"]]);
+  eq("keypad write: office = the patch + the stamp", [Object.keys(calls[0].data.keypads.kp_1.office).sort(), calls[0].data.keypads.kp_2.office.engraving], [["confirmed", "confirmedAt", "confirmedBy", "officeUpdatedAt"], { p1: "Kitchen" }]);
+  calls.length = 0;
+  eq("keypad write with nothing valid is a no-op (no setDoc)", [await wctx.publishCcKeypadOfficeMany(1, { a: null }), calls.length], [false, 0]);
   if (fails) { console.error(`ccloads-suggest-test: ${fails}/${n} FAILED`); process.exit(1); }
   console.log(`ccloads-suggest-test: ${n} checks passed`);
 })();

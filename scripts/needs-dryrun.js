@@ -70,7 +70,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
   "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter",
-  "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
+  "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronRejects","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
   extractConst("PERMISSIONS"),
   extractConst("getAccess"),
@@ -655,7 +655,10 @@ eq(H.lutronModType("LQSE-T5").zones, 4, "an old T5 is a 4-zone module (5 = amps)
 eq(H.lutronModType("SOMETHING-ELSE").custom, true, "unknown type → custom, 4 zones");
 eq([H.lutronZoneCap("LQSE-4A5-120-D",1), H.lutronZoneCap("LQSE-4A5-120-D",3), H.lutronZoneCap("LQSE-4S8-120-D",2), H.lutronZoneCap("LQSE-2HDC-D",1)], [800,500,960,0], "zone caps: dimmer per-zone table, relay amps × 120, bus none");
 eq([H.lutronLoadKind("Dimming"),H.lutronLoadKind("MLV"),H.lutronLoadKind("Switching"),H.lutronLoadKind("Relay"),H.lutronLoadKind("0-10V"),H.lutronLoadKind("Variable Speed"),H.lutronLoadKind("")], ["dimming","dimming","switching","switching","0-10v","motor",""], "load kinds");
-eq([H.lutronKindFits("LQSE-4A5-120-D","Switching"), H.lutronKindFits("LQSE-4S8-120-D","Dimming"), H.lutronKindFits("LQSE-4M-120-D","Dimming"), H.lutronKindFits("LQSE-4M-120-D","Variable Speed"), H.lutronKindFits("", "Switching"), H.lutronKindFits("LQSE-2HDC-D","Switching")], [false,true,false,true,true,true], "type gating: dimmers refuse switched, motor module takes motors only, untyped/bus take all");
+eq([H.lutronKindFits("LQSE-4A5-120-D","Switching"), H.lutronKindFits("LQSE-4S8-120-D","Dimming"), H.lutronKindFits("LQSE-4M-120-D","Dimming"), H.lutronKindFits("LQSE-4M-120-D","Variable Speed"), H.lutronKindFits("", "Switching"), H.lutronKindFits("LQSE-2HDC-D","Switching")], [false,false,false,true,true,true], "type gating: dimmers refuse switched, v554 switching (4S8) refuses dimmed, motor module takes motors only, untyped/bus take all");
+eq(["Dimming","ELV","MLV","LED"].map(t => H.lutronRejects("LQSE-4S8-120-D", t)), [true,true,true,true], "v554: a switching-only module HARD-refuses every dimmed load (Dimming / ELV / MLV / LED)");
+eq([H.lutronRejects("LQSE-S8","Dimming"), H.lutronRejects("LQSE-4S8-120-D","Switching"), H.lutronRejects("LQSE-4S8-120-D",""), H.lutronRejects("LQSE-4A5-120-D","ELV"), H.lutronRejects("LQSE-4T5-120-D","Dimming"), H.lutronRejects("","Dimming")], [true,false,false,false,false,false], "v554: legacy S8 alias refuses too; switched / untyped OK on 4S8; ELV fits the 4A5; 0-10V and untyped modules don't hard-refuse");
+eq(H.lutronKindFits("LQSE-4S8-120-D","Switching"), true, "switching loads still fit a 4S8");
 
 // Migration from the pre-v449 shape: upper → Panel A, main → Panel B (custom label wins), extras after.
 const oldPl = {

@@ -179,5 +179,37 @@ const names = (arr) => arr.map(l => l.id + ":" + l.name + (l.assign ? "@" + l.as
   ok("plRepairUnticks: nothing to repair → same object", plRepairUnticks(srv5, srv5).pl === srv5);
 }
 
+// ── v554: wallboxDevices get the same per-row intent as loads ────────────────
+{
+  const W0 = [{ id: "w1", name: "Entry Sconces", device: "Dimmer", pulled: false }, { id: "w2", name: "Garage Cans", device: "Switch", pulled: false }];
+  const base = { loads: [{ id: "L1", name: "Cans" }], wallboxDevices: W0, plRev: 5 };
+  // A stale phone ticks w1 Ran on its old copy.
+  const client = { ...base, wallboxDevices: W0.map(w => w.id === "w1" ? { ...w, pulled: true, pulledBy: "Noah", pulledAt: "10/18/2026" } : w) };
+  const intent = plDiffIntent(base, client);
+  eq("diff: only w1's tick fields, under rows.wallboxDevices; loads untouched; nothing whole-key", [intent.rows.wallboxDevices.changed, Object.keys(intent.changed), intent.keys], [{ w1: ["pulled", "pulledBy", "pulledAt"] }, [], []]);
+  // Meanwhile the office renamed w1, Keegan ticked w2, and a new device w3 was imported.
+  const server = { ...base, plRev: 9, wallboxDevices: [{ ...W0[0], name: "Foyer Sconces" }, { ...W0[1], pulled: true, pulledBy: "Keegan", pulledAt: "10/17/2026" }, { id: "w3", name: "Mud Cans", device: "Switch" }] };
+  const out = plApplyIntent(server, client, intent, base);
+  eq("apply: w1 keeps the office's rename AND gets the tick; Keegan's w2 tick stays; w3 survives", out.wallboxDevices.map(w => [w.id, w.name, !!w.pulled, w.pulledBy || ""]), [["w1", "Foyer Sconces", true, "Noah"], ["w2", "Garage Cans", true, "Keegan"], ["w3", "Mud Cans", false, ""]]);
+  eq("apply: loads untouched by a wallbox tick", out.loads, server.loads);
+  // remove honored, add kept
+  const c2 = { ...base, wallboxDevices: [W0[0], { id: "w9", name: "New", device: "Dimmer" }] };
+  const i2 = plDiffIntent(base, c2);
+  eq("remove here is honored, add here is kept, server-only rows kept", plApplyIntent(server, c2, i2, base).wallboxDevices.map(w => w.id), ["w1", "w9", "w3"]);
+  // bursts union
+  const i3 = plMergeIntents(intent, plDiffIntent(client, { ...client, wallboxDevices: client.wallboxDevices.map(w => w.id === "w2" ? { ...w, device: "Dimmer" } : w) }));
+  eq("burst: wallbox intents union like loads", i3.rows.wallboxDevices.changed, { w1: ["pulled", "pulledBy", "pulledAt"], w2: ["device"] });
+  eq("burst with an old intent (no rows) keeps the new rows", plMergeIntents({ changed: {}, added: [], removed: [], keys: [] }, intent).rows.wallboxDevices.changed, { w1: ["pulled", "pulledBy", "pulledAt"] });
+  // a job with no wallboxDevices: intent shape unchanged from v496
+  eq("no wallbox array on either side → no `rows` in the intent", "rows" in plDiffIntent({ loads: [] }, { loads: [] }), false);
+  // an old queued intent (no rows) that changed wallboxDevices whole-key still applies through the keys path
+  const legacy = { changed: {}, added: [], removed: [], keys: ["wallboxDevices"] };
+  eq("old queued intent → whole-key three-way path, as before", plApplyIntent(server, client, legacy, base).wallboxDevices.length, 3);
+  // un-tick repair covers wallbox rows
+  const merged = { ...server, wallboxDevices: server.wallboxDevices.map(w => w.id === "w2" ? { ...w, pulled: false } : w) };
+  const rep = plRepairUnticks(merged, server);
+  eq("plRepairUnticks: a merge-un-ticked wallbox row gets the server's tick back", [rep.repaired, rep.pl.wallboxDevices.find(w => w.id === "w2").pulled], [["Garage Cans"], true]);
+}
+
 if (fails) { console.error(`panel-loads-merge-test: ${fails} of ${n} checks failed`); process.exit(1); }
 console.log(`panel-loads-merge-test: ${n} checks passed`);
