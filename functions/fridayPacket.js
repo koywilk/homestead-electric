@@ -209,10 +209,12 @@ function collectMoneyCandidates(jobs, now = new Date(), cap = 250) {
   const approved = live.filter(j => (j.changeOrders || []).some(co => co && co.coStatus === "approved"));
   const doneCo = live.filter(j => done(j) && (j.changeOrders || []).some(openCo));
   const open = live.filter(j => !done(j));
+  // v553: finished here but not yet recorded as invoiced in full — the invoicing sync still watches them.
+  const unbilled = live.filter(j => done(j) && !((typeof j.simproInvoicedPct === "number" ? j.simproInvoicedPct : -1) >= 99.5));
   const out = [], seen = new Set();
   const add = (j, capped) => { const sn = String(j.simproNo).trim(); if (seen.has(sn) || (capped && out.length >= cap)) return; seen.add(sn); out.push(sn); };
   rti.forEach(j => add(j, false));
-  [...old, ...approved, ...doneCo, ...open].forEach(j => add(j, true));
+  [...old, ...approved, ...doneCo, ...open, ...unbilled].forEach(j => add(j, true));
   return out;
 }
 

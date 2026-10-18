@@ -5,8 +5,8 @@
 // 208 #1419 as they were on 2026-10-16), and checks:
 //   - every side effect the old inline handlers had is unchanged for a job that
 //     is not on hold (parity sweep over every stage on a grid of jobs),
-//   - Koy's two calls: below 85% clears Ready to invoice unless the other phase
-//     still justifies it, and a job on hold keeps its hold and its status,
+//   - v553: the stage % never touches Ready to invoice (the nudge is retired,
+//     invoicing is tracked from Simpro), and a job on hold keeps its hold and status,
 //   - 100% with open punch is refused with the count,
 //   - the summary lines say what happened in plain words.
 // Exit 1 on any failure. Runs in prebuild.
@@ -35,7 +35,7 @@ function extractFrom(marker) {
 }
 const line = (name) => { const i = src.indexOf(`const ${name} = `); return src.slice(i, src.indexOf("\n", i)); };
 const arr = (name) => { const i = src.indexOf(`const ${name} = `); return src.slice(i, src.indexOf("];", i) + 2); };
-const code = [line("parseStage"), arr("QC_STATUSES"), extractFrom("function stageChangePlan(")].join("\n") + "\nthis.stageChangePlan = stageChangePlan;";
+const code = [line("parseStage"), arr("QC_STATUSES"), line("READY_TO_INVOICE_ALERTS"), extractFrom("function stageChangePlan(")].join("\n") + "\nthis.stageChangePlan = stageChangePlan;";
 const box = { C: new Proxy({}, { get: () => "#000" }) }; // QC_STATUSES colours read C.* tokens
 vm.runInNewContext(code, box);
 const plan = box.stageChangePlan;
@@ -64,16 +64,19 @@ function oldFinish(job, v) {
   return { finishStage: v, ...invoiceFire, ...invoiceReset, ...finishQcFlip, ...(v === "100%" ? { finishStatus: "complete" } : pct > 0 ? { finishStatus: "inprogress" } : {}) };
 }
 const norm = (p) => { const o = { ...p }; if ("readyToInvoiceDate" in o && o.readyToInvoiceDate) o.readyToInvoiceDate = "D"; return o; };
+// v553: the invoice fire / reset / clear are retired — the old side effects minus those keys.
+const INVOICE_KEYS = ["readyToInvoice", "readyToInvoiceDate", "roughInvoiceFired", "roughInvoiceDismissed", "finishInvoiceFired", "finishInvoiceDismissed"];
+const noInvoice = (p) => Object.fromEntries(Object.entries(p).filter(([k]) => !INVOICE_KEYS.includes(k)));
 
 // ── Miller #1438 (2026-10-16): Rough 75%, QC scheduled 2026-10-15, finish 0, no Matterport ──
 const miller = { name: "Miller Residence - Alpine", foreman: "Keegan Wilkinson", roughStage: "75%", roughStatus: "inprogress", roughOnHold: false,
   finishStage: "0%", qcStatus: "scheduled", qcStatusDate: "2026-10-15", roughQCTaskFired: false, prepStage: "Job Prep Complete", readyToInvoice: false };
 let r = plan(miller, "rough", "85%", { openPunch: 21 });
-ok(r.patch.readyToInvoice === true && r.patch.roughInvoiceFired === true, "Miller 85%: Ready to invoice fires");
+ok(!INVOICE_KEYS.some(k => k in r.patch), "Miller 85%: Ready to invoice no longer fires (v553)");
 ok(r.patch.matterportStatus === "needs", "Miller 85%: Matterport flips");
 ok(!("qcStatus" in r.patch), "Miller 85%: QC already scheduled, not clobbered");
 ok(r.patch.roughStatus === "inprogress", "Miller 85%: status in progress");
-ok(has(r.lines, /^Ready to invoice: on\. The office and Keegan get a push\.$/), "Miller 85%: invoice line names the foreman");
+ok(!has(r.lines, /Ready to invoice/), "Miller 85%: no invoice line");
 ok(has(r.lines, /^Matterport scan: needed now\.$/), "Miller 85%: Matterport line");
 ok(has(r.lines, /^QC walk: already scheduled \(2026-10-15\), no change\.$/), "Miller 85%: QC line says no change");
 ok(r.title === "Rough 85% · here's what that set off", "Miller 85%: title");
@@ -87,9 +90,9 @@ ok(r.lines.length === 1 && r.lines[0] === "Nothing else changed." && r.title ===
 const sky = { name: "Skyridge Lot 208 - Mayflower", foreman: "Keegan Wilkinson", roughStage: "80%", roughStatus: "inprogress", roughOnHold: true,
   finishStage: "0%", qcStatus: "needs", roughQCTaskFired: true, prepStage: "Job Prep Complete", readyToInvoice: true, readyToInvoiceDate: "10/1/2026", roughInvoiceFired: false };
 r = plan(sky, "rough", "80%", { openPunch: 15 });
-ok(r.patch.readyToInvoice === false && r.patch.readyToInvoiceDate === "", "decision 1: below 85% clears Ready to invoice");
+ok(!INVOICE_KEYS.some(k => k in r.patch), "v553: below 85% leaves the old Ready to invoice flag alone");
 ok(!("roughStatus" in r.patch) && !("roughOnHold" in r.patch), "decision 2: on hold keeps status and hold");
-ok(has(r.lines, /^Ready to invoice is off\. It was on since 10\/1\/2026\.$/), "Skyridge: invoice-off line with the date");
+ok(!has(r.lines, /Ready to invoice/), "Skyridge: no invoice line");
 ok(has(r.lines, /^Still on hold\./), "Skyridge: still-on-hold line");
 r = plan({ ...sky, roughPunch: null }, "rough", "100%", { openPunch: 0 });
 ok(r.patch.roughStatus === "complete" && r.patch.roughOnHold === false, "100% on hold: complete clears the hold (same as the Status select)");
@@ -102,7 +105,7 @@ ok(!("readyToInvoice" in plan({ ...sky, finishStage: "90%" }, "rough", "75%", {}
 const fin = { name: "Webb", foreman: "Gage Lund", roughStage: "100%", roughStatus: "complete", finishStage: "90%", finishStatus: "inprogress",
   finishInvoiceFired: true, readyToInvoice: true, readyToInvoiceDate: "10/2/2026", finishQcStatus: "needs" };
 ok(!("readyToInvoice" in plan(fin, "finish", "80%", {}).patch), "finish drop keeps RTI while the rough invoice may be unsent");
-ok(plan({ ...fin, invoiceSent: true }, "finish", "80%", {}).patch.readyToInvoice === false, "finish drop clears RTI once the rough invoice was sent");
+ok(!("readyToInvoice" in plan({ ...fin, invoiceSent: true }, "finish", "80%", {}).patch), "v553: finish drop never touches RTI");
 ok(!("readyToInvoice" in plan({ ...fin, readyToInvoice: false, invoiceSent: true }, "finish", "80%", {}).patch), "an already-cleared invoice is never touched");
 r = plan(fin, "finish", "100%", { openPunch: 2, openQc: 1 });
 ok(r.blocked && r.blocked.count === 3 && /2 finish punch items and 1 QC item still open on Webb\./.test(r.blocked.text), "finish 100% refused with both counts");
@@ -114,13 +117,13 @@ const grid = [];
 for (const rs of STAGES) for (const fs2 of ["0%", "50%", "90%"]) for (const rti of [false, true]) for (const qc of ["", "scheduled"]) for (const fired of [false, true])
   grid.push({ name: "J", roughStage: rs, finishStage: fs2, readyToInvoice: rti, qcStatus: qc, roughQCTaskFired: fired, roughInvoiceFired: fired, finishInvoiceFired: fired, prepStage: fired ? "Job Prep Complete" : "", roughStatus: rs === "100%" ? "complete" : "inprogress" });
 for (const job of grid) for (const v of STAGES) {
-  const a = plan(job, "rough", v, { openPunch: 0 }).patch, b = oldRough(job, v);
+  const a = plan(job, "rough", v, { openPunch: 0 }).patch, b = noInvoice(oldRough(job, v));
   const extra = Object.keys(norm(a)).filter((k) => !(k in b));
-  ok(extra.every((k) => (k === "readyToInvoice" && a[k] === false) || (k === "readyToInvoiceDate" && a[k] === "")), `rough parity: only the invoice CLEAR may be added (${extra})`);
+  ok(!extra.length, `rough parity: nothing added, no invoice keys (${extra})`);
   for (const k of Object.keys(b)) ok(JSON.stringify(norm(a)[k]) === JSON.stringify(norm(b)[k]), `rough parity ${k} @ ${job.roughStage}->${v}`);
-  const fa = plan(job, "finish", v, { openPunch: 0, openQc: 0 }).patch, fb = oldFinish(job, v);
+  const fa = plan(job, "finish", v, { openPunch: 0, openQc: 0 }).patch, fb = noInvoice(oldFinish(job, v));
   const fextra = Object.keys(norm(fa)).filter((k) => !(k in fb));
-  ok(fextra.every((k) => (k === "readyToInvoice" && fa[k] === false) || (k === "readyToInvoiceDate" && fa[k] === "")), `finish parity: only the invoice CLEAR may be added (${fextra})`);
+  ok(!fextra.length, `finish parity: nothing added, no invoice keys (${fextra})`);
   for (const k of Object.keys(fb)) ok(JSON.stringify(norm(fa)[k]) === JSON.stringify(norm(fb)[k]), `finish parity ${k} @ ${v}`);
 }
 

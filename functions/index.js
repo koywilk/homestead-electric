@@ -1075,6 +1075,7 @@ function hasNewQuestions(beforeQ, afterQ) {
 // FIRESTORE TRIGGER — jobs/{jobId} onUpdate
 // ─────────────────────────────────────────────────────────────
 
+const READY_TO_INVOICE_PUSH = false;   // v553: see "3. Ready to invoice" below
 exports.onJobUpdate = functions.firestore
   .document("jobs/{jobId}")
   .onUpdate(async (change, context) => {
@@ -1172,7 +1173,9 @@ exports.onJobUpdate = functions.firestore
     // ── 3. Ready to invoice ───────────────────────────────────
     // One of two branches that keeps the admin/manager blast (billing is an
     // office-wide event) — but now pref-gated per user via the 4th arg.
-    if (!before.readyToInvoice && after.readyToInvoice) {
+    // v553 (Koy, 2026-10-17: "nobody uses the notification ready to invoice anyway"):
+    // retired. Invoicing is tracked from Simpro now (dailySimproTotals → simproSync).
+    if (READY_TO_INVOICE_PUSH && !before.readyToInvoice && after.readyToInvoice) {
       const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToNameIfWanted(after.foreman, "ready_invoice", {
         title: "💰 Ready to Invoice",
@@ -4858,6 +4861,10 @@ async function _simproGetJson(path) {
   }
   return null;
 }
+// v553: the version-lock build the Simpro sync stamps on its job writes (the app
+// release that shipped it), so they read as stamped writes like the app's own.
+const SIMPRO_SYNC_BUILD = 553;
+const simproSync = require("./simproSync.js");
 async function fetchSimproTotals(sns) {
   const out = {};
   const CHUNK = 5;
@@ -4945,15 +4952,50 @@ exports.dailySimproTotals = functions
   .onRun(async () => {
     const snap = await db.collection("jobs").select("data.name", "data.type", "data.archived", "data.archivedAt", "data.deleted", "data.simproNo",
       "data.readyToInvoice", "data.invoiceDismissed", "data.finishStatus", "data.finishStage", "data.changeOrders",
-      "data.quickJob", "data.quickJobStatus", "data.tempPed", "data.tempPedStatus").get();
+      "data.quickJob", "data.quickJobStatus", "data.tempPed", "data.tempPedStatus", "data.simproInvoicedPct").get();
     const jobs = snap.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) }));
     const now = new Date();
     const wanted = fridayPacketLib.collectMoneyCandidates(jobs, now);
     const byNo = await fetchSimproTotals(wanted);
     const quoteNos = fridayPacketLib.collectQuoteCandidates(jobs, now);
     const quotes = await fetchSimproQuotes(quoteNos);
-    await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo, quotes }, { merge: true });
-    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length, quotesWanted: quoteNos.length, quotesGot: Object.keys(quotes).length });
+    // v553: Simpro → app invoicing sync (functions/simproSync.js). settings/simproSync.mode:
+    // "off" = no job writes, "dry" = plan only (listed in settings/simproTotals.syncLast),
+    // anything else = live. Each job is read and written in one transaction, so the plan
+    // always runs on the latest copy and a crew edit in between is never overwritten.
+    let syncMode = "live";
+    try { const m = await db.doc("settings/simproSync").get(); if (m.exists && ["off", "dry"].includes((m.data() || {}).mode)) syncMode = m.data().mode; } catch (e) { /* default live */ }
+    const syncRows = [];
+    if (syncMode !== "off") {
+      const nowIso = new Date().toISOString();
+      const bySn = {}; jobs.filter(j => j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt).forEach(j => { const sn = String(j.simproNo || "").trim(); if (sn && byNo[sn]) (bySn[sn] = bySn[sn] || []).push(j.id); });
+      for (const [sn, ids] of Object.entries(bySn)) {
+        if (ids.length > 1) { syncRows.push({ sn, skipped: `${ids.length} app jobs share this Simpro #` }); continue; }   // never guess which one
+        const ref = db.doc(`jobs/${ids[0]}`);
+        try {
+          const row = await db.runTransaction(async (tx) => {
+            const cur = await tx.get(ref);
+            const raw = cur.exists ? (cur.data() || {}) : null;
+            if (!raw || !raw.data || raw.data.archived || raw.data.deleted) return null;
+            const plan = simproSync.planSimproSync(raw.data, byNo[sn], nowIso);
+            if (!plan) return null;
+            if (syncMode === "live") {
+              const upd = { updated_at: nowIso, saved_by: simproSync.SYNC_BY, device: "server", tab: "simpro-sync",
+                // Same version-lock stamp shape the app writes (app_build int + a fresh w).
+                app_build: SIMPRO_SYNC_BUILD, w: `${SIMPRO_SYNC_BUILD}.sync${Math.random().toString(36).slice(2, 10)}` };
+              Object.entries(plan.patch).forEach(([k, v]) => { upd[`data.${k}`] = v; });
+              tx.update(ref, upd);
+            }
+            return { id: ids[0], sn, name: String(raw.data.name || "").trim(), kinds: plan.kinds, changes: plan.entry.changes.filter(c => c.undo !== false || c.co).length };
+          });
+          if (row && (row.kinds.length || row.changes)) syncRows.push(row);
+        } catch (e) { syncRows.push({ id: ids[0], sn, error: String(e.message || e).slice(0, 120) }); }
+      }
+    }
+    await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo, quotes,
+      syncLast: { at: new Date().toISOString(), mode: syncMode, rows: syncRows.slice(0, 150) } }, { merge: true });
+    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length, quotesWanted: quoteNos.length, quotesGot: Object.keys(quotes).length,
+      syncMode, synced: syncRows.filter(r => !r.error && !r.skipped).length, syncErrors: syncRows.filter(r => r.error).length });
     return null;
   });
 

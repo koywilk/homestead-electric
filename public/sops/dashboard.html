@@ -98,11 +98,13 @@
     Below that: active jobs (with the count per stage under the bars), inspections in the last 30 days (and how many
     passed their target with no result logged), open change orders split by state (to send, waiting on the GC,
     approved, scheduled, on finished jobs), and open punch. Before noon the greeting reports <b>yesterday</b>. The chart
-    is everything logged per day. <b>Needs attention</b> lists the chases worst first; <b>Ready to invoice</b> shows what is
-    left to bill in Simpro (total minus what's been invoiced) and how many days each job has been ready; a job Simpro has
-    billed in full drops off. Change orders waiting on the GC 60+ days show their Simpro quote $ (each quote counted once).
+    is everything logged per day. <b>Needs attention</b> lists the chases worst first. There is no Ready to invoice line any more:
+    invoicing comes from Simpro. Every weekday morning the Simpro sync marks a job invoiced (in full at 99.5%), marks a job
+    Simpro has closed out as complete here, and completes the approved change orders on a job invoiced in full. <b>Changed
+    by the Simpro sync this week</b> in Needs you lists what it did; a job's card shows each change with <b>Undo</b> (it won't
+    redo one you undid). Change orders waiting on the GC 60+ days show their Simpro quote $ (each quote counted once).
     An approved change order on a job Simpro has billed in full says <b>Billed — mark done?</b> instead of waiting to be
-    booked. <b>Most activity</b> names the busiest job with its open questions
+    booked (the sync clears these each morning). <b>Most activity</b> names the busiest job with its open questions
     and punch. <b>Foremen</b> has one card per foreman, worst first, each with the jobs that are quiet 5+ days, return
     trips past their date and inspections not logged; the header says how many posted today.</p>
   </div></div>
@@ -196,7 +198,7 @@
     and never opens a job or logs anything won't show as active. Their phone still shows under "app opened".</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status), updated 2026-10-15 (SW v543: opens for every admin), updated 2026-10-15 (SW v545: Meeting Prep folder — Monday / Wednesday / Friday cards, Friday Strategy prep replaces the Friday Packet), updated 2026-10-16 (SW v547: Friday Strategy prep laid out the way Koy edits it — job trees with Plan lines, Blocked = GC + office only, no Money / headline), updated 2026-10-17 (SW v551: left to bill and days ready from Simpro, Closed in Simpro, billed change orders, quote $ on old change orders), updated 2026-10-17 (SW v552: Reassign to the Simpro technician, Coordinator filter, Move / unconfirm on starts, one Needs a date)</div>
+  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status), updated 2026-10-15 (SW v543: opens for every admin), updated 2026-10-15 (SW v545: Meeting Prep folder — Monday / Wednesday / Friday cards, Friday Strategy prep replaces the Friday Packet), updated 2026-10-16 (SW v547: Friday Strategy prep laid out the way Koy edits it — job trees with Plan lines, Blocked = GC + office only, no Money / headline), updated 2026-10-17 (SW v551: left to bill and days ready from Simpro, Closed in Simpro, billed change orders, quote $ on old change orders), updated 2026-10-17 (SW v552: Reassign to the Simpro technician, Coordinator filter, Move / unconfirm on starts, one Needs a date), updated 2026-10-17 (SW v553: Ready to invoice retired, invoicing and closed-out jobs synced from Simpro)</div>
 </div>
 </body>
 </html>

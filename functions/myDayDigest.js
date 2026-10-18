@@ -37,7 +37,7 @@ function digestCounts({ users, jobs, needs, redlines, todayYmd }) {
   (jobs || []).forEach(j => {
     if (!j || j.type === "quote" || j.tempPed || j.quickJob) return;
     const cleared = new Set(j.clearedTasks || []);
-    if (j.readyToInvoice && !j.invoiceDismissed && !cleared.has(j.id + "_invoice")) bump("invoice");
+    // v553: the Ready to invoice nudge is retired (invoicing is tracked from Simpro).
     const coDone = new Set(j.coDoneDismissed || []);
     (j.changeOrders || []).forEach(co => {
       if (!co) return;

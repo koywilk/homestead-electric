@@ -13,9 +13,9 @@
  *      on the schedule, no finish-start ask while not re-booked.
  *   4. DEDUPE — back-to-back Fail taps count once in Activity too.
  *   5. QUESTIONS — open = not done and not answered.
- *   6. MONEY — ready to invoice shows what's left to bill (Simpro Total −
- *      InvoicedValue) and days ready; billed-in-full jobs drop off; 60+ day
- *      change orders carry their Simpro quote $, not the job value (v551).
+ *   6. MONEY — v553: no Ready to invoice line or dollars; the Simpro sync's
+ *      changes listed for a week with Undo; 60+ day change orders carry their
+ *      Simpro quote $, not the job value (v551).
  *   7. PEOPLE — quiet needs an active job; approved time off is "off"; 30+ days is
  *      "gone"; neither counts in the on-app denominator.
  *   8. PLANS — an unmatched plan waits until filed/dismissed, not until Seen.
@@ -89,7 +89,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, OD_DOCS, canOpenDash };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -209,19 +209,27 @@ if (require.main === module) {
   // 5. QUESTIONS
   assert.strictEqual(d.openQs.length, 1); assert.strictEqual(d.openQs[0].age, 1, "46 hours = 1 full day, like punch ages");
 
-  // 6. MONEY — left to bill, days ready, billed-in-full off the list (v551).
-  const inv = d.attnBy.invoice.rows;
-  eq(inv.map(r => r.title), ["Webb", "Skyridge 208", "Miller Ready"], "most left to bill first; the billed-in-full temp ped is not listed");
-  assert.strictEqual(Math.round(inv[1].money), 20234, "Skyridge: $52,877 total − $32,643 billed = $20,234 left, not the $52.9k job total");
-  assert.strictEqual(inv[0].money, 20500, "Webb: half billed");
-  assert.ok(/left to bill · 50% billed · ready 14 d/.test(inv[0].sub), inv[0].sub);
-  assert.strictEqual(inv[0].idle, 14, "ready since 10/1 → 14 days on 10/15");
-  assert.strictEqual(inv[2].money, null); assert.ok(/not in the Simpro pull yet/.test(inv[2].sub), inv[2].sub);
-  assert.ok(/^\$41k left to bill · oldest ready 14 d · 1 billed in full in Simpro, not shown$/.test(d.attnBy.invoice.extra), d.attnBy.invoice.extra);
-  eq(d.rtiBilled.map(j => j.name), ["Sandlin Temp Ped"]);
-  const oldFmt = X.odModel({ jobs: [jobs[0]], users, needs: [], upcoming: [], simTotals: { byNo: { "1304": { total: 41000 } } }, now });
-  assert.strictEqual(oldFmt.attnBy.invoice.rows[0].money, null, "an entry from before v551 (total only) shows no $ instead of the job total");
-  assert.ok(/left to bill after the next Simpro pull/.test(oldFmt.attnBy.invoice.rows[0].sub));
+  // 6. MONEY — v553: no Ready to invoice line and no dollars for it anywhere (Koy:
+  //    "ready to invoice should not show numbers in the app"); invoicing comes from Simpro.
+  assert.ok(!d.attnBy.invoice && !d.attn.some(a => /invoice/i.test(a.label) && !/change order/i.test(a.label)), "no Ready to invoice line");
+  //    The Simpro sync's changes show for a week, newest first, and Undo puts them back.
+  const syncJob = { ...base, id: "sy", name: "Synced", foreman: "Abraham Tristan", simproNo: "9001", roughStatus: "complete", finishStatus: "complete",
+    changeOrders: [{ id: "k1", coStatus: "completed", desc: "Fan", completedBySync: ago(1).toISOString() }], coDoneDismissed: ["k1"],
+    simproSync: { complete: ago(1).toISOString(), cos: { k1: ago(1).toISOString() }, log: [
+      { at: ago(1).toISOString(), by: "Simpro sync", kinds: ["complete", "cos"], basis: { stage: "Invoiced", invPct: 100 },
+        changes: [{ field: "finishStatus", from: "inprogress", to: "complete", undo: true }, { co: "k1", desc: "Fan", from: "approved", to: "completed", undo: true }] },
+      { at: ago(20).toISOString(), by: "Simpro sync", kinds: ["invoicedFull"], basis: { stage: "Progress", invPct: 100 }, changes: [{ field: "invoiceSent", from: false, to: true, undo: true }] }] } };
+  const sdm = X.odModel({ jobs: [syncJob], users, needs: [], upcoming: [], simTotals: { byNo: { "9001": { total: 1, inv: 1, invPct: 100, stage: "Invoiced" } } }, now });
+  eq([sdm.syncLog.length, sdm.syncWeek.length], [2, 1], "a week of sync changes on the dashboard");
+  eq(sdm.closedSim.length + sdm.coBilled.length, 0, "nothing left to close by hand");
+  const reopened = { ...syncJob, finishStatus: "inprogress", changeOrders: [{ id: "k1", coStatus: "approved", desc: "Fan" }] };
+  const rd = X.odModel({ jobs: [reopened], users, needs: [], upcoming: [], simTotals: { byNo: { "9001": { total: 1, inv: 1, invPct: 100, stage: "Invoiced" } } }, now });
+  eq([rd.closedSim.length, rd.coBilled.length, rd.active.length], [0, 0, 1], "undone by hand: counts as open again, not nagged to close");
+  const up1 = X.odSyncUndo(syncJob, syncJob.simproSync.log[0]);
+  eq([up1.finishStatus, up1.changeOrders[0].coStatus, "completedBySync" in up1.changeOrders[0], up1.coDoneDismissed, !!up1.simproSync.log[0].undoneAt, up1.simproSync.complete === syncJob.simproSync.complete],
+    ["inprogress", "approved", false, [], true, true], "Undo: status and CO back, CO task back, memory kept so it is not redone");
+  const sv = require("../functions/simproSync.js").undoPatch(syncJob, syncJob.simproSync.log[0]);
+  eq([sv.finishStatus, sv.changeOrders, sv.coDoneDismissed], [up1.finishStatus, up1.changeOrders, up1.coDoneDismissed], "dashboard Undo = the server's undoPatch");
   // 60+ day change orders: quote $, summed per change order.
   const co60 = d.attnBy.coOld.rows;
   eq(co60.map(r => r.money), [9800, 3500], "each CO carries its own quote total, most first");
@@ -313,8 +321,9 @@ if (require.main === module) {
     { simproNo: "10", tempPed: true, tempPedStatus: "" },                             // temp ped not completed = open
     { simproNo: "11", archived: true, roughStatus: "inprogress" },
     { simproNo: "12", finishStatus: "complete", changeOrders: [{ coStatus: "pending", submittedAt: ago(57).toISOString(), quoteNumber: "#903" }, { coStatus: "pending", submittedAt: ago(80).toISOString(), quoteNumber: "901" }] },
+    { simproNo: "13", finishStatus: "complete", simproInvoicedPct: 100 },               // v553: finished and invoiced in full → no longer watched
   ];
-  eq(fp.collectMoneyCandidates(cand, now), ["1", "3", "12", "5", "4", "8", "10"], "ready to invoice, 55+ d COs, approved COs, finished with open COs, open jobs; not finished jobs with nothing open");
+  eq(fp.collectMoneyCandidates(cand, now), ["1", "3", "12", "5", "4", "8", "10", "2", "6", "9"], "ready to invoice, 55+ d COs, approved COs, finished with open COs, open jobs, then (v553) finished jobs not yet invoiced in full");
   const many = Array.from({ length: 300 }, (_, i) => ({ simproNo: String(1000 + i), roughStatus: "inprogress" }));
   const capped = fp.collectMoneyCandidates([...many, { simproNo: "77", readyToInvoice: true, finishStatus: "complete" }], now);
   assert.strictEqual(capped.length, 250, "250 Simpro reads at most; ready to invoice always gets in");
