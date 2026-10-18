@@ -113,6 +113,8 @@ h2.sect .why{margin-left:auto;font:500 12px var(--body);letter-spacing:0;text-tr
 :root[data-theme="dark"] .pod.first .mark,:root:not([data-theme="light"]) .pod.first .mark{opacity:.05}
 .pod.first::after{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,transparent,var(--accent),transparent)}
 .pod .place{font:800 54px/1 var(--display);letter-spacing:-.02em;color:var(--ink-3);opacity:.35;position:absolute;top:8px;right:12px}
+.pod .place.unranked{font-size:16px;letter-spacing:.06em;text-transform:uppercase;opacity:.8;top:14px;text-align:right}
+.pod .place.unranked::after{content:"finished · ranks at 4";display:block;font-size:10px;letter-spacing:.1em}
 .pod.first .place{color:var(--accent);opacity:.9;text-shadow:0 0 24px var(--accent-glow)}
 .pod .team{font:800 22px/1.05 var(--display);letter-spacing:.02em;text-transform:uppercase;padding-right:44px}
 .pod .roster{font-size:12px;color:var(--ink-3);line-height:1.35}
@@ -360,7 +362,7 @@ td.assign{white-space:normal;min-width:220px}
       const teams = teamsOf(people);
       const division = j.division || (teams.indexOf("comm") >= 0 ? "commercial" : "residential");
       const special = SPECIAL.test(j.name || ""), costs = nmAct !== 100 && ((matAct || 0) > 0 || (labAct || 0) > 0 || (hrsAct || 0) > 0);
-      const invPct = num(j.inv_pct), invoiced100 = invPct != null && invPct >= 99.5;
+      const invPct = num(j.inv_pct), invoiced100 = invPct != null && invPct >= 99.95;   // Koy 2026-10-17: all the way invoiced, exactly 100
       const q = qc[j.id];
       return {
         id: j.id, name: j.name || "", completed: j.completed || null, stage: j.stage || "", status: j.status || "", type: j.type || null,
@@ -421,10 +423,13 @@ const matClass = (p) => p == null ? "gr" : p <= 0 ? "g" : p <= 10 ? "y" : "r";
 
 /* state */
 const ls = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
-const st = { division: ls("sb2.div", "residential"), win: ls("sb2.win", "ytd"), extras: ls("sb2.extras", false), small: ls("sb2.smallIn", false), score: ls("sb2.score", true), month: "", open: "", edit: location.hash === "#edit" };
+// Everyone who opens the link sees the same board: the season window and the toggles start from the defaults on every
+// open (Koy 2026-10-17 saw Daegan 3rd on a remembered "Last 12 months" while the default view had him 1st). Only the
+// light / dark choice and pending corrections are remembered on the device.
+const st = { division: "residential", win: "ytd", extras: false, small: false, score: true, month: "", open: "", edit: location.hash === "#edit" };
 let PEND = ls("sb2.corr", {}); if (!PEND || typeof PEND !== "object" || Array.isArray(PEND)) PEND = {};
 const savePend = () => { try { localStorage.setItem("sb2.corr", JSON.stringify(PEND)); } catch {} };
-const save = () => { try { Object.entries({ "sb2.div": st.division, "sb2.win": st.win, "sb2.extras": st.extras, "sb2.smallIn": st.small, "sb2.score": st.score }).forEach(([k, v]) => localStorage.setItem(k, JSON.stringify(v))); } catch {} };
+const save = () => {};   // view state is deliberately not remembered — see st above
 const WINS = [{ k: "ytd", l: "This year" }, { k: "90", l: "Last 90 days" }, { k: "365", l: "Last 12 months" }];
 function winFrom() { const t = new Date(); t.setHours(0, 0, 0, 0); if (st.win === "ytd") return `${t.getFullYear()}-01-01`; const d = new Date(t); d.setDate(d.getDate() - (st.win === "90" ? 90 : 365)); return d.toISOString().slice(0, 10); }
 
@@ -466,8 +471,12 @@ const matPct = (s) => s.matEst ? (s.matAct - s.matEst) / s.matEst * 100 : null;
 const forTeam = (jobs, key) => jobs.filter(j => j.teams.includes(key));
 const forPerson = (jobs, p) => jobs.filter(j => j.people.includes(p));
 
-/* score — Margin 50 · Beat the bid 30 · Labor 20 (percentages only, all Simpro) */
-const W = { margin: 50, bid: 30, labor: 20 };
+/* score — Margin 70 · Beat the bid 30 (percentages only, all Simpro).
+   Labor hours are NOT scored (Koy, Oct 17: "we are focused on job margin — if it hits, labor over shouldn't
+   penalize them"); QC is not scored either (Sep 28). Both stay on the cards as information.
+   A team is RANKED only with MIN_RANK_JOBS finished jobs; below that it shows against the goal. */
+const W = { margin: 70, bid: 30 };
+const MIN_RANK_JOBS = 4;   // Koy 2026-10-17: "change it to 4 jobs so everyone scores"
 const clamp = (v) => Math.max(0, Math.min(1, v));
 function scoreOf(s) {
   const sc = s.sc; if (!sc.length) return null;
@@ -480,7 +489,8 @@ function scoreOf(s) {
   return { score: wsum ? Math.round(sum / wsum * 100) : null, parts, counts: { bid: bidJobs.length, beat: bidJobs.filter(j => j.nm >= j.nm_bid).length, labor: labJobs.length, qc: qcJobs.length }, qcItems: qcJobs.length ? qcJobs.reduce((a, j) => a + j.qc.misses + j.qc.minors, 0) / qcJobs.length : null };
 }
 const scoreCls = (v) => v == null ? "gr" : v >= 67 ? "g" : v >= 50 ? "y" : "r";
-const rankSort = (a, b) => (b.s.scored > 0) - (a.s.scored > 0) || (st.score ? ((b.r && b.r.score) ?? -1e9) - ((a.r && a.r.score) ?? -1e9) : 0) || (b.s.avg ?? -1e9) - (a.s.avg ?? -1e9) || b.s.scored - a.s.scored;
+const isRanked = (s) => s.scored >= MIN_RANK_JOBS;
+const rankSort = (a, b) => (b.s.scored > 0) - (a.s.scored > 0) || (isRanked(b.s) - isRanked(a.s)) || (st.score ? ((b.r && b.r.score) ?? -1e9) - ((a.r && a.r.score) ?? -1e9) : 0) || (b.s.avg ?? -1e9) - (a.s.avg ?? -1e9) || b.s.scored - a.s.scored;
 
 /* shell */
 function renderTabs() {
@@ -506,10 +516,10 @@ function podium(teams) {
   const val = (x) => st.score ? (x.r ? x.r.score : null) : x.s.avg;
   const cols = Math.min(4, Math.max(1, teams.length));
   return `<div class="podium" style="--cols:${cols}">${teams.map((x, i) => {
-    const empty = !x.s.scored, v = val(x), h = empty ? 150 : 170 + Math.round((st.score ? (v || 0) : Math.min(100, Math.max(0, (v || 0) * 2))) / max * 120);
-    return `<div class="pod ${i === 0 && !empty ? "first" : ""} ${empty ? "empty" : ""}" style="--h:${h}px;animation-delay:${i * .1}s">
-      ${empty ? "" : `<div class="place">${ordinal(i + 1)}</div>`}
-      ${i === 0 && !empty ? `<img class="mark" src="/icon-512.png" alt="" aria-hidden="true">` : ""}
+    const empty = !x.s.scored, ranked = isRanked(x.s), v = val(x), h = empty ? 150 : 170 + Math.round((st.score ? (v || 0) : Math.min(100, Math.max(0, (v || 0) * 2))) / max * 120);
+    return `<div class="pod ${i === 0 && ranked ? "first" : ""} ${empty ? "empty" : ""}" style="--h:${h}px;animation-delay:${i * .1}s">
+      ${ranked ? `<div class="place">${ordinal(i + 1)}</div>` : empty ? "" : `<div class="place unranked">${x.s.scored} of ${MIN_RANK_JOBS}</div>`}
+      ${i === 0 && ranked ? `<img class="mark" src="/icon-512.png" alt="" aria-hidden="true">` : ""}
       <div class="team">${esc(x.t.name)}</div>
       <div class="roster">${x.t.members.map(shortName).map(esc).join(" · ")}</div>
       ${empty ? `<div class="score gr">${DASH}<small>no finished jobs yet</small></div>` :
@@ -626,8 +636,8 @@ function teamBlock(x, rank) {
   const t = x.t, s = x.s, tp = progForTeam(t.key);
   const people = t.members.map(p => ({ p, jobs: forPerson(s.jobs, p) })).map(y => { const s2 = stats(y.jobs); return { ...y, s: s2, r: st.score ? scoreOf(s2) : null }; }).sort(rankSort);
   const openP = people.find(y => y.p === st.open);
-  return `<section class="teamblock ${rank === 1 && s.scored ? "first" : ""}">
-    <div class="th"><span class="rank">${s.scored ? ordinal(rank) : DASH}</span><span class="nm">${esc(t.name)}</span>
+  return `<section class="teamblock ${rank === 1 && isRanked(s) ? "first" : ""}">
+    <div class="th"><span class="rank">${isRanked(s) ? ordinal(rank) : DASH}</span><span class="nm">${esc(t.name)}</span>
       <span class="meta">${s.scored ? `${st.score ? `<span class="pill ${scoreCls(x.r.score)}"><i></i>${x.r.score} pts</span>` : ""}${mPill(s.avg)}<span>${s.scored} finished</span>` : `<span class="gr">nothing finished yet</span>`}${tp.length ? `<span>· ${tp.length} in progress</span>` : ""}</span></div>
     <div class="people">${people.map((y, i) => personCard(y.p, y.jobs, i + 1, i === 0 && y.s.scored > 0)).join("")}</div>
     ${openP ? personDetail(openP.p, openP.jobs) : ""}
@@ -679,11 +689,11 @@ function render() {
   </div>
   <div class="note">Every active Simpro job. A job still in rough is mostly the bid talking; it moves right as Simpro status changes and joins the board once it is complete, 100% invoiced, and costed.</div>
 
-  <h2 class="sect rules-h">How the score works <span class="why">every job is a fight against its own bid</span></h2>
+  <h2 class="sect rules-h">How the score works <span class="why">every job is a fight against its own bid · teams rank at ${MIN_RANK_JOBS} finished jobs</span></h2>
   <div class="rules">
-    <div class="rule"><div class="pts">50<small>points</small></div><h4>Margin</h4><p>Average net margin on finished jobs, divided by 30. Hit the 15% goal and you earn half the points. Double it and you earn them all.</p></div>
+    <div class="rule"><div class="pts">70<small>points</small></div><h4>Margin</h4><p>Average net margin on finished jobs, divided by 30. Hit the 15% goal and you earn half the points. Double it and you earn them all.</p></div>
     <div class="rule"><div class="pts">30<small>points</small></div><h4>Beat the bid</h4><p>Share of your finished jobs where the actual net margin met or beat the margin it was bid at. Every job is a win or a loss.</p></div>
-    <div class="rule"><div class="pts">20<small>points</small></div><h4>Labor</h4><p>Per job: finish at or under bid hours for full credit, 25% over for half, 50% over for none. Averaged across your jobs.</p></div>
+    <div class="rule"><div class="pts">—<small>not scored</small></div><h4>Hours, material, QC</h4><p>Shown on every card so you can see them, never scored. A job that hits its margin is a win even if the hours ran over. A team is ranked once it has ${MIN_RANK_JOBS} finished jobs; until then it shows against the goal.</p></div>
   </div>
   <div class="legend">
     <div class="row"><b>Finished jobs</b>${mPill(18)} 15% and up ${mPill(12)} 10 to 15% ${mPill(4)} under 10%</div>
@@ -691,7 +701,7 @@ function render() {
     <div class="row"><b>Form strip</b><span class="form" style="display:inline-flex"><i class="w"></i></span> beat the bid <span class="form" style="display:inline-flex"><i class="l"></i></span> missed it <span class="form" style="display:inline-flex"><i class="p"></i></span> in progress</div>
   </div>
   <details class="dd src"><summary>Where every number comes from</summary><div class="body"><div class="tbl-wrap compact" style="margin-top:10px"><table>
-      <tr><td>Which jobs</td><td>Simpro jobs whose <b>Stage</b> is Complete, Invoiced or Archived, <b>InvoicePercentage = 100</b>, with a <b>CompletedDate</b> inside the season window. A finished job that is not fully invoiced yet is not shown (${NOT_INVOICED().length} waiting right now). In-progress jobs are never pulled into the score.</td></tr>
+      <tr><td>Which jobs</td><td>Simpro jobs whose <b>Stage</b> is Complete, Invoiced or Archived, <b>InvoicePercentage exactly 100</b> (99.7% is not done), with a <b>CompletedDate</b> inside the season window. A finished job that is not fully invoiced yet is not shown (${NOT_INVOICED().length} waiting right now). In-progress jobs are never pulled into the score.</td></tr>
       <tr><td>Scored when</td><td>Simpro has real costs posted on the job (NettMargin.Actual is not the empty 100% and material, labor or hours are above zero). Otherwise the job is listed grey with the reason.</td></tr>
       <tr><td>Net margin</td><td><b>Totals.NettMargin.Actual</b> per job. Team, person and Everybody headlines are the plain average of their finished jobs.</td></tr>
       <tr><td>Bid margin</td><td><b>Totals.NettMargin.Estimate</b> — the margin the job was bid at. Beat the bid = actual ≥ bid.</td></tr>

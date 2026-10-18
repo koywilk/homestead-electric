@@ -40,7 +40,14 @@ export function bootPostHog() {
   try {
     posthog.init(KEY, {
       api_host: HOST,
-      autocapture: false,            // no click stream; errors and replay only
+      // v551 (UX batch 0, Koy 2026-10-17: "PostHog tap tracking with text masked: yes"):
+      // taps are captured only once a staff member has signed in (turned on in
+      // syncPostHogIdentity below), never on a homeowner / GC / share page, and
+      // never with any text: element text and attributes are masked, so an
+      // event says "a button on Job Info", not what it said.
+      autocapture: false,
+      mask_all_text: true,
+      mask_all_element_attributes: true,
       capture_pageview: true,        // one event per open so a session exists
       capture_pageleave: false,
       capture_exceptions: true,      // window errors + unhandled rejections
@@ -72,6 +79,8 @@ export function syncPostHogIdentity(identity) {
     if (name) {
       posthog.identify(name, { name });
       posthog.startSessionRecording();
+      // Rage taps, dead taps and heatmaps for signed-in staff only (see init).
+      posthog.set_config({ autocapture: true, rageclick: true, capture_dead_clicks: true, enable_heatmaps: true });
     } else {
       posthog.stopSessionRecording();
       posthog.reset();
@@ -86,4 +95,16 @@ export function syncPostHogIdentity(identity) {
 export function trackDash(event, props) {
   if (!booted) return;
   try { posthog.capture(event, { ...(props || {}), page: "dashboard" }); } catch (e) { /* see above */ }
+}
+
+// v551 (UX batch 0): named events the usability study measures (see the vault's
+// 08-Specs/UX Study 2026-10/4 - Ranked Backlog and Targets). No-op until PostHog
+// is booted with a key; never throws; props are plain words and ids only (no
+// typed text, no names beyond the signed-in person PostHog already knows).
+//   save_failed {coll, online}        undo_clicked {surface, label}
+//   draft_discarded {surface}         plan_opened {source}
+//   myday_opened {source: landing|tab|bell|push}
+export function heTrack(event, props) {
+  if (!booted) return;
+  try { posthog.capture(event, sanitize({ ...(props || {}) })); } catch (e) { /* see above */ }
 }

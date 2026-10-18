@@ -941,6 +941,7 @@ exports.notifyTimeOffRequest = functions.https.onCall(async (data) => {
 // inbox records deliver() always writes.
 // ─────────────────────────────────────────────────────────────
 const { timeOffDecisionPushes } = require("./timeOffDecision.js");
+const { jobEventsDiff } = require("./jobEvents.js"); // v551: job change log (UX batch 0)
 exports.onTimeOffDecision = functions.firestore
   .document("settings/timeOffRequests")
   .onUpdate(async (change) => {
@@ -1567,6 +1568,33 @@ exports.onJobUpdate = functions.firestore
         }));
       }
     } catch (e) { functions.logger.warn("[onJobUpdate] tripwire error (non-fatal)", e.message); }
+
+    // ── JOB CHANGE LOG (v551, UX batch 0 "measure, don't guess") ─────────
+    // Stage / status moves and change orders, return trips and material cards
+    // being created, changing status or removed, one small doc each in the
+    // function-only `job_events` collection (pure diff: ./jobEvents.js, test
+    // scripts/job-events-test.js). Gives the usability study the times the job
+    // data doesn't keep (created → sent / scheduled / signed off / invoiced,
+    // every stage change). Separate from `versions` on purpose: those are the
+    // recovery copies and keep only 25 per job. Fire-and-forget like the
+    // snapshot below: a log failure can never affect the save or a push.
+    try {
+      const evs = jobEventsDiff(before, after);
+      if (evs.length) {
+        const meta = change.after.data() || {};
+        const at = new Date().toISOString();
+        tasks.push((async () => {
+          const batch = db.batch();
+          for (const ev of evs) {
+            batch.set(db.collection("job_events").doc(), {
+              ...ev, jobId, jobName: name, at,
+              savedBy: meta.saved_by || "?", device: meta.device || "?", build: meta.app_build || null,
+            });
+          }
+          await batch.commit();
+        })().catch(e => functions.logger.warn("[onJobUpdate] job_events error (non-fatal)", e.message)));
+      }
+    } catch (e) { functions.logger.warn("[onJobUpdate] job_events setup error (non-fatal)", e.message); }
 
     // ── DURABLE VERSION SNAPSHOTS (HD2, Kweller hardening 2026-07-13) ──────
     // When a high-value, loss-prone field materially changes, stash its PRIOR
