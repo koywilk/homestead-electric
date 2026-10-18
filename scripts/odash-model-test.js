@@ -217,7 +217,7 @@ if (require.main === module) {
     changeOrders: [{ id: "k1", coStatus: "completed", desc: "Fan", completedBySync: ago(1).toISOString() }], coDoneDismissed: ["k1"],
     simproSync: { complete: ago(1).toISOString(), cos: { k1: ago(1).toISOString() }, log: [
       { at: ago(1).toISOString(), by: "Simpro sync", kinds: ["complete", "cos"], basis: { stage: "Invoiced", invPct: 100 },
-        changes: [{ field: "finishStatus", from: "inprogress", to: "complete", undo: true }, { co: "k1", desc: "Fan", from: "approved", to: "completed", undo: true }] },
+        changes: [{ field: "finishStatus", from: "inprogress", to: "complete", undo: true }, { co: "k1", desc: "Fan", from: "approved", to: "completed", undo: true, prev: { taskChecks: null, punchDoneAt: "", punchDoneBy: "", needsByStart: "", needsByEnd: "", needsHardDate: false } }] },
       { at: ago(20).toISOString(), by: "Simpro sync", kinds: ["invoicedFull"], basis: { stage: "Progress", invPct: 100 }, changes: [{ field: "invoiceSent", from: false, to: true, undo: true }] }] } };
   const sdm = X.odModel({ jobs: [syncJob], users, needs: [], upcoming: [], simTotals: { byNo: { "9001": { total: 1, inv: 1, invPct: 100, stage: "Invoiced" } } }, now });
   eq([sdm.syncLog.length, sdm.syncWeek.length], [2, 1], "a week of sync changes on the dashboard");

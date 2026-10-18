@@ -32,6 +32,14 @@ const OPEN_CO = ["approved", "scheduled"];
 const LOG_MAX = 20;
 const SYNC_BY = "Simpro sync";
 
+// The task lines of a CO's rich text, as the crew's punch list reads them (App.js
+// coTaskLines / coTaskKey, v417): "- " lines are the checkable items.
+function coItemKeys(html) {
+  const t = String(html || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/?(div|p|li|h[1-6])(\s[^>]*)?>/gi, "\n").replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  return t.split("\n").map(x => x.replace(/\s+/g, " ").trim()).filter(x => /^[-•*]/.test(x))
+    .map(x => x.replace(/^[-•*]+\s*/, "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 120));
+}
 const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 const r2 = (v) => Math.round(v * 100) / 100;
 
@@ -106,9 +114,17 @@ function planSimproSync(job, t, nowIso) {
       if (!co || !OPEN_CO.includes(co.coStatus) || !co.id || sync.cos[co.id]) return co;
       touched = true;
       sync.cos[co.id] = nowIso;
-      changes.push({ co: co.id, desc: String(co.desc || "").slice(0, 80), quote: co.quoteNumber || "", from: co.coStatus, to: "completed", undo: true });
+      // Checked off exactly like the crew's "mark done" on the punch list (App.js markDone):
+      // every task line ticked, punchDoneBy / punchDoneAt set — so the CO shows as done on the
+      // punch list and as Work Completed on the COs tab, not just vanish.
+      const checks = { ...(co.taskChecks || {}) };
+      const day = new Date(nowIso).toLocaleDateString("en-US", { timeZone: "America/Denver" });
+      coItemKeys(co.task).forEach(k => { if (!checks[k]) checks[k] = { by: SYNC_BY, at: day }; });
+      changes.push({ co: co.id, desc: String(co.desc || "").slice(0, 80), quote: co.quoteNumber || "", from: co.coStatus, to: "completed", undo: true,
+        prev: { taskChecks: co.taskChecks || null, punchDoneAt: co.punchDoneAt || "", punchDoneBy: co.punchDoneBy || "", needsByStart: co.needsByStart || "", needsByEnd: co.needsByEnd || "", needsHardDate: !!co.needsHardDate } });
       done.add(co.id);
-      return { ...co, coStatus: "completed", coStatusDate: "", needsByStart: "", needsByEnd: "", needsHardDate: false, completedBySync: nowIso };
+      return { ...co, coStatus: "completed", coStatusDate: "", needsByStart: "", needsByEnd: "", needsHardDate: false,
+        punchDoneBy: SYNC_BY, punchDoneAt: nowIso, taskChecks: checks, completedBySync: nowIso };
     });
     if (touched) {
       patch.changeOrders = next;
@@ -137,9 +153,12 @@ function undoPatch(job, entry) {
     if (c.field) p[c.field] = c.from;
   });
   const coBack = {};
-  ((entry && entry.changes) || []).forEach(c => { if (c.co) coBack[c.co] = c.from; });
+  ((entry && entry.changes) || []).forEach(c => { if (c.co) coBack[c.co] = c; });
   if (Object.keys(coBack).length && Array.isArray(j.changeOrders)) {
-    p.changeOrders = j.changeOrders.map(co => co && coBack[co.id] && co.coStatus === "completed" ? (() => { const { completedBySync, ...rest } = co; return { ...rest, coStatus: coBack[co.id] }; })() : co);
+    p.changeOrders = j.changeOrders.map(co => { const c = co && coBack[co.id]; if (!c || co.coStatus !== "completed") return co;
+      const { completedBySync, ...rest } = co; const pv = c.prev || {};
+      return { ...rest, coStatus: c.from, taskChecks: pv.taskChecks || {}, punchDoneAt: pv.punchDoneAt || "", punchDoneBy: pv.punchDoneBy || "",
+        needsByStart: pv.needsByStart || "", needsByEnd: pv.needsByEnd || "", needsHardDate: !!pv.needsHardDate }; });
     p.coDoneDismissed = (j.coDoneDismissed || []).filter(id => !coBack[id]);
   }
   return p;

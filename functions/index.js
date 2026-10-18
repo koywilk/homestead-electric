@@ -1109,6 +1109,12 @@ exports.onJobUpdate = functions.firestore
     });
 
     const tasks = [];
+    // v553: this write came from the Simpro invoicing sync (dailySimproTotals). It marks
+    // jobs Simpro already closed out, so it must not send "Finish complete — QC walk is
+    // due" to the coordinator or a "Finish complete" notice to the GC / homeowner; on
+    // the first run that would be 15 of each for jobs finished weeks ago.
+    const _rawA = change.after.data() || {}, _rawB = change.before.data() || {};
+    const bySimproSync = _rawA.saved_by === "Simpro sync" && _rawA.w !== _rawB.w;
 
     // ── Version lock telemetry (Phase 1, functions/versionLock.js) ──────────
     // Counts writes that landed WITHOUT a fresh app_build + w stamp in
@@ -1430,13 +1436,13 @@ exports.onJobUpdate = functions.firestore
     }
 
     // ── Milestone + inspection nudges → the job's coordinator (book-routed) ──
-    if (before.roughStatus !== "complete" && after.roughStatus === "complete") {
+    if (!bySimproSync && before.roughStatus !== "complete" && after.roughStatus === "complete") {
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "milestone_complete", {
         title: "✅ Rough complete", body: `Rough is complete on ${name} — QC walk is due.`,
         jobId, section: "Rough",
       }));
     }
-    if (before.finishStatus !== "complete" && after.finishStatus === "complete") {
+    if (!bySimproSync && before.finishStatus !== "complete" && after.finishStatus === "complete") {
       tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "milestone_complete", {
         title: "✅ Finish complete", body: `Finish is complete on ${name} — QC walk is due.`,
         jobId, section: "Finish",
@@ -1674,7 +1680,7 @@ exports.onJobUpdate = functions.firestore
     // on the mail provider and never depends on email being configured. Keyed on
     // the job's CURRENT gc — only GCs with an active link get notified.
     try {
-      const triggers = gcNotify.detectTriggers(before, after);
+      const triggers = gcNotify.detectTriggers(before, after).filter(t => !(bySimproSync && t.type === "milestone"));
       if (triggers.length) {
         const gcKeyNow = gcPortal.gcKeyOf(after.gc);
         if (gcKeyNow) {

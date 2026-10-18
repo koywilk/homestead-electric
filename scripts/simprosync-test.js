@@ -41,6 +41,14 @@ p = S.planSimproSync(webb, tW, NOW);
 eq([p.patch.invoiceSent, p.patch.readyToInvoice, p.patch.invoiceDismissed, p.patch.finishStatus, "roughStatus" in p.patch], [true, false, true, "complete", false], "invoiced in full + completed (rough already complete)");
 eq(p.patch.changeOrders.map(c => c.coStatus), ["completed", "pending", "completed"], "approved CO completed, pending left alone");
 eq([p.patch.changeOrders[0].needsByStart, p.patch.changeOrders[0].completedBySync, p.patch.coDoneDismissed], ["", NOW, ["a"]], "the CO's window cleared like Mark Work Completed; its invoice task cleared");
+// Checked off on the crew's punch list exactly like their own "mark done" (App.js markDone).
+const webbCo = { ...webb, changeOrders: [{ id: "a", coStatus: "approved", desc: "Add can", task: "<div><b>Kitchen</b></div><div>- Add 2 cans</div><div>- Move switch</div>", taskChecks: { "add 2 cans": { by: "Gage", at: "10/1/2026" } } }] };
+const pc = S.planSimproSync(webbCo, tW, NOW).patch.changeOrders[0];
+eq([pc.punchDoneBy, pc.punchDoneAt, Object.keys(pc.taskChecks).sort(), pc.taskChecks["add 2 cans"].by, pc.taskChecks["move switch"].by],
+  ["Simpro sync", NOW, ["add 2 cans", "move switch"], "Gage", "Simpro sync"], "punchDoneBy/At set, every task line ticked, the crew's own ticks kept");
+const pcEntry = S.planSimproSync(webbCo, tW, NOW).entry;
+const coUndo = S.undoPatch({ ...webbCo, changeOrders: [pc] }, pcEntry).changeOrders[0];
+eq([coUndo.coStatus, coUndo.punchDoneAt, coUndo.punchDoneBy, coUndo.taskChecks, "completedBySync" in coUndo], ["approved", "", "", { "add 2 cans": { by: "Gage", at: "10/1/2026" } }, false], "Undo puts the CO back on the punch list as it was");
 eq(p.kinds, ["invoiced", "invoicedFull", "complete", "cos"]);
 eq(p.entry.basis, { stage: "Invoiced", status: "Job - Ready to Invoice", inv: 41000, invPct: 100, total: 41000 }, "the Simpro numbers are on the log");
 assert.ok(p.entry.changes.some(c => c.field === "finishStatus" && c.from === "inprogress" && c.to === "complete"), "from / to logged");
