@@ -1063,6 +1063,46 @@ function ccLoadSyncPlan(rows, inboxById, floorOptions = [], dest = "loads") {
   }
   return { auto, manual };
 }
+// v555: FieldInk owns existence as well as the imported description. Only an
+// explicit bridge tombstone removes a linked row; absence is never deletion.
+// Keep the whole office row in an id-keyed archive. An explicit newer restore
+// brings it back with its original id and office work; a reused zone is not stolen.
+function ccLoadReconcileRemovals(pl, inboxById, rowKey = "loads") {
+  const archiveKey = rowKey === "loads" ? "fieldRemovedLoads" : "fieldRemovedWallboxDevices";
+  const source = pl || {}, rows = Array.isArray(source[rowKey]) ? source[rowKey] : [];
+  const archive = { ...(source[archiveKey] || {}) };
+  const removed = [], restored = [], loads = [];
+  const stamp = v => typeof v === "number" && Number.isFinite(v) && v > 0;
+  for (const row of rows) {
+    const f = row && row.origin === "fieldink" && row.fieldLoadId && inboxById && inboxById[row.fieldLoadId];
+    const previous = row && archive[row.id];
+    if (row && row.id && f && stamp(f.removedAt) && stamp(f.fieldUpdatedAt) &&
+        (!previous || f.fieldUpdatedAt >= (previous.fieldUpdatedAt || 0))) {
+      archive[row.id] = { load: { ...row }, removedAt: f.removedAt, fieldUpdatedAt: f.fieldUpdatedAt };
+      removed.push(row.id);
+    } else loads.push(row);
+  }
+  const activeIds = new Set(loads.filter(Boolean).map(r => r.id));
+  const otherRows = source[rowKey === "loads" ? "wallboxDevices" : "loads"] || [];
+  const activeFieldIds = new Set([...loads, ...otherRows].filter(Boolean).map(r => r.fieldLoadId).filter(Boolean));
+  for (const [id, entry] of Object.entries(archive)) {
+    const row = entry && entry.load;
+    if (!entry || !entry.removedAt || !row || row.id !== id || row.origin !== "fieldink" || !row.fieldLoadId) continue;
+    if (activeIds.has(id) || activeFieldIds.has(row.fieldLoadId)) continue;
+    const f = inboxById && inboxById[row.fieldLoadId];
+    // Require FieldInk to explicitly restore it, not an older cached live copy.
+    if (!f || f.removedAt !== null || !stamp(f.fieldUpdatedAt) || f.fieldUpdatedAt <= entry.fieldUpdatedAt) continue;
+    const a = row.assign;
+    const occupied = a && a.moduleId && a.zone && loads.some(l => l && l.assign &&
+      l.assign.panelId === a.panelId && l.assign.moduleId === a.moduleId && l.assign.zone === a.zone);
+    loads.push(occupied ? { ...row, assign: { panelId: a.panelId, moduleId: null, zone: null } } : { ...row });
+    activeIds.add(id); activeFieldIds.add(row.fieldLoadId);
+    // Retain the original assignment in the archive even when its zone was reused.
+    archive[id] = { ...entry, removedAt: null, fieldUpdatedAt: f.fieldUpdatedAt };
+    restored.push(id);
+  }
+  return { pl: removed.length || restored.length ? { ...source, [rowKey]: loads, [archiveKey]: archive } : source, removed, restored };
+}
 // ── v554 KEYPADS from FieldInk (ccloads/<jobId>.keypads, FieldInk v686) ──────
 // Field-owned: keypads[kpId] = { label, kpType:'ra3'|'panel', page, sheet,
 // floor, room, assigned:[{key, loadId}] (≤40; key = id in `loads`, which may be
@@ -29479,7 +29519,7 @@ function plOverlayLoad(serverLoad, clientLoad, fields) {
   (fields || []).forEach(f => { if (clientLoad[f] === undefined) delete o[f]; else o[f] = clientLoad[f]; });
   return o;
 }
-function _plApplyRows(sArr, cArr, ri) {
+function _plApplyRows(sArr, cArr, ri, serverArchive = {}, clientArchive = {}) {
   const sL = Array.isArray(sArr) ? sArr : [], cL = Array.isArray(cArr) ? cArr : [];
   const sById = new Map(sL.filter(l => l && l.id != null).map(l => [l.id, l]));
   const changed = (ri && ri.changed) || {}, added = new Set((ri && ri.added) || []), removed = new Set((ri && ri.removed) || []);
@@ -29490,7 +29530,17 @@ function _plApplyRows(sArr, cArr, ri) {
     seen.add(l.id);
     const sv = sById.get(l.id);
     if (sv) { out.push(changed[l.id] ? plOverlayLoad(sv, l, changed[l.id]) : sv); return; }
-    if (added.has(l.id) || changed[l.id]) out.push(l);   // added here, or edited here after another device removed it → keep
+    if (added.has(l.id) || changed[l.id]) {
+      const archived = serverArchive?.[l.id], local = clientArchive?.[l.id];
+      if (added.has(l.id) && archived?.removedAt && local?.removedAt === null && archived.load?.fieldLoadId === l.fieldLoadId) {
+        // Undo may race an archive updated by a second device. Start with its
+        // office row and overlay only what changed during this restore.
+        if (!(local.fieldUpdatedAt > archived.fieldUpdatedAt)) return;
+        const original = local.load || {};
+        const fields = [...new Set([...Object.keys(original), ...Object.keys(l)])].filter(k => !_jeq(original[k], l[k]));
+        out.push(plOverlayLoad(archived.load, l, fields));
+      } else out.push(l);
+    }   // added here, or edited here after another device removed it → keep
     /* else: gone from the server since this copy loaded and untouched here → honor the delete */
   });
   sL.forEach(l => { if (l && l.id != null && !seen.has(l.id) && !removed.has(l.id)) out.push(l); });
@@ -29498,17 +29548,45 @@ function _plApplyRows(sArr, cArr, ri) {
 }
 function plApplyIntent(serverPl, clientPl, intent, basePl) {
   const s = serverPl && typeof serverPl === "object" ? serverPl : {}, c = clientPl && typeof clientPl === "object" ? clientPl : {};
-  const res = { ...s, loads: _plApplyRows(s.loads, c.loads, intent) };
+  const res = { ...s, loads: _plApplyRows(s.loads, c.loads, intent, s.fieldRemovedLoads, c.fieldRemovedLoads) };
   // v554: per-row arrays beyond loads (intent.rows). An older queued intent has
   // no `rows` → those keys fall through to the whole-key path below as before.
   Object.keys((intent && intent.rows) || {}).forEach(k => {
     if (!PL_ROW_KEYS.includes(k) || k === "loads") return;
     if (!Array.isArray(s[k]) && !Array.isArray(c[k])) return;
-    res[k] = _plApplyRows(s[k], c[k], intent.rows[k]);
+    res[k] = _plApplyRows(s[k], c[k], intent.rows[k], s.fieldRemovedWallboxDevices, c.fieldRemovedWallboxDevices);
   });
   ((intent && intent.keys) || []).forEach(k => {
     if (c[k] === undefined) { delete res[k]; return; }                     // this copy removed the key
     res[k] = _threeWayMerge(basePl && typeof basePl === "object" ? basePl[k] : undefined, c[k], s[k]);
+  });
+  // v555: a FieldInk removal archives the SERVER's current office row, so
+  // watts, pulled stamps or assignments edited after this device loaded survive.
+  PL_ROW_KEYS.forEach(rowKey => {
+    const archiveKey = rowKey === "loads" ? "fieldRemovedLoads" : "fieldRemovedWallboxDevices";
+    if (!(intent?.keys || []).includes(archiveKey)) return;
+    const ri = rowKey === "loads" ? intent : intent?.rows?.[rowKey];
+    const removed = new Set(ri?.removed || []), added = new Set(ri?.added || []);
+    const sById = new Map((s[rowKey] || []).filter(Boolean).map(l => [l.id, l]));
+    const archive = { ...(res[archiveKey] || {}) };
+    removed.forEach(id => {
+      const entry = c[archiveKey] && c[archiveKey][id], live = sById.get(id);
+      if (entry?.removedAt && entry.load?.origin === "fieldink" && live?.origin === "fieldink" && live.fieldLoadId === entry.load.fieldLoadId) {
+        archive[id] = { ...entry, load: { ...live } };
+      }
+    });
+    // Re-check zone occupancy at commit, not just when the snapshot rendered.
+    added.forEach(id => {
+      if (sById.has(id)) return; // another device already restored it; its active row wins
+      const remote = s[archiveKey]?.[id], local = c[archiveKey]?.[id];
+      if (!remote?.removedAt || local?.removedAt !== null) return;
+      if (!(local.fieldUpdatedAt > remote.fieldUpdatedAt)) { archive[id] = remote; return; }
+      const row = res[rowKey].find(l => l && l.id === id), a = row && row.assign;
+      if (a?.moduleId && a.zone && res[rowKey].some(l => l && l.id !== id && l.assign?.panelId === a.panelId && l.assign?.moduleId === a.moduleId && l.assign?.zone === a.zone)) {
+        row.assign = { panelId: a.panelId, moduleId: null, zone: null };
+      }
+    });
+    res[archiveKey] = archive;
   });
   return res;
 }
@@ -31450,6 +31528,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Same self-healing attach as the cccos listener above; inert until the office
   // is job-linked AND the field-ink `ccloads` rules are deployed.
   const [ccLoadInbox, setCcLoadInbox] = useState({});
+  const [ccLoadSource, setCcLoadSource] = useState(null);
   // v554: FieldInk v686's top-level keypads map (field-owned + office sub-object).
   const [ccKeypadInbox, setCcKeypadInbox] = useState({});
   // v400 walk-mode UI state for the inbox: filter chip + which rooms are OPEN
@@ -31458,12 +31537,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [ccLoadUi, setCcLoadUi] = useState({ filter: "all", open: {} });
   useEffect(() => {
     let dead = false, unsub = null, retryTimer = null;
-    setCcLoadInbox({}); setCcKeypadInbox({});
+    setCcLoadInbox({}); setCcKeypadInbox({}); setCcLoadSource(null);
     const attach = () => { if (dead) return; ensureFieldinkAuth().then(u2 => {
       if (dead) return;
       if (!u2) { retryTimer = setTimeout(attach, 20000); return; }
       try {
-        unsub = onSnapshot(doc(fieldinkDb, "ccloads", String(job.id)), snap => {
+        unsub = onSnapshot(doc(fieldinkDb, "ccloads", String(job.id)), { includeMetadataChanges: true }, snap => {
+          if (dead) return;
+          setCcLoadSource({ jobId: String(job.id), confirmed: !snap.metadata.fromCache && !snap.metadata.hasPendingWrites });
           const d = snap.exists() ? snap.data() : null;
           const m = {};
           for (const [id, l] of Object.entries(d?.loads || {})) if (l && typeof l === "object") m[id] = { ...l, id };
@@ -31491,21 +31572,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // v554: Wallbox Devices rows follow the same way (dest "wallbox"), in the
   // SAME single u() patch so the two lists never race each other.
   useEffect(() => {
-    const pl = job.panelizedLighting || {};
+    // Only this job's server-confirmed bridge snapshot may change imported rows.
+    if (!ccLoadSource?.confirmed || ccLoadSource.jobId !== String(job.id) || String(jobRef.current?.id) !== String(job.id)) return;
+    const current = jobRef.current.panelizedLighting || {};
+    const lifecycle = ccLoadReconcileRemovals(current, ccLoadInbox);
+    const wallboxLifecycle = ccLoadReconcileRemovals(lifecycle.pl, ccLoadInbox, "wallboxDevices");
+    const pl = wallboxLifecycle.pl;
     const rows = pl.loads || [], wrows = pl.wallboxDevices || [];
-    if ((!rows.length && !wrows.length) || !Object.keys(ccLoadInbox || {}).length) return;
     const floorOptions = ["Main Level", "Basement", "Upper Level", ...(pl.extraFloors || []).map(ef => ef && ef.label).filter(Boolean)];
     const plan = ccLoadSyncPlan(rows, ccLoadInbox, floorOptions);
     const wplan = ccLoadSyncPlan(wrows, ccLoadInbox, floorOptions, "wallbox");
-    if (!plan.auto.length && !wplan.auto.length) return;
+    if (!plan.auto.length && !wplan.auto.length && pl === current) return;
     const byIdP = {}; plan.auto.forEach(e => { byIdP[e.id] = e.patch; });
     const byIdW = {}; wplan.auto.forEach(e => { byIdW[e.id] = e.patch; });
     u({ panelizedLighting: { ...pl,
       ...(plan.auto.length ? { loads: rows.map(r => r && byIdP[r.id] ? { ...r, ...byIdP[r.id] } : r) } : {}),
       ...(wplan.auto.length ? { wallboxDevices: wrows.map(r => r && byIdW[r.id] ? { ...r, ...byIdW[r.id] } : r) } : {}) } });
-    const nAuto = plan.auto.length + wplan.auto.length;
+    const nAuto = plan.auto.length + wplan.auto.length + lifecycle.removed.length + lifecycle.restored.length + wallboxLifecycle.removed.length + wallboxLifecycle.restored.length;
     try { toast.success(`Updated ${nAuto} imported load${nAuto === 1 ? "" : "s"} from FieldInk`); } catch {}
-  }, [ccLoadInbox, job.panelizedLighting, job.id]);
+  }, [ccLoadInbox, ccLoadSource, job.panelizedLighting, job.id]);
 
   // ── CREW FIELD QUESTIONS → the job's Questions ────────────────────────────
   // A crew drops a Question/Problem on a live plan link (?crew=) → FieldInk
@@ -33377,7 +33462,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // confusing"): loads already on the Loads list leave the inbox; the
                 // "Imported N" chip shows them. Header counts = what's left.
                 const importedRows = incoming.filter(l => importedIds.has(l.id));
-                const waiting = incoming.filter(l => !importedIds.has(l.id));
+                const waiting = incoming.filter(l => !l.removedAt && !importedIds.has(l.id));
                 const all = tally(waiting);
                 const filter = ccLoadUi.filter;
                 const passes = (l) => filter === "pending" ? !!(ccLoadSuggestionStatus(l) && ccLoadSuggestionStatus(l).state === "pending")
@@ -58228,9 +58313,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-18 · App SW version: v554
+**Last manifest update:** 2026-10-20 · App SW version: v555
 
 ---
+
+- **FieldInk deletions follow through to Panelized Lighting** · 'shipped 2026-10-20' · 'SW v555' · Koy reported Rec Room Perimeter Cans deleted on the plan but still active in CC. CC's imported-load sync skipped bridge tombstones. It now archives explicitly removed FieldInk-origin master and Wallbox Devices rows and removes them from the active list in the same normal job patch; an explicit newer FieldInk restore brings back the same row id and office details, parking it if its Lutron zone was reused. Archived/gone rows no longer reappear as waiting imports. Sync writes require a server-confirmed bridge snapshot for the current job. **Why it won't lose data:** the full row (watts, pulled stamps, assignment and other office fields) stays in 'panelizedLighting.fieldRemovedLoads' / 'fieldRemovedWallboxDevices'; the save transaction archives the latest server row, preserving concurrent office edits. Missing records, offline cache, hand-entered rows and other job fields are untouched. No FieldInk, rules or PDF/Drive change. Legacy standalone module rows without a FieldInk id remain independent.
+
 
 - **FieldInk bridge v2 on Panelized Lighting: every control method imports (panel + tape → Loads, RA3 + Standard → new Wallbox Devices = the dimmer / switch order), keypads fill from FieldInk with engraving + per-keypad Confirm, a method chip on every inbox row, and the Lutron builder refuses dimmed loads on a switching module** · 'shipped 2026-10-18' · 'SW v554' · 'ccLoadMethod' · 'ccLoadDest' · 'ccWallboxImportRows' · 'ccWallboxOrder' · 'WallboxDevicesSection' · 'ccKeypadPrefillPlan' · 'ccKeypadFillPatch' · 'ccKeypadRemovedRows' · 'FieldKeypadPanel' · 'ccOfficeWritePayload' · 'publishCcKeypadOfficeMany' · 'lutronRejects' · Koy approved the controls-standard review 2026-10-17 (*"do all recs"*, Sheet 7); pairs with FieldInk v686, which adds 'loads[id].method' ('switch' | 'wallbox' | 'panel' | 'tape'; 'control' stays frozen) and a top-level 'keypads' map to 'ccloads/<jobId>'. Mockup approved first (artifact 54J4vA6R…). **Import by method:** 'ccLoadImportRows' was panel-only (v435), so an RA3 wallbox job couldn't import its loads. Now one Import routes by 'ccLoadDest': panel → the Loads list as before (panel builders and the Lutron fit check unchanged); **tape** → the Loads list as an 'LED' load carrying 'tapeFt'; **wallbox** (RA3) and **switch** (Standard hard-wired, incl. a hard-wired dimmer) → 'panelizedLighting.wallboxDevices' ('{ id, name, room, location, device:'Dimmer'|'Switch' from control, method, fieldLoadId, origin, fieldSnap }'), idempotent on 'fieldLoadId'. A load with no or an unknown method (an older FieldInk iPad; 'module' / 'system' reserved) keeps today's rule: only control 'panel' imports. Header **Import all** / room **Import N** do both lists in ONE 'u()' patch and say where each went; rows show **Import** (Loads) or **Add to Wallbox**; the tag reads **In Loads** / **In Wallbox**; the header counts by method (panel · tape · RA3 · standard · older FieldInk). **Method chip** on every inbox row (Panel / RA3 / Standard / Tape, dashed *Update FieldInk* when absent); tape rows show their feet. 'ccLoadSyncPlan' takes a 'dest' and still compares name / room / floor ONLY — 'method' and 'control' never raise a "changed in FieldInk" note; the v450 auto-follow and **Update N from FieldInk** now cover Wallbox rows in the same patch; v435's *Remove N imported by mistake* now only offers rows whose field load can't be placed at all (no method, not panel) — a load FieldInk later moved to RA3 / Standard is never offered for removal; v436's *Fill floor/room* also gives pre-v554 tape rows their 'LED' type and 'tapeFt'; v443's header *Dismiss N switched* became **Dismiss N not importable** (only older-FieldInk loads with no method — RA3 / Standard are real work now). **Wallbox Devices** (new section under the Loads list, only when the job has some): order tiles RA3 dimmers / RA3 switches / Standard dimmers / Standard switches, then floor → room (floors start folded), editable name (rows don't re-sort while typing) and Dimmer/Switch, RA3/Standard chip, remove with confirm, *FieldInk now says Dimmer* when the plan flips. **Keypads:** a folded **Keypads from FieldInk** strip at the bottom of the inbox lists live keypads with their fate (*Fills into Upper Level* / *In Keypads* / *Main Level confirmed — skipped* / *Set this sheet's floor above*); **Fill N keypads** ('ccKeypadPrefillPlan' + 'ccKeypadFillPatch', ONE 'u()' patch) puts each into its floor's existing Keypad section (floor = keypad 'office.floor' → FieldInk floor → the floor the office set for that sheet), blank seeded rows first, never into a floor the office **CONFIRMED**, idempotent on 'fieldKeypadId'; the row carries 'room', 'sheet', 'kpType', 'assigned' (joined to 'loads' by key; a key missing from 'loads' keeps its loadId, flagged). The strip hides when Job Sections → Keypads is off; Fill never takes over a nameless row that already has a status. Under a filled row, 'FieldKeypadPanel' (buttons read live from the bridge, joined to its loads; the copy taken at Fill is the fallback): RA3 / Panel keypad, room · sheet, **N buttons ▸** (folded) with an **Engraving** box per button and a per-keypad **Confirm keypad** — both written ONLY to 'keypads[id].office' ('engraving.{loadKey}', 'confirmed' / 'confirmedBy' / 'confirmedAt'). 'removedAt' = hidden, never deleted: not filled, a filled row stays with a red *removed in FieldInk* tag, a **Removed in FieldInk N** chip shows them, and they return if FieldInk clears it. **Keypad wire per job** (Koy 2026-10-18: *"we dont always pull the low votagle keypad wires … we always pull the loads"*): a **Keypad wire: We pull it / Not on this job** switch under the Keypads heading writes 'panelizedLighting.pullKeypadWire' (unset = pull, so every existing job is unchanged); off hides the keypad Pulled status column, the pull progress bar and the status badges in a confirmed list (statuses already set are kept and return when switched back). **Loads always tracked:** Wallbox Devices rows get a **Ran** checkbox ('loadPulledPatch': 'pulled' / 'pulledBy' / 'pulledAt', shown as ✓ name · date) and appear on the **Loads Ran** card with the Loads list (ids prefixed 'wb:' route the tick to the right list). **Stale-copy guard extended:** 'wallboxDevices' gets the same per-row intent merge as 'loads' ('PL_ROW_KEYS', '_plRowDiff', '_plApplyRows', 'intent.rows.wallboxDevices'; the loads intent keeps its v496 top-level shape so an intent already queued on a phone still applies; 'rows' is only present when the job has the array) and 'plRepairUnticks' restores a merge-un-ticked Wallbox row — a stale phone ticking one device can't undo another person's tick or the office's rename. 'scripts/panel-loads-merge-test.js' 46 → 55 checks. **Office writes:** every write to the bridge now goes through 'ccOfficeWritePayload' → '{ loads|keypads: { id: { office:{…, officeUpdatedAt} } } }' and nothing else — the load writers no longer stamp top-level 'updatedAt' / 'updatedBy:"office"' (FieldInk's fields; the Miller forensics read 'updatedBy'). **Lutron:** 'lutronKindFits' now refuses dimmed loads (Dimming / ELV / MLV / LED) on a switching-only module (4S8, legacy S8) and 'lutronRejects' makes it hard — the module chip greys out (*can't dim*), the zone-fill chip is disabled, assign / fill refuse with a toast, a batch leaves the dimmed loads off; Suggest layout puts them on a 4A5. Tests: 'scripts/ccloads-suggest-test.js', now 164 checks (method fallback, routing, tape feet, wallbox rows + order, sync dest + method never trips a note, keypad sections / floor / join / 40 cap / plan buckets / fill / confirmed lock / idempotency, removedAt flagged-not-dropped + restorable, the office payload shape, the keypad writer); 'scripts/needs-dryrun.js' (4S8 refuses dimmed, S8 alias, ELV fits 4A5). Guide 'panelizedlighting.html'. Contract copied into 'LIGHTING-LOADS-BRIDGE.md'. Walked through on a sample job in a preview built from the real code (artifact 3ygsjXSu…), desktop + phone; that pass fixed: a typed keypad label stands as typed and only a generic one (KP / Keypad 2) borrows the room (was "Primary Closet Primary Bed KP"), Wallbox rows wrap to two lines on a phone, the Wallbox heading shows just the device count, the keypad strip header wraps cleanly. Adversarial review: nothing critical; one medium (the old *Dismiss N switched* would have hidden the RA3 / Standard loads Import now takes) and six lows fixed before ship. **Why it won't lose data:** 'pullKeypadWire' only hides the keypad status (nothing is cleared); the merge change leaves the loads path identical (the 46 existing merge checks pass unchanged) and only gives 'wallboxDevices' the stronger per-row protection; every job write is one 'u()' patch that spreads the current 'panelizedLighting' and only APPENDS (imports, wallbox rows) or fills blank keypad rows / appends (Fill) — no row is removed, reordered or overwritten except by the office's own edits, and Wallbox remove asks first; 'wallboxDevices' and the new keypad-row keys are additive inside 'data.panelizedLighting' (the loader already carries it; no loader, rules or function change); bridge writes name only 'office' sub-objects (deep merge, field-owned keys untouched); 'removedAt' never deletes; the Lutron change only refuses a new placement — loads already on a 4S8 stay put.
 - **Invoicing tracked from Simpro: Ready to invoice retired, jobs marked invoiced (in full at 99.5%), jobs Simpro closed out marked complete, invoiced change orders completed — every change logged with Undo** · 'shipped 2026-10-17' · 'SW v553' · 'functions/simproSync.js' · 'planSimproSync' · 'undoPatch' · 'dailySimproTotals' · 'READY_TO_INVOICE_ALERTS' · 'READY_TO_INVOICE_PUSH' · 'odSyncUndo' · 'odSyncText' · Koy, 2026-10-17: *"ready to invoice should not show numbers in the app. instead i want invoicing to be tracked from simpro api, when something is invoiced mark it in the app as invoiced, nobody uses the notification ready to invoice anyway. if closed in simpro just auto mark it complete. changed orders not marked complete in the app but invoiced in simpro should mark complete auto as well."* Replaces v551's left-to-bill Ready to invoice line before release. **Retired (fields kept on the jobs):** the stage % no longer turns Ready to invoice on or off ('stageChangePlan', 'READY_TO_INVOICE_ALERTS = false'), the onJobUpdate *Ready to Invoice* push ('READY_TO_INVOICE_PUSH = false'), the My Day tasks *Ready to Invoice*, *Invoice Overdue — N Days* and quick-job *Invoice …*, the Tasks page Ready-to-invoice section, the Kanban Ready-to-invoice card, the morning digest's invoice-hat count for it, and the dashboard line. Quick-job and temp-ped status flows and their *Invoice sent* buttons are unchanged. **Sync ('dailySimproTotals', weekdays 6:15, every job not yet invoiced in full or still open, cap 250):** per job, inside a Firestore transaction on its latest copy, 'planSimproSync' (1) records 'simproInvoicedValue' / 'simproInvoicedPct' / 'simproInvoicedTotal' and 'simproInvoicedSeenAt' (the day the sync first saw that amount; shown under the job's Simpro # in Job Info as *Invoiced 62% so far · seen 10/19* or *Invoiced in full*, percent only (Koy: *"dollar amounts can show in dashboard but no the app crews use"*; the dashboard job card keeps $ billed and $ left to bill)); at 99.5%+ sets 'invoiceSent' true, 'readyToInvoice' false, 'invoiceDismissed' true, 'invoice' statuses → complete, quick job → Invoiced (the fields the *Invoice sent* button sets); (2) when Simpro's Stage is Invoiced or Complete at 99.5%+ and the job is still open here, marks it complete (finish complete, rough complete if it wasn't, holds off; quick job Invoiced; temp ped Completed; commercial stage complete), leaving punch, return trips and inspections as they are; (3) on a job invoiced in full, approved / scheduled COs → 'completed' and checked off on the crew's punch list exactly like their own *mark done* ('punchDoneBy: "Simpro sync"', 'punchDoneAt', every task line ticked in 'taskChecks', the crew's own ticks kept; window cleared; 'completedBySync'), their *merge or invoice* task cleared ('coDoneDismissed'); Undo restores the CO's checks and dates; pending COs untouched. Each change happens **once** ('simproSync.complete' / '.invoiceSent' / '.cos[id]'): put it back by hand or Undo and it is not redone. Each run that changes something appends to 'simproSync.log' (last 20: what changed, from → to, and the Simpro stage / status / invoiced $ / % / total). Writes carry the app's version-lock stamp shape ('app_build' 553 + a fresh 'w'), 'saved_by: "Simpro sync"', 'device: "server"'; two app jobs on one Simpro # are skipped; onJobUpdate recognises the sync's writes ('saved_by' "Simpro sync" with a new 'w') and sends neither the coordinator's *Rough / Finish complete — QC walk is due* push nor the GC portal's *Finish complete* milestone for them (a person completing a job still sends both); **crew side:** an auto-completed job moves into the Job Board's collapsed *Completed* section (it does not disappear), and its open return trips and punch keep their red pills, My Day rows and tasks; completed COs show as done on the punch list and *Work Completed* on the COs tab; 'settings/simproSync.mode' = 'off' (no writes) / 'dry' (plan only) / live by default; the run's list lands in 'settings/simproTotals.syncLast'. **Dashboard:** Needs you → *Changed by the Simpro sync this week* (completed / invoiced / COs); the job card lists each sync change with **Undo** (admins; 'odSyncUndo' = the server's 'undoPatch': fields and CO statuses back, the CO task back, invoiced amounts kept as facts, entry marked undone). *Closed in Simpro — close it here?* and *Billed — mark done?* now only show what the sync has not handled (or a change someone undid stays put). **Dry run on live data, 2026-10-17 (read-only):** 15 jobs would be marked complete (the audit's 15), 12 marked invoiced in full (Mangum stays open: Simpro Progress at 100% with 36 open punch), 16 approved COs completed, 100 jobs get their invoiced amount recorded; #1370 skipped (two app jobs share it). Gates: new 'scripts/simprosync-test.js' (prebuild), 'odash-model-test.js' §6 and §10, 'stage-change-test.js' (parity sweep now with no invoice keys), 'mydaydigest-test.js'. Guides: 'dashboard.html', 'jobinfo.html', 'rough.html', 'myday.html'. Crew brief 'docs/crew-briefs/v553.md' (covers v551–v553). **Needs 'firebase deploy --only functions:dailySimproTotals,functions:onJobUpdate,functions:dailyMyDayDigest' before the push.** **Why it won't lose data:** nothing is deleted — the old Ready-to-invoice fields stay; the sync only sets status fields and adds 'simprosync*' / 'simproInvoiced*' fields, one job per transaction on its latest copy (a crew edit in between is never overwritten), once per change, each logged with its old value and undoable from the dashboard; Simpro is only read.

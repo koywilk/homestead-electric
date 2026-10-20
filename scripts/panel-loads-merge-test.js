@@ -211,5 +211,60 @@ const names = (arr) => arr.map(l => l.id + ":" + l.name + (l.assign ? "@" + l.as
   eq("plRepairUnticks: a merge-un-ticked wallbox row gets the server's tick back", [rep.repaired, rep.pl.wallboxDevices.find(w => w.id === "w2").pulled], [["Garage Cans"], true]);
 }
 
+// v555: removing a FieldInk load must archive concurrent office work.
+{
+  const row = { id: "fi1", origin: "fieldink", fieldLoadId: "rec", name: "Rec Room Perimeter Cans", watts: 100, pulled: false, assign: null };
+  const base = { loads: [row], panels: [{ id: "p1" }] };
+  const serverRow = { ...row, watts: 240, pulled: true, pulledBy: "Crew", assign: { panelId: "p1", moduleId: "m1", zone: 3 } };
+  const server = { ...base, loads: [serverRow, { id: "foreign", name: "Added elsewhere" }] };
+  const client = { ...base, loads: [], fieldRemovedLoads: { fi1: { load: row, removedAt: 100, fieldUpdatedAt: 100 } } };
+  const intent = plDiffIntent(base, client);
+  const out = plApplyIntent(server, client, intent, base);
+  eq("FieldInk removal preserves server-only loads", out.loads, [{ id: "foreign", name: "Added elsewhere" }]);
+  eq("archive captures the server's latest watts / tick / assignment", out.fieldRemovedLoads.fi1.load, serverRow);
+  eq("removal keeps panel definitions", out.panels, server.panels);
+  const remoteArchive = { untouched: { load: { id: "untouched" }, removedAt: 50, fieldUpdatedAt: 50 } };
+  const merged = plApplyIntent({ ...server, fieldRemovedLoads: remoteArchive }, client, intent, base);
+  eq("another device's archive entry survives", merged.fieldRemovedLoads.untouched, remoteArchive.untouched);
+}
+
+// Restore races must not discard a fresher archive or occupy a reused zone.
+{
+  const row = { id: "fi1", origin: "fieldink", fieldLoadId: "rec", name: "Rec Cans", watts: 100, assign: { panelId: "p", moduleId: "m", zone: 1 } };
+  const entry = { load: row, removedAt: 100, fieldUpdatedAt: 100 };
+  const base = { loads: [], fieldRemovedLoads: { fi1: entry } };
+  const client = { loads: [row], fieldRemovedLoads: { fi1: { ...entry, removedAt: null, fieldUpdatedAt: 200 } } };
+  const intent = plDiffIntent(base, client);
+  const newer = { ...entry, load: { ...row, watts: 240, pulled: true, pulledBy: "Crew" } };
+  const occupant = { id: "other", name: "New load", assign: row.assign };
+  const server = { loads: [occupant], fieldRemovedLoads: { fi1: newer } };
+  const before = JSON.stringify(server);
+  const out = plApplyIntent(server, client, intent, base);
+  const restored = out.loads.find(l => l.id === "fi1");
+  eq("restore takes the freshest archived office fields", [restored.watts, restored.pulled, restored.pulledBy], [240, true, "Crew"]);
+  eq("restore parks when a zone was occupied after the local snapshot", restored.assign, { panelId: "p", moduleId: null, zone: null });
+  eq("restore does not mutate the server input", JSON.stringify(server), before);
+  const alreadyActive = { ...server, loads: [occupant, { ...row, notes: "Restored elsewhere" }] };
+  const activeBefore = JSON.stringify(alreadyActive);
+  plApplyIntent(alreadyActive, client, intent, base);
+  eq("a concurrent restore never mutates an already active server row", JSON.stringify(alreadyActive), activeBefore);
+  const laterRemoval = { ...newer, removedAt: 300, fieldUpdatedAt: 300 };
+  const late = plApplyIntent({ ...server, fieldRemovedLoads: { fi1: laterRemoval } }, client, intent, base);
+  eq("older restore cannot override a later FieldInk deletion", late.loads, [occupant]);
+  eq("later removal archive remains recoverable", late.fieldRemovedLoads.fi1, laterRemoval);
+}
+
+// v555: Wallbox archiving uses v554's per-row intent, preserving concurrent work.
+{
+  const row = { id: "wb1", origin: "fieldink", fieldLoadId: "fw", device: "Dimmer", pulled: false };
+  const base = { loads: [], wallboxDevices: [row] };
+  const client = { ...base, wallboxDevices: [], fieldRemovedWallboxDevices: { wb1: { load: row, removedAt: 10, fieldUpdatedAt: 10 } } };
+  const latest = { ...row, pulled: true, pulledBy: "Crew", notes: "Keep" };
+  const server = { ...base, wallboxDevices: [latest, { id: "wb2", name: "Added elsewhere" }] };
+  const out = plApplyIntent(server, client, plDiffIntent(base, client), base);
+  eq("wallbox removal preserves other device's new row", out.wallboxDevices, [{ id: "wb2", name: "Added elsewhere" }]);
+  eq("wallbox archive captures latest server office work", out.fieldRemovedWallboxDevices.wb1.load, latest);
+}
+
 if (fails) { console.error(`panel-loads-merge-test: ${fails} of ${n} checks failed`); process.exit(1); }
 console.log(`panel-loads-merge-test: ${n} checks passed`);

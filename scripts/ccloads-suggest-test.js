@@ -17,10 +17,11 @@ const a = src.indexOf(START), b = src.indexOf(END);
 if (a === -1 || b === -1 || b < a) { console.error("ccloads-suggest-test: markers not found in src/App.js"); process.exit(1); }
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection; this.ccLoadSyncPlan = ccLoadSyncPlan; this.ccLoadWantFromField = ccLoadWantFromField; this.CC_LOAD_METHODS = CC_LOAD_METHODS; this.ccLoadMethod = ccLoadMethod; this.ccLoadDest = ccLoadDest; this.ccWallboxImportRows = ccWallboxImportRows; this.ccWallboxOrder = ccWallboxOrder; this.ccKeypadSectionKeys = ccKeypadSectionKeys; this.ccKeypadSectionKey = ccKeypadSectionKey; this.ccKeypadFloor = ccKeypadFloor; this.ccKeypadRowFields = ccKeypadRowFields; this.ccKeypadPrefillPlan = ccKeypadPrefillPlan; this.ccKeypadFillPatch = ccKeypadFillPatch; this.ccKeypadRemovedRows = ccKeypadRemovedRows; this.ccOfficeWritePayload = ccOfficeWritePayload; this.ccKeypadConfirmPatch = ccKeypadConfirmPatch; this.ccKeypadEngravePatch = ccKeypadEngravePatch;", ctx);
+vm.runInContext(src.slice(a, b) + "\nthis.CC_LOAD_SUGGEST_KINDS = CC_LOAD_SUGGEST_KINDS; this.ccLoadCurrentKind = ccLoadCurrentKind; this.ccLoadSuggestPatch = ccLoadSuggestPatch; this.ccLoadSuggestionStatus = ccLoadSuggestionStatus; this.ccLoadWithdrawPatch = ccLoadWithdrawPatch; this.ccLoadsGrouped = ccLoadsGrouped; this.ccLoadImportRows = ccLoadImportRows; this.ccFloorToSection = ccFloorToSection; this.ccLoadSyncPlan = ccLoadSyncPlan; this.ccLoadWantFromField = ccLoadWantFromField; this.ccLoadReconcileRemovals = ccLoadReconcileRemovals; this.CC_LOAD_METHODS = CC_LOAD_METHODS; this.ccLoadMethod = ccLoadMethod; this.ccLoadDest = ccLoadDest; this.ccWallboxImportRows = ccWallboxImportRows; this.ccWallboxOrder = ccWallboxOrder; this.ccKeypadSectionKeys = ccKeypadSectionKeys; this.ccKeypadSectionKey = ccKeypadSectionKey; this.ccKeypadFloor = ccKeypadFloor; this.ccKeypadRowFields = ccKeypadRowFields; this.ccKeypadPrefillPlan = ccKeypadPrefillPlan; this.ccKeypadFillPatch = ccKeypadFillPatch; this.ccKeypadRemovedRows = ccKeypadRemovedRows; this.ccOfficeWritePayload = ccOfficeWritePayload; this.ccKeypadConfirmPatch = ccKeypadConfirmPatch; this.ccKeypadEngravePatch = ccKeypadEngravePatch;", ctx);
 const { CC_LOAD_SUGGEST_KINDS, ccLoadCurrentKind, ccLoadSuggestPatch, ccLoadSuggestionStatus, ccLoadWithdrawPatch, ccLoadsGrouped, ccLoadImportRows, ccFloorToSection, ccLoadSyncPlan, ccLoadWantFromField,
   CC_LOAD_METHODS, ccLoadMethod, ccLoadDest, ccWallboxImportRows, ccWallboxOrder, ccKeypadSectionKeys, ccKeypadSectionKey, ccKeypadFloor, ccKeypadRowFields, ccKeypadPrefillPlan, ccKeypadFillPatch, ccKeypadRemovedRows, ccOfficeWritePayload, ccKeypadConfirmPatch, ccKeypadEngravePatch } = ctx;
 
+const { ccLoadReconcileRemovals } = ctx;
 let fails = 0, n = 0;
 const eq = (name, got, want) => {
   n++;
@@ -331,6 +332,54 @@ vm.runInContext(src.slice(pa, pb + 2) + "\n" + src.slice(ma, mb + 2) + "\n" + sr
   eq("un-confirm clears who / when", ccKeypadConfirmPatch(false, "Koy", 1000, () => DELK), { confirmed: false, confirmedBy: DELK, confirmedAt: DELK });
   eq("engraving patch is keyed by the assigned load key, capped at 40", ccKeypadEngravePatch("p1", "x".repeat(60)).engraving.p1.length, 40);
   eq("engraving with no key → null", ccKeypadEngravePatch("", "Hi"), null);
+}
+
+// v555: reproduce the reported deletion, including office work and restoration.
+{
+  const row = { id: "r1", fieldLoadId: "rec-cans", origin: "fieldink", name: "Rec Room Perimeter Cans", room: "Rec Room", watts: 240, pulled: true, pulledBy: "Crew", notes: "Office note", assign: { panelId: "p1", moduleId: "m1", zone: 2 } };
+  const manual = { id: "manual", name: "Rec Room Perimeter Cans" };
+  const other = { id: "other", fieldLoadId: "other-field", origin: "fieldink", name: "Other plan load" };
+  const pl = { loads: [row, manual, other], panels: [{ id: "p1" }], plRev: 8, cp4Loads: { main: [] } };
+  const frozen = JSON.stringify(pl);
+  const gone = { "rec-cans": { removedAt: 100, fieldUpdatedAt: 100, control: "panel" } };
+  const result = ccLoadReconcileRemovals(pl, gone);
+  eq("explicit FieldInk deletion removes only the linked row", result.pl.loads, [manual, other]);
+  eq("archive retains all office fields and the original id", result.pl.fieldRemovedLoads.r1, { load: row, removedAt: 100, fieldUpdatedAt: 100 });
+  eq("other panel data is unchanged", [result.pl.panels, result.pl.cp4Loads, result.pl.plRev], [pl.panels, pl.cp4Loads, 8]);
+  eq("reconcile does not mutate its input", JSON.stringify(pl), frozen);
+  eq("repeated deletion converges without another write", ccLoadReconcileRemovals(result.pl, gone).pl === result.pl, true);
+  eq("missing bridge or missing id is never deletion", ccLoadReconcileRemovals(pl, {}).pl === pl, true);
+  eq("malformed tombstone is never deletion", ccLoadReconcileRemovals(pl, { "rec-cans": { removedAt: "yesterday", fieldUpdatedAt: 100 } }).pl === pl, true);
+  eq("unstamped tombstone is never deletion", ccLoadReconcileRemovals(pl, { "rec-cans": { removedAt: 100 } }).pl === pl, true);
+  eq("a stale live snapshot cannot restore", ccLoadReconcileRemovals(result.pl, { "rec-cans": { removedAt: null, fieldUpdatedAt: 90 } }).pl === result.pl, true);
+  const live = { "rec-cans": { removedAt: null, fieldUpdatedAt: 200, control: "panel" } };
+  const back = ccLoadReconcileRemovals(result.pl, live);
+  eq("undo in FieldInk restores the same office row and id", back.pl.loads.find(l => l.id === row.id), row);
+  eq("restore converges", ccLoadReconcileRemovals(back.pl, live).pl === back.pl, true);
+  eq("old deletion after a restore is ignored", ccLoadReconcileRemovals(back.pl, gone).pl === back.pl, true);
+  const occupied = { ...result.pl, loads: [...result.pl.loads, { id: "new", assign: row.assign }] };
+  const parked = ccLoadReconcileRemovals(occupied, live).pl;
+  eq("restoring never steals a reused zone", parked.loads.find(l => l.id === row.id).assign, { panelId: "p1", moduleId: null, zone: null });
+  eq("the old assignment remains recoverable", parked.fieldRemovedLoads.r1.load.assign, row.assign);
+  const empty = ccLoadReconcileRemovals({ loads: [row] }, gone).pl;
+  eq("deleting the last load is supported", empty.loads, []);
+  eq("restoring when no active loads remain is supported", ccLoadReconcileRemovals(empty, live).pl.loads, [row]);
+  const twice = ccLoadReconcileRemovals(back.pl, { "rec-cans": { removedAt: 300, fieldUpdatedAt: 300 } });
+  eq("delete / undo / delete works", twice.removed, ["r1"]);
+}
+
+// v555: the newer Wallbox Devices list follows the same explicit deletions.
+{
+  const row = { id: "wb1", origin: "fieldink", fieldLoadId: "fwb", name: "Rec Room Sconces", method: "wallbox", device: "Dimmer", pulled: true, pulledBy: "Crew" };
+  const pl = { loads: [{ id: "panel", name: "Panel load" }], wallboxDevices: [row] };
+  const gone = { fwb: { removedAt: 10, fieldUpdatedAt: 10 } };
+  const out = ccLoadReconcileRemovals(pl, gone, "wallboxDevices");
+  eq("wallbox deletion removes the linked device", out.pl.wallboxDevices, []);
+  eq("wallbox archive keeps device / pulled details", out.pl.fieldRemovedWallboxDevices.wb1.load, row);
+  eq("wallbox deletion leaves panel loads untouched", out.pl.loads, pl.loads);
+  eq("wallbox restore returns its original row", ccLoadReconcileRemovals(out.pl, { fwb: { removedAt: null, fieldUpdatedAt: 20 } }, "wallboxDevices").pl.wallboxDevices, [row]);
+  const moved = { ...out.pl, loads: [{ id: "newpanel", origin: "fieldink", fieldLoadId: "fwb" }] };
+  eq("a load already imported into the other list is not restored twice", ccLoadReconcileRemovals(moved, { fwb: { removedAt: null, fieldUpdatedAt: 20 } }, "wallboxDevices").pl === moved, true);
 }
 
 (async () => {
