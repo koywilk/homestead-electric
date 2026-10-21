@@ -4,9 +4,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-10-20 · App SW version: v556
+**Last manifest update:** 2026-10-20 · App SW version: v557
 
 ---
+
+- **Wallbox totals render after import** · `shipped 2026-10-20` · `SW v557` · Live Rose import exposed a v556 render crash: the new order tiles referenced `React.Fragment`, but this module imports `Fragment` directly. Uses the existing imported binding. Import had already saved all 54 rows correctly (21 Loads + 33 Wallbox Devices); no reimport is needed. The regression now renders with actual module imports and the production automatic JSX runtime so a fixture cannot mask missing bindings. **Why it won't lose data:** render-only correction; no data write, delete, migration, assignment or permission change.
 
 - **Control4 stays Control4 after FieldInk import** · `shipped 2026-10-20` · `SW v556` · Incoming loads, Wallbox Devices, order counts, Loads Ran and filled keypads now use FieldInk's explicit system and Lux/Contemporary collection. New imports keep that metadata; existing imported loads receive only known system metadata through the existing server-confirmed sync, and existing keypad labels use their live bridge record without refilling or unlocking confirmed sections. Mixed Control4/RA3 orders are counted separately. Legacy publishers without system data keep saved metadata and existing RA3 fallback. Physical routing stays panel/tape → Loads and smart wallbox/standard → Wallbox Devices. The job's panel-builder system is never inferred or changed. Metadata refresh advances no unapproved name/room/floor snapshot, so office edits and pending FieldInk rename suggestions remain intact. **Why it won't lose data:** additive known metadata only, normal per-row intent merge/save path; no deleted rows, geometry, assignments, pulled stamps, office device choices, keypad confirmation/engraving, rules or FieldInk PDF/Drive writes.
 

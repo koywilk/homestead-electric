@@ -148,4 +148,62 @@ ok('filled keypad derives current bridge metadata',/const display = ccLightingRo
 ok('filled keypad badge uses derived display',src.includes('ccKeypadLabel(display)'));
 ok('inbox keypad badge uses system-aware label',src.includes('ccKeypadLabel(kp)'));
 ok('wallbox count tiles use system-aware totals',src.includes('ccWallboxSystemOrder(list)'));
+
+// Render the real component with the app's actual React bindings. CRA uses the
+// automatic JSX runtime: providing a synthetic default React import here would
+// hide an unbound React.Fragment, the v556 production-only render regression.
+// Babel and the JSX transform come from the installed react-scripts toolchain.
+const babel = require('@babel/core');
+const ReactForTest = require('react');
+const { renderToStaticMarkup } = require('react-dom/server');
+const section = (first, next) => {
+  const a = src.indexOf(first), b = src.indexOf(next, a);
+  assert.ok(a >= 0 && b > a, `Missing component extraction boundaries: ${first}`);
+  return src.slice(a, b);
+};
+const reactImports = src.split('\n').filter(line => /^import\s/.test(line) && /from\s+["']react["']/.test(line)).join('\n');
+assert.ok(reactImports, 'Use the actual App React imports');
+const componentSource = [reactImports, src.slice(start, end),
+  section('const C = {', '// ── Dark command-header'),
+  section('const ICON_PATHS = {', '// ── Inline loading spinner'),
+  section('function WallboxDevicesSection(', '// v554: the FieldInk half'),
+  section('function EngraveInput(', 'function KeypadSection('),
+  'module.exports = { WallboxDevicesSection, FieldKeypadPanel };',
+].join('\n');
+function compileComponents(source) {
+  const output = babel.transformSync(source, {
+    filename: 'App.control4-render.js', babelrc: false, configFile: false,
+    presets: [[require.resolve('@babel/preset-react'), { runtime: 'automatic' }]],
+    plugins: [require.resolve('@babel/plugin-transform-modules-commonjs')],
+  }).code;
+  const module = { exports: {} };
+  // Deliberately no React global: all component bindings must come from App.
+  vm.runInNewContext(output, { require, module, exports: module.exports }, { filename: 'App.control4-render.js' });
+  return module.exports;
+}
+const renderRows = [legacy,
+  {id:'lux',name:'Lux',method:'wallbox',device:'Dimmer',lightingSystem:'control4',c4Collection:'lux'},
+  {id:'ra3',name:'RA3',method:'wallbox',device:'Dimmer',lightingSystem:'lutron'},
+  {id:'standard',name:'Standard',method:'switch',device:'Switch'},
+];
+const wallboxProps = { rows:renderRows, inboxById:{f1:field()}, onChange:()=>{} };
+const components = compileComponents(componentSource);
+const renderedWallbox = renderToStaticMarkup(ReactForTest.createElement(components.WallboxDevicesSection, wallboxProps));
+for (const label of ['Control4 Contemporary','Control4 Lux','RA3','Standard']) {
+  ok(`actual component renders ${label} tiles without injected React`, renderedWallbox.includes(`${label} dimmers`) && renderedWallbox.includes(`${label} switches`));
+}
+const renderedKeypad = renderToStaticMarkup(ReactForTest.createElement(components.FieldKeypadPanel, {
+  row:oldKp, bridge:keypad, bridgeLoads:{f1:field()}, onOffice:()=>{}, me:'Test office',
+}));
+ok('actual existing keypad render uses live system', renderedKeypad.includes('Control4 Contemporary keypad'));
+ok('actual existing keypad render retains office confirmation', renderedKeypad.includes('Confirmed · Office'));
+// Negative control: replay the exact bad namespace use under the same imports.
+// If a future harness injects React globally this check must fail, rather than
+// allow the fixture to falsely bless a production crash again.
+const oldNamespace = componentSource.replace(/<Fragment\b/g, '<React.Fragment').replace(/<\/Fragment>/g, '</React.Fragment>');
+assert.notStrictEqual(oldNamespace, componentSource, 'Negative control must replace the current Fragment usage');
+const brokenComponents = compileComponents(oldNamespace);
+assert.throws(() => renderToStaticMarkup(ReactForTest.createElement(brokenComponents.WallboxDevicesSection, wallboxProps)), /React is not defined/, 'v556 namespace regression must fail real rendering');
+checks++;
+
 console.log(`ccloads-control4-test: ${checks} checks passed`);
