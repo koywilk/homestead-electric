@@ -4,9 +4,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-10-20 · App SW version: v555
+**Last manifest update:** 2026-10-20 · App SW version: v556
 
 ---
+
+- **Control4 stays Control4 after FieldInk import** · `shipped 2026-10-20` · `SW v556` · Incoming loads, Wallbox Devices, order counts, Loads Ran and filled keypads now use FieldInk's explicit system and Lux/Contemporary collection. New imports keep that metadata; existing imported loads receive only known system metadata through the existing server-confirmed sync, and existing keypad labels use their live bridge record without refilling or unlocking confirmed sections. Mixed Control4/RA3 orders are counted separately. Legacy publishers without system data keep saved metadata and existing RA3 fallback. Physical routing stays panel/tape → Loads and smart wallbox/standard → Wallbox Devices. The job's panel-builder system is never inferred or changed. Metadata refresh advances no unapproved name/room/floor snapshot, so office edits and pending FieldInk rename suggestions remain intact. **Why it won't lose data:** additive known metadata only, normal per-row intent merge/save path; no deleted rows, geometry, assignments, pulled stamps, office device choices, keypad confirmation/engraving, rules or FieldInk PDF/Drive writes.
 
 - **FieldInk deletions follow through to Panelized Lighting** · `shipped 2026-10-20` · `SW v555` · Koy reported Rec Room Perimeter Cans deleted on the plan but still active in CC. CC's imported-load sync skipped bridge tombstones. It now archives explicitly removed FieldInk-origin master and Wallbox Devices rows and removes them from the active list in the same normal job patch; an explicit newer FieldInk restore brings back the same row id and office details, parking it if its Lutron zone was reused. Archived/gone rows no longer reappear as waiting imports. Sync writes require a server-confirmed bridge snapshot for the current job. **Why it won't lose data:** the full row (watts, pulled stamps, assignment and other office fields) stays in `panelizedLighting.fieldRemovedLoads` / `fieldRemovedWallboxDevices`; the save transaction archives the latest server row, preserving concurrent office edits. Missing records, offline cache, hand-entered rows and other job fields are untouched. No FieldInk, rules or PDF/Drive change. Legacy standalone module rows without a FieldInk id remain independent.
 

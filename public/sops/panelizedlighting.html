@@ -242,9 +242,9 @@
       open their rooms for you.</p>
       <p>The dark chip beside each load's name is what the plan has now — <b>Panel</b>,
       <b>Switched</b>, or <b>Dimmer</b>. The outlined chip after it says <b>how the load is
-      controlled</b>: <b>Panel</b>, <b>RA3</b> (a wallbox), <b>Standard</b> (hard-wired switch or
+      controlled</b>: <b>Panel</b>, <b>RA3</b> or <b>Control4</b> (smart wallbox devices), <b>Standard</b> (hard-wired switch or
       dimmer) or <b>Tape</b>. A dashed <b>Update FieldInk</b> chip means that load came from an
-      iPad on an older FieldInk that doesn't say RA3 or Standard yet; it waits in the inbox until
+      iPad on an older FieldInk that doesn't identify its control method yet; it waits in the inbox until
       that iPad updates. The header counts the loads the same way. Walking with the customer and a load should flip?
       Its row has one button that names the other kind: <b>Suggest Switched</b> on a panel
       load, <b>Suggest Panel</b> on a switched one. Tap it and it turns solid blue,
@@ -289,7 +289,7 @@
       <p><b>Bringing them in.</b> <b>Import</b> on a row, <b>Import N</b> on a room, or
       <b>Import all</b> in the header brings each load to the list it belongs on.
       <b>Panel</b> loads go to this job's Loads list below. <b>Tape</b> goes there too, as an LED
-      load that keeps its feet. <b>RA3</b> and <b>Standard</b> loads go to <b>Wallbox Devices</b>
+      load that keeps its feet. <b>RA3</b>, <b>Control4</b> and <b>Standard</b> loads go to <b>Wallbox Devices</b>
       (next step down); their row button says <b>Add to Wallbox</b>. A load from an older FieldInk
       (the dashed chip) has no button until that iPad updates. Imported loads bring their
       <b>room</b> (shown in the Room box on each load, and in the name, like "Kitchen Cans") and
@@ -313,7 +313,7 @@
       on the job changes. Hid one by mistake? Tap the <b>Dismissed</b> chip in the header
       and <b>Restore</b> it, or <b>Restore all N</b> to bring every dismissed load back.
       <b>Dismiss N not importable</b> in the header hides, after a confirm, every load an iPad on an
-      older FieldInk sent without saying RA3 or Standard (the dashed chip) — the only ones Import
+      older FieldInk sent without identifying the control method (the dashed chip) — the only ones Import
       can't take yet.</p>
       <p><b>The orange "needs a switch on the plan" pill</b> means the field flipped that
       load to regular switching but hasn't placed its switch symbol yet. It's read-only
@@ -327,11 +327,11 @@
     <div class="num">·</div>
     <div class="body">
       <h3>Wallbox Devices — the dimmer and switch order</h3>
-      <p>RA3 wallbox loads and Standard hard-wired loads you bring in from the inbox land in
-      <b>Wallbox Devices</b>, under the Loads list. It only shows once the job has some. The four
-      tiles on top are the order: <b>RA3 dimmers</b>, <b>RA3 switches</b>, <b>Standard dimmers</b>,
-      <b>Standard switches</b>. Below them the devices are grouped floor &rarr; room; floors start
+      <p>RA3 and Control4 wallbox loads and Standard hard-wired loads you bring in from the inbox land in
+      <b>Wallbox Devices</b>, under the Loads list. It only shows once the job has some. The
+      tiles on top count dimmers and switches separately for each system and collection present, including Control4 Lux and Contemporary. Below them the devices are grouped floor &rarr; room; floors start
       folded, tap one to open it.</p>
+      <p>System labels follow the plan. Existing imported devices update when FieldInk sends explicit system information; no reimport is needed. Unknown older plans keep their prior labels. This does not change the job's panel builder or move devices into Panel Loads.</p>
       <p><b>Ran:</b> tick the box at the start of a row when the wire to that box is pulled. It
       stamps your name and the date, and the same devices show on the <b>Loads Ran</b> card at the
       top of the tab with every other load.</p>
@@ -369,7 +369,7 @@
       and Pulled status, same as typing it). Blank rows fill first. A floor you've
       <b>CONFIRMED</b> is never touched. Unconfirm it first if you want it filled. Tapping Fill again
       never doubles anything.</p>
-      <p>Under a filled row, a blue panel shows <b>RA3 keypad</b> or <b>Panel keypad</b>, the room
+      <p>Under a filled row, a blue panel shows the actual keypad system and role, such as <b>Control4 Lux keypad</b>, <b>RA3 keypad</b> or <b>Panel keypad</b>, the room
       and sheet, and <b>N buttons</b>. Open it to see each button with the load it runs, and type
       the <b>engraving</b> beside it (it saves when you leave the box). <b>Confirm keypad</b> marks
       that keypad's buttons as checked by the office, with your name. Engraving and Confirm save to

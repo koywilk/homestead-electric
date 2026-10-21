@@ -956,6 +956,42 @@ function ccLoadComposedName(l) {
   const room = String((l && l.room) || "").trim(), base = String((l && (l.name || l.loadId)) || "Load").trim();
   return room && !base.toLowerCase().includes(room.toLowerCase()) ? `${room} ${base}` : base;
 }
+// v556: system is independent of the physical control method. Old/partial
+// publishers never erase a known system; explicit live metadata wins over a
+// saved import. Never infer a plan's brand from the job's panel-builder choice.
+function ccLightingMeta(source, fallback = {}) {
+  const valid = x => x && ["lutron", "control4"].includes(x.lightingSystem);
+  const pick = valid(source) ? source : valid(fallback) ? fallback : null;
+  if (!pick) return {};
+  const out = { lightingSystem: pick.lightingSystem };
+  if (pick.lightingSystem === "lutron") out.c4Collection = null;
+  else if (["lux", "contemporary"].includes(pick.c4Collection)) out.c4Collection = pick.c4Collection;
+  else if (fallback.lightingSystem === "control4" && ["lux", "contemporary"].includes(fallback.c4Collection)) out.c4Collection = fallback.c4Collection;
+  return out;
+}
+function ccLightingRow(row, bridge) { return { ...row, ...ccLightingMeta(bridge, row) }; }
+function ccLightingLabel(row) {
+  if (row && row.lightingSystem === "control4") return "Control4" + (row.c4Collection === "lux" ? " Lux" : row.c4Collection === "contemporary" ? " Contemporary" : "");
+  return "RA3";
+}
+function ccWallboxLabel(row) { return row && row.method === "switch" ? "Standard" : ccLightingLabel(row); }
+function ccMethodLabel(row) {
+  const m = ccLoadMethod(row);
+  return m === "wallbox" ? ccLightingLabel(row) : m === "switch" ? "Standard" : m === "panel" ? "Panel" : m === "tape" ? "Tape" : "Update FieldInk";
+}
+function ccKeypadLabel(row) {
+  return (row && row.kpType === "panel") ? (row.lightingSystem === "control4" ? ccLightingLabel(row) + " panel keypad" : "Panel keypad") : ccLightingLabel(row) + " keypad";
+}
+function ccWallboxSystemOrder(rows) {
+  const totals = new Map();
+  for (const r of rows || []) {
+    if (!r || !String(r.name || "").trim()) continue;
+    const label = ccWallboxLabel(r);
+    if (!totals.has(label)) totals.set(label, { label, Dimmer: 0, Switch: 0 });
+    totals.get(label)[r.device === "Dimmer" ? "Dimmer" : "Switch"]++;
+  }
+  return [...totals.values()].sort((a,b) => a.label.localeCompare(b.label));
+}
 function ccLoadImportRows(loads, existingRows, mk, floorOptions = []) {
   const have = new Set((existingRows || []).map(r => r && r.fieldLoadId).filter(Boolean));
   const opts = Array.isArray(floorOptions) ? floorOptions : ["Main Level", "Basement", "Upper Level", ...Object.values(floorOptions || {})];
@@ -977,7 +1013,7 @@ function ccLoadImportRows(loads, existingRows, mk, floorOptions = []) {
     const tape = m === "tape" ? { tapeFt: typeof l.tapeFt === "number" && isFinite(l.tapeFt) ? l.tapeFt : null } : {};
     // v450: remember what we took from FieldInk so later field edits can flow
     // through automatically (ccLoadSyncPlan) without trampling office edits.
-    rows.push({ ...mk(), name, location, loadType: m === "tape" ? "LED" : "", room, ...tape, fieldLoadId: l.id, origin: "fieldink", fieldSnap: { name, room, location } });
+    rows.push({ ...mk(), ...ccLightingMeta(l), name, location, loadType: m === "tape" ? "LED" : "", room, ...tape, fieldLoadId: l.id, origin: "fieldink", fieldSnap: { name, room, location } });
   }
   return { rows, skipped };
 }
@@ -995,7 +1031,7 @@ function ccWallboxImportRows(loads, existingRows, mkId, floorOptions = []) {
     have.add(l.id);
     const room = String(l.room || "").trim(), name = ccLoadComposedName(l);
     const location = ccFloorToSection((l.office && l.office.floor) || l.floor, opts);
-    rows.push({ id: mkId(), name, room, location, device: ccWallboxDevice(l), method: ccLoadMethod(l), fieldLoadId: l.id, origin: "fieldink", fieldSnap: { name, room, location } });
+    rows.push({ id: mkId(), ...ccLightingMeta(l), name, room, location, device: ccWallboxDevice(l), method: ccLoadMethod(l), fieldLoadId: l.id, origin: "fieldink", fieldSnap: { name, room, location } });
   }
   return { rows, skipped };
 }
@@ -1046,6 +1082,7 @@ function ccLoadSyncPlan(rows, inboxById, floorOptions = [], dest = "loads") {
     const want = ccLoadWantFromField(f, opts);
     const snap = r.fieldSnap && typeof r.fieldSnap === "object" ? r.fieldSnap : null;
     const autoPatch = {}, changes = [];
+    for (const [key, value] of Object.entries(ccLightingMeta(f, r))) if (r[key] !== value) autoPatch[key] = value;
     for (const k of ["name", "room", "location"]) {
       const cur = String(r[k] || ""), w = String(want[k] || "");
       if (cur === w) continue;
@@ -1054,7 +1091,14 @@ function ccLoadSyncPlan(rows, inboxById, floorOptions = [], dest = "loads") {
       else if (snap && w === String(snap[k] || "")) continue;   // v496: office-edited, field unchanged since → the office's value stands
       else changes.push({ key: k, from: cur, to: w });
     }
-    if (Object.keys(autoPatch).length) auto.push({ id: r.id, fieldLoadId: r.fieldLoadId, patch: { ...autoPatch, fieldSnap: want } });
+    if (Object.keys(autoPatch).length) {
+      // Metadata hydration must not accept an unapproved name/room change.
+      // Advance only the snapshot fields actually followed automatically.
+      const followed = ["name", "room", "location"].filter(k => Object.prototype.hasOwnProperty.call(autoPatch, k));
+      const nextSnap = { ...(snap || {}) };
+      followed.forEach(k => { nextSnap[k] = want[k]; });
+      auto.push({ id: r.id, fieldLoadId: r.fieldLoadId, patch: { ...autoPatch, ...(followed.length ? { fieldSnap: nextSnap } : {}) } });
+    }
     if (changes.length) {
       const patch = { fieldSnap: want };
       changes.forEach(c => { patch[c.key] = c.to; });
@@ -1156,7 +1200,7 @@ function ccKeypadRowFields(id, kp, loadsById) {
     const l = loadsById && loadsById[a.key];
     return l ? { key: a.key, loadId: String(a.loadId || l.loadId || ""), name: ccLoadComposedName(l) } : { key: a.key, loadId: String(a.loadId || ""), name: String(a.loadId || a.key), missing: true };
   });
-  return { name, room, sheet: String((kp && kp.sheet) || "").trim(), kpType, assigned, fieldKeypadId: id, origin: "fieldink" };
+  return { name, room, ...ccLightingMeta(kp), sheet: String((kp && kp.sheet) || "").trim(), kpType, assigned, fieldKeypadId: id, origin: "fieldink" };
 }
 // What a Fill would do. Returns { bySection:{key:[fields]}, add, locked:[ids],
 // noFloor:[ids], removed:[ids], already:[ids] } — every live keypad is in exactly
@@ -22797,9 +22841,9 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
 // one u() per edit, same as KeypadSection.
 function WallboxDevicesSection({ rows, onChange, inboxById = {}, floorOrder = [], color = C.blue }) {
   const [open, setOpen] = useState({});
-  const list = (rows || []).filter(Boolean);
+  const list = (rows || []).filter(Boolean).map(r => ccLightingRow(r, inboxById[r.fieldLoadId]));
   if (!list.length) return null;
-  const order = ccWallboxOrder(list);
+  const order = ccWallboxSystemOrder(list);
   const upd = (id, p) => onChange(list.map(r => r.id === id ? { ...r, ...p } : r));
   const del = (r) => { if (!window.confirm(`Remove ${r.name || "this device"} from Wallbox Devices? FieldInk is not changed; Import brings it back.`)) return; onChange(list.filter(x => x.id !== r.id)); };
   const ord = (fl) => { const i = floorOrder.findIndex(f => String(f).toLowerCase() === String(fl || "").toLowerCase()); return i < 0 ? 99 : i; };
@@ -22816,8 +22860,7 @@ function WallboxDevicesSection({ rows, onChange, inboxById = {}, floorOrder = []
   return (
     <div style={{ marginBottom: 22, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.card }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 12px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-        {tile("RA3 dimmers", order.wallbox.Dimmer)}{tile("RA3 switches", order.wallbox.Switch)}
-        {tile("Standard dimmers", order.switch.Dimmer)}{tile("Standard switches", order.switch.Switch)}
+        {order.map(o => <React.Fragment key={o.label}>{tile(`${o.label} dimmers`, o.Dimmer)}{tile(`${o.label} switches`, o.Switch)}</React.Fragment>)}
       </div>
       {floors.map(fl => {
         const fRows = list.filter(r => floorOf(r) === fl);
@@ -22838,7 +22881,7 @@ function WallboxDevicesSection({ rows, onChange, inboxById = {}, floorOrder = []
                 {fRows.filter(r => roomOf(r) === rm).sort((a, b) => String((a.fieldSnap && a.fieldSnap.name) || a.id || "").localeCompare(String((b.fieldSnap && b.fieldSnap.name) || b.id || ""))).map(r => {
                   const f = r.fieldLoadId && inboxById[r.fieldLoadId];
                   const fieldDevice = f && !f.removedAt && ccLoadDest(f) === "wallbox" ? ccWallboxDevice(f) : null;
-                  const isRa3 = r.method !== "switch";
+                  const smart = r.method !== "switch", systemLabel = ccWallboxLabel(r);
                   return (
                     <div key={r.id} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: "6px 12px 6px 14px", borderTop: `1px solid ${C.border}`, background: r.pulled ? "rgba(62,125,90,0.08)" : "transparent" }}>
                       {/* phone: checkbox + name on line 1, picker / chip / ✕ wrap to line 2 */}
@@ -22854,7 +22897,7 @@ function WallboxDevicesSection({ rows, onChange, inboxById = {}, floorOrder = []
                         <select value={r.device === "Dimmer" ? "Dimmer" : "Switch"} onChange={e => upd(r.id, { device: e.target.value })} aria-label="Device" style={{ ...inp, width: 104 }}>
                           <option value="Dimmer">Dimmer</option><option value="Switch">Switch</option>
                         </select>
-                        <span style={{ width: 78, display: "inline-flex" }}><span title={isRa3 ? "RA3 wallbox" : "Standard hard-wired"} style={{ fontSize: 12, fontWeight: 700, color: isRa3 ? C.purple : C.dim, border: `1px solid ${isRa3 ? C.purple : C.dim}`, borderRadius: 999, padding: "0 7px", whiteSpace: "nowrap" }}>{isRa3 ? "RA3" : "Standard"}</span></span>
+                        <span style={{ maxWidth: 170, display: "inline-flex" }}><span title={smart ? `${systemLabel} wallbox` : "Standard hard-wired"} style={{ fontSize: 12, fontWeight: 700, color: smart ? C.blue : C.dim, border: `1px solid ${smart ? C.blue : C.dim}`, borderRadius: 999, padding: "0 7px", whiteSpace: "normal" }}>{systemLabel}</span></span>
                         <button onClick={() => del(r)} aria-label={`Remove ${r.name || "device"}`} style={{ minWidth: "var(--he-tap, 32px)", background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 14 }}>✕</button>
                       </div>
                     </div>
@@ -22897,7 +22940,7 @@ function FieldKeypadPanel({ row, bridge, bridgeLoads = null, onOffice, me, color
   const live = kp && Array.isArray(kp.assigned) ? ccKeypadRowFields(row.fieldKeypadId, kp, bridgeLoads).assigned : null;
   const seenKeys = new Set();
   const assigned = (live || (Array.isArray(row.assigned) ? row.assigned : [])).filter(a => a && a.key && !seenKeys.has(a.key) && seenKeys.add(a.key));
-  const isRa3 = row.kpType === "ra3";
+  const display = ccLightingRow(row, kp);
   const canWrite = !!(kp && onOffice);
   const confirmed = !!office.confirmed;
   const toggleConfirm = () => { if (canWrite) onOffice(row.fieldKeypadId, ccKeypadConfirmPatch(!confirmed, me, Date.now(), deleteField)); };
@@ -22905,7 +22948,7 @@ function FieldKeypadPanel({ row, bridge, bridgeLoads = null, onOffice, me, color
   return (
     <div style={{ border: `1px solid ${C.steelLine}`, background: C.steelBg, borderRadius: 9, padding: "7px 10px", margin: "0 0 6px 42px", display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, color: C.dim }}>
-        {row.kpType && <span style={{ fontSize: 12, fontWeight: 700, color: isRa3 ? C.purple : C.blue, border: `1px solid ${isRa3 ? C.purple : C.blue}`, borderRadius: 999, padding: "0 7px", whiteSpace: "nowrap" }}>{isRa3 ? "RA3 keypad" : "Panel keypad"}</span>}
+        {row.kpType && <span style={{ fontSize: 12, fontWeight: 700, color: C.blue, border: `1px solid ${C.blue}`, borderRadius: 999, padding: "0 7px" }}>{ccKeypadLabel(display)}</span>}
         <span>{[row.room, row.sheet].filter(Boolean).join(" · ") || "From FieldInk"}</span>
         {kp && kp.removedAt && <span style={{ fontSize: 12, fontWeight: 700, color: C.red }}>removed in FieldInk</span>}
         <span style={{ flex: 1 }}/>
@@ -33401,7 +33444,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 }));
                 namedWb.forEach(l => items.push({
                   id: "wb:" + l.id, name: l.name,
-                  meta: [String(l.room||"").trim(), String(l.location||"").trim(), l.method === "switch" ? "Standard" : "RA3"].filter(Boolean).join(" · "),
+                  meta: [String(l.room||"").trim(), String(l.location||"").trim(), ccWallboxLabel(ccLightingRow(l, ccLoadInbox[l.fieldLoadId]))].filter(Boolean).join(" · "),
                   chip: l.device || "", done: !!l.pulled, by: l.pulledBy || "", at: l.pulledAt || "",
                 }));
                 return <PullChecklistSummary title="Loads Ran" items={items} doneWord="Ran" notWord="Not Ran"
@@ -33439,9 +33482,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   if (list.length > 1) toast.success([rows.length ? `${rows.length} to Loads` : "", wrows.length ? `${wrows.length} to Wallbox Devices` : ""].filter(Boolean).join(" · "));
                 };
                 const importable = (list) => list.filter(l => ccLoadDest(l) && !l.removedAt && !importedIds.has(l.id));   // v435 panel-only → v554 by method
-                const METHOD_CHIP = { panel: ["Panel", C.blue], wallbox: ["RA3", C.purple], switch: ["Standard", C.dim], tape: ["Tape", C.green] };
-                const methodChip = (l) => { const m = ccLoadMethod(l); const [txt, col] = METHOD_CHIP[m] || ["Update FieldInk", C.dim];
-                  return <span title={m ? "How FieldInk says this load is controlled" : "This load came from an older FieldInk that doesn't say RA3 or Standard — it waits here until that iPad updates"} style={{fontSize:12,fontWeight:700,color:col,border:`1px ${m?"solid":"dashed"} ${col}`,borderRadius:999,padding:"0 7px",whiteSpace:"nowrap"}}>{txt}</span>; };
+                const methodChip = (l) => { const m = ccLoadMethod(l), txt = ccMethodLabel(l), col = m === "tape" ? C.green : m === "switch" || !m ? C.dim : C.blue;
+                  return <span title={m ? "How FieldInk says this load is controlled" : "This load came from an older FieldInk that doesn't identify the control method — it waits here until that iPad updates"} style={{fontSize:12,fontWeight:700,color:col,border:`1px ${m?"solid":"dashed"} ${col}`,borderRadius:999,padding:"0 7px",whiteSpace:"nowrap"}}>{txt}</span>; };
                 const KIND_LABEL = { switched: "Switched", panel: "Panel" };
                 const fixtxt = (l) => (Array.isArray(l.fixtures) ? l.fixtures : []).filter(Boolean).map(f => `${f.n} ${f.name}`).join(", ");
                 const ctrlLabel = (l) => l.control === "dimmer" ? "Dimmer" : l.control === "tape" ? "Tape" : l.control === "panel" ? "Panel" : "Switched";
@@ -33479,7 +33521,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const switchedWaiting = waiting.filter(l => !ccLoadDest(l));
                 const dismissAllSwitched = () => {
                   if (!switchedWaiting.length) return;
-                  if (!window.confirm(`Dismiss all ${switchedWaiting.length} load${switchedWaiting.length===1?"":"s"} that can't be imported yet (sent by an older FieldInk that doesn't say RA3 or Standard)? They only hide from this inbox. Restore them any time from the Dismissed chip.`)) return;
+                  if (!window.confirm(`Dismiss all ${switchedWaiting.length} load${switchedWaiting.length===1?"":"s"} that can't be imported yet (sent by an older FieldInk that doesn't identify the control method)? They only hide from this inbox. Restore them any time from the Dismissed chip.`)) return;
                   const patches = {}; switchedWaiting.forEach(l => { patches[l.id] = { dismissed: true }; });
                   publishCcLoadOfficeMany(job.id, patches);
                   toast.success(`Dismissed ${switchedWaiting.length} load${switchedWaiting.length===1?"":"s"}`);
@@ -33659,13 +33701,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <Icon name="inbox" size={14} stroke={2.25}/>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:sysAccentColor(job)}}>Incoming from FieldInk</div>
                       <div style={{fontSize:12.5,color:C.dim,fontWeight:700}}>{all.active}</div>
-                      <div style={{fontSize:12,color:C.dim}}>{[[all.m.panel,"panel"],[all.m.tape,"tape"],[all.m.wallbox,"RA3"],[all.m.switch,"standard"],[all.m.none,"older FieldInk"]].filter(x=>x[0]).map(x=>`${x[0]} ${x[1]}`).join(" · ") || "0 waiting"}</div>
+                      <div style={{fontSize:12,color:C.dim}}>{[[all.m.panel,"panel"],[all.m.tape,"tape"],[all.m.wallbox,"smart wallbox"],[all.m.switch,"standard"],[all.m.none,"older FieldInk"]].filter(x=>x[0]).map(x=>`${x[0]} ${x[1]}`).join(" · ") || "0 waiting"}</div>
                       <div style={{flex:1}}/>
                       <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                         {chip("all", "All", null)}
                         {chip("pending", "Pending", all.pending)}
                         {switchedWaiting.length > 0 && filter !== "dismissed" && filter !== "imported" && (
-                          <button onClick={dismissAllSwitched} title="Hide every load an older FieldInk sent without saying RA3 or Standard (they can't be imported until that iPad updates)"
+                          <button onClick={dismissAllSwitched} title="Hide every load an older FieldInk sent without identifying the control method (they can't be imported until that iPad updates)"
                             style={{padding:"3px 10px",borderRadius:999,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:"transparent",color:C.dim,border:`1px solid ${C.border}`}}>
                             Dismiss {switchedWaiting.length} not importable
                           </button>
@@ -33704,7 +33746,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           </button>
                         )}
                         {filter !== "dismissed" && toImportAll.length > 0 && (
-                          <button onClick={()=>importLoads(toImportAll)} title={`Bring in the ${toImportAll.length} incoming load${toImportAll.length===1?"":"s"} not yet on this job: panel + tape → Loads, RA3 + Standard → Wallbox Devices (name carries the room; already-imported ones are skipped)`}
+                          <button onClick={()=>importLoads(toImportAll)} title={`Bring in the ${toImportAll.length} incoming load${toImportAll.length===1?"":"s"} not yet on this job: panel + tape → Loads, smart wallbox + Standard → Wallbox Devices (name carries the room; already-imported ones are skipped)`}
                             style={{padding:"3px 10px",borderRadius:999,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",background:sysAccentColor(job),color:"#fff",border:`1px solid ${sysAccentColor(job)}`}}>Import all {toImportAll.length}</button>
                         )}
                       </div>
@@ -33748,7 +33790,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   </div>
                                 )}
                                 {filter !== "dismissed" && importable(r.loads).length > 0 && (
-                                  <button onClick={()=>importLoads(importable(r.loads))} title="Bring in this room's not-yet-imported loads: panel + tape → Loads, RA3 + Standard → Wallbox Devices"
+                                  <button onClick={()=>importLoads(importable(r.loads))} title="Bring in this room's not-yet-imported loads: panel + tape → Loads, smart wallbox + Standard → Wallbox Devices"
                                     style={{padding:"3px 8px",borderRadius:8,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:sysAccentColor(job),border:`1px solid ${sysAccentColor(job)}`}}>Import {importable(r.loads).length}</button>
                                 )}
                                 {t.pending > 0 && (
@@ -33827,7 +33869,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         u({ panelizedLighting: { ...pl, ...patch } });
                         toast.success(`Filled ${kplan.add} keypad${kplan.add===1?"":"s"} into Keypads`);
                       };
-                      const typeChip = (kp) => kp.kpType ? <span style={{fontSize:12,fontWeight:700,color:kp.kpType==="ra3"?C.purple:C.blue,border:`1px solid ${kp.kpType==="ra3"?C.purple:C.blue}`,borderRadius:999,padding:"0 7px",whiteSpace:"nowrap"}}>{kp.kpType==="ra3"?"RA3":"Panel"}</span> : null;
+                      const typeChip = (kp) => kp.kpType ? <span style={{fontSize:12,fontWeight:700,color:C.blue,border:`1px solid ${C.blue}`,borderRadius:999,padding:"0 7px"}}>{ccKeypadLabel(kp)}</span> : null;
                       const card = (kp, status) => {
                         const n = Array.isArray(kp.assigned) ? kp.assigned.length : 0;
                         const f = ccKeypadRowFields(kp.id, kp, ccLoadInbox);
@@ -58313,9 +58355,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-20 · App SW version: v555
+**Last manifest update:** 2026-10-20 · App SW version: v556
 
 ---
+
+- **Control4 stays Control4 after FieldInk import** · 'shipped 2026-10-20' · 'SW v556' · Incoming loads, Wallbox Devices, order counts, Loads Ran and filled keypads now use FieldInk's explicit system and Lux/Contemporary collection. New imports keep that metadata; existing imported loads receive only known system metadata through the existing server-confirmed sync, and existing keypad labels use their live bridge record without refilling or unlocking confirmed sections. Mixed Control4/RA3 orders are counted separately. Legacy publishers without system data keep saved metadata and existing RA3 fallback. Physical routing stays panel/tape → Loads and smart wallbox/standard → Wallbox Devices. The job's panel-builder system is never inferred or changed. Metadata refresh advances no unapproved name/room/floor snapshot, so office edits and pending FieldInk rename suggestions remain intact. **Why it won't lose data:** additive known metadata only, normal per-row intent merge/save path; no deleted rows, geometry, assignments, pulled stamps, office device choices, keypad confirmation/engraving, rules or FieldInk PDF/Drive writes.
 
 - **FieldInk deletions follow through to Panelized Lighting** · 'shipped 2026-10-20' · 'SW v555' · Koy reported Rec Room Perimeter Cans deleted on the plan but still active in CC. CC's imported-load sync skipped bridge tombstones. It now archives explicitly removed FieldInk-origin master and Wallbox Devices rows and removes them from the active list in the same normal job patch; an explicit newer FieldInk restore brings back the same row id and office details, parking it if its Lutron zone was reused. Archived/gone rows no longer reappear as waiting imports. Sync writes require a server-confirmed bridge snapshot for the current job. **Why it won't lose data:** the full row (watts, pulled stamps, assignment and other office fields) stays in 'panelizedLighting.fieldRemovedLoads' / 'fieldRemovedWallboxDevices'; the save transaction archives the latest server row, preserving concurrent office edits. Missing records, offline cache, hand-entered rows and other job fields are untouched. No FieldInk, rules or PDF/Drive change. Legacy standalone module rows without a FieldInk id remain independent.
 

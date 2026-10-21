@@ -107,3 +107,9 @@ Deploy: bump `public/service-worker.js` CACHE; Koy commits + pushes; NO
 homestead-electric own-project firestore.rules change (writes go to its own `jobs`
 collection via saveJob, and to the field-ink project's ccloads governed by that
 project's already-deployed rules).
+
+## v556 — Explicit lighting system and collection
+
+FieldInk v737+ publishes `lightingSystem: lutron|control4` and `c4Collection: lux|contemporary|null`, resolved by its stamped lighting cells. These are independent of `method` and legacy keypad `kpType:ra3|panel`. CC retains valid metadata on new load/wallbox/keypad imports. Known metadata on existing imported load rows follows a server-confirmed bridge snapshot through the existing row sync. Unknown/missing metadata never clears a saved choice; explicit Lutron clears the irrelevant Control4 collection. CC never infers a plan's system from the job's builder choice.
+
+Inbox labels, wallbox order tiles/rows, Loads Ran and keypad labels resolve the actual system/collection. Existing filled keypads read live metadata for presentation; filling or unlocking a confirmed section is not required. Panel/tape versus wallbox/standard routing is unchanged. Metadata-only hydration does not advance name/room/floor snapshots or accept pending manual changes.
