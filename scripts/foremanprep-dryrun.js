@@ -9,8 +9,8 @@
  * Run from the Mac:  node scripts/foremanprep-dryrun.js
  * Delete the preview doc from Drive when you're done with it. */
 const path = require("path");
-const admin = require(path.join(process.env.HOME, "Desktop/homestead-electric/functions/node_modules/firebase-admin"));
-const { google } = require(path.join(process.env.HOME, "Desktop/homestead-electric/functions/node_modules/googleapis"));
+const admin = require(path.join(__dirname, "..", "functions", "node_modules", "firebase-admin"));
+const { google } = require(path.join(__dirname, "..", "functions", "node_modules", "googleapis"));
 const SA_PATH = "/Users/koyhomestead/Desktop/homestead-electric-firebase-adminsdk-fbsvc-e3fa8a404f.json";
 admin.initializeApp({ credential: admin.credential.cert(require(SA_PATH)), projectId: "homestead-electric" });
 const db = admin.firestore();

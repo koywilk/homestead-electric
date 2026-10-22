@@ -10,8 +10,8 @@
  * before signing off: a job you expected and do not see is a rule bug, not a data gap. */
 const path = require("path");
 const fs = require("fs");
-const admin = require(path.join(process.env.HOME, "Desktop/homestead-electric/functions/node_modules/firebase-admin"));
-const { google } = require(path.join(process.env.HOME, "Desktop/homestead-electric/functions/node_modules/googleapis"));
+const admin = require(path.join(__dirname, "..", "functions", "node_modules", "firebase-admin"));
+const { google } = require(path.join(__dirname, "..", "functions", "node_modules", "googleapis"));
 const SA_PATH = "/Users/koyhomestead/Desktop/homestead-electric-firebase-adminsdk-fbsvc-e3fa8a404f.json";
 admin.initializeApp({ credential: admin.credential.cert(require(SA_PATH)), projectId: "homestead-electric" });
 const db = admin.firestore();
