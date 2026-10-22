@@ -7346,11 +7346,37 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', 
   // second of typing if the page gets killed (SW reload, browser crash,
   // OS yanking the tab). `onLiveSave` is optional — call sites that don't
   // wire it keep the old commit-on-Done behavior.
+  //
+  // v558 (Keegan, rough notes losing text on his phone, 2026-10-22): this
+  // effect used to list `onLiveSave` in its deps. Every TA call site passes a
+  // fresh arrow for it on each render, and the live-save ITSELF re-renders the
+  // parent (u() -> setJob -> App setSelected), so the first 400 ms pause started
+  // a loop that never ended while the sheet was open: a phantom save every
+  // ~0.4 s with unchanged text, each one re-rendering the whole app, rewriting
+  // the multi-MB hejobs_backup copy in localStorage and re-arming saveJob's
+  // 500 ms debounce — so the real Firestore write was starved for as long as
+  // the sheet stayed open, and the phone's main thread was pegged (which is
+  // what eats keystrokes and autocorrect commits on iOS). Reproduced by
+  // scripts/livesave-loop-test.js with the real components: 9 saves and 0
+  // writes in a 4 s pause. Now the callback lives in a ref, the timer re-arms
+  // only when the TEXT changes, and a tick whose text matches the last one
+  // sent is a no-op — the mount tick (unchanged server text) included. A
+  // restored localStorage draft still live-saves once, as before.
+  const onLiveSaveRef = useRef(onLiveSave);
+  useEffect(() => { onLiveSaveRef.current = onLiveSave; }, [onLiveSave]);
+  const liveKey = (h, m, s) => `${h || ""}\u0000${m || ""}\u0000${s || ""}`;
+  const lastLiveRef = useRef(liveKey(initialHtml, initialMaterial, initialMatSource));
   useEffect(() => {
-    if (!onLiveSave) return;
-    const id = setTimeout(() => { try { onLiveSave(html, material, matSource); } catch(e){} }, 400);
+    if (!onLiveSaveRef.current) return;
+    const id = setTimeout(() => {
+      const fn = onLiveSaveRef.current;
+      if (!fn) return;
+      const key = liveKey(html, material, matSource);
+      if (key === lastLiveRef.current) return;   // nothing new to send
+      try { fn(html, material, matSource); lastLiveRef.current = key; } catch(e){}   // mark sent only once it went out
+    }, 400);
     return () => clearTimeout(id);
-  }, [html, material, matSource, onLiveSave]);
+  }, [html, material, matSource]);   // eslint-disable-line
 
   // ── Mirror in-progress text to localStorage on every change ──────────
   // Second safety net: even if the parent's Firestore write fails (offline,
@@ -58355,10 +58381,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-20 · App SW version: v557
+**Last manifest update:** 2026-10-22 · App SW version: v558
 
 ---
 
+- **Phone notes box stops fighting itself** · 'shipped 2026-10-22' · 'SW v558' · Keegan: typing in Rough Notes on his phone, "when I stop typing part of what I typed disappears." Every rich-text box on a phone (Rough/Finish Notes, Scope, Material, Notes, return-trip scope/task/material, PO items, Q&A answers, load-mapping notes) opens the same bottom sheet, which live-saves the text 400 ms after each change. That timer was also re-armed whenever the parent re-rendered — and the live-save itself re-renders the parent — so the first pause started a loop: a phantom save every ~0.4 s with unchanged text for as long as the sheet stayed open, each one re-rendering the whole app, rewriting the multi-MB 'hejobs_backup' copy in localStorage and re-arming saveJob's 500 ms debounce, so the real Firestore write never went out while the box was open (reproduced with the real components: 9 saves and 0 writes in a 4 s pause; the one write that escaped the loop carried the text from BEFORE the typing) and the phone's main thread was pegged, which is what eats keystrokes and autocorrect on iOS. Now the sheet re-arms the timer only when the text changes and skips a tick whose text it already sent (opening a box sends nothing; a restored crash draft still saves once). Gate: 'scripts/livesave-loop-test.js' (real RichEditor / RichMobileSheet / TA in jsdom under the app's save timing). **Why it won't lose data:** the sheet's own text is untouched (local state, committed on Done and on app-switch exactly as before); the only change is that unchanged text is no longer re-sent, so every save that goes out now carries text the user actually typed, and the server write that used to be starved while the box was open now lands after each pause; no field, loader, rules or merge change.
 - **Wallbox totals render after import** · 'shipped 2026-10-20' · 'SW v557' · Live Rose import exposed a v556 render crash: the new order tiles referenced 'React.Fragment', but this module imports 'Fragment' directly. Uses the existing imported binding. Import had already saved all 54 rows correctly (21 Loads + 33 Wallbox Devices); no reimport is needed. The regression now renders with actual module imports and the production automatic JSX runtime so a fixture cannot mask missing bindings. **Why it won't lose data:** render-only correction; no data write, delete, migration, assignment or permission change.
 
 - **Control4 stays Control4 after FieldInk import** · 'shipped 2026-10-20' · 'SW v556' · Incoming loads, Wallbox Devices, order counts, Loads Ran and filled keypads now use FieldInk's explicit system and Lux/Contemporary collection. New imports keep that metadata; existing imported loads receive only known system metadata through the existing server-confirmed sync, and existing keypad labels use their live bridge record without refilling or unlocking confirmed sections. Mixed Control4/RA3 orders are counted separately. Legacy publishers without system data keep saved metadata and existing RA3 fallback. Physical routing stays panel/tape → Loads and smart wallbox/standard → Wallbox Devices. The job's panel-builder system is never inferred or changed. Metadata refresh advances no unapproved name/room/floor snapshot, so office edits and pending FieldInk rename suggestions remain intact. **Why it won't lose data:** additive known metadata only, normal per-row intent merge/save path; no deleted rows, geometry, assignments, pulled stamps, office device choices, keypad confirmation/engraving, rules or FieldInk PDF/Drive writes.
