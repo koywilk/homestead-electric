@@ -67,6 +67,11 @@ eq(sheet.quarters[0], { row: 26, q: "Q1", text: "First foreman bonus payouts; ch
 const shifted = X.odGoalsParse([["", "A note Josh added above everything", ""], [""], ...grid]);
 eq([shifted.goals.length, shifted.measures.length, shifted.goals[0].row], [8, 10, 7], "sections found by headers after an inserted row; row numbers follow");
 eq(X.odGoalsParse(null).goals, [], "no grid, no rows");
+// v563: the export's own folding (seen live 2026-10-23): row 1 carries title + mission + section + AREA in one cell.
+const folded = X.odGoalsParse([["", "Team Goals 2026–2027 Our goal: Be the best electrical contractor in Utah. That means jobs built right the first time. REST OF 2026  ·  OCTOBER – DECEMBER AREA", "GOAL", "WHO", "BY", "STATUS"], ...grid.slice(4)]);
+eq([folded.goals.length, folded.measures.length, folded.quarters.length, folded.goals[0].status, folded.goals[1].status], [8, 10, 4, "", "On track"], "folded first row still yields every section and the STATUS column");
+assert.ok(folded.mission.startsWith("Be the best electrical contractor") && !/REST OF/.test(folded.mission) && !/AREA$/.test(folded.mission), "mission is cut out of the folded cell cleanly: " + folded.mission);
+eq(folded.title, "Team Goals 2026–2027");
 
 // 2. DUE
 eq(X.odGoalDue("Oct 31", now).text, "Due in 8 d");
