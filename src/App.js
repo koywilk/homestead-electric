@@ -19041,6 +19041,191 @@ const wireAmpsVolts = (wire, v240) => {
   return `${b.amps}A · ${effectivePoles(wire, v240) === 1 ? 120 : 240}V`;
 };
 
+// ─── Home Runs export, by panel (v561) ────────────────────────────────────
+// Koy, 2026-10-23: Gary asked for "the list of home runs in each panel at
+// Ashcraft" — before any panel schedule exists. The Home Runs tab's export
+// bar sends one panel (or all of them) as a PDF, a CSV, or plain text to
+// text / paste. Same order as the By Panel view: panel-dropdown order, then
+// floor (main → basement → upper → extras), then load name A–Z. Read-only.
+// Pure row / CSV / text builders are vm-tested in scripts/needs-dryrun.js.
+const HR_NO_PANEL = "No Panel Assigned";
+function homeRunsPanelRows(homeRuns, customPanels, onlyPanel) {
+  const hr = homeRuns || {};
+  const norm = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+  const floors = [["main", "Main Level"], ["basement", "Basement"], ["upper", "Upper Level"],
+    ...((hr.extraFloors || []).map(ef => [ef.key, ef.label || ef.key]))];
+  const order = getPanelOrder(customPanels);
+  // Unassigned runs go LAST on a sheet that leaves the office.
+  const pIdx = (p) => p === HR_NO_PANEL ? 10000 : (order[p] !== undefined ? order[p] : 500);
+  const rows = [];
+  floors.forEach(([k, label], fi) => (hr[k] || []).forEach(r => {
+    if (!r || !(norm(r.name) || r.wire || norm(r.panel) || r.status || norm(r.note))) return;
+    const panel = norm(r.panel) || HR_NO_PANEL;
+    if (onlyPanel && panel !== onlyPanel) return;
+    rows.push({ panel, floor: label, fi, name: norm(r.name), wire: r.wire || "",
+      breaker: wireAmpsVolts(r.wire, r.v240), status: r.status || "", note: norm(r.note) });
+  }));
+  rows.sort((a, b) => (pIdx(a.panel) - pIdx(b.panel)) || a.panel.localeCompare(b.panel)
+    || (a.fi - b.fi) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+  // Numbered 1..n within each panel, the way the panel itself reads.
+  let last = null, n = 0;
+  return rows.map(({ fi, ...r }) => { n = r.panel === last ? n + 1 : 1; last = r.panel; return { ...r, n }; });
+}
+// [{ panel, total, pulled }] in export order — the bar's panel picker.
+function homeRunsPanelList(rows) {
+  const out = [];
+  (rows || []).forEach(r => {
+    let g = out[out.length - 1];
+    if (!g || g.panel !== r.panel) { g = { panel: r.panel, total: 0, pulled: 0 }; out.push(g); }
+    g.total += 1; if (r.status === "Pulled") g.pulled += 1;
+  });
+  return out;
+}
+function homeRunsCsv(rows) {
+  const Q = '"';
+  const cell = (v) => { const s = String(v == null ? "" : v); const needs = s.includes(",") || s.includes(Q) || s.includes("\n") || s.includes("\r"); return needs ? Q + s.split(Q).join(Q + Q) + Q : s; };
+  const lines = [["Panel", "#", "Load", "Floor", "Wire", "Breaker", "Note"].join(",")];
+  (rows || []).forEach(r => lines.push([r.panel, r.n, r.name, r.floor, r.wire, r.breaker, r.note].map(cell).join(",")));
+  return lines.join("\r\n") + "\r\n";
+}
+// Plain text for a text message / email body — a branded top line, then one
+// line per home run under each panel. Customer-facing (Koy, 2026-10-23): no
+// pulled / need-specs status on any export.
+function homeRunsText(rows, jobName, dateStr) {
+  const out = ["HOMESTEAD ELECTRIC", `${jobName || "Job"} — Home Run Schedule${dateStr ? " · " + dateStr : ""}`];
+  homeRunsPanelList(rows).forEach(g => {
+    out.push("", `${g.panel.toUpperCase()} · ${g.total} home run${g.total === 1 ? "" : "s"}`);
+    (rows || []).filter(r => r.panel === g.panel).forEach(r => {
+      const spec = r.wire ? (r.breaker ? `${r.wire} (${r.breaker})` : r.wire) : "";
+      const tail = [spec, r.floor, r.note].filter(Boolean).join(" · ");
+      out.push(`${r.n}. ${r.name || "(no name)"}${tail ? " — " + tail : ""}`);
+    });
+  });
+  return out.join("\n");
+}
+// Branded sheet (Koy: "customized with homestead and very clean looking"):
+// charcoal band with the white longhorn logo, a stats strip, one section per
+// panel, wire chips in the app's own sheathing colors. Customer-facing, so no
+// pulled / open / need-specs status anywhere on the sheet.
+function homeRunsHtml({ jobName, jobAddress, rows, dateStr, onlyPanel }) {
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const groups = homeRunsPanelList(rows);
+  const total = (rows || []).length;
+  const chip = (w) => w ? `<span class="chip" style="background:${WIRE_COLORS[w] || C.bg};color:${WIRE_TEXT[w] || C.text};${(WIRE_COLORS[w] || "").toLowerCase() === "#e8e8e8" ? "box-shadow:inset 0 0 0 1px #CDD3DB;" : ""}">${esc(w)}</span>` : `<span class="dash">—</span>`;
+  const body = groups.map(g => `
+    <section class="panel${g.total > 26 ? " tall" : ""}">
+      <div class="ph"><span class="pn">${esc(g.panel)}</span><span class="pc">${g.total} home run${g.total === 1 ? "" : "s"}</span></div>
+      <table>
+        <thead><tr><th class="n">#</th><th>Load</th><th class="f">Floor</th><th class="w">Wire</th><th class="b">Breaker</th></tr></thead>
+        <tbody>${(rows || []).filter(r => r.panel === g.panel).map(r => `<tr><td class="n">${r.n}</td><td class="ld"><div class="nm">${esc(r.name) || '<span class="dash">No name</span>'}</div>${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}</td><td class="f">${esc(r.floor)}</td><td class="w">${chip(r.wire)}</td><td class="b">${r.breaker ? esc(r.breaker) : '<span class="dash">—</span>'}</td></tr>`).join("")}</tbody>
+      </table>
+    </section>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(jobName)} — Home Run Schedule</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;padding:0;font:11px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:${C.text};background:#fff;width:816px;-webkit-font-smoothing:antialiased}
+    .band{background:${C.text};color:#fff;padding:26px 40px 24px;display:flex;align-items:center;gap:26px}
+    .band img{height:72px;width:auto;display:block}
+    .band .rule{width:1px;align-self:stretch;background:rgba(255,255,255,.18)}
+    .band .k{font-size:9.5px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:${D.text}}
+    .band h1{font-size:23px;line-height:1.15;margin:4px 0 3px;font-weight:800;letter-spacing:.01em}
+    .band .addr{font-size:11px;color:#C4CAD3}
+    .wrap{padding:22px 40px 30px}
+    .stats{display:flex;border:1px solid ${C.border};border-radius:10px;margin:0 0 22px;overflow:hidden}
+    .stat{flex:1;padding:10px 14px;border-left:1px solid ${C.border}}
+    .stat:first-child{border-left:0}
+    .stat .v{font-size:17px;font-weight:800;line-height:1.1}
+    .stat .l{font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:${C.dim};margin-top:3px}
+    .panel{margin:0 0 20px}
+    .ph{display:flex;align-items:baseline;justify-content:space-between;border-bottom:2px solid ${C.text};padding:0 0 5px;margin:0 0 2px}
+    .pn{font-size:14px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+    .pc{font-size:10.5px;color:${C.dim}}
+    table{width:100%;border-collapse:collapse}
+    th{text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:${C.dim};padding:7px 8px 6px;border-bottom:1px solid ${C.muted}}
+    td{padding:7px 8px;border-bottom:1px solid ${C.bg};vertical-align:middle}
+    tbody tr:nth-child(even) td{background:#F7F8FA}
+    .n{width:30px;text-align:right;color:#8A929D;font-variant-numeric:tabular-nums}
+    .nm{font-weight:600;font-size:11.5px}
+    .note{color:${C.dim};font-size:10px;margin-top:1px}
+    .f{width:110px;color:${C.dim}}
+    .w{width:58px}
+    .b{width:96px;font-variant-numeric:tabular-nums}
+    .chip,.b{white-space:nowrap}
+    .chip{display:inline-block;min-width:38px;text-align:center;font-weight:800;font-size:10px;padding:2px 7px;border-radius:5px}
+    .dash{color:#A3AAB4;font-weight:400}
+    .foot{display:flex;justify-content:space-between;margin-top:26px;padding-top:10px;border-top:1px solid ${C.border};color:#8A929D;font-size:9px;letter-spacing:.04em}
+    .foot b{color:${C.text};letter-spacing:.14em;text-transform:uppercase;font-size:9px}
+  </style></head><body>
+  <div class="band">
+    <img src="/hs-logo-white.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
+    <div class="rule"></div>
+    <div>
+      <div class="k">Home Run Schedule${onlyPanel ? " &middot; " + esc(onlyPanel) : ""}</div>
+      <h1>${esc(jobName || "Job")}</h1>
+      ${jobAddress ? `<div class="addr">${esc(jobAddress)}</div>` : ""}
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><div class="v">${groups.length}</div><div class="l">Panel${groups.length === 1 ? "" : "s"}</div></div>
+      <div class="stat"><div class="v">${total}</div><div class="l">Home runs</div></div>
+      <div class="stat"><div class="v">${esc(dateStr || "")}</div><div class="l">Date</div></div>
+    </div>
+    ${body || '<div class="note">No home runs yet.</div>'}
+    <div class="foot"><b>Homestead Electric</b><span>Breaker sizes follow the wire gauge.</span></div>
+  </div>
+  </body></html>`;
+}
+const _hrFileName = (jobName, onlyPanel, ext) =>
+  `Home runs — ${String(jobName || "job").replace(/[\\/:*?"<>|]+/g, " ").trim()}${onlyPanel ? " — " + onlyPanel.replace(/[\\/:*?"<>|]+/g, " ") : ""}.${ext}`;
+
+// Export bar on the Home Runs tab (both views): pick All panels or one panel,
+// then PDF / CSV / Share. Share uses the phone's share sheet when there is
+// one (text it straight to Gary), otherwise copies the text to the clipboard.
+function HomeRunsExportBar({ homeRuns, customPanels, jobName, jobAddress }) {
+  const [pick, setPick] = useState("");
+  const all = useMemo(() => homeRunsPanelRows(homeRuns, customPanels), [homeRuns, customPanels]);
+  const panels = useMemo(() => homeRunsPanelList(all), [all]);
+  if (!all.length) return null;
+  const only = panels.some(g => g.panel === pick) ? pick : "";
+  const rows = only ? all.filter(r => r.panel === only) : all;
+  const pdf = async () => {
+    const filename = _hrFileName(jobName, only, "pdf");
+    const html = homeRunsHtml({ jobName, jobAddress, rows, onlyPanel: only, dateStr: new Date().toLocaleDateString("en-US") });
+    try { _loadsToast("info", "Building PDF…"); await _saveHtmlAsPdfPaged(html, filename, { avoid: ".panel:not(.tall), .ph, tr" }); _loadsToast("success", `Saved ${filename}`); }
+    catch (e) { _loadsToast("error", "PDF download failed: " + e.message); }
+  };
+  const csv = () => {
+    const filename = _hrFileName(jobName, only, "csv");
+    _downloadTextFile("﻿" + homeRunsCsv(rows), filename, "text/csv;charset=utf-8");   // BOM so Excel reads UTF-8
+    _loadsToast("success", `Saved ${filename}`);
+  };
+  const share = async () => {
+    const text = homeRunsText(rows, jobName, new Date().toLocaleDateString("en-US"));
+    if (navigator.share) {
+      try { await navigator.share({ title: `${jobName || "Job"} — Home Runs`, text }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; }
+    }
+    try { await navigator.clipboard.writeText(text); _loadsToast("success", "Home runs copied — paste into a text or email"); }
+    catch (e) { _loadsToast("error", "Couldn't copy: " + (e && e.message)); }
+  };
+  const btn = { display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 700, padding: "4px 12px", borderRadius: 99, cursor: "pointer",
+    fontFamily: "inherit", border: `1px solid ${C.border}`, background: C.card, color: C.dim };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: C.faint }}>SEND LIST</span>
+      <select value={only} onChange={e => setPick(e.target.value)}
+        style={{ background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 8, padding: "4px 6px", fontSize: 12.5, fontFamily: "inherit", outline: "none", maxWidth: "100%" }}>
+        <option value="">All panels ({all.length})</option>
+        {panels.map(g => <option key={g.panel} value={g.panel}>{g.panel} ({g.total})</option>)}
+      </select>
+      <button type="button" onClick={pdf} style={btn} title="Download a PDF of this list"><Icon name="download" size={12} stroke={2}/>PDF</button>
+      <button type="button" onClick={csv} style={btn} title="Download a spreadsheet (CSV) of this list"><Icon name="download" size={12} stroke={2}/>CSV</button>
+      <button type="button" onClick={share} style={btn} title="Text or email the list (copies it when this device has no share sheet)"><Icon name="send" size={12} stroke={2}/>Share</button>
+    </div>
+  );
+}
+
 // Flatten every home-run row across floors, keeping rows that have a name.
 // Wire is NOT required — a "Need Specs" row has a name but no wire yet and must
 // still reach the generator list (item 1). Shared by the gen sync + panel fill.
@@ -20945,6 +21130,8 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                 Appliance loads
               </button>
             </div>
+
+            <HomeRunsExportBar homeRuns={homeRuns} customPanels={cp} jobName={jobName} jobAddress={jobAddress}/>
 
             {applViewOpen && (
               <div onClick={()=>setApplViewOpen(false)}
@@ -58419,10 +58606,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-22 · App SW version: v560
+**Last manifest update:** 2026-10-23 · App SW version: v561
 
 ---
 
+- **Home Runs: send the list by panel — PDF, CSV or text** · 'shipped 2026-10-23' · 'SW v561' · 'HomeRunsExportBar' · 'homeRunsPanelRows' · Gary asked Koy for "the list of home runs in each panel at Ashcraft", and the only export was the breaker panel schedule, which is rarely made until finish. The Home Runs tab now has a **SEND LIST** bar under By Panel / By Floor (shows in both views, hidden when the job has no home runs): a picker (**All panels** or one panel, with run counts) and three buttons. **PDF** downloads a branded Homestead "Home Run Schedule": charcoal header band with the white longhorn logo ('/hs-logo-white.png'), job name and address, a stats strip (panels · home runs · date), then one section per panel (# per panel, load + note, floor, wire chip in the app's sheathing colors, breaker). **Customer-facing (Koy): no pulled / open / need-specs status on any of the three exports**, through the existing paged saver with a panel section kept on one page when it fits (26 runs or fewer) and rows never split; **CSV** downloads the same rows (Panel, #, Load, Floor, Wire, Breaker, Note, UTF-8 BOM for Excel); **Share** opens the phone's share sheet with a plain-text list headed HOMESTEAD ELECTRIC (one line per run, e.g. '3. Dryer — 10/3 (30A · 240V) · Upper Level') and on a computer copies it to the clipboard. Order matches the By Panel view: panel-dropdown order, floor (main → basement → upper → extras), load A–Z; rows with no panel group under "No Panel Assigned", listed last on the exports; blank seeded rows are skipped. Breaker is read from the wire gauge ('wireAmpsVolts', so a 240V 12/2 reads 20A · 240V). Pure builders tested in 'scripts/needs-dryrun.js'. Guide 'homeruns.html' updated. **Why it won't lose data:** read-only — the bar only reads 'homeRuns' already on screen and writes nothing to Firestore; no new field, no loader, rules or function change; the picker choice lives in component state only.
 - **Friday card opens the TEST doc right after Run now** · 'shipped 2026-10-22' · 'SW v560' · 'OD_DOCS' · 'testDocs' · Koy ran the Friday Strategy prep from Dashboard › Automations, tapped the card and got last Friday's real doc ("the date at the top says the 19th through 23rd"), because the card skips TEST copies. Now, when Run now on the **Friday Strategy prep** card succeeds, the app keeps the TEST doc link the callable already returns ('sendTestStrategyPrep' → 'docLink') and the card shows **Latest: TEST run · <day> <time>** and opens it. It stays that way until a newer real doc exists (Friday's 6:00 AM run), then the card goes back to the newest real doc on its own. Kept per device in localStorage ('he_od_testDocs'); clearing it just falls back to the real doc. Wednesday's Run now is unchanged (it writes into the running notes doc). Guide 'dashboard.html' updated. **Why it won't lose data:** front end only — it reads the callable's existing answer and stores one link in this browser; no Firestore read or write, no function, rules or loader change.
 - **Punch check-offs can't be un-done by someone else's stale phone** · 'shipped 2026-10-22' · 'SW v560' (built as v559, shipped in the same push as the Friday-card fix) · Koy: "I feel like we've had to fix this problem several times." Same day as v558, the server history for Miller #1788319922110 showed exactly how: at 15:32:34Z Keegan's phone saved its whole punch list 46 s after a 'merged:true' save and un-ticked Austin's "Cut in floor outlets" (ticked 14:51Z) — the phone's merge baseline had moved to the merged server copy while its screen copy had not, so the next save took the "server == baseline → client verbatim" path with a stale tree. Ninth incident in this family since July (Cougar Moon, Kweller ×3, Home Runs refresh, Miller ×3). What changed: every flip of a punch item's 'done' now ALSO writes its own slot 'data.punchTicks.<itemId>' = '{done, by, at, ts}' as a dotted-path write (never the whole map), from all three writers (JobDetail 'u()', the My Day Done button 'togglePunchItemDone', the return-trip sign-off cascade 'handleSignOffRT'); the slots are laid over the trees (and linked return-trip entries) on every read — 'normalizeJob' for everything in the app, and the Cloud Functions readers ('strategyPrep', 'gcPortal', 'fridayPacket', the punch-assignment push in 'index.js'); same item on two phones = latest tap wins; 'punchTicks' joins the per-field 'versions' snapshots. Files: 'src/punchTicks.js' (pure, copied byte-for-byte to 'functions/punchTicks.js' by 'scripts/punch-ticks-sync.js', which blocks the build if they drift), 'scripts/punch-ticks-test.js' (37 checks incl. the Miller 15:32 replay through the real merge code, writer tripwires, functions readers). Adversarial review (fresh Fable pass, 5 attacks replayed through the real code) found and fixed two more before ship: a re-check reusing a stale 'checkedAtTs' lost to its own un-tick slot (slot 'ts' is now this flip's), and a return-trip entry whose origin item was deleted stayed pinned to an orphan slot (orphans are no longer overlaid); the public punch share page now overlays too. Mixed-version window: a phone still on v558 flips only through the tree — its tick newer than a slot still wins, its un-tick of a slot-backed item comes back on its own screen until it refreshes (hours, not days); Koy raises Require v560 in Settings → Devices → App Versions the next morning. Deploy = hosting + functions in the same sitting. **Why it won't lose data:** the whole-tree write still happens unchanged, so every reader that ignores slots still converges; each slot is a dotted-path write to its own key, so no phone ever sends a copy of the map back and two phones ticking different items cannot collide; the offline queue, 'he_pending_patches' mirror, replay and build stamp carry slots exactly like any other pending key; the overlay is read-only, idempotent and returns jobs without slots unchanged, so removing it returns the app to today's behavior; nothing in Firestore is migrated or deleted and 'firestore.rules' is untouched (the jobs rule only requires the 'data' map and 'updated_at' string, both kept by a dotted update; proven on the emulator).
 - **Phone notes box stops fighting itself** · 'shipped 2026-10-22' · 'SW v558' · Keegan: typing in Rough Notes on his phone, "when I stop typing part of what I typed disappears." Every rich-text box on a phone (Rough/Finish Notes, Scope, Material, Notes, return-trip scope/task/material, PO items, Q&A answers, load-mapping notes) opens the same bottom sheet, which live-saves the text 400 ms after each change. That timer was also re-armed whenever the parent re-rendered — and the live-save itself re-renders the parent — so the first pause started a loop: a phantom save every ~0.4 s with unchanged text for as long as the sheet stayed open, each one re-rendering the whole app, rewriting the multi-MB 'hejobs_backup' copy in localStorage and re-arming saveJob's 500 ms debounce, so the real Firestore write never went out while the box was open (reproduced with the real components: 9 saves and 0 writes in a 4 s pause; the one write that escaped the loop carried the text from BEFORE the typing) and the phone's main thread was pegged, which is what eats keystrokes and autocorrect on iOS. Now the sheet re-arms the timer only when the text changes and skips a tick whose text it already sent (opening a box sends nothing; a restored crash draft still saves once). Gate: 'scripts/livesave-loop-test.js' (real RichEditor / RichMobileSheet / TA in jsdom under the app's save timing). **Why it won't lose data:** the sheet's own text is untouched (local state, committed on Done and on app-switch exactly as before); the only change is that unchanged text is no longer re-sent, so every save that goes out now carries text the user actually typed, and the server write that used to be starved while the box was open now lands after each pause; no field, loader, rules or merge change.

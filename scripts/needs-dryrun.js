@@ -70,6 +70,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
   "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter",
+  "homeRunsPanelRows","homeRunsPanelList","homeRunsCsv","homeRunsText",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronRejects","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
   extractConst("PERMISSIONS"),
@@ -82,6 +83,15 @@ const combined = [
   extractLine("MYDAY_ORDER"),
   extractConst("MYDAY_CAT_LABELS"),
   extractArray("HAT_REGISTRY"),
+  // v561 Home Runs export — panel order + wire→breaker helpers it reads.
+  extractLine("DEFAULT_PANELS"),
+  extractConst("getPanelOpts"),
+  extractConst("getPanelOrder"),
+  extractConst("WIRE_BREAKER"),
+  extractLine("canBe240"),
+  extractConst("effectivePoles"),
+  extractConst("wireAmpsVolts"),
+  extractLine("HR_NO_PANEL"),
   // v449 Lutron Panel Builder — the pure model helpers + their inputs.
   "let _uidT = 0; const uid = () => 't' + (++_uidT);",
   "const newLoadRow = (num) => ({ id:uid(), num, name:\"\", ch:\"\", loadType:\"\", watts:\"\", keypad:\"\", pulled:false });",
@@ -645,6 +655,29 @@ eq(H.homeBoardFilter(hbJobs, "").length, 2, "no search → every job on the boar
 eq(H.homeBoardFilter(hbJobs, "keeg").map(j => j.name), ["Wise Flooring"], "search matches foreman");
 eq(H.homeBoardFilter(hbJobs, "55012").map(j => j.name), ["Miller"], "search matches a CO quote #");
 eq(H.homeBoardFilter(hbJobs, "zzz"), [], "no match → []");
+
+// ── v561 — Home Runs export by panel (Gary: "home runs in each panel") ──
+const hrFix = {
+  customPanels:["Panel A","Panel B"],
+  main:[ { name:"Range", wire:"6/3", panel:"Panel B", status:"Pulled" }, { name:" Fridge ", wire:"12/2", panel:"Panel A" }, { name:"", wire:"", panel:"", status:"" } ],
+  upper:[ { name:"Dryer", wire:"10/3", panel:"Panel A", note:"laundry, by door" }, { name:"Well pump", wire:"12/2", v240:true, panel:"Panel A", status:"Need Specs" } ],
+  basement:[ { name:"Mystery", wire:"14/2", panel:"" } ],
+  extraFloors:[{ key:"garage", label:"Garage" }], garage:[ { name:"EV", wire:"6/2", panel:"Panel B" } ],
+};
+const hrRows = H.homeRunsPanelRows(hrFix, hrFix.customPanels);
+eq(hrRows.map(r => `${r.panel}#${r.n}:${r.name}`),
+  ["Panel A#1:Fridge","Panel A#2:Dryer","Panel A#3:Well pump","Panel B#1:Range","Panel B#2:EV","No Panel Assigned#1:Mystery"],
+  "blank rows dropped; panel order, then floor (main → basement → upper → extras), numbered per panel; unassigned last");
+eq([hrRows[0].breaker, hrRows[2].breaker, hrRows[3].breaker], ["20A · 120V","20A · 240V","50A · 240V"], "breaker from wire gauge, v240 flips 12/2 to 240V");
+eq(H.homeRunsPanelRows(hrFix, hrFix.customPanels, "Panel B").map(r => r.n + r.name), ["1Range","2EV"], "one panel only");
+eq(H.homeRunsPanelList(hrRows), [{panel:"Panel A",total:3,pulled:0},{panel:"Panel B",total:2,pulled:1},{panel:"No Panel Assigned",total:1,pulled:0}], "panel picker list with pulled counts");
+eq(H.homeRunsPanelRows({}, []), [], "no home runs → []");
+eq(H.homeRunsCsv(hrRows.slice(1,2)), 'Panel,#,Load,Floor,Wire,Breaker,Note\r\nPanel A,2,Dryer,Upper Level,10/3,30A · 240V,"laundry, by door"\r\n', "CSV header (no status — customer-facing) + comma note quoted");
+eq(H.homeRunsText(H.homeRunsPanelRows(hrFix, hrFix.customPanels, "Panel A"), "Ashcraft", "10/23/2026"),
+  "HOMESTEAD ELECTRIC\nAshcraft — Home Run Schedule · 10/23/2026\n\nPANEL A · 3 home runs\n1. Fridge — 12/2 (20A · 120V) · Main Level\n2. Dryer — 10/3 (30A · 240V) · Upper Level · laundry, by door\n3. Well pump — 12/2 (20A · 240V) · Upper Level",
+  "text for a message: branded top line, one line per run, no status (customer-facing)");
+eq(H.homeRunsText(H.homeRunsPanelRows(hrFix, hrFix.customPanels, "Panel B"), "Ashcraft").split("\n").slice(1, 5),
+  ["Ashcraft — Home Run Schedule", "", "PANEL B · 2 home runs", "1. Range — 6/3 (50A · 240V) · Main Level"], "no date → no date suffix; pulled runs don't say so");
 
 // ── v449 — Lutron Panel Builder: catalog, migration, assignment, suggest ──
 eq(H.lutronNormalizeType(" lqse-s8 "), "LQSE-4S8-120-D", "old S8 alias → real SKU");
