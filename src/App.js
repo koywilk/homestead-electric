@@ -49865,14 +49865,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const q = cQ.trim().toLowerCase();
     const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q));
     const cols = isM ? [
-      ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)], ["rough_mEst", "Rough est. margin", "r n", null, "Margin the estimate expected for rough, every cost center"],
-      ["rough_mAct", "Rough margin so far", "r", null, "Rough sell less what has been spent and committed on rough, every cost center"],
-      ["finish_sell", "Finish sell", "f n", (j) => fk(j.finish_sell)], ["finish_mEst", "Finish est. margin", "f n", null, "Margin the estimate expected for finish, every cost center"],
-      ["finish_mAct", "Finish margin so far", "f", null, "Finish sell less what has been spent and committed on finish, every cost center"], ["all_mAct", "Whole job", "n", null],
+      ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)],
+      ["rough_mAct", "Rough margin so far", "r", "mEst", "Rough sell less what has been spent and committed on rough, every cost center. Under it: the margin the estimate expected."],
+      ["finish_sell", "Finish sell", "f", (j) => fk(j.finish_sell)],
+      ["finish_mAct", "Finish margin so far", "f", "mEst", "Finish sell less what has been spent and committed on finish, every cost center. Under it: the margin the estimate expected."],
+      ["all_mAct", "Whole job", "", null],
     ] : [
-      [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r", (j) => fv(cm, j[`rough_${uKey(cm)}`])], [`rough_${cm}Est`, "Rough est (all)", "r n", (j) => fv(cm, j[`rough_${cm}Est`]), "Estimate from every cost center: the base bid and every change order"],
-      [`rough_${cm}_pct`, "Rough %", "r", "bar"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f n", (j) => fv(cm, j[`finish_${uKey(cm)}`])],
-      [`finish_${cm}Est`, "Finish est (all)", "f n", (j) => fv(cm, j[`finish_${cm}Est`]), "Estimate from every cost center: the base bid and every change order"], [`finish_${cm}_pct`, "Finish %", "f", "bar"],
+      [`rough_${uKey(cm)}`, `Rough ${USED[cm]} / est`, "r", (j) => <>{fv(cm, j[`rough_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`rough_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on rough / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
+      [`rough_${cm}_pct`, "Rough %", "r", "bar"],
+      [`finish_${uKey(cm)}`, `Finish ${USED[cm]} / est`, "f", (j) => <>{fv(cm, j[`finish_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`finish_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on finish / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
+      [`finish_${cm}_pct`, "Finish %", "f", "bar"],
       [`other_${cm}Est`, "Untagged est", "n", (j) => j[`other_${cm}Est`] ? fv(cm, j[`other_${cm}Est`]) : "–"],
     ];
     const valOf = (j, k) => (k in j ? j[k] : (v.pct.get(j.no) || {})[k]);
@@ -49900,7 +49902,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job">{c.cc}<small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n dim">{c.type || "–"}</td>
                 {ccCols.map(([k, , cl]) => <td key={k} className={cl}>{c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
       </td></tr>);
+    const wiOf = (r) => (v.crewWi || []).find(x => x.person === r.person) || null;
+    const personVal = (r) => isM ? r.rough.w : r[`rough_${cm}_pct`];
+    const crewRows = v.crew.slice().sort((a, b) => { const x = personVal(a), y = personVal(b); if (x == null && y == null) return b.jobs - a.jobs; if (x == null) return 1; if (y == null) return -1; return isM ? x - y : y - x; });
     const pending = costsDoc && costsDoc.counts && costsDoc.counts.pending;
+    right = null;   // full width: the foreman list sits above the job table (Koy: see the whole table at once)
     main = (<>
       <div className="od-head"><div><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split item by item into rough and finish · foreman from the Job Board, titled Foreman only{costsDoc && costsDoc.generated_at ? ` · pulled ${fmtAt(costsDoc.generated_at)}` : ""}</p></div>
         <div className="od-ct-actions">
@@ -49922,10 +49928,22 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {cOff.size ? <div className="od-cost-wi"><b>What-if</b><span>{cOff.size} {cOff.size === 1 ? "job" : "jobs"} switched off: {v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}. The boxes and the foreman list leave {cOff.size === 1 ? "it" : "them"} out. Nothing in Simpro or the app changes.</span>
           <button type="button" className="od-mini-btn" onClick={() => setCOff(new Set())}>Turn all back on</button></div> : null}
         <div className={`od-minis${isM ? " six" : ""}`}>{tiles.map(x => <OdMini key={x.t} title={x.t} color={x.c} icon={x.i} value={x.v} sub={x.sub} hint={x.h}/>)}</div>
+      <div className="od-white od-pad">
+        <div className="od-ct">{cRole === "foreman" ? "By foreman" : "By lead"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"]], "Group by")}</div>
+        <small className="od-cost-cap">{isM ? "Rough margin, weighted, on jobs past rough · avg beside · whole job on finished jobs" : `Rough ${NOUN[cm]} ${USED[cm]} ÷ estimate, jobs with rough logged`} · tap a name to see their numbers</small>
+        <div className="od-cost-ppl wide">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
+          const val = isM ? r.rough.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.rough.w : r0[`rough_${cm}_pct`]) : null;
+          return (
+            <button type="button" key={r0.person} className={on ? "on" : ""} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: cRole, person: r0.person }); setCSel(null); }}>
+              <span className="nm">{r0.person}<small>{r.jobs} jobs{isM ? ` · ${r.rough.n} past rough` : ` · ${r.rough_started} started`}</small></span>
+              <span className="val"><b style={{ color: isM ? mC(val) : val != null && val > 1 ? OD_R : OD_B }}>{fp(val)}</b>
+                <small>{isM ? `avg ${fp(r.rough.avg)} · whole ${fp(r.all.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? ` · all jobs ${fp(was)}` : ""}</small></span>
+            </button>); })}</div>
+      </div>
         <div className="od-white od-pad">
           <div className="od-ct">{isM ? "Every job, margin by phase" : `Every job, ${NOUN[cm]}`}<small>{isM
             ? "margin = sell less what's been spent and committed, over sell · every cost center · red is below zero, orange below 15% · untick Count to leave a job out"
-            : `est (all) = the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on · untick Count to leave a job out`}</small></div>
+            : `est = the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on · untick Count to leave a job out`}</small></div>
           <input className="od-cost-q" type="search" value={cQ} onChange={e => setCQ(e.target.value)} placeholder="Search jobs, foremen, leads" aria-label="Search jobs"/>
           <div className="od-cost-scroll tall"><table className="od-cost-tbl jobs">
             <thead><tr><th className="l">Count</th>{th("name", "Job", "l")}{th("foremanShown", "Foreman", "l n", "Only people titled Foreman on Team Members count. A jr foreman or lead named in the foreman field shows as No foreman.")}{th("status", "Status", "l n")}
@@ -49935,32 +49953,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
                 <tr className={`${off ? "off" : ""}${open ? " open" : ""}`} onClick={() => setCSel(open ? null : j.no)}>
                   <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
                   <td className="l job">{j.name}<small>#{j.no}{j.site ? ` · ${j.site}` : ""}</small></td>
-                  <td className={`l n${j.foreman ? "" : " dim"}`}>{j.foremanShown}</td>
+                  <td className={`l n fm${j.foreman ? "" : " dim"}`}>{j.foremanShown}</td>
                   <td className="l n"><span className="od-cost-st">{j.status || "—"}</span></td>
-                  {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k], /finish/.test(k)) : typeof fmt === "function" ? fmt(j) : margin(p[k])}</td>)}
+                  {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k], /finish/.test(k)) : typeof fmt === "function" ? fmt(j)
+                    : fmt === "mEst" ? <>{margin(p[k])}<small className="od-cost-sub">est {fp(p[k.replace("_mAct", "_mEst")])}</small></> : margin(p[k])}</td>)}
                 </tr>
                 {open ? detail(j) : null}
               </Fragment>); })}
               {!list.length ? <tr><td colSpan={4 + cols.length}><div className="od-empty">No jobs match.</div></td></tr> : null}</tbody></table></div>
         </div>
-      </>}
-    </>);
-    const wiOf = (r) => (v.crewWi || []).find(x => x.person === r.person) || null;
-    const personVal = (r) => isM ? r.rough.w : r[`rough_${cm}_pct`];
-    const crewRows = v.crew.slice().sort((a, b) => { const x = personVal(a), y = personVal(b); if (x == null && y == null) return b.jobs - a.jobs; if (x == null) return 1; if (y == null) return -1; return isM ? x - y : y - x; });
-    right = costsDoc ? (<>
-      <div className="od-white od-pad">
-        <div className="od-ct">{cRole === "foreman" ? "By foreman" : "By lead"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"]], "Group by")}</div>
-        <small className="od-cost-cap">{isM ? "Rough margin, weighted, on jobs past rough · avg beside · whole job on finished jobs" : `Rough ${NOUN[cm]} ${USED[cm]} ÷ estimate, jobs with rough logged`} · tap a name to see their numbers</small>
-        <div className="od-cost-ppl">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
-          const val = isM ? r.rough.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.rough.w : r0[`rough_${cm}_pct`]) : null;
-          return (
-            <button type="button" key={r0.person} className={on ? "on" : ""} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: cRole, person: r0.person }); setCSel(null); }}>
-              <span className="nm">{r0.person}<small>{r.jobs} jobs{isM ? ` · ${r.rough.n} past rough` : ` · ${r.rough_started} started`}</small></span>
-              <span className="val"><b style={{ color: isM ? mC(val) : val != null && val > 1 ? OD_R : OD_B }}>{fp(val)}</b>
-                <small>{isM ? `avg ${fp(r.rough.avg)} · whole ${fp(r.all.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? ` · all jobs ${fp(was)}` : ""}</small></span>
-            </button>); })}</div>
-      </div>
       <div className="od-white od-pad">
         <div className="od-ct">How it is counted</div>
         <ul className="od-cost-how">
@@ -49973,7 +49974,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <li>Jobs: Simpro's in progress and complete, plus invoiced jobs still on the Job Board. Pulled nightly; read-only.</li>
         </ul>
       </div>
-    </>) : null;
+      </>}
+    </>);
   } else if (tab === "goals") {
     // v562: the Team Goals sheet beside today's numbers. Simpro cards follow Josh's rule
     // (jobs invoiced this year, weighted, technician credit); the rest read this page's model.
@@ -50530,6 +50532,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-goal-note{font-size:12.5px;color:var(--cdim);padding:2px 4px}
         .odash .od-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
         .odash .od-minis.six{grid-template-columns:repeat(3,minmax(0,1fr))}
+        .odash .od-grid.one{grid-template-columns:minmax(0,1fr)}
         .odash .od-cseg{display:inline-flex;gap:2px;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px}
         .odash .od-cseg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap}
         .odash .od-cseg button[aria-pressed="true"]{background:var(--o);color:var(--on-o)}
@@ -50548,13 +50551,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-cost-scroll{overflow:auto;border-radius:10px}
         .odash .od-cost-scroll.tall{max-height:620px}
         .odash .od-cost-tbl{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
-        .odash .od-cost-tbl th{position:sticky;top:0;background:var(--card);z-index:1;text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);font-weight:700;padding:7px 8px;border-bottom:2px solid var(--cline);white-space:nowrap}
+        .odash .od-cost-tbl th{position:sticky;top:0;background:var(--card);z-index:1;text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);font-weight:700;padding:7px 7px;border-bottom:2px solid var(--cline);white-space:normal;line-height:1.25;vertical-align:bottom;max-width:110px}
         .odash .od-cost-tbl th.r{box-shadow:inset 0 3px 0 ${OD_B}}.odash .od-cost-tbl th.f{box-shadow:inset 0 3px 0 ${OD_P}}
         .odash .od-cost-tbl th button{border:0;background:transparent;padding:0;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;cursor:pointer}
         .odash .od-cost-tbl th[aria-sort="ascending"] button::after{content:" ▲"}.odash .od-cost-tbl th[aria-sort="descending"] button::after{content:" ▼"}
-        .odash .od-cost-tbl td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--cline);white-space:nowrap}
+        .odash .od-cost-tbl td{text-align:right;padding:6px 7px;border-bottom:1px solid var(--cline);white-space:nowrap}
         .odash .od-cost-tbl .l{text-align:left}
-        .odash .od-cost-tbl td.job{white-space:normal;min-width:170px;font-weight:600}
+        .odash .od-cost-tbl td.job{white-space:normal;min-width:150px;font-weight:600}
+        .odash .od-cost-tbl td.fm{white-space:normal;max-width:150px;line-height:1.3}
+        .odash .od-cost-tbl td .od-cost-sub{display:block;font-size:10.5px;font-weight:500;color:var(--cdim)}
         .odash .od-cost-tbl td.job small{display:block;font-weight:400;color:var(--cdim);font-size:11px}
         .odash .od-cost-tbl .dim{color:var(--cdim)}
         .odash .od-cost-tbl.jobs tbody tr{cursor:pointer}
@@ -50563,7 +50568,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-cost-tbl input[type="checkbox"]{width:17px;height:17px;accent-color:var(--o);cursor:pointer}
         .odash .od-cost-st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--inset);color:var(--cdim)}
         .odash .od-cost-pct{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end}
-        .odash .od-cost-bar{position:relative;width:70px;height:7px;border-radius:999px;background:var(--trk);flex-shrink:0}
+        .odash .od-cost-bar{position:relative;width:54px;height:7px;border-radius:999px;background:var(--trk);flex-shrink:0}
         .odash .od-cost-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px}
         .odash .od-cost-bar em{position:absolute;left:calc(66.67% - 1px);top:-3px;bottom:-3px;width:2px;background:var(--cink);opacity:.45}
         .odash .od-cost-det>td{background:var(--inset);padding:10px 12px;cursor:default;white-space:normal}
@@ -50571,6 +50576,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-cost-det .od-cost-tbl th{background:var(--card-solid)}
         .odash .od-cost-cap{display:block;color:var(--cdim);font-size:11.5px;margin:4px 0 8px}
         .odash .od-cost-ppl{display:flex;flex-direction:column;gap:4px}
+        .odash .od-cost-ppl.wide{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px}
+        .odash .od-cost-ppl.wide button{border-color:var(--cline)}
         .odash .od-cost-ppl button{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;border:1px solid transparent;background:transparent;border-radius:12px;padding:8px 10px;cursor:pointer}
         .odash .od-cost-ppl button:hover{background:var(--hov)}
         .odash .od-cost-ppl button.on{background:var(--o-soft);border-color:var(--o)}
@@ -50659,9 +50666,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           </div>
         </div>
       )}
-      <div className="od-grid">
+      <div className={"od-grid" + (tab === "costs" ? " one" : "")}>
         <div className="od-panel">{main}</div>
-        <div className="od-panel">{right}</div>
+        {tab === "costs" ? null : <div className="od-panel">{right}</div>}
       </div>
       {sheetEl}
     </div>
@@ -59265,10 +59272,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-23 · App SW version: v564
+**Last manifest update:** 2026-10-23 · App SW version: v565
 
 ---
 
+- **Job Costs: the whole job table fits across the screen** · 'shipped 2026-10-23' · 'SW v565' · 'OfficeDash' · Koy, right after v564: *"its annoying that you cant see the whole table horizonatlly at once"*. The Job Costs tab now uses the dashboard's full width (the 310 px right rail is dropped on this tab only — '.od-grid.one'); **By foreman / By lead** moved above the job table as a grid of name cards, **How it is counted** below it. Cost views: used and estimate share one column per phase ("1,249 / 395"; sorts by used), so the table is 9 columns; Margin: one column per phase — margin so far with the estimate's margin small under it — plus sell and whole job. Headings and the long "No foreman (…, why)" text wrap, bars are shorter. Measured on today's data: both views fit with no sideways scroll at 1440, 1280, 1200 and 1100 px; phones still scroll the table (narrow-screen columns hide as before). Guide 'dashboard.html' says the foreman list is above the table. **Why it won't lose data:** layout only — no data, write, function or rules change.
 - **Job Costs tab on the office dashboard: rough and finish across every cost center, by foreman, with a what-if** · 'shipped 2026-10-23' · 'SW v564' · 'OfficeDash' · 'odCostsJoin' · 'odCostsSummary' · 'odCostsCrew' · 'odCostsJobPct' · 'phaseCostsNightly' · 'sendTestPhaseCosts' · 'functions/phaseCosts.js' · Koy: *"show what the rough profit margin is and the finish profit margin is"* — crews are scheduled and materials ordered on Base → Rough In, so the base cost center carries every hour while the extras' estimates sit on their own cost centers and rough looks over (Pierce #1277: 129% of the Rough In cost center's 313.6 h, 94% of the 427.3 h the job was sold with for rough). **Split ('functions/phaseCosts.js'):** every cost center (base bid and every change order) into rough / finish / untagged, item by item — an item ending "(Rough In)" → rough, "(Finish)"/"(Trim)" → finish, else the cost center's type ("Residential (Rough In)"), else its name, else untagged (Change Order, Generators); hours, materials, labor with overhead and sell price all follow the item; Simpro's cost-center total is the budget (items over it scale down, labor not on an item goes to the cost center's phase, a credit comes off its phase); spending is per cost center in Simpro, so it splits in the same shares as that cost center's estimate (DMF Lighting #694: $12,187 → $1,776 rough / $7,073 finish / rest untagged); spent $ include committed, as Simpro's margin does. **Server:** 'phaseCostsNightly' (2:15, 3:15, 4:15 AM MT) + 'sendTestPhaseCosts' (admins, "Pull from Simpro now"): Simpro's Progress + Complete jobs plus the Invoiced jobs still on the Job Board (Keegan's 8 invoiced jobs were missing otherwise); each job's last pull in server-only 'phaseCostsState/{simproNo}' (the rules' catch-all closes it to the app) so a cost center's items are re-read only when its estimate changes and invoiced jobs weekly; a run stops at a 7-minute budget and the next run continues; writes 'settings/phaseCosts' (one row per job) and 'settings/phaseCostsCc0..N' (each job's cost centers, sharded under the doc limit, read when a job is opened). Verified read-only against live Simpro: Pierce and #694 match the hand pull exactly, and a second run reads no items. **Tab:** Hours / Materials / Labor $ / Margin × All jobs / Active / Invoiced; boxes for jobs over estimate and used vs estimate, rough and finish; Margin: whole job (punch list / RTI / invoiced), rough (past rough) and finish, **weighted** (Σ sell − Σ spent ÷ Σ sell — Koy's pick, the bank's number) with the plain per-job average smaller beside it, and how many are under 15%; Every job table (worst first: hours / $ over estimate, or $ lost on Margin), rough and finish side by side, 'Est (all)' explained as every cost center, tap a job for its cost centers + Open job; **Count** checkboxes for a what-if (boxes and foreman list leave switched-off jobs out, What-if bar names them, Turn all back on; page-only); right rail **By foreman / By lead** — tap a name and the boxes become theirs with the company's under each. **Foreman = the Job Board's, counted only when titled Foreman on Team Members** (Koy: Gage is a jr foreman, not a foreman; "No foreman (Gage Lund, jr foreman)"; Paul = outside contractor) — deliberately not the Goals tab's Simpro-technician credit (they differ on 29 jobs). Tests: 'scripts/phasecosts-test.js' (split, budget, credit, spent, Pierce's seven cost centers, shards) and 'scripts/jobcosts-model-test.js' (foreman rule, weighted vs average, summary, crew, per job), both in prebuild; 'odash-model-test' sandbox exports them. Guide 'dashboard.html' step 8. Crew brief 'docs/crew-briefs/v564.md'. **Needs 'firebase deploy --only functions:phaseCostsNightly,functions:sendTestPhaseCosts' before the push**; the first full pull takes about three runs (press Pull from Simpro now a few times, or wait for the night). **Why it won't lose data:** read-only against Simpro and the jobs; the only writes are new docs — 'settings/phaseCosts', 'settings/phaseCostsCc*' (existing settings read rule) and the server-only 'phaseCostsState' collection — no job write, no loader or rules change; the what-if switches never leave the page.
 - **Goals tab reads the sheet the way Google actually exports it** · 'shipped 2026-10-23' · 'SW v563' · 'OD_GOALS_SHEET' · 'odGoalsParse' · Found right after v562 went live, while adding the STATUS column: Google's CSV export guesses "header rows" and folded the title, mission, section line and the AREA header into ONE first line, so the live tab showed the 2027 scoreboard and the quarters but no mission and zero rest-of-2026 goals. Two fixes: the export URL now carries 'headers=0' (Google then sends every row as-is), and the parser also survives the folded row (mission cut out of a longer cell, a cell ending in AREA treated as the header, so STATUS in column F still resolves). 'scripts/goals-model-test.js' gains the folded-row case. **Why it won't lose data:** read path only; one URL parameter and parser logic; no Firestore, function, rules or loader change.
 - **The office dashboard wears the Homestead brand** · 'shipped 2026-10-23' · 'SW v562' · 'DashPage' · 'OD_A' · Koy, after seeing the Goals tab built: *"wait i want the dashboard fully homestead branded"*, then chose Brand A from two mockups. Every tab of '/dashboard': the longhorn ('/icon-192.png') with **HOMESTEAD ELECTRIC** in the app's Bebas slab caps and *Office dashboard* under it in copper, a warm off-white page ('#F7F4EE', manifest and status-bar colour follow), warm brown-black ink, and the copper from the purchase-order form as the accent ('OD_A' '#8E6336': darkened from the form's '#A3733F' so it reads 5.3:1 on white as text and as a filled pill; '--o-ink' '#7E5730' for copper text) on the active tab, buttons, focus rings, hover tints and the heat cells. Tab headings use the slab caps. Data colours are unchanged (green / red / orange / blue to-do / purple), so a red line still means what it meant yesterday. **Why it won't lose data:** colours, one image and CSS only; no Firestore read or write, no function, rules or loader change.
