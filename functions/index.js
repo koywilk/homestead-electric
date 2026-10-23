@@ -8368,3 +8368,99 @@ exports.sendTestGoalsPull = functions
     try { return await runGoalsPull({ reason: "manual" }); }
     catch (e) { functions.logger.error("[goals] manual pull failed", { error: e.message }); return { ok: false, error: e.message }; }
   });
+
+// ─────────────────────────────────────────────────────────────
+// JOB COSTS — nightly rough / finish split for Dashboard › Job Costs (SW v564, 2026-10-23)
+// Every Simpro job in progress or complete, plus the invoiced jobs still on the Job Board,
+// split item by item into rough / finish / untagged across every cost center (base bid and
+// change orders). Math in functions/phaseCosts.js (scripts/phasecosts-test.js).
+// Writes settings/phaseCosts (one row per job) and settings/phaseCostsCc0..N (each job's cost
+// centers, sharded under the doc limit; the tab reads one when a job is opened). Each job's
+// last pull is kept in phaseCostsState/{simproNo} — server-only (the rules' catch-all closes it
+// to the app) — so a run re-reads a cost center's items only when its estimate changed,
+// invoiced jobs are re-read weekly, and a run that hits its time budget leaves the rest for
+// the next run (2:15, 3:15 and 4:15 AM; the first full pull is ~20 min of reads, later runs a
+// minute or two). Read-only against Simpro; no job write.
+// ─────────────────────────────────────────────────────────────
+const _pc = require("./phaseCosts");
+const PC_DOC = "phaseCosts", PC_CC_DOC = "phaseCostsCc", PC_STATE = "phaseCostsState";
+const pcMetaOf = (x) => ({ no: String(x.ID), name: x.Name || "", site: (x.Site && x.Site.Name) || "", stage: x.Stage || "", status: (x.Status && x.Status.Name) || "" });
+const pcJob = (meta, prevState) => _pc.pullJob(meta, prevState, simproReqWithRetry);
+async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
+  const startedAt = Date.now();
+  const now = new Date();
+  // 1. Which jobs: Simpro's in-progress and complete jobs, plus invoiced jobs still on the Job Board.
+  const metas = new Map();
+  for (const st of ["Progress", "Complete"]) {
+    for (let page = 1; page <= 10; page++) {
+      const r = await simproReqWithRetry("GET", `/jobs/?Stage=${st}&pageSize=250&page=${page}&columns=ID,Name,Stage,Status,Site`);
+      if (!r.ok || !Array.isArray(r.data)) throw new Error(`[phaseCosts] ${st} job list failed on page ${page} (${r.status})`);
+      r.data.forEach(x => { if (x && x.ID != null) metas.set(String(x.ID), pcMetaOf(x)); });
+      if (r.data.length < 250) break;
+    }
+  }
+  const snap = await db.collection("jobs").select("data.simproNo", "data.type", "data.archived", "data.deleted").get();
+  const board = new Set();
+  snap.docs.forEach(d => { const j = (d.data() || {}).data || {}; const sn = String(j.simproNo || "").trim(); if (sn && !j.deleted && !j.archived && j.type !== "quote") board.add(sn); });
+  const stateSnap = await db.collection(PC_STATE).get();
+  const state = {}; stateSnap.docs.forEach(d => { state[d.id] = d.data(); });
+  for (const sn of board) {
+    if (metas.has(sn)) continue;
+    const st = state[sn];
+    if (st && st.meta && st.meta.stage === "Invoiced") { metas.set(sn, st.meta); continue; }   // invoiced stays invoiced
+    const r = await simproReqWithRetry("GET", `/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Name,Stage,Status,Site`);
+    const x = r.ok && Array.isArray(r.data) ? r.data[0] : null;
+    if (x && x.Stage === "Invoiced") metas.set(sn, pcMetaOf(x));
+  }
+  // 2. Pull: never-pulled jobs first, then the rest; invoiced jobs only once a week. Stop at the budget.
+  const WEEK = 7 * 86400000;
+  const all = [...metas.values()];
+  const todo = all.filter(m => !(m.stage === "Invoiced" && state[m.no] && state[m.no].at && (now - new Date(state[m.no].at)) < WEEK))
+    .sort((a, b) => (state[a.no] ? 1 : 0) - (state[b.no] ? 1 : 0));
+  let i = 0, refreshed = 0, failed = 0, itemReads = 0;
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (i < todo.length) {
+      if (Date.now() - startedAt > budgetMs) return;
+      const m = todo[i++];
+      try {
+        const r = await pcJob(m, state[m.no]);
+        const docData = { at: now.toISOString(), meta: m, row: r.row, ccs: r.ccs, cache: r.cache };
+        await db.collection(PC_STATE).doc(m.no).set(docData);
+        state[m.no] = docData; refreshed++; itemReads += r.itemReads;
+      } catch (e) { failed++; functions.logger.warn("[phaseCosts] job failed", { no: m.no, error: e.message }); }
+    }
+  }));
+  // 3. Assemble: today's Simpro name / stage over the last pull's numbers.
+  const rows = [], ccsByNo = {};
+  all.forEach(m => {
+    const st = state[m.no]; if (!st || !st.row) return;
+    const row = { ...st.row, name: m.name, site: m.site, stage: m.stage, status: m.stage === "Invoiced" ? "Invoiced" : String(m.status || "").replace(/^Job\s*-\s*/i, "").trim(), pulledAt: st.at };
+    if (!_pc.hasEstimate(row)) return;
+    rows.push(row); ccsByNo[m.no] = st.ccs || [];
+  });
+  const { shards, where } = _pc.shardCcs(ccsByNo);
+  for (let k = 0; k < shards.length; k++) await db.collection("settings").doc(PC_CC_DOC + k).set({ generated_at: now.toISOString(), jobs: shards[k] });
+  const payload = {
+    generated_at: now.toISOString(), reason, rows, ccShard: where, shardCount: shards.length,
+    counts: { jobs: rows.length, listed: all.length, refreshed, failed, pending: Math.max(0, todo.length - refreshed - failed), itemReads },
+    seconds: Math.round((Date.now() - startedAt) / 1000),
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(payload));
+  if (bytes > 900000) throw new Error(`[phaseCosts] doc would be ${bytes} bytes — over the document limit, not written`);
+  await db.collection("settings").doc(PC_DOC).set(payload);
+  functions.logger.info("[phaseCosts] written", { ...payload.counts, bytes, shards: shards.length, seconds: payload.seconds, reason });
+  return { ok: true, ...payload.counts, shards: shards.length, bytes, seconds: payload.seconds, generated_at: payload.generated_at };
+}
+// 2:15, 3:15 and 4:15 AM Mountain — a later run finishes anything an earlier one left at its time budget.
+exports.phaseCostsNightly = functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .pubsub.schedule("15 2,3,4 * * *").timeZone(TZ)
+  .onRun(async () => { try { return await runPhaseCosts({ reason: "nightly" }); } catch (e) { functions.logger.error("[phaseCosts] nightly failed", { error: e.message }); return null; } });
+// "Pull from Simpro now" on the Job Costs tab (admins; same app-key guard as every other callable).
+exports.sendTestPhaseCosts = functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    try { return await runPhaseCosts({ reason: "manual" }); }
+    catch (e) { functions.logger.error("[phaseCosts] manual pull failed", { error: e.message }); return { ok: false, error: e.message }; }
+  });

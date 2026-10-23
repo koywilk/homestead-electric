@@ -56,7 +56,8 @@
     app already has, so it is live: when someone closes a punch item or logs an inspection, the numbers move. It
     follows the <b>Residential / Commercial</b> switch like every other screen. The page wears the Homestead brand (v562): the longhorn and the slab wordmark at the top, a warm off-white page, white cards, and the copper from our purchase-order form for the active tab and buttons. <b>Needs you</b> at the top of the Overview is the short list of decisions only you make; the
     rest of the page is what is slipping. Tap any line, card or job to see the list behind it. The <b>Goals</b> tab
-    (v562) puts the Team Goals sheet beside today's numbers.</p>
+    (v562) puts the Team Goals sheet beside today's numbers, and <b>Job Costs</b> (v564) splits every job's hours, materials and
+    margin into rough and finish across every cost center.</p>
   </div>
 
   <div class="rules">
@@ -198,6 +199,31 @@
     jobs, open questions, return trips, failed inspections not re-booked, plans waiting): add a scoreboard row in the sheet that
     names one and it moves up into the cards. <b>Pull from Simpro now</b> (admins) runs the nightly pull on demand; the right rail
     says when it last ran and turns red past two days. Nothing on this tab writes to the sheet, to Simpro or to a job.</p>
+  </div></div>
+  <div class="step"><div class="num">8</div><div class="body">
+    <h3>Job Costs</h3>
+    <p>Rough and finish, counted the way the job was sold. Crews are scheduled and materials are ordered on <b>Base → Rough In</b>,
+    so that one cost center carries every hour while the extras' estimates sit on their own cost centers. This tab counts
+    <b>every cost center on the job</b> — the base bid and every change order — and splits each one into rough, finish and untagged
+    <b>item by item</b>: an item ending <b>(Rough In)</b> goes to rough, <b>(Finish)</b> to finish; an item with neither follows its cost
+    center's type (Residential (Rough In) / (Finish)); a cost center with no phase (Change Order, Generators) is <b>Untagged</b>.
+    Simpro's total for each cost center is the budget; the items only decide the split, and a credit comes off its phase. What was
+    spent is recorded per cost center, so it splits the same way as that cost center's estimate; spent dollars include committed
+    (ordered, scheduled), the way Simpro figures margin.
+    Pick <b>Hours</b>, <b>Materials</b>, <b>Labor $</b> or <b>Margin</b>, and <b>All jobs</b>, <b>Active</b> or <b>Invoiced</b>. The boxes show jobs
+    over estimate and used vs estimate for rough and finish; on Margin, the whole job (on jobs at punch list, ready to invoice or
+    invoiced), rough (jobs past rough) and finish, each <b>weighted</b> (total sell less total spent, over total sell — big jobs count
+    more) with the plain average of each job's margin smaller beside it, and how many are under 15%.
+    <b>Every job</b> lists rough and finish side by side, worst first; <b>Est (all)</b> is the estimate from every cost center, not just
+    the base one. Tap a job to see its cost centers and how each splits; <b>Open job</b> opens it in the app. Untick <b>Count</b> to leave a
+    job out: a <b>What-if</b> bar names what is off and the boxes and the foreman list leave it out (<b>Turn all back on</b> to undo;
+    nothing in Simpro or the app changes, and it resets when you leave).
+    <b>By foreman</b> / <b>By lead</b> (right rail) adds up each person's jobs; tap a name and the boxes become theirs, with the company
+    number under each. The foreman is the one on the <b>Job Board</b>, counted only when titled <b>Foreman</b> on Team Members — a jr foreman,
+    lead or office person named in the foreman field shows as <b>No foreman (name, why)</b>; fix the job's foreman field to move it.
+    This is not the Goals tab's rule (Simpro's technician), so the two tabs can credit a job to different people.
+    The numbers are pulled from Simpro every night (2:15, 3:15 and 4:15 AM; read-only); <b>Pull from Simpro now</b> (admins) runs it on
+    demand. Nothing on this tab writes to Simpro or to a job.</p>
   </div></div>
 
   <div class="call tip"><span class="lbl">Tip</span><p>The tab you were on is remembered on that device,

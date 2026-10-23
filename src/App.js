@@ -47491,7 +47491,7 @@ function PlansCard({ identity, users = [] }) {
 // (planFileByHand / planDismissByHand callables, name + PIN), Ask <foreman> to
 // import (one My Day task through the stamped needs write) and Run now on the
 // Wednesday / Friday meeting-prep docs (their existing test-trigger callables).
-const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["goals","Goals"]];
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["goals","Goals"],["costs","Job Costs"]];
 // Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
 // what Koy's two Claude Routines produced, read from where they already put it.
 // Plan intake → agentFindings (the Today Plans card's source, live listener
@@ -48657,6 +48657,89 @@ function odGoalsModel({ sheet, sim, sb, d, plans, now = new Date() }) {
     counts: { goals: goals.length, done, dueSoon, measures: measures.length, atGoal, tracked, daysLeft } };
 }
 
+// ── Job Costs (v564) ───────────────────────────────────────────────────────
+// Koy, 2026-10-23: rough and finish "according to all cost centers", by foreman, with a what-if.
+// settings/phaseCosts (phaseCostsNightly; math in functions/phaseCosts.js) holds one row per
+// Simpro job: per phase (rough / finish / other = untagged) hours, materials, labor with overhead
+// and sell price — estimated (split item by item over every cost center, base bid and change
+// orders) and spent (incl. committed, split like each cost center's estimate). Here: the Job
+// Board's foreman joined in, counted only when titled Foreman on Team Members (Koy: Gage is a jr
+// foreman, not a foreman; Paul never counts), and the sums. Margin is WEIGHTED — Σ (sell − spent)
+// ÷ Σ sell, the bank's number — with the plain per-job average beside it (Koy's pick 2026-10-23).
+// Credit is the Job Board foreman, NOT the Goals tab's Simpro technician (also Koy's pick).
+// Pure: tested by scripts/jobcosts-model-test.js through the odash-model-test sandbox.
+const OD_COST_P = ["rough", "finish", "other"];
+const OD_COST_DONE = { rough: ["Rough-In Complete", "Finish", "Punch List", "Ready to Invoice", "Invoiced"], finish: ["Punch List", "Ready to Invoice", "Invoiced"] };
+const OD_COST_GOAL = 0.15;
+function odCostsJoin(rows, jobs, users) {
+  const titleOf = (u) => u.title || (["admin", "justin", "jeromy"].includes(u.role) ? "admin" : ["foreman", "lead", "crew"].includes(u.role) ? u.role : "crew");
+  const TITLE = { foreman: "foreman", jrforeman: "jr foreman", lead: "lead", crew: "crew", admin: "office" };
+  const team = (users || []).filter(u => u && String(u.name || "").trim());
+  const personOf = (name) => { const s = String(name || "").trim().toLowerCase(); if (!s) return null;
+    return team.find(u => String(u.name).trim().toLowerCase() === s) || team.find(u => sameName(u.name, s)) || null; };
+  const board = {};
+  (jobs || []).forEach(j => { const sn = String((j && j.simproNo) || "").trim(); if (!sn || j.deleted || j.type === "quote") return;
+    if (!board[sn] || (board[sn].archived && !j.archived)) board[sn] = j; });
+  return (rows || []).map(r => {
+    const b = board[String(r.no)] || null;
+    const raw = String((b && b.foreman) || "").trim(), p = personOf(raw);
+    let foreman = "", why = "";
+    if (p && p.active !== false && titleOf(p) === "foreman" && !SBV2_EXCLUDE_NAME(p.name)) foreman = String(p.name).trim();
+    else if (raw && !/^(unassigned|tbd)$/i.test(raw)) why = !p ? raw : SBV2_EXCLUDE_NAME(p.name) ? `${raw}, outside contractor` : p.active === false ? `${raw}, not on the team` : `${raw}, ${TITLE[titleOf(p)] || titleOf(p)}`;
+    const lead = String((b && b.lead) || "").trim();
+    return { ...r, jobId: b ? b.id : null, foreman, foremanShown: foreman || (why ? `No foreman (${why})` : "No foreman"), lead: /^lead tbd$/i.test(lead) ? "" : lead };
+  });
+}
+const odCostSell = (j, ps) => ps.reduce((a, p) => a + (j[p + "_sell"] || 0), 0);
+const odCostSpent = (j, ps) => ps.reduce((a, p) => a + (j[p + "_matAct"] || 0) + (j[p + "_labAct"] || 0), 0);
+// Weighted margin (Σ sell − Σ spent ÷ Σ sell) and the plain per-job average, for one set of jobs and phases.
+function odCostsMargins(js, ps) {
+  const sell = js.reduce((a, j) => a + odCostSell(j, ps), 0), cost = js.reduce((a, j) => a + odCostSpent(j, ps), 0);
+  const per = js.map(j => { const s = odCostSell(j, ps); return s > 0 ? (s - odCostSpent(j, ps)) / s : null; }).filter(x => x != null);
+  return { n: js.length, w: sell > 0 ? (sell - cost) / sell : null, avg: per.length ? per.reduce((a, x) => a + x, 0) / per.length : null, under: per.filter(x => x < OD_COST_GOAL).length };
+}
+// Totals for a set of jobs: used vs estimate and jobs over, per phase and kind (hrs / mat / lab), for
+// jobs with that phase started; margins on jobs past rough (rough), at punch list or later (finish, all).
+function odCostsSummary(rows) {
+  const o = { jobs: rows.length };
+  ["rough", "finish"].forEach(p => {
+    const started = rows.filter(j => j[p + "_hrsUsed"] > 0);
+    o[p + "_started"] = started.length;
+    ["hrs", "mat", "lab"].forEach(m => {
+      const u = m === "hrs" ? "hrsUsed" : m + "Act";
+      const used = started.reduce((a, j) => a + (j[p + "_" + u] || 0), 0), est = started.reduce((a, j) => a + (j[p + "_" + m + "Est"] || 0), 0);
+      o[p + "_" + m + "_used"] = used; o[p + "_" + m + "_est"] = est; o[p + "_" + m + "_pct"] = est > 0 ? used / est : null;
+      o[p + "_" + m + "_over"] = started.filter(j => j[p + "_" + m + "Est"] > 0 && j[p + "_" + u] > j[p + "_" + m + "Est"]).length;
+    });
+    o[p] = odCostsMargins(rows.filter(j => OD_COST_DONE[p].includes(j.status) && j[p + "_hrsUsed"] > 0), [p]);
+  });
+  o.all = odCostsMargins(rows.filter(j => OD_COST_DONE.finish.includes(j.status) && OD_COST_P.some(p => j[p + "_hrsUsed"] > 0)), OD_COST_P);
+  return o;
+}
+// The same totals per foreman (or lead); jobs with nobody count under "No foreman" / "No lead".
+function odCostsCrew(rows, role) {
+  const g = {};
+  rows.forEach(j => { const k = j[role] || (role === "foreman" ? "No foreman" : "No lead"); (g[k] = g[k] || []).push(j); });
+  return Object.keys(g).map(person => ({ person, ...odCostsSummary(g[person]) }));
+}
+// One job's own numbers: used ÷ estimate per phase and kind, and margin so far per phase (null until
+// that phase has spending) and for the whole job.
+function odCostsJobPct(j) {
+  const o = {};
+  ["rough", "finish"].forEach(p => {
+    ["hrs", "mat", "lab"].forEach(m => { const u = m === "hrs" ? "hrsUsed" : m + "Act"; const e = j[p + "_" + m + "Est"] || 0;
+      o[p + "_" + m + "_pct"] = e > 0 ? (j[p + "_" + u] || 0) / e : null;
+      o[p + "_" + m + "_overBy"] = (j[p + "_" + u] || 0) - e; });     // how far past the estimate (the default sort)
+    const s = odCostSell(j, [p]), c = odCostSpent(j, [p]);
+    o[p + "_profit"] = c > 0 ? s - c : null;                         // dollars made so far on the phase (Margin's default sort)
+    o[p + "_mEst"] = s > 0 ? (s - (j[p + "_matEst"] || 0) - (j[p + "_labEst"] || 0)) / s : null;
+    o[p + "_mAct"] = s > 0 && c > 0 ? (s - c) / s : null;
+  });
+  const s = odCostSell(j, OD_COST_P), c = odCostSpent(j, OD_COST_P);
+  o.all_mAct = s > 0 && c > 0 ? (s - c) / s : null;
+  return o;
+}
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -48786,6 +48869,47 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     getDoc(doc(db, "settings", "scoreboardCompleted")).then(snap => { if (!dead) setGoalsSb(snap.exists() ? { prog: (snap.data() || {}).prog || [] } : null); }, () => {});
     return () => { dead = true; };
   }, [tab, goalsTick]);
+  // ── Job Costs tab (v564): settings/phaseCosts (phaseCostsNightly) is read when the tab opens or
+  // Refresh is pressed; an opened job's cost centers come from its settings/phaseCostsCc<N> shard.
+  // The what-if switches and the picked person live only on this page — nothing here writes.
+  const [costsDoc, setCostsDoc] = useState(undefined);     // undefined = loading, null = no pull yet, else the doc
+  const [costsTick, setCostsTick] = useState(0);
+  const [costsPull, setCostsPull] = useState("");          // "" | "busy" | the last pull's result line
+  const [costsCc, setCostsCc] = useState({});              // shard index → { simproNo: cost centers } | "err"
+  const [cm, setCm] = useState("hrs");                     // hrs | mat | lab | margin
+  const [cStage, setCStage] = useState("all");             // all | active | done (Invoiced)
+  const [cRole, setCRole] = useState("foreman");           // the right rail groups by foreman or lead
+  const [cWho, setCWho] = useState(null);                  // { role, person } picked in the rail
+  const [cOff, setCOff] = useState(() => new Set());       // Simpro #s switched off for a what-if
+  const [cSel, setCSel] = useState(null);                  // the opened job's Simpro #
+  const [cQ, setCQ] = useState("");
+  const [cSort, setCSort] = useState(null);                // { k, dir } — null = the tab's default order
+  useEffect(() => {
+    if (tab !== "costs") return undefined;
+    let dead = false;
+    getDoc(doc(db, "settings", "phaseCosts")).then(snap => { if (!dead) { setCostsDoc(snap.exists() ? (snap.data() || null) : null); setCostsCc({}); } }, () => { if (!dead) setCostsDoc(null); });
+    return () => { dead = true; };
+  }, [tab, costsTick]);
+  const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
+  useEffect(() => {
+    if (tab !== "costs" || costShard == null || costsCc[costShard]) return undefined;
+    let dead = false;
+    getDoc(doc(db, "settings", "phaseCostsCc" + costShard)).then(snap => { if (!dead) setCostsCc(m => ({ ...m, [costShard]: snap.exists() ? ((snap.data() || {}).jobs || {}) : "err" })); },
+      () => { if (!dead) setCostsCc(m => ({ ...m, [costShard]: "err" })); });
+    return () => { dead = true; };
+  }, [tab, costShard]); // eslint-disable-line
+  const costsView = useMemo(() => {
+    const rows = costsDoc && Array.isArray(costsDoc.rows) ? odCostsJoin(costsDoc.rows, jobs, users) : [];
+    const inStage = (j) => cStage === "all" || (cStage === "done") === (j.status === "Invoiced");
+    const ownerOf = (j, role) => j[role] || (role === "foreman" ? "No foreman" : "No lead");
+    const mine = (j) => !cWho || ownerOf(j, cWho.role) === cWho.person;
+    const staged = rows.filter(inStage), counted = staged.filter(j => !cOff.has(j.no));
+    return { rows, staged, mine, ownerOf,
+      company: odCostsSummary(staged),                       // every job in this stage — the cited number
+      boxes: odCostsSummary(counted.filter(mine)),           // the picked person's, less switched-off jobs
+      crew: odCostsCrew(staged, cRole), crewWi: cOff.size ? odCostsCrew(counted, cRole) : null,
+      pct: new Map(rows.map(j => [j.no, odCostsJobPct(j)])) };
+  }, [costsDoc, jobs, users, cStage, cWho, cOff, cRole]);
   const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
   const [applTick, setApplTick] = useState(0);
   useEffect(() => {
@@ -49694,6 +49818,162 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdItem color={OD_B} icon="refresh" tag="Appliance Loads" title={`Nightly ${odRunTimes(OD_RUNS.appl)}`} sub={nAppl ? `Next ${at2(nAppl)} · reads new appliance packages, checks Home Runs` : ""}/>
       </div>
     </>);
+  } else if (tab === "costs") {
+    // v564: every cost center (base bid and change orders) split item by item into rough / finish;
+    // foreman = the Job Board's, titled Foreman only; margins weighted, plain average beside.
+    const v = costsView, s = v.boxes, co = v.company, isM = cm === "margin";
+    const scoped = !!cWho || cOff.size > 0;
+    const NOUN = { hrs: "hours", mat: "materials", lab: "labor" }, USED = { hrs: "used", mat: "spent", lab: "spent" };
+    const uKey = (m) => m === "hrs" ? "hrsUsed" : m + "Act";
+    const f$ = (x) => x == null ? "—" : "$" + Math.round(x).toLocaleString();
+    const fk = (x) => x == null ? "—" : Math.abs(x) >= 10000 ? "$" + Math.round(x / 1000).toLocaleString() + "k" : f$(x);
+    const fh = (x) => x == null ? "—" : Math.round(x).toLocaleString();
+    const fv = (m, x) => m === "hrs" ? fh(x) : f$(x);
+    const fvk = (m, x) => m === "hrs" ? fh(x) : fk(x);
+    const fp = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+    const mC = (x) => x == null ? OD_GREY : x < 0 ? OD_R : x < OD_COST_GOAL ? OD_O : OD_G;
+    const fmtAt = (iso) => { const t = odDate(iso); return t ? `${odDow(t)} ${odTime(t)}` : "—"; };
+    const pullNow = async () => {
+      if (costsPull === "busy") return;
+      if (!window.confirm("Pull every job's cost centers from Simpro now? Read-only. The first pull takes several runs of up to 9 minutes; after that about a minute.")) return;
+      setCostsPull("busy");
+      try {
+        const r = await httpsCallable(functions, "sendTestPhaseCosts", { timeout: 540000 })({});
+        const x = r && r.data;
+        if (x && x.ok) { setCostsPull(`Pulled ${x.refreshed} jobs · ${x.jobs} on the tab${x.pending ? ` · ${x.pending} still to pull — press again or wait for tonight` : ""} · ${x.seconds}s`); setCostsTick(t => t + 1); }
+        else setCostsPull(`Pull failed: ${(x && x.error) || "unknown"}`);
+      } catch (e) { setCostsPull(`Pull failed: ${(e && e.message) || e}`); }
+    };
+    const seg = (val, set, opts, label) => (
+      <div className="od-cseg" role="group" aria-label={label}>{opts.map(([k, l]) => <button type="button" key={k} aria-pressed={val === k} onClick={() => set(k)}>{l}</button>)}</div>);
+    const hintCo = (txt) => scoped ? `Company, every job: ${txt}` : null;
+    const tiles = isM ? [
+      { t: "Whole job margin", c: mC(s.all.w), v: fp(s.all.w), sub: `avg ${fp(s.all.avg)}`, i: "dollarSign", h: hintCo(`${fp(co.all.w)} · avg ${fp(co.all.avg)}`) || `${s.all.n} jobs at punch list, ready to invoice or invoiced` },
+      { t: "Whole job under 15%", c: s.all.under ? OD_R : OD_G, v: s.all.under, sub: `of ${s.all.n}`, i: "flag", h: hintCo(`${co.all.under} of ${co.all.n}`) || "Those jobs, below the 15% goal" },
+      { t: "Rough margin", c: mC(s.rough.w), v: fp(s.rough.w), sub: `avg ${fp(s.rough.avg)}`, i: "dollarSign", h: hintCo(`${fp(co.rough.w)} · avg ${fp(co.rough.avg)}`) || `${s.rough.n} jobs past rough` },
+      { t: "Rough under 15%", c: s.rough.under ? OD_R : OD_G, v: s.rough.under, sub: `of ${s.rough.n}`, i: "flag", h: hintCo(`${co.rough.under} of ${co.rough.n}`) },
+      { t: "Finish margin", c: mC(s.finish.w), v: fp(s.finish.w), sub: `avg ${fp(s.finish.avg)}`, i: "dollarSign", h: hintCo(`${fp(co.finish.w)} · avg ${fp(co.finish.avg)}`) || `${s.finish.n} jobs at punch list or later` },
+      { t: "Finish under 15%", c: s.finish.under ? OD_R : OD_G, v: s.finish.under, sub: `of ${s.finish.n}`, i: "flag", h: hintCo(`${co.finish.under} of ${co.finish.n}`) },
+    ] : ["rough", "finish"].flatMap(p => [
+      { t: `${p === "rough" ? "Rough" : "Finish"} jobs over estimate`, c: s[`${p}_${cm}_over`] ? OD_R : OD_G, v: s[`${p}_${cm}_over`], sub: `of ${s[`${p}_started`]}`, i: "flag",
+        h: hintCo(`${co[`${p}_${cm}_over`]} of ${co[`${p}_started`]}`) || `Jobs with ${p} logged` },
+      { t: `${p === "rough" ? "Rough" : "Finish"} ${NOUN[cm]} ${USED[cm]}`, c: (s[`${p}_${cm}_pct`] || 0) > 1 ? OD_R : p === "rough" ? OD_B : OD_P, v: fvk(cm, s[`${p}_${cm}_used`]),
+        sub: `of ${fvk(cm, s[`${p}_${cm}_est`])} · ${fp(s[`${p}_${cm}_pct`])}`, i: cm === "hrs" ? "clock" : "dollarSign",
+        h: hintCo(`${fp(co[`${p}_${cm}_pct`])} of estimate`) || "Estimate from every cost center, those jobs" },
+    ]);
+    // The job table: the picked person's jobs in this stage; every job stays listed so it can be switched back on.
+    const q = cQ.trim().toLowerCase();
+    const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q));
+    const cols = isM ? [
+      ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)], ["rough_mEst", "Rough est. margin", "r n", null, "Margin the estimate expected for rough, every cost center"],
+      ["rough_mAct", "Rough margin so far", "r", null, "Rough sell less what has been spent and committed on rough, every cost center"],
+      ["finish_sell", "Finish sell", "f n", (j) => fk(j.finish_sell)], ["finish_mEst", "Finish est. margin", "f n", null, "Margin the estimate expected for finish, every cost center"],
+      ["finish_mAct", "Finish margin so far", "f", null, "Finish sell less what has been spent and committed on finish, every cost center"], ["all_mAct", "Whole job", "n", null],
+    ] : [
+      [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r", (j) => fv(cm, j[`rough_${uKey(cm)}`])], [`rough_${cm}Est`, "Rough est (all)", "r n", (j) => fv(cm, j[`rough_${cm}Est`]), "Estimate from every cost center: the base bid and every change order"],
+      [`rough_${cm}_pct`, "Rough %", "r", "bar"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f n", (j) => fv(cm, j[`finish_${uKey(cm)}`])],
+      [`finish_${cm}Est`, "Finish est (all)", "f n", (j) => fv(cm, j[`finish_${cm}Est`]), "Estimate from every cost center: the base bid and every change order"], [`finish_${cm}_pct`, "Finish %", "f", "bar"],
+      [`other_${cm}Est`, "Untagged est", "n", (j) => j[`other_${cm}Est`] ? fv(cm, j[`other_${cm}Est`]) : "–"],
+    ];
+    const valOf = (j, k) => (k in j ? j[k] : (v.pct.get(j.no) || {})[k]);
+    const sort = cSort || (isM ? { k: "rough_profit", dir: 1 } : { k: `rough_${cm}_overBy`, dir: -1 });   // worst first
+    list.sort((a, b) => { const x = valOf(a, sort.k), y = valOf(b, sort.k); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir; });
+    const th = (k, l, cls, title) => (
+      <th key={k} className={cls} title={title} aria-sort={sort.k === k ? (sort.dir > 0 ? "ascending" : "descending") : "none"}>
+        <button type="button" onClick={() => setCSort(sort.k === k ? { k, dir: -sort.dir } : { k, dir: k === "name" || k === "foremanShown" || k === "status" ? 1 : -1 })}>{l}</button></th>);
+    const bar = (x, finish) => (<span className="od-cost-pct"><b style={{ color: x != null && x > 1 ? OD_R : "inherit" }}>{fp(x)}</b>
+      <span className="od-cost-bar"><i style={{ width: `${Math.min(Math.max(x || 0, 0), 1.5) / 1.5 * 100}%`, background: x != null && x > 1 ? OD_R : finish ? OD_P : OD_B }}/><em/></span></span>);
+    const margin = (x) => <b style={{ color: mC(x) }}>{x == null ? "not started" : fp(x)}</b>;
+    const toggle = (no) => setCOff(prev => { const n = new Set(prev); if (n.has(no)) n.delete(no); else n.add(no); return n; });
+    const ccs = cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
+    const ccCols = isM ? [["sell", "Sell"], ["rough_sell", "To rough", "r"], ["finish_sell", "To finish", "f"], ["other_sell", "Untagged", "n"]]
+      : [[`rough_${cm}`, "Rough est", "r"], [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r"], [`finish_${cm}`, "Finish est", "f"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f"], [`other_${cm}`, "Untagged est", "n"]];
+    const detail = (j) => (
+      <tr className="od-cost-det"><td colSpan={4 + cols.length}>
+        <div className="od-cost-det-h"><b>{j.name}</b><span>Each cost center's estimate split item by item; what was {isM ? "sold" : USED[cm]} on a cost center splits the same way as its estimate.</span>
+          {j.jobId ? <button type="button" className="od-mini-btn" onClick={() => goApp((jobs || []).find(x => x.id === j.jobId))}>Open job</button> : null}</div>
+        {costShard == null ? <div className="od-empty">No cost centers saved for this job yet.</div>
+          : costsCc[costShard] === "err" ? <div className="od-empty">The cost centers could not be read. Press Refresh.</div>
+          : !ccs ? <div className="od-empty">Reading cost centers…</div>
+          : <div className="od-cost-scroll"><table className="od-cost-tbl">
+              <thead><tr><th className="l">Section</th><th className="l">Cost center</th><th className="l n">Type</th>{ccCols.map(([k, l, c]) => <th key={k} className={c}>{l}</th>)}</tr></thead>
+              <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job">{c.cc}<small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n dim">{c.type || "–"}</td>
+                {ccCols.map(([k, , cl]) => <td key={k} className={cl}>{c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
+      </td></tr>);
+    const pending = costsDoc && costsDoc.counts && costsDoc.counts.pending;
+    main = (<>
+      <div className="od-head"><div><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split item by item into rough and finish · foreman from the Job Board, titled Foreman only{costsDoc && costsDoc.generated_at ? ` · pulled ${fmtAt(costsDoc.generated_at)}` : ""}</p></div>
+        <div className="od-ct-actions">
+          <button type="button" className="od-mini-btn" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
+          {canOpenDash(identity) ? <button type="button" className="od-mini-btn run" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
+        </div></div>
+      {costsPull && costsPull !== "busy" ? <div className="od-goal-note">{costsPull}</div> : null}
+      {costsDoc === undefined ? <div className="od-white od-pad"><div className="od-empty">Reading the last Simpro pull…</div></div>
+      : !costsDoc ? <div className="od-white od-pad"><div className="od-ct">No Simpro pull yet</div><div className="od-empty">The nightly pull runs at 2:15, 3:15 and 4:15 AM. Press Pull from Simpro now to start it.</div></div>
+      : <>
+        {pending ? <div className="od-goal-note">{pending} jobs still to pull from Simpro · they show after the next run.</div> : null}
+        <div className="od-cost-ctl">
+          {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", "Labor $"], ["margin", "Margin"]], "What to compare")}
+          {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["done", "Invoiced"]], "Which jobs")}
+        </div>
+        {cWho ? <div className="od-cost-spot"><div><small>{cWho.role === "foreman" ? "Foreman" : "Lead"}</small><b>{cWho.person}</b></div>
+          <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
+          <button type="button" className="od-mini-btn" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
+        {cOff.size ? <div className="od-cost-wi"><b>What-if</b><span>{cOff.size} {cOff.size === 1 ? "job" : "jobs"} switched off: {v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}. The boxes and the foreman list leave {cOff.size === 1 ? "it" : "them"} out. Nothing in Simpro or the app changes.</span>
+          <button type="button" className="od-mini-btn" onClick={() => setCOff(new Set())}>Turn all back on</button></div> : null}
+        <div className={`od-minis${isM ? " six" : ""}`}>{tiles.map(x => <OdMini key={x.t} title={x.t} color={x.c} icon={x.i} value={x.v} sub={x.sub} hint={x.h}/>)}</div>
+        <div className="od-white od-pad">
+          <div className="od-ct">{isM ? "Every job, margin by phase" : `Every job, ${NOUN[cm]}`}<small>{isM
+            ? "margin = sell less what's been spent and committed, over sell · every cost center · red is below zero, orange below 15% · untick Count to leave a job out"
+            : `est (all) = the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on · untick Count to leave a job out`}</small></div>
+          <input className="od-cost-q" type="search" value={cQ} onChange={e => setCQ(e.target.value)} placeholder="Search jobs, foremen, leads" aria-label="Search jobs"/>
+          <div className="od-cost-scroll tall"><table className="od-cost-tbl jobs">
+            <thead><tr><th className="l">Count</th>{th("name", "Job", "l")}{th("foremanShown", "Foreman", "l n", "Only people titled Foreman on Team Members count. A jr foreman or lead named in the foreman field shows as No foreman.")}{th("status", "Status", "l n")}
+              {cols.map(([k, l, cls, , title]) => th(k, l, cls, title))}</tr></thead>
+            <tbody>{list.map(j => { const p = v.pct.get(j.no) || {}, off = cOff.has(j.no), open = cSel === j.no;
+              return (<Fragment key={j.no}>
+                <tr className={`${off ? "off" : ""}${open ? " open" : ""}`} onClick={() => setCSel(open ? null : j.no)}>
+                  <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
+                  <td className="l job">{j.name}<small>#{j.no}{j.site ? ` · ${j.site}` : ""}</small></td>
+                  <td className={`l n${j.foreman ? "" : " dim"}`}>{j.foremanShown}</td>
+                  <td className="l n"><span className="od-cost-st">{j.status || "—"}</span></td>
+                  {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k], /finish/.test(k)) : typeof fmt === "function" ? fmt(j) : margin(p[k])}</td>)}
+                </tr>
+                {open ? detail(j) : null}
+              </Fragment>); })}
+              {!list.length ? <tr><td colSpan={4 + cols.length}><div className="od-empty">No jobs match.</div></td></tr> : null}</tbody></table></div>
+        </div>
+      </>}
+    </>);
+    const wiOf = (r) => (v.crewWi || []).find(x => x.person === r.person) || null;
+    const personVal = (r) => isM ? r.rough.w : r[`rough_${cm}_pct`];
+    const crewRows = v.crew.slice().sort((a, b) => { const x = personVal(a), y = personVal(b); if (x == null && y == null) return b.jobs - a.jobs; if (x == null) return 1; if (y == null) return -1; return isM ? x - y : y - x; });
+    right = costsDoc ? (<>
+      <div className="od-white od-pad">
+        <div className="od-ct">{cRole === "foreman" ? "By foreman" : "By lead"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"]], "Group by")}</div>
+        <small className="od-cost-cap">{isM ? "Rough margin, weighted, on jobs past rough · avg beside · whole job on finished jobs" : `Rough ${NOUN[cm]} ${USED[cm]} ÷ estimate, jobs with rough logged`} · tap a name to see their numbers</small>
+        <div className="od-cost-ppl">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
+          const val = isM ? r.rough.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.rough.w : r0[`rough_${cm}_pct`]) : null;
+          return (
+            <button type="button" key={r0.person} className={on ? "on" : ""} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: cRole, person: r0.person }); setCSel(null); }}>
+              <span className="nm">{r0.person}<small>{r.jobs} jobs{isM ? ` · ${r.rough.n} past rough` : ` · ${r.rough_started} started`}</small></span>
+              <span className="val"><b style={{ color: isM ? mC(val) : val != null && val > 1 ? OD_R : OD_B }}>{fp(val)}</b>
+                <small>{isM ? `avg ${fp(r.rough.avg)} · whole ${fp(r.all.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? ` · all jobs ${fp(was)}` : ""}</small></span>
+            </button>); })}</div>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">How it is counted</div>
+        <ul className="od-cost-how">
+          <li>Every cost center on the job counts: the base bid and every change order.</li>
+          <li>An item ending "(Rough In)" goes to rough, "(Finish)" to finish. Its hours, materials, labor and sell price go with it. An item with neither follows its cost center's type; a cost center with no phase (Change Order, Generators) is untagged.</li>
+          <li>Simpro's total for each cost center is the budget; items only decide how it splits. A credit comes off its phase.</li>
+          <li>Spending is recorded per cost center, so it splits the same way as that cost center's estimate. Spent dollars include committed (ordered, scheduled), as Simpro's margin does.</li>
+          <li>Margin is weighted: total sell less total spent, over total sell (big jobs count more). The plain average of each job's margin is beside it.</li>
+          <li>Foreman is the Job Board's, counted only when titled Foreman on Team Members. This is not the Goals tab's rule, which credits Simpro's technician.</li>
+          <li>Jobs: Simpro's in progress and complete, plus invoiced jobs still on the Job Board. Pulled nightly; read-only.</li>
+        </ul>
+      </div>
+    </>) : null;
   } else if (tab === "goals") {
     // v562: the Team Goals sheet beside today's numbers. Simpro cards follow Josh's rule
     // (jobs invoiced this year, weighted, technician credit); the rest read this page's model.
@@ -50249,6 +50529,55 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-goal-mission b{color:var(--o-ink)}
         .odash .od-goal-note{font-size:12.5px;color:var(--cdim);padding:2px 4px}
         .odash .od-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+        .odash .od-minis.six{grid-template-columns:repeat(3,minmax(0,1fr))}
+        .odash .od-cseg{display:inline-flex;gap:2px;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px}
+        .odash .od-cseg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-cseg button[aria-pressed="true"]{background:var(--o);color:var(--on-o)}
+        .odash .od-cseg button:focus-visible,.odash .od-cost-ppl button:focus-visible,.odash .od-cost-tbl th button:focus-visible{outline:2px solid var(--o);outline-offset:2px}
+        .odash .od-ct .od-cseg{margin-left:auto}
+        .odash .od-cost-ctl{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+        .odash .od-cost-spot,.odash .od-cost-wi{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-radius:16px;padding:12px 16px}
+        .odash .od-cost-spot{background:#292119;color:#F6F1E8}
+        .odash .od-cost-spot small{display:block;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:#C9B9A4;font-weight:700}
+        .odash .od-cost-spot b{font-family:'Bebas Neue','DM Sans',sans-serif;font-weight:400;font-size:30px;letter-spacing:.04em;line-height:1}
+        .odash .od-cost-spot>span{flex:1;min-width:0;font-size:12.5px;color:#D9CDBB}
+        .odash .od-cost-wi{background:var(--o-soft);border:1px solid var(--o);font-size:12.5px}
+        .odash .od-cost-wi>b{font-family:'Bebas Neue','DM Sans',sans-serif;font-weight:400;font-size:20px;letter-spacing:.05em;color:var(--o-ink)}
+        .odash .od-cost-wi>span{flex:1;min-width:0;color:var(--cdim)}
+        .odash .od-cost-q{width:100%;max-width:340px;margin:8px 0;font:inherit;font-size:13px;padding:7px 11px;border:1px solid var(--cline);border-radius:10px;background:var(--card);color:var(--cink)}
+        .odash .od-cost-scroll{overflow:auto;border-radius:10px}
+        .odash .od-cost-scroll.tall{max-height:620px}
+        .odash .od-cost-tbl{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+        .odash .od-cost-tbl th{position:sticky;top:0;background:var(--card);z-index:1;text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);font-weight:700;padding:7px 8px;border-bottom:2px solid var(--cline);white-space:nowrap}
+        .odash .od-cost-tbl th.r{box-shadow:inset 0 3px 0 ${OD_B}}.odash .od-cost-tbl th.f{box-shadow:inset 0 3px 0 ${OD_P}}
+        .odash .od-cost-tbl th button{border:0;background:transparent;padding:0;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;cursor:pointer}
+        .odash .od-cost-tbl th[aria-sort="ascending"] button::after{content:" ▲"}.odash .od-cost-tbl th[aria-sort="descending"] button::after{content:" ▼"}
+        .odash .od-cost-tbl td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--cline);white-space:nowrap}
+        .odash .od-cost-tbl .l{text-align:left}
+        .odash .od-cost-tbl td.job{white-space:normal;min-width:170px;font-weight:600}
+        .odash .od-cost-tbl td.job small{display:block;font-weight:400;color:var(--cdim);font-size:11px}
+        .odash .od-cost-tbl .dim{color:var(--cdim)}
+        .odash .od-cost-tbl.jobs tbody tr{cursor:pointer}
+        .odash .od-cost-tbl.jobs tbody tr:hover td,.odash .od-cost-tbl.jobs tbody tr.open td{background:var(--hov)}
+        .odash .od-cost-tbl.jobs tbody tr.off td{opacity:.45}.odash .od-cost-tbl.jobs tbody tr.off td:first-child{opacity:1}
+        .odash .od-cost-tbl input[type="checkbox"]{width:17px;height:17px;accent-color:var(--o);cursor:pointer}
+        .odash .od-cost-st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--inset);color:var(--cdim)}
+        .odash .od-cost-pct{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end}
+        .odash .od-cost-bar{position:relative;width:70px;height:7px;border-radius:999px;background:var(--trk);flex-shrink:0}
+        .odash .od-cost-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px}
+        .odash .od-cost-bar em{position:absolute;left:calc(66.67% - 1px);top:-3px;bottom:-3px;width:2px;background:var(--cink);opacity:.45}
+        .odash .od-cost-det>td{background:var(--inset);padding:10px 12px;cursor:default;white-space:normal}
+        .odash .od-cost-det-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px}.odash .od-cost-det-h span{flex:1;min-width:0;color:var(--cdim)}
+        .odash .od-cost-det .od-cost-tbl th{background:var(--card-solid)}
+        .odash .od-cost-cap{display:block;color:var(--cdim);font-size:11.5px;margin:4px 0 8px}
+        .odash .od-cost-ppl{display:flex;flex-direction:column;gap:4px}
+        .odash .od-cost-ppl button{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;border:1px solid transparent;background:transparent;border-radius:12px;padding:8px 10px;cursor:pointer}
+        .odash .od-cost-ppl button:hover{background:var(--hov)}
+        .odash .od-cost-ppl button.on{background:var(--o-soft);border-color:var(--o)}
+        .odash .od-cost-ppl .nm{font-weight:700;font-size:13px;min-width:0}.odash .od-cost-ppl small{display:block;font-weight:500;font-size:11px;color:var(--cdim)}
+        .odash .od-cost-ppl .val{text-align:right;flex-shrink:0}.odash .od-cost-ppl .val b{font-size:16px;font-variant-numeric:tabular-nums}
+        .odash .od-cost-how{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--cdim);line-height:1.45}
+        @media (max-width:700px){.odash .od-cost-tbl .n{display:none}.odash .od-minis.six{grid-template-columns:repeat(2,minmax(0,1fr))}}
         .odash .od-goal{border:1px solid var(--cline);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;background:var(--card);min-width:0}
         .odash .od-goal .h{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
         .odash .od-goal .h b{font-size:13.5px}
@@ -58936,10 +59265,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-23 · App SW version: v563
+**Last manifest update:** 2026-10-23 · App SW version: v564
 
 ---
 
+- **Job Costs tab on the office dashboard: rough and finish across every cost center, by foreman, with a what-if** · 'shipped 2026-10-23' · 'SW v564' · 'OfficeDash' · 'odCostsJoin' · 'odCostsSummary' · 'odCostsCrew' · 'odCostsJobPct' · 'phaseCostsNightly' · 'sendTestPhaseCosts' · 'functions/phaseCosts.js' · Koy: *"show what the rough profit margin is and the finish profit margin is"* — crews are scheduled and materials ordered on Base → Rough In, so the base cost center carries every hour while the extras' estimates sit on their own cost centers and rough looks over (Pierce #1277: 129% of the Rough In cost center's 313.6 h, 94% of the 427.3 h the job was sold with for rough). **Split ('functions/phaseCosts.js'):** every cost center (base bid and every change order) into rough / finish / untagged, item by item — an item ending "(Rough In)" → rough, "(Finish)"/"(Trim)" → finish, else the cost center's type ("Residential (Rough In)"), else its name, else untagged (Change Order, Generators); hours, materials, labor with overhead and sell price all follow the item; Simpro's cost-center total is the budget (items over it scale down, labor not on an item goes to the cost center's phase, a credit comes off its phase); spending is per cost center in Simpro, so it splits in the same shares as that cost center's estimate (DMF Lighting #694: $12,187 → $1,776 rough / $7,073 finish / rest untagged); spent $ include committed, as Simpro's margin does. **Server:** 'phaseCostsNightly' (2:15, 3:15, 4:15 AM MT) + 'sendTestPhaseCosts' (admins, "Pull from Simpro now"): Simpro's Progress + Complete jobs plus the Invoiced jobs still on the Job Board (Keegan's 8 invoiced jobs were missing otherwise); each job's last pull in server-only 'phaseCostsState/{simproNo}' (the rules' catch-all closes it to the app) so a cost center's items are re-read only when its estimate changes and invoiced jobs weekly; a run stops at a 7-minute budget and the next run continues; writes 'settings/phaseCosts' (one row per job) and 'settings/phaseCostsCc0..N' (each job's cost centers, sharded under the doc limit, read when a job is opened). Verified read-only against live Simpro: Pierce and #694 match the hand pull exactly, and a second run reads no items. **Tab:** Hours / Materials / Labor $ / Margin × All jobs / Active / Invoiced; boxes for jobs over estimate and used vs estimate, rough and finish; Margin: whole job (punch list / RTI / invoiced), rough (past rough) and finish, **weighted** (Σ sell − Σ spent ÷ Σ sell — Koy's pick, the bank's number) with the plain per-job average smaller beside it, and how many are under 15%; Every job table (worst first: hours / $ over estimate, or $ lost on Margin), rough and finish side by side, 'Est (all)' explained as every cost center, tap a job for its cost centers + Open job; **Count** checkboxes for a what-if (boxes and foreman list leave switched-off jobs out, What-if bar names them, Turn all back on; page-only); right rail **By foreman / By lead** — tap a name and the boxes become theirs with the company's under each. **Foreman = the Job Board's, counted only when titled Foreman on Team Members** (Koy: Gage is a jr foreman, not a foreman; "No foreman (Gage Lund, jr foreman)"; Paul = outside contractor) — deliberately not the Goals tab's Simpro-technician credit (they differ on 29 jobs). Tests: 'scripts/phasecosts-test.js' (split, budget, credit, spent, Pierce's seven cost centers, shards) and 'scripts/jobcosts-model-test.js' (foreman rule, weighted vs average, summary, crew, per job), both in prebuild; 'odash-model-test' sandbox exports them. Guide 'dashboard.html' step 8. Crew brief 'docs/crew-briefs/v564.md'. **Needs 'firebase deploy --only functions:phaseCostsNightly,functions:sendTestPhaseCosts' before the push**; the first full pull takes about three runs (press Pull from Simpro now a few times, or wait for the night). **Why it won't lose data:** read-only against Simpro and the jobs; the only writes are new docs — 'settings/phaseCosts', 'settings/phaseCostsCc*' (existing settings read rule) and the server-only 'phaseCostsState' collection — no job write, no loader or rules change; the what-if switches never leave the page.
 - **Goals tab reads the sheet the way Google actually exports it** · 'shipped 2026-10-23' · 'SW v563' · 'OD_GOALS_SHEET' · 'odGoalsParse' · Found right after v562 went live, while adding the STATUS column: Google's CSV export guesses "header rows" and folded the title, mission, section line and the AREA header into ONE first line, so the live tab showed the 2027 scoreboard and the quarters but no mission and zero rest-of-2026 goals. Two fixes: the export URL now carries 'headers=0' (Google then sends every row as-is), and the parser also survives the folded row (mission cut out of a longer cell, a cell ending in AREA treated as the header, so STATUS in column F still resolves). 'scripts/goals-model-test.js' gains the folded-row case. **Why it won't lose data:** read path only; one URL parameter and parser logic; no Firestore, function, rules or loader change.
 - **The office dashboard wears the Homestead brand** · 'shipped 2026-10-23' · 'SW v562' · 'DashPage' · 'OD_A' · Koy, after seeing the Goals tab built: *"wait i want the dashboard fully homestead branded"*, then chose Brand A from two mockups. Every tab of '/dashboard': the longhorn ('/icon-192.png') with **HOMESTEAD ELECTRIC** in the app's Bebas slab caps and *Office dashboard* under it in copper, a warm off-white page ('#F7F4EE', manifest and status-bar colour follow), warm brown-black ink, and the copper from the purchase-order form as the accent ('OD_A' '#8E6336': darkened from the form's '#A3733F' so it reads 5.3:1 on white as text and as a filled pill; '--o-ink' '#7E5730' for copper text) on the active tab, buttons, focus rings, hover tints and the heat cells. Tab headings use the slab caps. Data colours are unchanged (green / red / orange / blue to-do / purple), so a red line still means what it meant yesterday. **Why it won't lose data:** colours, one image and CSS only; no Firestore read or write, no function, rules or loader change.
 - **Goals tab on the office dashboard: the Team Goals sheet beside today's numbers, Simpro by Josh's rule** · 'shipped 2026-10-23' · 'SW v562' · 'OfficeDash' · 'odGoalsParse' · 'odGoalsModel' · 'OD_GOAL_LIVE' · 'goalsNightly' · 'sendTestGoalsPull' · 'functions/goalsPull.js' · Koy: *"add this to my dashboard, maybe a new goals section and help me track everything"*, then *"Simpro numbers are the source of truth in this case, so we need to make those match before we do anything."* An eighth tab, **Goals**, on '/dashboard' (admins, like the rest of the page). It reads Koy's copy of Josh's *Homestead Electric – Team Goals 2026–2027* sheet when the tab opens (CSV, no sign-in, the same read as Appliance Loads; sections found by their header cells, so an inserted row changes nothing; emojis stripped from measure names) and shows: the mission line; **2027 scoreboard** cards with *Sheet says / Simpro today or App today / 2027 goal*, a bar, a status pill and a **How it is counted** fold; **Rest of 2026** rows (AREA · GOAL · WHO · BY) with a status pill from a new sheet column **F STATUS** (Not started / On track / At risk / Done) plus the app's due flag from BY ("Due in 8 d", "Overdue"), each opening the sheet on its row; **2027 by quarter** with the next quarter marked; and a folded **Measured by the app, not on the sheet yet** list (first-pass inspections, change orders waiting 60+ days, quiet jobs, open questions, return trips, failed inspections not re-booked, plans waiting) — a sheet row that names one lights it up, so adding a goal is a sheet edit, never code. **The Simpro rule** (Josh's Builder Scorecard rule, adopted by Koy 2026-10-23): every customer invoice dated this year → its jobs → each job's Totals; a job counts when 100% invoiced with costs posted; **margin = Σ net profit ÷ Σ contract** (weighted, Simpro cost rates), **hours = Σ actual ÷ Σ estimated**, **per foreman by Simpro technician** (3+ counted jobs), **commercial share** of invoice dollars by Business Group (blank = residential), **days to collect** = average issue-to-paid over invoices paid this year beside the open book (owed, past due, over 60 days). On 10/23 that is 153 jobs, 11.2% and 136% (the sheet's 11.7 / 140 were the same rule on Oct 20). This is deliberately not the Scoreboard tab's rule (per-job average, completed this year, app foreman credit); the card's fold says so. **New function 'goalsNightly'** (5:40 AM Mountain, after 'scoreboardNightly') and **'sendTestGoalsPull'** (the tab's *Pull from Simpro now*, admins, asks first) read Simpro only (~250 calls) and write ONE doc 'settings/goalsSimpro' '{generated_at, year, jobs:[slim], measures, invoices, counts}'; the math is the pure 'functions/goalsPull.js', repeated by 'odGoalsMeasures' in the dashboard so the two are checked against each other. Guards: refuses to overwrite when fewer than 90% of listed jobs come back or the doc would pass ~900 KB. Right rail says where each number comes from and turns the Simpro line red when the last pull is older than 2 days. Not tracked yet (next phase, needs per-job cost-center and vendor-order reads): warranty hours, change-order hours in their own cost center, Home Depot / ACE runs, jobs with hours tracked weekly. Tests: 'scripts/goals-pull-test.js' (counting rule, slim row, days to paid incl. bad dates, open book, measures) and 'scripts/goals-model-test.js' (sheet parse incl. an inserted row, due flags, status, Simpro cards with and without the doc, extras), both in 'prebuild'. Guide 'dashboard.html' updated. Spec 'docs/superpowers/specs/2026-10-23-goals-tab-design.md'. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull' then hosting. **Why it won't lose data:** read-only everywhere but one new 'settings/goalsSimpro' doc written by the function (existing 'settings/{docId}' read rule; no rules change); the tab reads a public CSV and two settings docs with getDoc; no job write, no loader change, nothing written to the sheet, nothing written to Simpro; the Automations branch only gained an explicit 'tab === "cc"' check (it was the chain's 'else').
