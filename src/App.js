@@ -47491,7 +47491,7 @@ function PlansCard({ identity, users = [] }) {
 // (planFileByHand / planDismissByHand callables, name + PIN), Ask <foreman> to
 // import (one My Day task through the stamped needs write) and Run now on the
 // Wednesday / Friday meeting-prep docs (their existing test-trigger callables).
-const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"]];
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["goals","Goals"]];
 // Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
 // what Koy's two Claude Routines produced, read from where they already put it.
 // Plan intake → agentFindings (the Today Plans card's source, live listener
@@ -47544,7 +47544,8 @@ function odAgo(at, now) {
 // caution colour that replaced amber. Every value must stay distinct from OD_R/OD_O/OD_G
 // because ATTN_SEV keys severity by colour.
 const OD_O = "#B4531A", OD_G = "#18804A", OD_R = "#C43B3B", OD_B = "#2563C9", OD_P = "#6A4FC8", OD_WARN = "#B23A6E";
-const OD_A = "#2563C9", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6B7487", OD_ON_A = "#fff";
+// v562 (Koy, Brand A): the page accent is Homestead copper (#8E6336, 5.3:1 on white, same for white on it); OD_B stays the blue DATA colour (to-do).
+const OD_A = "#8E6336", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6B7487", OD_ON_A = "#fff";
 // Foreman filter value for "jobs with no foreman" (blank, Unassigned, TBD, Paul, or
 // someone no longer on the team). Never a real name.
 const OD_NOFM = "__none__";
@@ -47803,7 +47804,7 @@ function OdRing({ pct, color, size = 36, label }) {
   const r = size/2 - 4, C2 = 2*Math.PI*r, p = Math.max(0, Math.min(1, pct || 0));
   return (
     <svg className="spark" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(27,43,74,.1)" strokeWidth="5"/>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(41,33,25,.1)" strokeWidth="5"/>
       {p > 0 && <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" strokeDasharray={`${(C2*p).toFixed(1)} ${C2.toFixed(1)}`} transform={`rotate(-90 ${size/2} ${size/2})`}/>}
     </svg>
   );
@@ -47858,7 +47859,7 @@ function OdLine({ vals, labels, color, min, max, ticks, fmt, target, targetLabel
   return (
     <svg className="od-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label} fontFamily="inherit">
       <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity=".26"/><stop offset="1" stopColor={color} stopOpacity="0"/></linearGradient></defs>
-      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="rgba(27,43,74,.09)"/><text x={L-8} y={y(t)+4} textAnchor="end" fontSize="11.5" fill={C.dim}>{fmt(t)}</text></g>)}
+      {ticks.map(t => <g key={t}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="rgba(41,33,25,.09)"/><text x={L-8} y={y(t)+4} textAnchor="end" fontSize="11.5" fill={C.dim}>{fmt(t)}</text></g>)}
       {target != null && <g><line x1={L} x2={W-R} y1={y(target)} y2={y(target)} stroke={OD_B} strokeWidth="1.2" strokeDasharray="4 4"/><text x={L+4} y={y(target)-5} fontSize="11.5" fill={OD_B}>{targetLabel}</text></g>}
       {pts.length > 1 && <path d={`${d} L${pts[pts.length-1][0]} ${y(min)} L${pts[0][0]} ${y(min)}Z`} fill={`url(#${gid})`}/>}
       {pts.length > 1 && <path d={d} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round"/>}
@@ -48483,6 +48484,171 @@ function OdMove({ j, ph, confirmed, cur, onSave }) {
   );
 }
 
+// ── Goals tab (SW v562, 2026-10-23): the Team Goals sheet beside live numbers ──────────
+// Koy: "add this to my dashboard, maybe a new goals section and help me track everything."
+// The sheet (Koy's copy of Josh's Team Goals 2026–2027) is the source of the goals and is
+// read as CSV on open, like the Appliance Loads sheet. Simpro numbers follow Josh's Builder
+// Scorecard rule, adopted by Koy on 2026-10-23 ("Simpro numbers are the source of truth"):
+// every customer invoice dated this year → its jobs → each job's Totals; a job counts when
+// 100% invoiced with costs posted; margin = Σ net profit ÷ Σ contract (weighted); hours =
+// Σ actual ÷ Σ estimate; credit = Simpro technician. settings/goalsSimpro is written by
+// goalsNightly (functions/index.js, math in functions/goalsPull.js); odGoalsMeasures below
+// repeats that math on the slim rows so the two can be checked against each other. This is
+// deliberately NOT the Scoreboard tab's rule (per-job average, completed this year, app
+// foreman credit): the two pages differ on purpose and the tab's rule fold says so.
+// Pure: tested by scripts/goals-model-test.js through the odash-model-test sandbox.
+const OD_GOALS_SHEET = (() => {
+  const id = "1p4ZPUck4VM4GxffWx_zkHZCis0ZR3PWqHtDHRrYY-l4", gid = "1084235660", tab = "Goals";
+  return { id, gid, tab, csv: `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${tab}`, edit: `https://docs.google.com/spreadsheets/d/${id}/edit#gid=${gid}` };
+})();
+// House rule: no emojis in the UI. The sheet decorates measure names with them.
+const odGoalsStrip = (s) => String(s == null ? "" : s).replace(/[\u{1F000}-\u{1FAFF}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/gu, "").replace(/\s+/g, " ").trim();
+// The sheet's three sections are found by their header cells, never by row number, so a
+// row inserted above them does not break the tab. Column A is blank in the sheet; the
+// header row (AREA / GOAL / WHO / BY / STATUS, MEASURE / WHERE WE ARE TODAY / 2027 GOAL)
+// says which column is which; a missing header falls back to the sheet's own layout.
+function odGoalsParse(grid) {
+  const rows = Array.isArray(grid) ? grid : [];
+  const cell = (r, c) => odGoalsStrip(r && r[c] != null ? r[c] : "");
+  const out = { title: "", mission: "", goals: [], measures: [], quarters: [] };
+  let section = "", cols = null;
+  rows.forEach((r, i) => {
+    const cells = (r || []).map(c => odGoalsStrip(c));
+    const text = cells.filter(Boolean);
+    if (!text.length) return;
+    const up = text.join(" ").toUpperCase();
+    const mission = text.find(t => /^our goal:/i.test(t));
+    if (mission) { out.mission = mission.replace(/^our goal:\s*/i, ""); return; }
+    if (!out.title && /^team goals/i.test(text[0])) { out.title = text[0]; return; }
+    if (/REST OF 2026/.test(up)) { section = "goals"; cols = null; return; }
+    if (/2027 SCOREBOARD/.test(up)) { section = "measures"; cols = null; return; }
+    if (/2027 BY QUARTER/.test(up)) { section = "quarters"; cols = null; return; }
+    const ix = (name) => cells.findIndex(c => c.toUpperCase() === name);
+    if (section === "goals") {
+      if (ix("AREA") >= 0) { cols = { area: ix("AREA"), goal: ix("GOAL"), who: ix("WHO"), by: ix("BY"), status: ix("STATUS") }; return; }
+      const c = cols || { area: 1, goal: 2, who: 3, by: 4, status: 5 };
+      const area = cell(r, c.area), goal = cell(r, c.goal);
+      if (!goal) return;
+      out.goals.push({ row: i + 1, area, goal, who: cell(r, c.who), by: cell(r, c.by), status: c.status >= 0 ? cell(r, c.status) : "" });
+    } else if (section === "measures") {
+      if (ix("MEASURE") >= 0) { cols = { name: ix("MEASURE"), today: cells.findIndex(x => /WHERE WE ARE/i.test(x)), goal: cells.findIndex(x => /2027 GOAL/i.test(x)) }; return; }
+      const c = cols || { name: 1, today: 2, goal: 3 };
+      const name = cell(r, c.name);
+      if (!name) return;
+      out.measures.push({ row: i + 1, name, today: cell(r, c.today), goal: cell(r, c.goal) });
+    } else if (section === "quarters") {
+      const q = text[0];
+      if (!/^Q[1-4]$/i.test(q)) return;
+      out.quarters.push({ row: i + 1, q: q.toUpperCase(), text: text.slice(1).join(" ") });
+    }
+  });
+  return out;
+}
+// A BY cell like "Oct 31", "Nov 30", "Jan", "Dec 15, 2026" → when it is due; "Starting now",
+// "Ongoing", "Weekly, ongoing", "Every quote" → no date, no flag. A month-only cell is due
+// at the end of that month; a month already more than 120 days behind us means next year.
+function odGoalDue(by, now) {
+  const s = String(by || "").trim();
+  const m = s.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?(?:\s+(\d{1,2}))?(?:,?\s+(\d{4}))?$/i);
+  if (!m) return null;
+  const mi = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[1].slice(0, 3).toLowerCase());
+  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let year = m[3] ? Number(m[3]) : now.getFullYear();
+  const dayOf = (y) => m[2] ? new Date(y, mi, Number(m[2])) : new Date(y, mi + 1, 0);
+  let due = dayOf(year);
+  if (!m[3] && (t0 - due) / 864e5 > 120) { year += 1; due = dayOf(year); }
+  const days = Math.round((due - t0) / 864e5);
+  const text = days < 0 ? `Overdue ${-days} d` : days === 0 ? "Due today" : `Due in ${days} d`;
+  return { due, days, text, tone: days <= 10 ? "bad" : days <= 45 ? "warn" : "grey" };
+}
+// Status comes from the sheet's STATUS column (Koy / Josh type it); the app only adds the due flag.
+function odGoalStatus(status, due) {
+  const s = String(status || "").trim().toLowerCase();
+  if (/^done|complete/.test(s)) return { text: "Done", tone: "good" };
+  if (/on track/.test(s)) return { text: "On track", tone: "good", flag: due && due.days < 0 ? due.text : "" };
+  if (/at risk|behind|blocked/.test(s)) return { text: "At risk", tone: "bad", flag: due ? due.text : "" };
+  if (/not started/.test(s)) return { text: "Not started", tone: "grey", flag: due ? due.text : "" };
+  if (s) return { text: status.trim(), tone: "grey", flag: due ? due.text : "" };
+  return due ? { text: due.text, tone: due.tone } : { text: "No status yet", tone: "grey" };
+}
+// The same formulas as functions/goalsPull.js measures(), on the slim rows the doc keeps.
+function odGoalsMeasures(slim) {
+  const num = (v) => (typeof v === "number" && Number.isFinite(v)) ? v : (v == null || v === "" ? null : Number(v));
+  const counts = (s) => !!(s && s.inv_pct != null && s.inv_pct >= 99.95 && s.nm_act != null && s.nm_act !== 100 && ((s.mat_act || 0) > 0 || (s.lab_act || 0) > 0 || (s.hrs_act || 0) > 0));
+  const c = (slim || []).filter(counts);
+  const sum = (a, f) => a.reduce((s, j) => s + (num(f(j)) || 0), 0);
+  const pct = (a, b) => (b > 0 ? Math.round(1000 * a / b) / 10 : null);
+  const byTech = {};
+  c.forEach(j => { const t = String(j.tech || "").split(" / ")[0] || "UNASSIGNED"; const o = byTech[t] || (byTech[t] = { tech: t, n: 0, npl: 0, rev: 0, ha: 0, he: 0 }); o.n++; o.npl += num(j.npl_act) || 0; o.rev += num(j.contract) || 0; o.ha += num(j.hrs_act) || 0; o.he += num(j.hrs_est) || 0; });
+  const techs = Object.values(byTech).map(o => ({ tech: o.tech, n: o.n, hoursPct: o.he > 0 ? Math.round(100 * o.ha / o.he) : null, marginPct: pct(o.npl, o.rev) })).sort((a, b) => b.n - a.n || a.tech.localeCompare(b.tech));
+  return { counted: c.length, marginPct: pct(sum(c, j => j.npl_act), sum(c, j => j.contract)), hoursPct: sum(c, j => j.hrs_est) > 0 ? Math.round(100 * sum(c, j => j.hrs_act) / sum(c, j => j.hrs_est)) : null, at15: c.filter(j => num(j.nm_act) != null && j.nm_act >= 15).length, byTech: techs };
+}
+const odGoalsK = (n) => n == null ? "" : n >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
+// What the app can measure, keyed by the words a sheet MEASURE cell uses. A sheet row that
+// names one lights up; the ones no row names are listed under "Measured by the app, not on
+// the sheet yet", so adding a goal is a sheet edit, never a code change. Simpro entries need
+// the nightly doc (`sim`); the rest read the dashboard's own model (`d`).
+const OD_GOAL_LIVE = [
+  { key: "margin", label: "Job net margin, jobs invoiced this year", test: /\bmargin\b/i, sim: true,
+    live: ({ sim, m }) => ({ value: `${m.marginPct == null ? "—" : m.marginPct + "%"}`, sub: `${m.counted} jobs invoiced in ${sim.year}, fully invoiced, costs posted · ${m.at15} of them at 15% or better`, tone: m.marginPct == null ? "grey" : m.marginPct >= 15 ? "good" : m.marginPct >= 13 ? "warn" : "bad", bar: m.marginPct == null ? 0 : Math.max(0, Math.min(1, m.marginPct / 15)),
+      rule: "Σ net profit ÷ Σ contract (ex tax) at Simpro's cost rates over every job with an invoice dated this year that is 100% invoiced with costs posted (Josh's Builder Scorecard rule). Weighted, not a plain per-job average, so a big job counts for what it is. The Scoreboard tab uses a different rule on purpose (per-job average, completed this year, app foreman credit)." }) },
+  { key: "commercial", label: "Commercial share of invoiced work", test: /commercial/i, sim: true,
+    live: ({ sim, sb }) => { const bd = (sim.invoices && sim.invoices.byDivision) || {}; const tot = (bd.commercial || 0) + (bd.residential || 0) + (bd.other || 0); const share = tot > 0 ? Math.round(1000 * (bd.commercial || 0) / tot) / 10 : null;
+      const prog = (sb && Array.isArray(sb.prog) ? sb.prog : []); const pv = prog.reduce((s, j) => s + (Number(j.contract) || 0), 0), pc = prog.filter(j => j.division === "commercial").reduce((s, j) => s + (Number(j.contract) || 0), 0);
+      return { value: share == null ? "—" : `${share}%`, sub: `${odGoalsK(bd.commercial || 0)} of ${odGoalsK(tot)} invoiced in ${sim.year}${pv > 0 ? ` · in progress: ${Math.round(100 * pc / pv)}% of ${odGoalsK(pv)} contract value is commercial` : ""}`, tone: share == null ? "grey" : share >= 25 ? "good" : share >= 12 ? "warn" : "bad", bar: share == null ? 0 : Math.max(0, Math.min(1, share / 25)),
+        rule: "Invoice dollars (ex tax, credits out) on jobs whose Simpro Business Group is Commercial, divided by all invoice dollars this year. A job with no Business Group counts as residential, same as the Scoreboard page. The second line is the pipeline: commercial contract value among the jobs Simpro has in progress." }; } },
+  { key: "hoursForeman", label: "Hours vs estimate, every foreman", test: /hours.*(foreman|crew)|(foreman|crew).*hours/i, sim: true,
+    live: ({ m }) => { const ppl = (m.byTech || []).filter(t => t.n >= 3 && t.tech !== "UNASSIGNED" && t.hoursPct != null); if (!ppl.length) return { value: "—", sub: "No foreman has 3 counted jobs yet", tone: "grey", bar: 0, people: [] };
+      const sorted = ppl.slice().sort((a, b) => a.hoursPct - b.hoursPct); const at = sorted.filter(p => p.hoursPct <= 115).length;
+      return { value: `${sorted[0].hoursPct}–${sorted[sorted.length - 1].hoursPct}%`, sub: `${at} of ${sorted.length} at 115% or better · credit = Simpro's technician on the job, 3+ counted jobs`, tone: at === sorted.length ? "good" : "bad", bar: 0, people: sorted.map(p => ({ name: p.tech.split(" ")[0], full: p.tech, n: p.n, pct: p.hoursPct, bar: Math.max(0.04, Math.min(1, 115 / p.hoursPct)) })),
+        rule: "Per technician: Σ hours used ÷ Σ hours estimated across the counted jobs Simpro names them on. The Scoreboard credits by the app's foreman or lead instead, which moves people; this tab follows Simpro so it matches the sheet." }; } },
+  { key: "hoursCompany", label: "Hours vs estimate, company", test: /hours.*estimate|estimate.*hours/i, sim: true,
+    live: ({ sim, m }) => ({ value: m.hoursPct == null ? "—" : `${m.hoursPct}%`, sub: `${m.counted} jobs invoiced in ${sim.year} · hours used ÷ hours estimated`, tone: m.hoursPct == null ? "grey" : m.hoursPct <= 110 ? "good" : m.hoursPct <= 125 ? "warn" : "bad", bar: m.hoursPct == null ? 0 : Math.max(0.04, Math.min(1, 110 / m.hoursPct)),
+      rule: "Σ actual labor hours ÷ Σ estimated labor hours from each job's Totals, over the same counted jobs as the margin card. Old estimates stay in the mix until those jobs are invoiced." }) },
+  { key: "collect", label: "Days to collect on our invoices", test: /collect|days to pa|receivable/i, sim: true,
+    live: ({ sim }) => { const inv = sim.invoices || {}, p = inv.paid || {}, o = inv.open || {}; return { value: p.avgDays == null ? "—" : `${p.avgDays} d`, sub: `${p.n || 0} invoices paid in ${sim.year}, issue to paid (median ${p.medianDays == null ? "—" : p.medianDays}) · open ${odGoalsK(o.owed || 0)} on ${o.n || 0} · past due ${odGoalsK(o.pastDue || 0)} · over 60 d ${odGoalsK(o.over60 || 0)}`, tone: p.avgDays == null ? "grey" : p.avgDays < 45 ? "good" : p.avgDays < 55 ? "warn" : "bad", bar: p.avgDays == null ? 0 : Math.max(0.04, Math.min(1, 45 / p.avgDays)),
+      rule: "Average of DatePaid minus DateIssued over customer invoices paid this year (credits out, a paid date before the issue date left out). The open book beside it is what is unpaid today: the whole balance, the part past its due date, and the part issued more than 60 days ago. Josh's \"about 55\" is an A/R estimate (what is owed ÷ daily sales), which runs higher while a big draw sits unpaid." }; } },
+  { key: "firstPass", label: "First-pass inspection rate, 90 days", test: /first.?pass|pass(ed)? (the )?first|inspection/i,
+    live: ({ d }) => { const f = (d && d.firsts) || []; const pass = f.filter(x => x.pass === true).length; const pct = f.length ? Math.round(100 * pass / f.length) : null; return { value: pct == null ? "—" : `${pct}%`, sub: `${pass} of ${f.length} first inspections passed, last 90 days`, tone: pct == null ? "grey" : pct >= 90 ? "good" : pct >= 75 ? "warn" : "bad", bar: pct == null ? 0 : pct / 100 }; } },
+  { key: "coOld", label: "Change orders waiting on a GC 60+ days", test: /change orders?.*(wait|gc|past|older|days)|(wait|gc).*change order/i,
+    live: ({ d }) => { const n = ((d && d.attnBy && d.attnBy.coOld && d.attnBy.coOld.rows) || []).length; return { value: String(n), sub: `${n === 1 ? "change order" : "change orders"} waiting on a GC 60+ days (Needs attention)`, tone: n === 0 ? "good" : n <= 5 ? "warn" : "bad", bar: 0 }; } },
+  { key: "quiet", label: "Active jobs with no update in 5+ days", test: /every active job|logged update|daily update|quiet/i,
+    live: ({ d }) => { const n = ((d && d.attnBy && d.attnBy.quiet && d.attnBy.quiet.rows) || []).length, a = ((d && d.active) || []).length; return { value: String(n), sub: `of ${a} active jobs, nothing logged in 5+ days`, tone: n === 0 ? "good" : n <= 3 ? "warn" : "bad", bar: 0 }; } },
+  { key: "questions", label: "Crew questions open", test: /question/i,
+    live: ({ d, now }) => { const qs = (d && d.openQs) || []; const old = qs.filter(q => q.at && (now - new Date(q.at)) / 864e5 > 2).length; return { value: String(qs.length), sub: `open crew questions · ${old} older than 2 days`, tone: old === 0 ? "good" : old <= 5 ? "warn" : "bad", bar: 0 }; } },
+  { key: "returnTrips", label: "Return trips past date or undated", test: /return trip/i,
+    live: ({ d }) => { const s = (d && d.rtSum) || {}; const late = s.late || 0, none = s.none || 0; return { value: String(late + none), sub: `${s.open || 0} open · ${late} past date · ${none} with no date`, tone: late + none === 0 ? "good" : late === 0 ? "warn" : "bad", bar: 0 }; } },
+  { key: "rebook", label: "Failed inspections not re-booked", test: /re-?book|failed inspection/i,
+    live: ({ d }) => { const n = ((d && d.notRebooked) || []).length; return { value: String(n), sub: "failed inspections with no re-inspection booked", tone: n === 0 ? "good" : n <= 2 ? "warn" : "bad", bar: 0 }; } },
+  { key: "plans", label: "Plans waiting to be filed", test: /plans? (filed|waiting|intake)|file(d)? plans?/i,
+    live: ({ plans }) => plans ? { value: String(plans.waiting), sub: plans.oldest != null ? `waiting to be filed · oldest ${plans.oldest} d` : "waiting to be filed", tone: plans.waiting === 0 ? "good" : plans.oldest != null && plans.oldest <= 1 ? "warn" : "bad", bar: 0 } : null },
+];
+// Everything the Goals tab renders. `sheet` = odGoalsParse output (or null while loading),
+// `sim` = settings/goalsSimpro (or null), `sb` = settings/scoreboardCompleted (prog rows),
+// `d` = odModel output, `plans` = { waiting, oldest } from the plan model.
+function odGoalsModel({ sheet, sim, sb, d, plans, now = new Date() }) {
+  const m = sim && Array.isArray(sim.jobs) ? odGoalsMeasures(sim.jobs) : (sim && sim.measures) || null;
+  const ctx = { sim, m, sb, d, plans, now };
+  const compute = (e) => { if (e.sim) return (sim && m) ? e.live(ctx) : { pending: true, value: "—", sub: "No Simpro pull yet", tone: "grey", bar: 0 }; return d ? e.live(ctx) : null; };
+  const used = new Set();
+  const measures = ((sheet && sheet.measures) || []).map(x => {
+    const entry = OD_GOAL_LIVE.find(e => e.test.test(x.name));
+    if (entry) used.add(entry.key);
+    const live = entry ? compute(entry) : null;
+    return { ...x, key: entry ? entry.key : "", live, rule: entry && live && !live.pending ? live.rule || "" : "" };
+  });
+  const goals = ((sheet && sheet.goals) || []).map(g => { const due = odGoalDue(g.by, now); return { ...g, due, pill: odGoalStatus(g.status, due) }; });
+  const y = now.getFullYear(), q = Math.floor(now.getMonth() / 3) + 1;
+  const nextQ = y < 2027 ? "Q1" : y === 2027 ? `Q${q}` : "";
+  const quarters = ((sheet && sheet.quarters) || []).map(x => ({ ...x, next: x.q === nextQ }));
+  const extra = OD_GOAL_LIVE.filter(e => !used.has(e.key)).map(e => { const live = compute(e); return live && !live.pending ? { key: e.key, name: e.label, ...live } : null; }).filter(Boolean);
+  const atGoal = measures.filter(x => x.live && x.live.tone === "good").length, tracked = measures.filter(x => x.live && !x.live.pending).length;
+  const done = goals.filter(g => g.pill.text === "Done").length, dueSoon = goals.filter(g => g.due && g.due.days <= 45).length;
+  const daysLeft = Math.max(0, Math.round((new Date(y, 11, 31) - new Date(y, now.getMonth(), now.getDate())) / 864e5));
+  return { title: (sheet && sheet.title) || "Team Goals 2026–2027", mission: (sheet && sheet.mission) || "", goals, measures, quarters, extra, m, simAt: (sim && sim.generated_at) || null, simYear: (sim && sim.year) || y,
+    counts: { goals: goals.length, done, dueSoon, measures: measures.length, atGoal, tracked, daysLeft } };
+}
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -48589,6 +48755,29 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     getDoc(doc(db, "settings", "simproTotals")).then(snap => { if (!dead) setSimTotals(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
   }, []);
+  // ── Goals tab (v562): the Team Goals sheet, settings/goalsSimpro (goalsNightly) and the
+  // Scoreboard cache's in-progress rows, read when the tab opens or Refresh is pressed.
+  // The sheet is the source of the goals; nothing here writes to it or to Firestore.
+  const [goalsSheet, setGoalsSheet] = useState(undefined);   // undefined = loading, { err } or odGoalsParse output
+  const [goalsSim, setGoalsSim] = useState(undefined);       // undefined = loading, null = no pull yet, else the doc
+  const [goalsSb, setGoalsSb] = useState(null);
+  const [goalsTick, setGoalsTick] = useState(0);
+  const [goalsPull, setGoalsPull] = useState("");            // "" | "busy" | the last pull's result line
+  useEffect(() => {
+    if (tab !== "goals") return undefined;
+    let dead = false;
+    setGoalsSheet(undefined);
+    fetch(OD_GOALS_SHEET.csv, { cache: "no-store" }).then(async res => {
+      if (!res.ok) throw new Error(`The goals sheet could not be read (HTTP ${res.status}).`);
+      const txt = await res.text();
+      // Vercel / Firebase rewrite nothing here, but Google answers a sign-in PAGE (200) for a sheet that isn't shared.
+      if (/^\s*<(!doctype|html)/i.test(txt)) throw new Error("The goals sheet is not shared for viewing yet. Set it to \"Anyone with the link can view\", then press Refresh.");
+      return odGoalsParse(parseCSVText(txt));
+    }).then(parsed => { if (!dead) setGoalsSheet(parsed); }, e => { if (!dead) setGoalsSheet({ err: (e && e.message) || "The goals sheet could not be read." }); });
+    getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setGoalsSim(snap.exists() ? (snap.data() || null) : null); }, () => { if (!dead) setGoalsSim(null); });
+    getDoc(doc(db, "settings", "scoreboardCompleted")).then(snap => { if (!dead) setGoalsSb(snap.exists() ? { prog: (snap.data() || {}).prog || [] } : null); }, () => {});
+    return () => { dead = true; };
+  }, [tab, goalsTick]);
   const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
   const [applTick, setApplTick] = useState(0);
   useEffect(() => {
@@ -48741,6 +48930,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const myUrgent = d.openNeeds.filter(n => identity && sameName(needAssignee(n), identity.name) && needPriority(n) === "urgent");
   const docsMissed = OD_DOCS.filter(x => OD_DOC_DUE[x.k]).map(x => ({ x, st: docStat(x) })).filter(o => o.st.missed || o.st.tone === "bad");
   const planAge = (f) => f && f._at ? Math.max(0, Math.floor((d.now - f._at) / OD_DAY)) : 0;
+  // v562: everything the Goals tab renders; pure, tested by scripts/goals-model-test.js.
+  const goalsView = useMemo(() => odGoalsModel({ sheet: goalsSheet && !goalsSheet.err ? goalsSheet : null, sim: goalsSim || null, sb: goalsSb, d, plans: { waiting: (plan.waiting || []).length, oldest: plan.oldest ? planAge(plan.oldest) : null }, now: d.now }), [goalsSheet, goalsSim, goalsSb, d, plan]); // eslint-disable-line
   const needYou = [
     { k: "plans", label: "Plans waiting to be filed", icon: "fileText", color: OD_R, n: plan.waiting.length, extra: plan.oldest ? `oldest ${planAge(plan.oldest)} d` : "",
       open: () => { setPlanShow("needs"); pickTab("cc"); } },
@@ -49307,7 +49498,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{d.shortName(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
                 return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "thing")} logged`}
                   onClick={() => openList(`${d.shortName(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, `${odPlural(v, "thing")} logged`, p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
-                  style={{ background: v ? `rgba(37,99,201,${(0.1 + a*0.5).toFixed(2)})` : "rgba(27,43,74,.04)", color: v ? (a > 0.55 ? "#fff" : C.text) : OD_GREY, boxShadow: v && a > 0.75 ? `inset 0 0 0 1.5px ${OD_A}` : "none" }}>{v || "–"}</button>; })])}
+                  style={{ background: v ? `rgba(142,99,54,${(0.1 + a*0.5).toFixed(2)})` : "rgba(41,33,25,.04)", color: v ? (a > 0.55 ? "#fff" : C.text) : OD_GREY, boxShadow: v && a > 0.75 ? `inset 0 0 0 1.5px ${OD_A}` : "none" }}>{v || "–"}</button>; })])}
             </div>
           ) : <div className="od-empty">Nothing logged this week.</div>}
         </div>
@@ -49336,7 +49527,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {devices != null && !shownDevices.length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
       </div>
     </>);
-  } else {
+  } else if (tab === "cc") {
     // ── Automations: Plan Intake + Appliance Loads ──
     const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
     const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
@@ -49495,6 +49686,98 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdItem color={OD_B} icon="refresh" tag="Appliance Loads" title={`Nightly ${odRunTimes(OD_RUNS.appl)}`} sub={nAppl ? `Next ${at2(nAppl)} · reads new appliance packages, checks Home Runs` : ""}/>
       </div>
     </>);
+  } else if (tab === "goals") {
+    // v562: the Team Goals sheet beside today's numbers. Simpro cards follow Josh's rule
+    // (jobs invoiced this year, weighted, technician credit); the rest read this page's model.
+    const g = goalsView;
+    const sheetErr = goalsSheet && goalsSheet.err;
+    const loadingSheet = goalsSheet === undefined;
+    const simAgeD = g.simAt ? Math.floor((d.now - new Date(g.simAt)) / OD_DAY) : null;
+    const simStale = simAgeD != null && simAgeD > 2;
+    const go = (url) => { try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {} };
+    const rowUrl = (row) => `${OD_GOALS_SHEET.edit}&range=B${row}`;
+    const pillC = (tone) => tone === "good" ? OD_G : tone === "bad" ? OD_R : tone === "warn" ? OD_O : OD_GREY;
+    const liveOf = (k) => { const m = g.measures.find(x => x.key === k); return m ? m.live : (g.extra.find(e => e.key === k) || null); };
+    const marginLive = liveOf("margin"), hoursLive = liveOf("hoursCompany");
+    const fmtAt = (iso) => { const t = odDate(iso); return t ? `${odDow(t)} ${odTime(t)}` : "—"; };
+    const pullNow = async () => {
+      if (goalsPull === "busy") return;
+      if (!window.confirm("Pull this year's invoices and their jobs from Simpro now? Read-only, about 250 calls, up to 3 minutes.")) return;
+      setGoalsPull("busy");
+      try {
+        const r = await httpsCallable(functions, "sendTestGoalsPull", { timeout: 540000 })({});
+        const x = r && r.data;
+        if (x && x.ok) { setGoalsPull(`Pulled ${x.counted} counted of ${x.jobs} jobs · margin ${x.marginPct}% · hours ${x.hoursPct}% · ${x.seconds}s`); setGoalsTick(t => t + 1); }
+        else setGoalsPull(`Pull failed: ${(x && x.error) || "unknown"}`);
+      } catch (e) { setGoalsPull(`Pull failed: ${(e && e.message) || e}`); }
+    };
+    const pillText = (x) => { const l = x.live; if (!x.key) return "Not tracked yet"; if (!l) return "—"; if (l.pending) return "No Simpro pull yet"; return l.tone === "good" ? "At goal" : l.tone === "warn" ? "Moving" : l.tone === "bad" ? "Off track" : "—"; };
+    const isSim = (x) => { const e = x.key && OD_GOAL_LIVE.find(y => y.key === x.key); return !!(e && e.sim); };
+    const card = (x, extra) => { const l = x.live, c = pillC(l ? l.tone : "grey");
+      return (
+        <div className="od-goal" key={extra ? x.key : x.row} style={{ "--c": c }}>
+          <div className="h"><b>{x.name}</b><span className="od-goal-pill"><i/>{extra ? (l.tone === "good" ? "Good" : l.tone === "warn" ? "Watch" : "Off") : pillText(x)}</span></div>
+          {extra
+            ? <div className="n"><div><small>Today</small><b style={{ color: c }}>{l.value}</b></div></div>
+            : <div className="n"><div><small>Sheet says</small><b className="s">{x.today || "—"}</b></div><div><small>{isSim(x) ? "Simpro today" : "App today"}</small><b style={{ color: c }}>{l ? l.value : "—"}</b></div><div><small>2027 goal</small><b className="s">{x.goal || "—"}</b></div></div>}
+          {l && !l.pending && l.people && l.people.length ? <div className="od-goal-ppl">{l.people.map(p => <div key={p.full} title={`${p.full} · ${p.n} jobs`}><span>{p.name} · {p.n}</span><b>{p.pct}%</b><span className="od-goal-bar"><i style={{ width: `${Math.round(p.bar * 100)}%` }}/></span></div>)}</div> : null}
+          {l && !l.pending && !l.people && l.bar > 0 ? <span className="od-goal-bar"><i style={{ width: `${Math.round(l.bar * 100)}%` }}/></span> : null}
+          <small className="sub">{l ? l.sub : (x.key ? "" : "Needs a per-job cost-center read from Simpro (next phase) or a hand count. The sheet's words show as typed.")}</small>
+          {x.rule ? <details className="od-goal-rule"><summary>How it is counted</summary><p>{x.rule}</p></details> : null}
+        </div>
+      ); };
+    main = (<>
+      <div className="od-head"><div><h1>Goals</h1><p>{g.title} · from the Goals sheet · Simpro numbers use Josh's rule, jobs invoiced this year{g.simAt ? ` · pulled ${fmtAt(g.simAt)}` : " · no Simpro pull yet"}</p></div>
+        <div className="od-ct-actions">
+          <button type="button" className="od-mini-btn" onClick={() => setGoalsTick(t => t + 1)}>Refresh</button>
+          <button type="button" className="od-mini-btn" onClick={() => go(OD_GOALS_SHEET.edit)}>Open sheet</button>
+          {canOpenDash(identity) ? <button type="button" className="od-mini-btn run" disabled={goalsPull === "busy"} onClick={pullNow}>{goalsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
+        </div></div>
+      {goalsPull && goalsPull !== "busy" ? <div className="od-goal-note">{goalsPull}</div> : null}
+      {sheetErr ? <div className="od-white od-pad"><div className="od-ct">The goals sheet</div><div className="od-empty">{sheetErr}</div></div> : null}
+      {g.mission ? <div className="od-goal-mission"><b>Our goal:</b> {g.mission}</div> : null}
+      <div className="od-minis">
+        <OdMini title="Rest of 2026" color={OD_B} icon="flag" value={loadingSheet ? "…" : g.counts.goals} sub={`goals · ${g.counts.done} done`} hint={`${g.counts.dueSoon} due within 45 days · status is column F of the sheet`}/>
+        <OdMini title="2027 scoreboard" color={OD_O} icon="checkCircle" value={loadingSheet ? "…" : g.counts.atGoal} sub={`of ${g.counts.measures} at goal`} hint={`${g.counts.tracked} measured today · the rest need a cost-center read or a hand count`}/>
+        <OdMini title="Margin, invoiced this year" color={marginLive && !marginLive.pending ? pillC(marginLive.tone) : OD_GREY} icon="dollarSign" value={marginLive && !marginLive.pending ? marginLive.value : "—"} sub="goal 15%" hint={marginLive ? marginLive.sub : "Add a margin line to the sheet"}/>
+        <OdMini title="Hours vs estimate" color={hoursLive && !hoursLive.pending ? pillC(hoursLive.tone) : OD_GREY} icon="clock" value={hoursLive && !hoursLive.pending ? hoursLive.value : "—"} sub="goal 110%" hint={hoursLive ? hoursLive.sub : "Add an hours line to the sheet"}/>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">2027 scoreboard<small>the sheet's number and today's beside it · open "How it is counted" on any card</small></div>
+        {loadingSheet && !sheetErr ? <div className="od-empty">Reading the sheet…</div> : null}
+        {!loadingSheet && !sheetErr && !g.measures.length ? <div className="od-empty">No measures found under "2027 SCOREBOARD" in the sheet.</div> : null}
+        <div className="od-goal-grid">{g.measures.map(x => card(x, false))}</div>
+      </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">Rest of 2026 · October – December<small>status is column F of the sheet (Not started / On track / At risk / Done) · the due flag comes from BY · tap a goal to open it in the sheet</small></div>
+        <div className="od-goal-rows">
+          {g.goals.map(x => (
+            <a className="od-goal-row" key={x.row} href={rowUrl(x.row)} target="_blank" rel="noopener noreferrer">
+              <span className="area">{x.area || "—"}</span><span className="goal">{x.goal}</span><span className="who">{x.who}</span><span className="by">{x.by}</span>
+              <span className="od-goal-pill" style={{ "--c": pillC(x.pill.tone) }}><i/>{x.pill.text}{x.pill.flag ? <em> · {x.pill.flag}</em> : null}</span>
+            </a>))}
+          {!loadingSheet && !sheetErr && !g.goals.length ? <div className="od-empty">No goals found under "REST OF 2026" in the sheet.</div> : null}
+        </div>
+      </div>
+      {g.quarters.length ? <div className="od-white od-pad">
+        <div className="od-ct">2027 by quarter<small>{g.quarters.some(q => q.next) ? `${g.quarters.find(q => q.next).q} is next` : ""}</small></div>
+        <div className="od-goal-qtr">{g.quarters.map(q => <div key={q.row} className={q.next ? "next" : ""}><b>{q.q}{q.next ? " · next" : ""}</b>{q.text}</div>)}</div>
+      </div> : null}
+      {g.extra.length ? <details className="od-white od-pad od-goal-extra">
+        <summary className="od-ct">Measured by the app, not on the sheet yet<small>{g.extra.length} · add a 2027 scoreboard row that names one and it lights up above</small></summary>
+        <div className="od-goal-grid">{g.extra.map(e => card({ key: e.key, name: e.name, live: e, rule: "" }, true))}</div>
+      </details> : null}
+    </>);
+    right = (<>
+      <Me sub="Goals"/>
+      <Stats items={[[g.counts.goals, "Goals, rest of 2026"], [`${g.counts.atGoal}/${g.counts.measures}`, "Measures at goal"], [g.counts.daysLeft, "Days left in 2026"]]}/>
+      <Sec>Where the numbers come from</Sec>
+      <div className="od-list">
+        <OdItem color={OD_B} icon="fileText" tag="Goals sheet" title="Read when this tab opens" sub="Koy's copy of Josh's Team Goals 2026–2027 · edit it there, press Refresh here" onClick={() => go(OD_GOALS_SHEET.edit)}/>
+        <OdItem color={simStale ? OD_R : OD_B} icon="refresh" tag="Simpro" title="Nightly 5:40 AM" sub={g.simAt ? `Last pull ${fmtAt(g.simAt)}${simStale ? " · older than 2 days" : ""} · ${g.m ? g.m.counted : 0} jobs counted` : "No pull yet. Press Pull from Simpro now."}/>
+        <OdItem color={OD_B} icon="activity" tag="This dashboard" title="Live from the jobs" sub="First-pass, questions, return trips, change orders, quiet jobs, plans"/>
+      </div>
+    </>);
   }
 
   // ── sheet (job / person / list / plan) ──
@@ -49633,11 +49916,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   return (
     <div className="odash">
       <style>{`
-        .odash{--pan:rgba(255,255,255,.66);--inset:rgba(27,43,74,.045);--line:rgba(27,43,74,.1);--ink:${C.text};--dim:${C.dim};--faint:${C.faint};
-          --card:${C.card};--card-solid:${C.card};--cink:${C.text};--cdim:${C.dim};--cline:${C.border};--hov:rgba(37,99,201,.06);--trk:rgba(27,43,74,.08);
-          --o:${OD_A};--on-o:${OD_ON_A};--o-soft:rgba(37,99,201,.1);--o-ink:#1E4FA8;
+        .odash{--pan:rgba(255,255,255,.66);--inset:rgba(41,33,25,.045);--line:rgba(41,33,25,.1);--ink:#292119;--dim:#6B6157;--faint:${C.faint};
+          --card:${C.card};--card-solid:${C.card};--cink:#292119;--cdim:#6B6157;--cline:#E6DFD3;--hov:rgba(142,99,54,.07);--trk:rgba(41,33,25,.08);
+          --o:${OD_A};--on-o:${OD_ON_A};--o-soft:rgba(142,99,54,.12);--o-ink:#7E5730;
           color:var(--ink);border-radius:22px;padding:14px;margin:0 auto;max-width:1400px;color-scheme:light;
-          background:radial-gradient(55% 45% at 12% 6%,rgba(47,91,217,.09),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(37,99,201,.06),transparent 70%),linear-gradient(180deg,#F7F9FC,#EDF1F6)}
+          background:radial-gradient(55% 45% at 12% 6%,rgba(142,99,54,.10),transparent 70%),radial-gradient(45% 40% at 92% 96%,rgba(142,99,54,.05),transparent 70%),linear-gradient(180deg,#FBF9F5,#F2EDE4)}
         .odash *{box-sizing:border-box}
         .odash button{font:inherit;color:inherit}
         .odash .od-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
@@ -49645,49 +49928,49 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-tabs::-webkit-scrollbar{display:none}
         .odash .od-tabs button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
         .odash .od-tabs button:hover{color:var(--ink)}
-        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:var(--on-o);box-shadow:0 6px 14px -6px rgba(37,99,201,.45)}
+        .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:var(--on-o);box-shadow:0 6px 14px -6px rgba(142,99,54,.45)}
         .odash .od-help{display:inline-flex;align-items:center}
         .odash .od-help > span > span{display:none}
         .odash .od-help button{width:34px;height:34px;justify-content:center;background:var(--inset)!important;border:1px solid var(--line)!important;color:var(--o)!important}
-        .odash .od-help button:hover{border-color:rgba(37,99,201,.45)!important}
+        .odash .od-help button:hover{border-color:rgba(142,99,54,.45)!important}
         .odash .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);white-space:nowrap}
         .odash .od-top .live{margin-left:auto}
         .odash .live::before{content:"";width:8px;height:8px;border-radius:50%;background:${D.live};box-shadow:0 0 0 4px rgba(52,209,127,.2)}
         .odash .od-ctrl .live{display:none}
         .odash .od-fpanel{display:contents}
         .odash .od-fbtn{display:none;align-items:center;gap:7px;border:1px solid var(--line);background:var(--inset);color:var(--ink);border-radius:999px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer}
-        .odash .od-fbtn[aria-expanded="true"]{border-color:rgba(37,99,201,.45);color:var(--o-ink)}
+        .odash .od-fbtn[aria-expanded="true"]{border-color:rgba(142,99,54,.45);color:var(--o-ink)}
         .odash .od-fbtn .ct{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--o);color:var(--on-o);font-size:11.5px;font-weight:800}
         .odash .od-ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
         .odash .od-sel{background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:7px 12px;font:inherit;font-size:12.5px;font-weight:600;max-width:220px;color-scheme:light}
         .odash .od-sel.light{background:var(--card);border-color:var(--cline);color:var(--cink);color-scheme:light}
         .odash .od-seg{display:inline-flex;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
         .odash .od-seg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
-        .odash .od-seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(27,43,74,.14)}
+        .odash .od-seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(41,33,25,.14)}
         .odash .od-seg.off{opacity:.45}.odash .od-seg.off button{cursor:default}
         .odash .od-find{position:relative;flex:1;min-width:200px;max-width:380px;margin-left:auto}
         .odash .od-find input{width:100%;background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 14px;font:inherit;font-size:12.5px;outline:none}
         .odash .od-find input::placeholder{color:var(--faint)}
-        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:var(--card);color:var(--cink);border:1px solid var(--cline);border-radius:14px;box-shadow:0 18px 40px -12px rgba(27,43,74,.28);overflow:hidden}
+        .odash .od-find .hits{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:20;background:var(--card);color:var(--cink);border:1px solid var(--cline);border-radius:14px;box-shadow:0 18px 40px -12px rgba(41,33,25,.28);overflow:hidden}
         .odash .od-find .hits button{display:flex;flex-direction:column;align-items:flex-start;width:100%;border:0;background:transparent;padding:9px 14px;text-align:left;cursor:pointer;border-bottom:1px solid var(--cline)}
         .odash .od-find .hits button:hover{background:var(--hov)}
         .odash .od-find .hits b{font-size:13px}.odash .od-find .hits small{font-size:11.5px;color:var(--cdim)}
         .odash .od-grid{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:14px;align-items:start}
-        .odash .od-panel{background:var(--pan);border:1px solid rgba(27,43,74,.08);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+        .odash .od-panel{background:var(--pan);border:1px solid rgba(41,33,25,.08);border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:16px;min-width:0;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
         .odash .od-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
-        .odash .od-head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+        .odash .od-head h1{margin:0;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:28px;font-weight:400;letter-spacing:.06em;color:var(--ink)}
         .odash .od-head p{margin:3px 0 0;font-size:12.5px;color:var(--dim)}
         .odash .od-warn{margin-left:auto;font-size:11.5px;font-weight:700;color:#8A3A12;background:rgba(180,83,26,.09);border:1px solid rgba(180,83,26,.32);border-radius:12px;padding:5px 10px;max-width:420px}
         .odash .od-warn.wide{margin:0;max-width:none;font-size:12.5px;font-weight:600;line-height:1.5}
         .odash .od-inlink{all:unset;cursor:pointer;font-weight:700;text-decoration:underline}
         .odash .od-clear{margin-left:auto;border:1px solid var(--line);background:var(--inset);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
-        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:1px solid var(--cline);text-align:left;box-shadow:0 1px 2px rgba(27,43,74,.05),0 12px 26px -20px rgba(27,43,74,.28)}
-        .odash .od-needyou{border-color:rgba(196,59,59,.28);box-shadow:inset 3px 0 0 ${OD_R},0 1px 2px rgba(27,43,74,.05)}
+        .odash .od-white{background:var(--card);color:var(--cink);border-radius:18px;border:1px solid var(--cline);text-align:left;box-shadow:0 1px 2px rgba(41,33,25,.05),0 12px 26px -20px rgba(41,33,25,.28)}
+        .odash .od-needyou{border-color:rgba(196,59,59,.28);box-shadow:inset 3px 0 0 ${OD_R},0 1px 2px rgba(41,33,25,.05)}
         .odash .od-pad{padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
         .odash .od-minis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
         .odash .od-mini{padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0;transition:transform .25s cubic-bezier(.2,.8,.2,1),box-shadow .25s}
         .odash .od-tap{cursor:pointer}
-        .odash .od-tap:hover{transform:translateY(-4px);border-color:rgba(37,99,201,.35);box-shadow:0 18px 30px -18px rgba(27,43,74,.35)}
+        .odash .od-tap:hover{transform:translateY(-4px);border-color:rgba(142,99,54,.35);box-shadow:0 18px 30px -18px rgba(41,33,25,.35)}
         .odash .od-mini .t{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px;font-weight:700}
         .odash .od-mini .t i{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);flex:none}
         .odash .od-mini .b{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:auto;flex-wrap:wrap}
@@ -49795,8 +50078,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;cursor:pointer;width:100%;color:var(--cink)}
         .odash .od-rowa{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--cline)}
         .odash .od-rowa>.od-row{border-bottom:0;flex:1;min-width:0}
-        .odash .od-act{flex:none;border:1px solid rgba(37,99,201,.35);background:#fff;color:#1E4FA8;border-radius:999px;padding:8px 12px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;min-height:40px;white-space:nowrap}
-        .odash .od-act:hover{background:rgba(37,99,201,.06)}
+        .odash .od-act{flex:none;border:1px solid rgba(142,99,54,.35);background:#fff;color:#7E5730;border-radius:999px;padding:8px 12px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;min-height:40px;white-space:nowrap}
+        .odash .od-act:hover{background:rgba(142,99,54,.06)}
         .odash .od-act:focus-visible{outline:2px solid ${OD_A};outline-offset:2px}
         .odash .od-edit{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0 4px}
         .odash .od-edit label{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:${C.dim}}
@@ -49810,7 +50093,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-move .btns button{font:inherit;font-size:14px;font-weight:700;border-radius:999px;padding:10px 16px;min-height:44px;cursor:pointer}
         .odash .od-move .pri{background:${OD_A};color:#fff;border:0}
         .odash .od-move .pri:disabled{opacity:.45;cursor:default}
-        .odash .od-move .sec{background:#fff;color:#1E4FA8;border:1px solid rgba(37,99,201,.35)}
+        .odash .od-move .sec{background:#fff;color:#7E5730;border:1px solid rgba(142,99,54,.35)}
         .odash .od-move small{color:${C.faint};font-size:12px}
         @media (max-width:600px){.odash .od-rowa{flex-wrap:wrap}.odash .od-rowa>.od-row{flex-basis:100%}.odash .od-rowa>.od-act{margin:0 0 10px 42px}}
         .odash .od-row:disabled{cursor:default}
@@ -49822,7 +50105,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-row .m small{font-size:12px;color:var(--cdim);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
         .odash .od-row .t{font-size:11.5px;color:var(--cdim);white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
         .odash .od-pulse{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:1px solid var(--cline);box-shadow:0 1px 2px rgba(27,43,74,.05);text-align:left;cursor:pointer}
+        .odash .od-person{display:flex;align-items:center;gap:10px;background:var(--card);color:var(--cink);border-radius:14px;padding:10px 12px;min-width:0;border:1px solid var(--cline);box-shadow:0 1px 2px rgba(41,33,25,.05);text-align:left;cursor:pointer}
         .odash .od-person:hover{background:var(--hov)}
         .odash .od-person > div{min-width:0;flex:1}
         .odash .od-person b{display:block;font-size:13px}
@@ -49834,7 +50117,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-nav button{border:1px solid var(--cline);background:var(--inset);border-radius:999px;min-width:30px;height:28px;padding:0 10px;display:grid;place-items:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--cink)}
         .odash .od-weekwrap{overflow-x:auto}
         .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
-        .odash .od-week .col{background:rgba(27,43,74,.035);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
+        .odash .od-week .col{background:rgba(41,33,25,.035);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
         .odash .od-week .col.today{background:var(--o-soft)}
         .odash .od-week .dh{font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-week .col.today .dh{color:var(--o-ink)}
@@ -49918,7 +50201,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
         .odash .od-empty.dark{color:var(--dim)}
         .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(27,33,45,.34);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
-        .od-sheet{width:min(560px,100%);height:100%;background:#F7F9FC;color:${C.text};border-left:1px solid ${C.border};display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(27,43,74,.35);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
+        .od-sheet{width:min(560px,100%);height:100%;background:#FBF9F5;color:#292119;border-left:1px solid #E6DFD3;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(41,33,25,.35);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
         @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
         .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid ${C.border};background:${C.card}}
         .od-sheet-h .tt{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -49937,7 +50220,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .od-sheet .od-rows{display:flex;flex-direction:column}
         .od-sheet .od-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 2px;border:0;border-bottom:1px solid ${C.border};background:transparent;text-align:left;cursor:pointer;width:100%;color:${C.text};font:inherit}
         .od-sheet .od-row:disabled{cursor:default}
-        .od-sheet .od-row:not(:disabled):hover{background:rgba(37,99,201,.06)}
+        .od-sheet .od-row:not(:disabled):hover{background:rgba(142,99,54,.06)}
         .od-sheet .od-row .k{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
         .od-sheet .od-row .m{min-width:0;display:flex;flex-direction:column}
         .od-sheet .od-row .m b{font-size:13px;overflow:hidden;text-overflow:ellipsis}
@@ -49953,6 +50236,44 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           .od-sheet-h{border-radius:20px 20px 0 0;padding-top:16px}
           .od-sheet .od-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @keyframes odUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}}
+        /* v562 Goals tab */
+        .odash .od-goal-mission{border:1px solid var(--cline);border-left:4px solid var(--o);background:var(--card);border-radius:14px;padding:12px 16px;font-size:14px;line-height:1.5}
+        .odash .od-goal-mission b{color:var(--o-ink)}
+        .odash .od-goal-note{font-size:12.5px;color:var(--cdim);padding:2px 4px}
+        .odash .od-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+        .odash .od-goal{border:1px solid var(--cline);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;background:var(--card);min-width:0}
+        .odash .od-goal .h{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+        .odash .od-goal .h b{font-size:13.5px}
+        .odash .od-goal .n{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-variant-numeric:tabular-nums}
+        .odash .od-goal .n div{display:flex;flex-direction:column;gap:2px;min-width:0}
+        .odash .od-goal .n small{font-size:11px;color:var(--cdim);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+        .odash .od-goal .n b{font-size:18px;font-weight:800;overflow-wrap:anywhere}
+        .odash .od-goal .n b.s{font-size:13px;font-weight:600;line-height:1.3}
+        .odash .od-goal .sub{font-size:11.5px;color:var(--cdim)}
+        .odash .od-goal-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:3px 9px;font-size:11.5px;font-weight:700;white-space:nowrap;color:var(--c);background:color-mix(in srgb,var(--c) 12%,transparent);flex:none}
+        .odash .od-goal-pill i{width:7px;height:7px;border-radius:50%;background:var(--c);display:inline-block}
+        .odash .od-goal-pill em{font-style:normal;font-weight:600;opacity:.85}
+        .odash .od-goal-bar{display:block;height:7px;border-radius:999px;background:var(--trk);overflow:hidden}
+        .odash .od-goal-bar i{display:block;height:100%;border-radius:999px;background:var(--c)}
+        .odash .od-goal-ppl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;font-size:12px}
+        .odash .od-goal-ppl>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center}
+        .odash .od-goal-ppl>div .od-goal-bar{grid-column:1/-1}
+        .odash .od-goal-rule{font-size:12px;color:var(--cdim)}
+        .odash .od-goal-rule summary{cursor:pointer;font-weight:700;color:var(--o);list-style:none}
+        .odash .od-goal-rule summary::-webkit-details-marker{display:none}
+        .odash .od-goal-rule p{margin:6px 0 0;line-height:1.45}
+        .odash .od-goal-rows{display:flex;flex-direction:column}
+        .odash .od-goal-row{display:grid;grid-template-columns:86px minmax(0,1fr) 150px 110px auto;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--cline);font-size:13px;color:var(--cink);text-decoration:none}
+        .odash .od-goal-row:last-child{border-bottom:0}
+        .odash .od-goal-row:hover{background:var(--hov)}
+        .odash .od-goal-row .area{font-size:11.5px;font-weight:700;color:var(--o);background:var(--o-soft);border-radius:8px;padding:4px 8px;text-align:center}
+        .odash .od-goal-row .who,.odash .od-goal-row .by{font-size:12.5px;color:var(--cdim)}
+        .odash .od-goal-qtr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+        .odash .od-goal-qtr div{border:1px solid var(--cline);border-radius:14px;padding:12px;font-size:12.5px;line-height:1.45;background:var(--card)}
+        .odash .od-goal-qtr div b{display:block;font-size:13px;margin-bottom:4px}
+        .odash .od-goal-qtr div.next{border-color:var(--o);box-shadow:0 0 0 3px var(--o-soft)}
+        .odash details.od-goal-extra summary{cursor:pointer;list-style:none}.odash details.od-goal-extra summary::-webkit-details-marker{display:none}
+        @media (max-width:760px){.odash .od-goal-grid,.odash .od-goal-qtr{grid-template-columns:minmax(0,1fr)}.odash .od-goal-row{grid-template-columns:minmax(0,1fr)}.odash .od-goal-row .area{justify-self:start}.odash .od-goal .n{grid-template-columns:1fr 1fr}.odash .od-goal-ppl{grid-template-columns:1fr 1fr}}
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
         @media (max-width:600px){
           .odash .od-top{flex-wrap:nowrap}
@@ -50033,7 +50354,7 @@ if (IS_DASH_PAGE) {
     if (t) t.setAttribute("content", "Dashboard");
     // v542: a light page — the phone's status bar matches it, not the crew app's dark one.
     const th = document.querySelector('meta[name="theme-color"]');
-    if (th) th.setAttribute("content", "#EEF2F7");
+    if (th) th.setAttribute("content", "#F7F4EE");
   } catch (e) {}
 }
 function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial, onUpdateJob }) {
@@ -50043,17 +50364,18 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
   return (
     <div className="od-page">
       <style>{`
-        .od-page{min-height:100vh;background:#EEF2F7;color:${C.text};font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
+        .od-page{min-height:100vh;background:#F7F4EE;color:#292119;font-family:'DM Sans',sans-serif;padding:calc(12px + env(safe-area-inset-top,0px)) 12px calc(24px + env(safe-area-inset-bottom,0px))}
         .od-page-h{max-width:1400px;margin:0 auto 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-        .od-brand{display:inline-flex;align-items:center;gap:9px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:23px;letter-spacing:.04em;line-height:1;color:${C.text}}
-        .od-brand .mk{width:32px;height:32px;border-radius:10px;background:${OD_A};display:grid;place-items:center;flex:none;box-shadow:0 6px 14px -8px rgba(37,99,201,.7)}
-        .od-brand .sub{color:${C.dim}}
+        .od-brand{display:inline-flex;align-items:center;gap:12px;font-family:'Bebas Neue','DM Sans',sans-serif;font-size:26px;letter-spacing:.08em;line-height:1;color:#292119}
+        .od-brand .wm{display:flex;flex-direction:column;gap:4px}
+        .od-brand .mk{width:44px;height:44px;border-radius:11px;object-fit:cover;flex:none;box-shadow:0 8px 20px -12px rgba(41,33,25,.5)}
+        .od-brand .sub{font-family:'DM Sans',sans-serif;font-size:11px;letter-spacing:.18em;font-weight:700;color:#7E5730;text-transform:uppercase}
         .od-page-r{margin-left:auto;display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
-        .od-mode{display:inline-flex;background:${C.card};border:1px solid rgba(27,43,74,.12);border-radius:999px;padding:3px;gap:2px}
+        .od-mode{display:inline-flex;background:${C.card};border:1px solid rgba(41,33,25,.12);border-radius:999px;padding:3px;gap:2px}
         .od-mode button{border:0;border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:transparent;color:${C.dim}}
         .od-mode button[aria-pressed="true"]{background:${OD_A};color:#fff}
-        .od-app{color:${C.text};background:${C.card};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(27,43,74,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
-        .od-app:hover{border-color:rgba(37,99,201,.45)}
+        .od-app{color:${C.text};background:${C.card};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(41,33,25,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
+        .od-app:hover{border-color:rgba(142,99,54,.45)}
         .od-app .s{display:none}
         .od-page-h button:focus-visible,.od-page-h a:focus-visible{outline:2px solid ${OD_A};outline-offset:2px}
         .od-private{max-width:520px;margin:40px auto;background:${C.card};border:1px solid ${C.border};color:${C.text};border-radius:16px;padding:20px}
@@ -50063,8 +50385,8 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
       `}</style>
       <div className="od-page-h">
         <span className="od-brand">
-          <span className="mk"><Icon name="zap" size={16} color="#fff"/></span>
-          Homestead <span className="sub">Dashboard</span>
+          <img className="mk" src="/icon-192.png" alt="" onError={e => { e.currentTarget.style.display = "none"; }}/>
+          <span className="wm">Homestead Electric<span className="sub">Office dashboard</span></span>
         </span>
         <span className="od-page-r">
           {canCommercial && (
@@ -58606,10 +58928,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-23 · App SW version: v561
+**Last manifest update:** 2026-10-23 · App SW version: v562
 
 ---
 
+- **The office dashboard wears the Homestead brand** · 'shipped 2026-10-23' · 'SW v562' · 'DashPage' · 'OD_A' · Koy, after seeing the Goals tab built: *"wait i want the dashboard fully homestead branded"*, then chose Brand A from two mockups. Every tab of '/dashboard': the longhorn ('/icon-192.png') with **HOMESTEAD ELECTRIC** in the app's Bebas slab caps and *Office dashboard* under it in copper, a warm off-white page ('#F7F4EE', manifest and status-bar colour follow), warm brown-black ink, and the copper from the purchase-order form as the accent ('OD_A' '#8E6336': darkened from the form's '#A3733F' so it reads 5.3:1 on white as text and as a filled pill; '--o-ink' '#7E5730' for copper text) on the active tab, buttons, focus rings, hover tints and the heat cells. Tab headings use the slab caps. Data colours are unchanged (green / red / orange / blue to-do / purple), so a red line still means what it meant yesterday. **Why it won't lose data:** colours, one image and CSS only; no Firestore read or write, no function, rules or loader change.
+- **Goals tab on the office dashboard: the Team Goals sheet beside today's numbers, Simpro by Josh's rule** · 'shipped 2026-10-23' · 'SW v562' · 'OfficeDash' · 'odGoalsParse' · 'odGoalsModel' · 'OD_GOAL_LIVE' · 'goalsNightly' · 'sendTestGoalsPull' · 'functions/goalsPull.js' · Koy: *"add this to my dashboard, maybe a new goals section and help me track everything"*, then *"Simpro numbers are the source of truth in this case, so we need to make those match before we do anything."* An eighth tab, **Goals**, on '/dashboard' (admins, like the rest of the page). It reads Koy's copy of Josh's *Homestead Electric – Team Goals 2026–2027* sheet when the tab opens (CSV, no sign-in, the same read as Appliance Loads; sections found by their header cells, so an inserted row changes nothing; emojis stripped from measure names) and shows: the mission line; **2027 scoreboard** cards with *Sheet says / Simpro today or App today / 2027 goal*, a bar, a status pill and a **How it is counted** fold; **Rest of 2026** rows (AREA · GOAL · WHO · BY) with a status pill from a new sheet column **F STATUS** (Not started / On track / At risk / Done) plus the app's due flag from BY ("Due in 8 d", "Overdue"), each opening the sheet on its row; **2027 by quarter** with the next quarter marked; and a folded **Measured by the app, not on the sheet yet** list (first-pass inspections, change orders waiting 60+ days, quiet jobs, open questions, return trips, failed inspections not re-booked, plans waiting) — a sheet row that names one lights it up, so adding a goal is a sheet edit, never code. **The Simpro rule** (Josh's Builder Scorecard rule, adopted by Koy 2026-10-23): every customer invoice dated this year → its jobs → each job's Totals; a job counts when 100% invoiced with costs posted; **margin = Σ net profit ÷ Σ contract** (weighted, Simpro cost rates), **hours = Σ actual ÷ Σ estimated**, **per foreman by Simpro technician** (3+ counted jobs), **commercial share** of invoice dollars by Business Group (blank = residential), **days to collect** = average issue-to-paid over invoices paid this year beside the open book (owed, past due, over 60 days). On 10/23 that is 153 jobs, 11.2% and 136% (the sheet's 11.7 / 140 were the same rule on Oct 20). This is deliberately not the Scoreboard tab's rule (per-job average, completed this year, app foreman credit); the card's fold says so. **New function 'goalsNightly'** (5:40 AM Mountain, after 'scoreboardNightly') and **'sendTestGoalsPull'** (the tab's *Pull from Simpro now*, admins, asks first) read Simpro only (~250 calls) and write ONE doc 'settings/goalsSimpro' '{generated_at, year, jobs:[slim], measures, invoices, counts}'; the math is the pure 'functions/goalsPull.js', repeated by 'odGoalsMeasures' in the dashboard so the two are checked against each other. Guards: refuses to overwrite when fewer than 90% of listed jobs come back or the doc would pass ~900 KB. Right rail says where each number comes from and turns the Simpro line red when the last pull is older than 2 days. Not tracked yet (next phase, needs per-job cost-center and vendor-order reads): warranty hours, change-order hours in their own cost center, Home Depot / ACE runs, jobs with hours tracked weekly. Tests: 'scripts/goals-pull-test.js' (counting rule, slim row, days to paid incl. bad dates, open book, measures) and 'scripts/goals-model-test.js' (sheet parse incl. an inserted row, due flags, status, Simpro cards with and without the doc, extras), both in 'prebuild'. Guide 'dashboard.html' updated. Spec 'docs/superpowers/specs/2026-10-23-goals-tab-design.md'. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull' then hosting. **Why it won't lose data:** read-only everywhere but one new 'settings/goalsSimpro' doc written by the function (existing 'settings/{docId}' read rule; no rules change); the tab reads a public CSV and two settings docs with getDoc; no job write, no loader change, nothing written to the sheet, nothing written to Simpro; the Automations branch only gained an explicit 'tab === "cc"' check (it was the chain's 'else').
 - **Home Runs: send the list by panel — PDF, CSV or text** · 'shipped 2026-10-23' · 'SW v561' · 'HomeRunsExportBar' · 'homeRunsPanelRows' · Gary asked Koy for "the list of home runs in each panel at Ashcraft", and the only export was the breaker panel schedule, which is rarely made until finish. The Home Runs tab now has a **SEND LIST** bar under By Panel / By Floor (shows in both views, hidden when the job has no home runs): a picker (**All panels** or one panel, with run counts) and three buttons. **PDF** downloads a branded Homestead "Home Run Schedule": charcoal header band with the white longhorn logo ('/hs-logo-white.png'), job name and address, a stats strip (panels · home runs · date), then one section per panel (# per panel, load + note, floor, wire chip in the app's sheathing colors, breaker). **Customer-facing (Koy): no pulled / open / need-specs status on any of the three exports**, through the existing paged saver with a panel section kept on one page when it fits (26 runs or fewer) and rows never split; **CSV** downloads the same rows (Panel, #, Load, Floor, Wire, Breaker, Note, UTF-8 BOM for Excel); **Share** opens the phone's share sheet with a plain-text list headed HOMESTEAD ELECTRIC (one line per run, e.g. '3. Dryer — 10/3 (30A · 240V) · Upper Level') and on a computer copies it to the clipboard. Order matches the By Panel view: panel-dropdown order, floor (main → basement → upper → extras), load A–Z; rows with no panel group under "No Panel Assigned", listed last on the exports; blank seeded rows are skipped. Breaker is read from the wire gauge ('wireAmpsVolts', so a 240V 12/2 reads 20A · 240V). Pure builders tested in 'scripts/needs-dryrun.js'. Guide 'homeruns.html' updated. **Why it won't lose data:** read-only — the bar only reads 'homeRuns' already on screen and writes nothing to Firestore; no new field, no loader, rules or function change; the picker choice lives in component state only.
 - **Friday card opens the TEST doc right after Run now** · 'shipped 2026-10-22' · 'SW v560' · 'OD_DOCS' · 'testDocs' · Koy ran the Friday Strategy prep from Dashboard › Automations, tapped the card and got last Friday's real doc ("the date at the top says the 19th through 23rd"), because the card skips TEST copies. Now, when Run now on the **Friday Strategy prep** card succeeds, the app keeps the TEST doc link the callable already returns ('sendTestStrategyPrep' → 'docLink') and the card shows **Latest: TEST run · <day> <time>** and opens it. It stays that way until a newer real doc exists (Friday's 6:00 AM run), then the card goes back to the newest real doc on its own. Kept per device in localStorage ('he_od_testDocs'); clearing it just falls back to the real doc. Wednesday's Run now is unchanged (it writes into the running notes doc). Guide 'dashboard.html' updated. **Why it won't lose data:** front end only — it reads the callable's existing answer and stores one link in this browser; no Firestore read or write, no function, rules or loader change.
 - **Punch check-offs can't be un-done by someone else's stale phone** · 'shipped 2026-10-22' · 'SW v560' (built as v559, shipped in the same push as the Friday-card fix) · Koy: "I feel like we've had to fix this problem several times." Same day as v558, the server history for Miller #1788319922110 showed exactly how: at 15:32:34Z Keegan's phone saved its whole punch list 46 s after a 'merged:true' save and un-ticked Austin's "Cut in floor outlets" (ticked 14:51Z) — the phone's merge baseline had moved to the merged server copy while its screen copy had not, so the next save took the "server == baseline → client verbatim" path with a stale tree. Ninth incident in this family since July (Cougar Moon, Kweller ×3, Home Runs refresh, Miller ×3). What changed: every flip of a punch item's 'done' now ALSO writes its own slot 'data.punchTicks.<itemId>' = '{done, by, at, ts}' as a dotted-path write (never the whole map), from all three writers (JobDetail 'u()', the My Day Done button 'togglePunchItemDone', the return-trip sign-off cascade 'handleSignOffRT'); the slots are laid over the trees (and linked return-trip entries) on every read — 'normalizeJob' for everything in the app, and the Cloud Functions readers ('strategyPrep', 'gcPortal', 'fridayPacket', the punch-assignment push in 'index.js'); same item on two phones = latest tap wins; 'punchTicks' joins the per-field 'versions' snapshots. Files: 'src/punchTicks.js' (pure, copied byte-for-byte to 'functions/punchTicks.js' by 'scripts/punch-ticks-sync.js', which blocks the build if they drift), 'scripts/punch-ticks-test.js' (37 checks incl. the Miller 15:32 replay through the real merge code, writer tripwires, functions readers). Adversarial review (fresh Fable pass, 5 attacks replayed through the real code) found and fixed two more before ship: a re-check reusing a stale 'checkedAtTs' lost to its own un-tick slot (slot 'ts' is now this flip's), and a return-trip entry whose origin item was deleted stayed pinned to an orphan slot (orphans are no longer overlaid); the public punch share page now overlays too. Mixed-version window: a phone still on v558 flips only through the tree — its tick newer than a slot still wins, its un-tick of a slot-backed item comes back on its own screen until it refreshes (hours, not days); Koy raises Require v560 in Settings → Devices → App Versions the next morning. Deploy = hosting + functions in the same sitting. **Why it won't lose data:** the whole-tree write still happens unchanged, so every reader that ignores slots still converges; each slot is a dotted-path write to its own key, so no phone ever sends a copy of the map back and two phones ticking different items cannot collide; the offline queue, 'he_pending_patches' mirror, replay and build stamp carry slots exactly like any other pending key; the overlay is read-only, idempotent and returns jobs without slots unchanged, so removing it returns the app to today's behavior; nothing in Firestore is migrated or deleted and 'firestore.rules' is untouched (the jobs rule only requires the 'data' map and 'updated_at' string, both kept by a dotted update; proven on the emulator).

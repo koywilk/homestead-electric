@@ -8292,3 +8292,79 @@ exports.sendTestScoreboardPull = functions
     try { return await runScoreboardPull({ reason: "manual" }); }
     catch (e) { functions.logger.error("[scoreboard] manual pull failed", { error: e.message }); return { ok: false, error: e.message }; }
   });
+
+// ─────────────────────────────────────────────────────────────
+// GOALS — nightly Simpro pull for the Dashboard › Goals tab (SW v562, 2026-10-23)
+// Josh's Builder Scorecard rule, adopted by Koy as the Goals tab's Simpro truth:
+// every customer invoice dated this calendar year → its jobs → each job's Totals.
+// Writes ONE slim doc, settings/goalsSimpro:
+//   { generated_at, year, reason, jobs:[slim], measures, invoices, counts, seconds }
+// Read-only against Simpro (about 250 calls). The math lives in functions/goalsPull.js
+// (tested by scripts/goals-pull-test.js); the dashboard repeats it on the slim rows.
+// ─────────────────────────────────────────────────────────────
+const _goals = require("./goalsPull");
+const GOALS_DOC = "goalsSimpro";
+async function goalsListInvoices(year) {
+  const cols = "ID,DateIssued,IsPaid,DatePaid,DueDate,Total,Jobs,Customer,IsCredit";
+  const out = [];
+  for (let page = 1; page <= 40; page++) {
+    const r = await simproReqWithRetry("GET", `/customerInvoices/?pageSize=250&page=${page}&columns=${cols}&DateIssued=between(${year}-01-01,${year}-12-31)`);
+    if (!r.ok || !Array.isArray(r.data)) throw new Error(`[goals] invoice list failed on page ${page} (${r.status})`);
+    out.push(...r.data);
+    if (r.data.length < 250) break;
+  }
+  // The filter is server-side, but keep the year check: a Simpro that ignores it must not count last year.
+  return out.filter(i => i && String(i.DateIssued || "").startsWith(`${year}-`));
+}
+async function goalsFetchJobs(ids, concurrency) {
+  const rows = []; let i = 0, failed = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (i < ids.length) {
+      const id = ids[i++];
+      const r = await simproReqWithRetry("GET", `/jobs/${id}`);
+      if (r.ok && r.data && r.data.ID != null) rows.push(_goals.slimJob(r.data));
+      else { failed++; functions.logger.warn("[goals] job failed", { id, status: r.status }); }
+    }
+  }));
+  return { rows, failed };
+}
+async function runGoalsPull({ reason = "nightly" } = {}) {
+  const startedAt = Date.now();
+  const now = new Date();
+  const todayYmd = new Date(now.toLocaleString("en-US", { timeZone: TZ })).toISOString().slice(0, 10);
+  const year = Number(todayYmd.slice(0, 4));
+  const invoices = await goalsListInvoices(year);
+  const ids = _goals.distinctJobIds(invoices);
+  const jobs = await goalsFetchJobs(ids, 6);
+  // Refuse to overwrite a good doc with a half-empty one (Simpro hiccup, rate limiting).
+  if (ids.length && jobs.rows.length < ids.length * 0.9) {
+    throw new Error(`[goals] only ${jobs.rows.length} of ${ids.length} jobs came back — keeping the previous doc`);
+  }
+  const divOf = {}; jobs.rows.forEach(j => { divOf[j.id] = j.division || ""; });
+  const payload = {
+    generated_at: now.toISOString(), year, reason,
+    jobs: jobs.rows,
+    measures: _goals.measures(jobs.rows),
+    invoices: _goals.invoiceStats(invoices, todayYmd, (id) => divOf[id] || ""),
+    counts: { invoices: invoices.length, jobs: jobs.rows.length, jobsFailed: jobs.failed, listedJobs: ids.length, counted: jobs.rows.filter(j => j.counts).length },
+    seconds: Math.round((Date.now() - startedAt) / 1000),
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(payload));
+  if (bytes > 900000) throw new Error(`[goals] doc would be ${bytes} bytes — over the document limit, not written`);
+  await db.collection("settings").doc(GOALS_DOC).set(payload);
+  functions.logger.info("[goals] doc written", { ...payload.counts, bytes, seconds: payload.seconds, reason, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct });
+  return { ok: true, ...payload.counts, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct, bytes, seconds: payload.seconds, generated_at: payload.generated_at };
+}
+// 5:40 AM Mountain, every day — after scoreboardNightly (5:20), before anyone opens the tab.
+exports.goalsNightly = functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .pubsub.schedule("40 5 * * *").timeZone(TZ)
+  .onRun(async () => { try { return await runGoalsPull({ reason: "nightly" }); } catch (e) { functions.logger.error("[goals] nightly failed", { error: e.message }); return null; } });
+// "Pull from Simpro now" on the Goals tab (admins; same app-key guard as every other callable).
+exports.sendTestGoalsPull = functions
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    try { return await runGoalsPull({ reason: "manual" }); }
+    catch (e) { functions.logger.error("[goals] manual pull failed", { error: e.message }); return { ok: false, error: e.message }; }
+  });
