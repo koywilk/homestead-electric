@@ -7,7 +7,8 @@ const admin      = require("firebase-admin");
 admin.initializeApp();
 
 const db        = admin.firestore();
-const gcPortal  = require("./gcPortal.js"); // GC portal projection wall (08-Specs/GC Portal Link Spec.md)
+const gcPortal  = require("./gcPortal.js");
+const { applyPunchTicks } = require("./punchTicks.js");   // v559: punch check-off slots overlaid before reading `done` // GC portal projection wall (08-Specs/GC Portal Link Spec.md)
 const gcNotify  = require("./gcNotify.js"); // GC portal email composition (Piece 5, same spec)
 const messaging = admin.messaging();
 
@@ -1480,6 +1481,7 @@ exports.onJobUpdate = functions.firestore
     // Gated per-user on the punch_assigned notification pref (opt-out).
     {
       const flatPunch = (j) => {
+        j = applyPunchTicks(j);   // v559
         const out = [];
         ["roughPunch", "finishPunch", "qcPunch"].forEach(pk => {
           const ph = j[pk]; if (!ph) return;
@@ -1611,7 +1613,7 @@ exports.onJobUpdate = functions.firestore
     // forget via tasks: a snapshot failure can't affect the notifications.
     // Pruned to the newest 25 per job so storage is bounded with no TTL policy.
     try {
-      const WATCH = ["roughQuestions","finishQuestions","roughPunch","finishPunch","qcPunch","changeOrders","designerQuestions"];
+      const WATCH = ["roughQuestions","finishQuestions","roughPunch","finishPunch","qcPunch","changeOrders","designerQuestions","punchTicks"];
       const prev = {};
       for (const f of WATCH) {
         if (before[f] !== undefined && JSON.stringify(before[f]) !== JSON.stringify(after[f])) prev[f] = before[f];

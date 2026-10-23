@@ -83,6 +83,7 @@ function session({ tabId, version, gate, local, sess, pending = {}, txMode = "ok
     TAB_ID: tabId,
     PL_INTENT_KEY: "_plIntent",
     plMergeIntents: (a, b) => b,
+    ...require("../src/punchTicks.js"),   // v559: saveJob/_mergePatchAgainstServer fold punch check-off slots
     pendingPatches: { current: pending },
     saveTimers: { current: {} },
     serverBaselines: { current: {} },

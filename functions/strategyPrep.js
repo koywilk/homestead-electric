@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────
 "use strict";
 const { docsRequests } = require("./foremanMeetingPrep.js");
+const { applyPunchTicks } = require("./punchTicks.js");   // v559: punch check-off slots overlaid before reading `done`
 
 const TZ = "America/Denver";
 const NOTES_READ_HINT = "Couldn't read Josh's notes doc. Share it (Viewer) with homestead-electric@appspot.gserviceaccount.com to get carry-forward.";
@@ -109,8 +110,8 @@ function walkPunch(punch, cb) {
   floors.forEach(fk => { const f = punch[fk]; if (!f || typeof f !== "object") return;
     arr(f.general).forEach(i => i && cb(i)); arr(f.hotcheck).forEach(i => i && cb(i)); arr(f.rooms).forEach(r => arr(r && r.items).forEach(i => i && cb(i))); });
 }
-function openPunchCount(j) { let n = 0; ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(j[k], i => { if (!i.done && !i.voided) n++; })); return n; }
-function waitingItems(j) { const out = []; ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(j[k], i => { if (!i.done && !i.voided && i.waiting) out.push({ text: stripHtml(i.text), waitingOn: String(i.waitingOn || "").trim(), since: toDateAny(i.waitingSince || i.addedAtTs || i.addedAt) }); })); return out; }
+function openPunchCount(j) { let n = 0; const jt = applyPunchTicks(j); ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(jt[k], i => { if (!i.done && !i.voided) n++; })); return n; }
+function waitingItems(j) { const out = []; const jt = applyPunchTicks(j); ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(jt[k], i => { if (!i.done && !i.voided && i.waiting) out.push({ text: stripHtml(i.text), waitingOn: String(i.waitingOn || "").trim(), since: toDateAny(i.waitingSince || i.addedAtTs || i.addedAt) }); })); return out; }
 function openQuestions(j) {
   const out = [];
   ["roughQuestions", "finishQuestions"].forEach(k => { const qs = j[k]; if (!qs || typeof qs !== "object") return;
@@ -605,7 +606,7 @@ function lastWeekRows({ jobs, live, users, prevState, blocked, today }) {
     ["roughInspectionAttempts", "finalInspectionAttempts"].forEach(k => arr(j[k]).forEach(a => { if (a && inWin(a.date)) { if (a.result === "fail") inspFailed++; else if (a.result) inspPassed++; } }));
     arr(j.changeOrders).forEach(co => { if (!co) return; if (inWin(co.createdAt)) cosCreated++; const sd = co.coStatusSyncedAt || co.coStatusDate; if (inWin(sd) && String(co.coStatus).toLowerCase() === "approved") cosApproved++; if (inWin(sd) && String(co.coStatus).toLowerCase() === "converted") cosConverted++; });
     arr(j.returnTrips).forEach(rt => { if (rt && inWin(rt.createdAt || rt.date)) rtCreated++; });
-    ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(j[k], i => { if (i.done && !i.voided && inWin(i.checkedAtTs || i.checkedAt)) punchClosed++; }));
+    ["roughPunch", "finishPunch", "qcPunch"].forEach(k => walkPunch(applyPunchTicks(j)[k], i => { if (i.done && !i.voided && inWin(i.checkedAtTs || i.checkedAt)) punchClosed++; }));
     ["roughQuestions", "finishQuestions"].forEach(k => { const qs = j[k]; if (!qs || typeof qs !== "object") return; Object.values(qs).forEach(l => arr(l).forEach(q => { if (!q) return; if (inWin(q.addedAt)) qAsked++; if (inWin(q.answeredAt)) qAnswered++; })); });
   });
   const weeks = arr(prevState && prevState.weeks);

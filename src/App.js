@@ -9,6 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
+import PunchTicks from "./punchTicks";
 import { syncPostHogIdentity, trackDash, heTrack } from "./posthog";
 import { readableInk } from "./a11y";
 import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
@@ -25,6 +26,9 @@ const safeProps = SafeHtml.sanitizeProps;  // same, pre-shaped for the render pr
 const escapeHtml = SafeHtml.escapeHtml;    // plain text -> literal, for write paths
 const safeUrl = SafeHtml.safeUrl;          // untrusted URL -> navigable or ""
 const safeImageSrc = SafeHtml.safeImageSrc;// same, but allows blob:/data:image
+// Punch check-off slots (v559): each flip of `done` is its own dotted-path
+// write `data.punchTicks.<itemId>`, overlaid on every read. See src/punchTicks.js.
+const { isTickKey, tickIdOf, slotWins, mergeTickMaps, punchTickPatches, applyPunchTicks, foldTickPatches } = PunchTicks;
 // Open a stored URL only if it is actually navigable. React does NOT block
 // javascript: URLs, and photo/attachment records live in anonymously-writable
 // collections — so an unsafe value must simply do nothing, not open a tab.
@@ -29890,7 +29894,7 @@ function getAllActiveNotes(notes) {
   return list.filter(n => n && !n.deleted && !n.archived);
 }
 
-const normalizeJob = (raw) => ({
+const _normalizeJobShape = (raw) => ({
   changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
   roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[], commMaterials:[],
   homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
@@ -29949,6 +29953,11 @@ const normalizeJob = (raw) => ({
     baseline: raw?.panelizedLighting?.baseline || null,
   },
 });
+// v559: lay the punch check-off slots over the trees (and linked return-trip
+// entries) BEFORE anything reads `done`. Every in-app reader passes through
+// here: the jobs listener (via migrate), the hejobs_backup seed, JobDetail
+// adoption, refreshJob, and the base/server copies inside the merge.
+const normalizeJob = (raw) => applyPunchTicks(_normalizeJobShape(raw));
 
 
 // ── Temp Ped Detail ────────────────────────────────────────────
@@ -30858,7 +30867,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       patchForJob = { ...finalPatch, panelizedLighting: nextPl };
       finalPatch = intent ? { ...patchForJob, [PL_INTENT_KEY]: intent } : patchForJob;
     }
-    const updated = {...jobRef.current, ...patchForJob};
+    // Punch check-off slots (v559): for every item whose `done` this patch
+    // flips, add its own `punchTicks.<id>` slot to the patch (it rides to
+    // saveJob as a dotted-path write, never onto the job object) and fold the
+    // slot into the local copy so the screen and the overlay agree.
+    let tickPatch = {};
+    if (finalPatch) {
+      const who = (getIdentity && getIdentity()?.name) || identity?.name || "";
+      const nowIso = new Date().toISOString();
+      ["roughPunch", "finishPunch", "qcPunch"].forEach(key => {
+        if (!Object.prototype.hasOwnProperty.call(finalPatch, key)) return;
+        tickPatch = { ...tickPatch, ...punchTickPatches(jobRef.current?.[key], finalPatch[key], who, nowIso) };
+      });
+      if (Object.keys(tickPatch).length) finalPatch = { ...finalPatch, ...tickPatch };
+    }
+    const updated = foldTickPatches({...jobRef.current, ...patchForJob}, tickPatch);
     jobRef.current = updated;
     setJob(updated);
     onUpdate(updated, finalPatch);
@@ -30907,6 +30930,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         done: !!doneVal,
         checkedBy: doneVal ? (checkedBy||it.checkedBy||"") : "",
         checkedAt: doneVal ? (checkedAt||it.checkedAt||"") : "",
+        checkedAtTs: doneVal ? new Date().toISOString() : "",   // v559: a real stamp both ways, so the slot's ts is this flip's
         waiting: doneVal ? false : it.waiting,
       };
     };
@@ -39938,6 +39962,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
     if (nextRough !== job.roughPunch) patch.roughPunch = nextRough;
     if (nextFinish !== job.finishPunch) patch.finishPunch = nextFinish;
 
+    Object.assign(patch, punchTickPatches(job.roughPunch, nextRough, who, todayTs), punchTickPatches(job.finishPunch, nextFinish, who, todayTs));   // v559 slots for the cascade
     onUpdateJob(jobId, patch);
   };
 
@@ -48301,6 +48326,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [jobsQ, setJobsQ] = useState("");
   const [planShow, setPlanShow] = useState("all");
   const [runBusy, setRunBusy] = useState("");          // automated doc being run now (v542)
+  // v560: the TEST doc a Run now just made, per card ({ url, at }), so the card opens it until a newer
+  // real doc lands. Per-device convenience only (localStorage); losing it just falls back to the real doc.
+  const [testDocs, setTestDocs] = useState(() => { try { return JSON.parse(localStorage.getItem("he_od_testDocs") || "{}") || {}; } catch (e) { return {}; } });
   const [planBusy, setPlanBusy] = useState(false);     // "Not ours" in flight (v542)
   const [showAllDevices, setShowAllDevices] = useState(false);
   const [tick, setTick] = useState(0);
@@ -49196,7 +49224,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const runNow = async (k) => {
       if (!window.confirm(RUN_ASK[k])) return;
       setRunBusy(k);
-      try { const r = await httpsCallable(functions, RUN_FN[k], { timeout: 540000 })({}); const ok = !(r && r.data && r.data.ok === false); (ok ? toast.success : toast.error)(ok ? "Done — the doc is in Drive" : `It ran but failed: ${(r.data && r.data.error) || "error"}`); setDocsTick(t => t + 1); }
+      try {
+        const r = await httpsCallable(functions, RUN_FN[k], { timeout: 540000 })({}); const ok = !(r && r.data && r.data.ok === false);
+        // v560: remember the Friday TEST doc so the card opens it (the Wednesday run writes into the running notes doc instead).
+        const link = ok && k === "friday" && r && r.data && safeUrl(r.data.docLink || "");
+        if (link) setTestDocs(prev => { const next = { ...prev, [k]: { url: link, at: new Date().toISOString() } }; try { localStorage.setItem("he_od_testDocs", JSON.stringify(next)); } catch (e) {} return next; });
+        (ok ? toast.success : toast.error)(ok ? (link ? "Done — tap the card to open the TEST doc" : "Done — the doc is in Drive") : `It ran but failed: ${(r.data && r.data.error) || "error"}`); setDocsTick(t => t + 1);
+      }
       catch (e) { toast.error(`Couldn't run it: ${(e && e.message) || e}`); }
       finally { setRunBusy(""); }
     };
@@ -49211,11 +49245,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-white od-pad">
         <div className="od-ct">Automated docs<small>tap to open in Google Drive{latestDocs && latestDocs._failed ? " · the newest-doc lookup failed" : ""}</small><div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setDocsTick(t => t + 1)}>Check again</button></div></div>
         <div className="od-docs">
-          {OD_DOCS.filter(x => !x.koyOnly || isKoy).map(x => { const st = docStat(x), lt = st.doc; return (
+          {OD_DOCS.filter(x => !x.koyOnly || isKoy).map(x => { const st = docStat(x), lt = st.doc;
+            // v560: a TEST doc from Run now wins until a newer real doc exists (Friday's 6 AM run takes over).
+            const td = testDocs[x.k], tdAt = td && safeUrl(td.url || "") && odDate(td.at), ltAt = lt && odDate(lt.createdTime);
+            const useTd = !!(tdAt && (!ltAt || tdAt > ltAt));
+            return (
             <div className="od-doc" key={x.k}>
-              <a className="go" href={lt ? lt.url : x.url} target="_blank" rel="noopener noreferrer">
-                <span className="k"><Icon name={lt ? "fileText" : x.folder ? "folderOpen" : x.sheet ? "dollarSign" : "fileText"} size={16}/></span>
-                <span className="m"><b>{x.title}</b><small>{lt ? `Latest: ${lt.name}` : x.what}</small>{st.text ? <small className={"st " + (st.tone || "")}>{st.text}</small> : null}<small className="w">{x.when} · {x.by}</small></span>
+              <a className="go" href={useTd ? safeUrl(td.url) : lt ? lt.url : x.url} target="_blank" rel="noopener noreferrer">
+                <span className="k"><Icon name={useTd || lt ? "fileText" : x.folder ? "folderOpen" : x.sheet ? "dollarSign" : "fileText"} size={16}/></span>
+                <span className="m"><b>{x.title}</b><small>{useTd ? `Latest: TEST run · ${odDow(tdAt)} ${odTime(tdAt)}` : lt ? `Latest: ${lt.name}` : x.what}</small>{st.text ? <small className={"st " + (st.tone || "")}>{st.text}</small> : null}<small className="w">{x.when} · {x.by}</small></span>
               </a>
               {RUN_FN[x.k] ? <button type="button" className="od-mini-btn run" disabled={!!runBusy} onClick={() => runNow(x.k)}>{runBusy === x.k ? "Running…" : "Run now"}</button>
                 : lt ? <a className="fold" href={x.url} target="_blank" rel="noopener noreferrer" title="Open the folder" aria-label={`Open the ${x.title} folder`}><Icon name="folderOpen" size={14}/></a> : <span className="fold"><Icon name="external" size={13}/></span>}
@@ -57253,7 +57291,7 @@ function PunchSharePage({ jobId, stage }) {
       const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
       if(st==='loading'){ setWeak(true); return; }
       if(st==='missing'){ setError('This punch list is not available.'); setLoading(false); return; }
-      setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
+      setError(null); setJob(applyPunchTicks(snap.data()?.data)); setCached(!!snap.metadata.fromCache);   // v559: slots over the stored tree
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
@@ -57700,7 +57738,7 @@ function QuestionsSharePage({ jobId }) {
       const st = shareDocState(snap); // weak signal ≠ "not available" — see shareDocState
       if(st==='loading'){ setWeak(true); return; }
       if(st==='missing'){ setError('This questions form is not available.'); setLoading(false); return; }
-      setError(null); setJob(snap.data()?.data); setCached(!!snap.metadata.fromCache);
+      setError(null); setJob(applyPunchTicks(snap.data()?.data)); setCached(!!snap.metadata.fromCache);   // v559: slots over the stored tree
       setLoading(false);
     }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
     return () => unsub();
@@ -58381,10 +58419,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-22 · App SW version: v558
+**Last manifest update:** 2026-10-22 · App SW version: v560
 
 ---
 
+- **Friday card opens the TEST doc right after Run now** · 'shipped 2026-10-22' · 'SW v560' · 'OD_DOCS' · 'testDocs' · Koy ran the Friday Strategy prep from Dashboard › Automations, tapped the card and got last Friday's real doc ("the date at the top says the 19th through 23rd"), because the card skips TEST copies. Now, when Run now on the **Friday Strategy prep** card succeeds, the app keeps the TEST doc link the callable already returns ('sendTestStrategyPrep' → 'docLink') and the card shows **Latest: TEST run · <day> <time>** and opens it. It stays that way until a newer real doc exists (Friday's 6:00 AM run), then the card goes back to the newest real doc on its own. Kept per device in localStorage ('he_od_testDocs'); clearing it just falls back to the real doc. Wednesday's Run now is unchanged (it writes into the running notes doc). Guide 'dashboard.html' updated. **Why it won't lose data:** front end only — it reads the callable's existing answer and stores one link in this browser; no Firestore read or write, no function, rules or loader change.
+- **Punch check-offs can't be un-done by someone else's stale phone** · 'shipped 2026-10-22' · 'SW v560' (built as v559, shipped in the same push as the Friday-card fix) · Koy: "I feel like we've had to fix this problem several times." Same day as v558, the server history for Miller #1788319922110 showed exactly how: at 15:32:34Z Keegan's phone saved its whole punch list 46 s after a 'merged:true' save and un-ticked Austin's "Cut in floor outlets" (ticked 14:51Z) — the phone's merge baseline had moved to the merged server copy while its screen copy had not, so the next save took the "server == baseline → client verbatim" path with a stale tree. Ninth incident in this family since July (Cougar Moon, Kweller ×3, Home Runs refresh, Miller ×3). What changed: every flip of a punch item's 'done' now ALSO writes its own slot 'data.punchTicks.<itemId>' = '{done, by, at, ts}' as a dotted-path write (never the whole map), from all three writers (JobDetail 'u()', the My Day Done button 'togglePunchItemDone', the return-trip sign-off cascade 'handleSignOffRT'); the slots are laid over the trees (and linked return-trip entries) on every read — 'normalizeJob' for everything in the app, and the Cloud Functions readers ('strategyPrep', 'gcPortal', 'fridayPacket', the punch-assignment push in 'index.js'); same item on two phones = latest tap wins; 'punchTicks' joins the per-field 'versions' snapshots. Files: 'src/punchTicks.js' (pure, copied byte-for-byte to 'functions/punchTicks.js' by 'scripts/punch-ticks-sync.js', which blocks the build if they drift), 'scripts/punch-ticks-test.js' (37 checks incl. the Miller 15:32 replay through the real merge code, writer tripwires, functions readers). Adversarial review (fresh Fable pass, 5 attacks replayed through the real code) found and fixed two more before ship: a re-check reusing a stale 'checkedAtTs' lost to its own un-tick slot (slot 'ts' is now this flip's), and a return-trip entry whose origin item was deleted stayed pinned to an orphan slot (orphans are no longer overlaid); the public punch share page now overlays too. Mixed-version window: a phone still on v558 flips only through the tree — its tick newer than a slot still wins, its un-tick of a slot-backed item comes back on its own screen until it refreshes (hours, not days); Koy raises Require v560 in Settings → Devices → App Versions the next morning. Deploy = hosting + functions in the same sitting. **Why it won't lose data:** the whole-tree write still happens unchanged, so every reader that ignores slots still converges; each slot is a dotted-path write to its own key, so no phone ever sends a copy of the map back and two phones ticking different items cannot collide; the offline queue, 'he_pending_patches' mirror, replay and build stamp carry slots exactly like any other pending key; the overlay is read-only, idempotent and returns jobs without slots unchanged, so removing it returns the app to today's behavior; nothing in Firestore is migrated or deleted and 'firestore.rules' is untouched (the jobs rule only requires the 'data' map and 'updated_at' string, both kept by a dotted update; proven on the emulator).
 - **Phone notes box stops fighting itself** · 'shipped 2026-10-22' · 'SW v558' · Keegan: typing in Rough Notes on his phone, "when I stop typing part of what I typed disappears." Every rich-text box on a phone (Rough/Finish Notes, Scope, Material, Notes, return-trip scope/task/material, PO items, Q&A answers, load-mapping notes) opens the same bottom sheet, which live-saves the text 400 ms after each change. That timer was also re-armed whenever the parent re-rendered — and the live-save itself re-renders the parent — so the first pause started a loop: a phantom save every ~0.4 s with unchanged text for as long as the sheet stayed open, each one re-rendering the whole app, rewriting the multi-MB 'hejobs_backup' copy in localStorage and re-arming saveJob's 500 ms debounce, so the real Firestore write never went out while the box was open (reproduced with the real components: 9 saves and 0 writes in a 4 s pause; the one write that escaped the loop carried the text from BEFORE the typing) and the phone's main thread was pegged, which is what eats keystrokes and autocorrect on iOS. Now the sheet re-arms the timer only when the text changes and skips a tick whose text it already sent (opening a box sends nothing; a restored crash draft still saves once). Gate: 'scripts/livesave-loop-test.js' (real RichEditor / RichMobileSheet / TA in jsdom under the app's save timing). **Why it won't lose data:** the sheet's own text is untouched (local state, committed on Done and on app-switch exactly as before); the only change is that unchanged text is no longer re-sent, so every save that goes out now carries text the user actually typed, and the server write that used to be starved while the box was open now lands after each pause; no field, loader, rules or merge change.
 - **Wallbox totals render after import** · 'shipped 2026-10-20' · 'SW v557' · Live Rose import exposed a v556 render crash: the new order tiles referenced 'React.Fragment', but this module imports 'Fragment' directly. Uses the existing imported binding. Import had already saved all 54 rows correctly (21 Loads + 33 Wallbox Devices); no reimport is needed. The regression now renders with actual module imports and the production automatic JSX runtime so a fixture cannot mask missing bindings. **Why it won't lose data:** render-only correction; no data write, delete, migration, assignment or permission change.
 
@@ -69747,6 +69787,14 @@ function App() {
     const nServer = normalizeJob(serverData || {});
     const writePatch = {};
     Object.entries(cleanPatch).forEach(([k, v]) => {
+      if (isTickKey(k)) {                                   // v559: one punch check-off — latest tap wins, never baseline-merged, never "merged"
+        if (slotWins(nServer.punchTicks && nServer.punchTicks[tickIdOf(k)], v)) writePatch["data." + k] = v;
+        return;
+      }
+      if (k === "punchTicks") {                             // legacy no-patch full save only: per-id union inside the transaction
+        writePatch["data.punchTicks"] = mergeTickMaps(nServer.punchTicks, v);
+        return;
+      }
       let out = v;
       const sv = nServer[k];
       // Stale-copy tripwire for the whole-object panelizedLighting write (see
@@ -69844,6 +69892,7 @@ function App() {
     const _b = serverBaselines.current[jobId] ? { ...serverBaselines.current[jobId] } : {};
     Object.keys(writtenPatch).forEach(pk => {
       if (pk.indexOf("data.") !== 0) return;
+      if (isTickKey(pk.slice(5))) return;   // v559: slots never enter the baseline
       const f = pk.slice(5);
       _b[f] = rescued.includes(f) ? sentPatch[f] : writtenPatch[pk];
     });
@@ -69856,6 +69905,7 @@ function App() {
   const saveJob = (job, patch) => {
 
     if(initialLoad.current) return;
+    job = foldTickPatches(job, patch);   // v559: never let a literal "punchTicks.<id>" key reach hejobs_backup or a whole-doc create
 
     isDirty.current = true;
 
@@ -70011,10 +70061,10 @@ function App() {
           // baseline (Kweller rule) and converges the same way after.
           if (_rescued.length && _writtenPatch && !saveTimers.current[job.id] &&
               !(pendingPatches.current[job.id] && Object.keys(pendingPatches.current[job.id]).length > 0)) {
-            const fields = {};
-            Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") === 0) fields[pk.slice(5)] = _writtenPatch[pk]; });
+            const fields = {}, tickWritten = {};
+            Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") !== 0) return; const f = pk.slice(5); if (isTickKey(f)) tickWritten[f] = _writtenPatch[pk]; else fields[f] = _writtenPatch[pk]; });
             const stamp = { updated_at: _writtenPatch.updated_at, _tab: TAB_ID, _merged: true, _saved_by: meta.saved_by, _device: meta.device };
-            const apply = (x) => ({ ...x, ...fields, ...stamp });
+            const apply = (x) => foldTickPatches({ ...x, ...fields, ...stamp }, tickWritten);
             setAllJobs(js => js.map(x => x.id === job.id ? apply(x) : x));
             setSelected(s => (s && s.id === job.id) ? apply(s) : s);
             _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, []);   // local now holds the merged content, so the baseline may too
@@ -70929,6 +70979,7 @@ function App() {
   // ms after the user clicks out. Only patch `selected` when it's actually
   // pointing at this job (i.e. modal is open on this job).
   const updateJob = (updated, patch) => {
+    updated = foldTickPatches(updated, patch);   // v559: `{...job, ...patch}` callers spread slot keys; fold them into punchTicks
     setAllJobs(js => js.map(j => j.id === updated.id ? updated : j));
     setSelected(s => (s && s.id === updated.id) ? updated : s);
     saveJob(updated, patch);
@@ -71386,6 +71437,7 @@ function App() {
       });
       if(anyRTChanged) patch.returnTrips = newTrips;
     }
+    Object.assign(patch, punchTickPatches(punch, newPunch, who, whenTs));   // v559: the flip as its own slot
     updateJob({ ...job, ...patch }, patch);
     return true;
   };

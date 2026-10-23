@@ -14,6 +14,7 @@
 //     (scripts/gcportal-test.js) and shared by publisher + backfill.
 
 "use strict";
+const { applyPunchTicks } = require("./punchTicks.js");   // v559: punch check-off slots overlaid before reading `done`
 
 // Normalized matching key for a job's free-text `gc` field.
 // "Robison" / "Robison " / "robison " → "robison" (confirmed real variants).
@@ -438,6 +439,7 @@ function portalHtmlFor(html, link) {
 }
 
 function projectJobForPortal(jobId, job) {
+  job = applyPunchTicks(job);   // v559: slots over the trees + linked RT entries before any `done` is read
   if (!job || typeof job !== "object") return null;
   if (job.archived === true || job.deleted === true) return null;
   return {

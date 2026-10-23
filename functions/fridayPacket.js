@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────
-// Friday Packet builder — PURE module (no Firestore, no network, no requires).
+// Friday Packet builder — PURE module (no Firestore, no network; the one require is the pure ./punchTicks.js overlay, v559).
+const { applyPunchTicks } = require("./punchTicks.js");   // v559: punch check-off slots overlaid before reading `done`
 //
 //   buildModel(inputs)  → plain model object (all predicates, ranking, caps)
 //   renderHtml(model)   → the packet HTML string
@@ -479,7 +480,8 @@ function buildModel(inputs) {
       }
 
       // Waiting-on items, canonically bucketed.
-      const waiting = [...flatPunchWaiting(j.roughPunch), ...flatPunchWaiting(j.finishPunch), ...flatPunchWaiting(j.qcPunch)];
+      const jt = applyPunchTicks(j);   // v559
+      const waiting = [...flatPunchWaiting(jt.roughPunch), ...flatPunchWaiting(jt.finishPunch), ...flatPunchWaiting(jt.qcPunch)];
       if (waiting.length) {
         const byBucket = {};
         waiting.forEach(w => { const b = waitBucket(w.waitingOn); byBucket[b] = (byBucket[b] || 0) + 1; });
