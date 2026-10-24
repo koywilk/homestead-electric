@@ -49856,25 +49856,32 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       } catch (e) { setCostsPull(`Pull failed: ${(e && e.message) || e}`); }
     };
     const seg = (val, set, opts, label) => (
-      <div className="od-cseg" role="group" aria-label={label}>{opts.map(([k, l]) => <button type="button" key={k} aria-pressed={val === k} onClick={() => set(k)}>{l}</button>)}</div>);
+      <div className="jc-seg" role="group" aria-label={label}>{opts.map(([k, l]) => <button type="button" key={k} aria-pressed={val === k} onClick={() => set(k)}>{l}</button>)}</div>);
     const hintCo = (txt) => scoped ? `Company, every job: ${txt}` : null;
     const joshYear = (costsGoals && costsGoals.year) || new Date().getFullYear();
     const PH_LIVE = cStage === "active";                                     // open jobs have no Josh numbers yet
     const PH = (sum, p) => PH_LIVE ? sum[p + "Live"] : sum[p];
-    const tiles = isM ? [
-      { t: "Whole job margin (Josh)", c: mC(s.whole.w), v: fp(s.whole.w), sub: `avg ${fp(s.whole.avg)}`, i: "dollarSign", h: hintCo(`${fp(co.whole.w)} · avg ${fp(co.whole.avg)}`) || `${s.whole.n} jobs invoiced in full ${joshYear} with costs posted · Simpro net profit ÷ contract, the Goals tab's number` },
-      { t: "Whole job under 15%", c: s.whole.under ? OD_R : OD_G, v: s.whole.under, sub: `of ${s.whole.n}`, i: "flag", h: hintCo(`${co.whole.under} of ${co.whole.n}`) || "Josh's jobs, below the 15% goal" },
-      { t: `Rough margin${PH_LIVE ? ", open jobs" : ""}`, c: mC(PH(s, "rough").w), v: fp(PH(s, "rough").w), sub: `avg ${fp(PH(s, "rough").avg)}`, i: "dollarSign", h: hintCo(`${fp(PH(co, "rough").w)} · avg ${fp(PH(co, "rough").avg)}`) || (PH_LIVE ? `${PH(s, "rough").n} open jobs past rough, so far` : `${PH(s, "rough").n} of Josh's jobs, split item by item`) },
-      { t: "Rough under 15%", c: PH(s, "rough").under ? OD_R : OD_G, v: PH(s, "rough").under, sub: `of ${PH(s, "rough").n}`, i: "flag", h: hintCo(`${PH(co, "rough").under} of ${PH(co, "rough").n}`) },
-      { t: `Finish margin${PH_LIVE ? ", open jobs" : ""}`, c: mC(PH(s, "finish").w), v: fp(PH(s, "finish").w), sub: `avg ${fp(PH(s, "finish").avg)}`, i: "dollarSign", h: hintCo(`${fp(PH(co, "finish").w)} · avg ${fp(PH(co, "finish").avg)}`) || (PH_LIVE ? `${PH(s, "finish").n} open jobs at punch list or later, so far` : `${PH(s, "finish").n} of Josh's jobs, split item by item`) },
-      { t: "Finish under 15%", c: PH(s, "finish").under ? OD_R : OD_G, v: PH(s, "finish").under, sub: `of ${PH(s, "finish").n}`, i: "flag", h: hintCo(`${PH(co, "finish").under} of ${PH(co, "finish").n}`) },
-    ] : ["rough", "finish"].flatMap(p => [
-      { t: `${p === "rough" ? "Rough" : "Finish"} jobs over estimate`, c: s[`${p}_${cm}_over`] ? OD_R : OD_G, v: s[`${p}_${cm}_over`], sub: `of ${s[`${p}_started`]}`, i: "flag",
-        h: hintCo(`${co[`${p}_${cm}_over`]} of ${co[`${p}_started`]}`) || `Jobs with ${p} logged` },
-      { t: `${p === "rough" ? "Rough" : "Finish"} ${NOUN[cm]} ${USED[cm]}`, c: (s[`${p}_${cm}_pct`] || 0) > 1 ? OD_R : p === "rough" ? OD_B : OD_CYAN, v: fvk(cm, s[`${p}_${cm}_used`]),
-        sub: `of ${fvk(cm, s[`${p}_${cm}_est`])} · ${fp(s[`${p}_${cm}_pct`])}`, i: cm === "hrs" ? "clock" : "dollarSign",
-        h: hintCo(`${fp(co[`${p}_${cm}_pct`])} of estimate`) || "Estimate from every cost center, those jobs" },
-    ]);
+    // v567 look (Koy picked it from three mockups): the Panel Schedule — steel, white label strips, red / blue
+    // wire for rough / finish, green ground for Josh's whole job, hi-vis orange tags for anything over — with the
+    // Night Shift chart (glowing dots on a dark panel) set into it. Every class here is jc-*, scoped to this tab.
+    const fu = (m) => m === "hrs" ? " h" : "";
+    const tag = (bad, text) => <span className={`jc-tag${bad ? " over" : " ok"}`}>{text}</span>;
+    const coLine = (txt) => scoped ? <small className="jc-co">Company, every job: {txt}</small> : null;
+    const phaseBox = (p) => {
+      const pct = s[`${p}_${cm}_pct`], over = s[`${p}_${cm}_over`], st = s[`${p}_started`];
+      return { key: p, wire: p === "rough" ? "r" : "f", title: `${p === "rough" ? "Rough" : "Finish"} ${NOUN[cm]}`, big: fp(pct), unit: "of estimate",
+        sub: `${fvk(cm, s[`${p}_${cm}_used`])}${fu(cm)} of ${fvk(cm, s[`${p}_${cm}_est`])}${fu(cm)}`, tag: tag(over > 0, over ? `${over} of ${st} over` : `none of ${st} over`),
+        co: coLine(`${fp(co[`${p}_${cm}_pct`])}, ${co[`${p}_${cm}_over`]} of ${co[`${p}_started`]} over`) };
+    };
+    const fp1 = (x) => x == null ? "—" : `${(Math.round(x * 1000) / 10).toFixed(1)}%`;   // margins to a tenth, as the Goals tab shows them
+    const marginBox = (key, wire, title, m, cm0, note) => ({ key, wire, title, big: fp1(m.w), unit: key === "whole" ? "goal 15%" : "weighted",
+      sub: m.n ? `${m.n} ${note}, avg ${fp1(m.avg)}` : (PH_LIVE && key === "whole" ? "Finished jobs only: switch to All jobs or Invoiced" : "No jobs yet"),
+      tag: m.n ? tag(m.under > 0, `${m.under} under 15%`) : null, co: coLine(`${fp1(cm0.w)}, ${cm0.under} of ${cm0.n} under 15%`) });
+    const wholeBox = marginBox("whole", "g", "Whole job margin, Josh's numbers", s.whole, co.whole, `jobs invoiced in full ${joshYear}`);
+    const tiles = isM ? [wholeBox,
+      marginBox("rough", "r", `Rough margin${PH_LIVE ? ", open jobs" : ""}`, PH(s, "rough"), PH(co, "rough"), PH_LIVE ? "open jobs past rough" : "of Josh's jobs"),
+      marginBox("finish", "f", `Finish margin${PH_LIVE ? ", open jobs" : ""}`, PH(s, "finish"), PH(co, "finish"), PH_LIVE ? "open jobs at punch list or later" : "of Josh's jobs")]
+      : [phaseBox("rough"), phaseBox("finish"), wholeBox];
     // The job table: the picked person's jobs in this stage; every job stays listed so it can be switched back on.
     const q = cQ.trim().toLowerCase();
     const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q));
@@ -49897,30 +49904,30 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const th = (k, l, cls, title) => (
       <th key={k} className={cls} title={title} aria-sort={sort.k === k ? (sort.dir > 0 ? "ascending" : "descending") : "none"}>
         <button type="button" onClick={() => setCSort(sort.k === k ? { k, dir: -sort.dir } : { k, dir: k === "name" || k === "foremanShown" || k === "status" ? 1 : -1 })}>{l}</button></th>);
-    const bar = (x, finish) => (<span className="od-cost-pct"><b style={{ color: x != null && x > 1 ? OD_R : "inherit" }}>{fp(x)}</b>
-      <span className="od-cost-bar"><i style={{ width: `${Math.min(Math.max(x || 0, 0), 1.5) / 1.5 * 100}%`, background: x != null && x > 1 ? OD_R : finish ? OD_CYAN : OD_B }}/><em/></span></span>);
-    const margin = (x) => <b style={{ color: mC(x) }}>{x == null ? "not started" : fp(x)}</b>;
+    const bar = (x) => x == null ? <span className="jc-dim">–</span> : <span className={`jc-pct${x > 1 ? " over" : ""}`}>{fp(x)}</span>;
+    const margin = (x) => x == null ? <span className="jc-dim">not started</span> : <span className={`jc-pct${x < OD_COST_GOAL ? " over" : " good"}`}>{fp(x)}</span>;
     const toggle = (no) => setCOff(prev => { const n = new Set(prev); if (n.has(no)) n.delete(no); else n.add(no); return n; });
     const ccs = cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
     const ccCols = isM ? [["sell", "Sell"], ["rough_sell", "To rough", "r"], ["finish_sell", "To finish", "f"], ["other_sell", "Untagged", "n"]]
       : [[`rough_${cm}`, "Rough est", "r"], [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r"], [`finish_${cm}`, "Finish est", "f"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f"], [`other_${cm}`, "Untagged est", "n"]];
     const detail = (j) => (
-      <tr className="od-cost-det"><td colSpan={4 + cols.length}>
-        <div className="od-cost-det-h"><b>{j.name}</b><span>Each cost center's estimate split item by item; what was {isM ? "sold" : USED[cm]} on a cost center splits the same way as its estimate.</span>
-          {j.jobId ? <button type="button" className="od-mini-btn" onClick={() => goApp((jobs || []).find(x => x.id === j.jobId))}>Open job</button> : null}</div>
-        {costShard == null ? <div className="od-empty">No cost centers saved for this job yet.</div>
-          : costsCc[costShard] === "err" ? <div className="od-empty">The cost centers could not be read. Press Refresh.</div>
-          : !ccs ? <div className="od-empty">Reading cost centers…</div>
-          : <div className="od-cost-scroll"><table className="od-cost-tbl">
+      <tr className="jc-det"><td colSpan={4 + cols.length}>
+        <div className="jc-det-h"><b>{j.name}</b><span>Each cost center's estimate split item by item; what was {isM ? "sold" : USED[cm]} on a cost center splits the same way as its estimate.</span>
+          {j.jobId ? <button type="button" className="jc-btn" onClick={() => goApp((jobs || []).find(x => x.id === j.jobId))}>Open job</button> : null}</div>
+        {costShard == null ? <div className="jc-empty">No cost centers saved for this job yet.</div>
+          : costsCc[costShard] === "err" ? <div className="jc-empty">The cost centers could not be read. Press Refresh.</div>
+          : !ccs ? <div className="jc-empty">Reading cost centers…</div>
+          : <div className="jc-scroll"><table className="jc-cct">
               <thead><tr><th className="l">Section</th><th className="l">Cost center</th><th className="l n">Type</th>{ccCols.map(([k, l, c]) => <th key={k} className={c}>{l}</th>)}</tr></thead>
-              <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job">{c.cc}<small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n dim">{c.type || "–"}</td>
+              <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job"><b>{c.cc}</b><small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n jc-dim">{c.type || "–"}</td>
                 {ccCols.map(([k, , cl]) => <td key={k} className={cl}>{c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
       </td></tr>);
     const wiOf = (r) => (v.crewWi || []).find(x => x.person === r.person) || null;
     const personVal = (r) => isM ? r.whole.w : r[`rough_${cm}_pct`];
     const crewRows = v.crew.slice().sort((a, b) => { const x = personVal(a), y = personVal(b); if (x == null && y == null) return b.jobs - a.jobs; if (x == null) return 1; if (y == null) return -1; return isM ? x - y : y - x; });
-    // "Where every job stands" (Koy liked it on the artifact): each job's rough (blue) and finish (violet) on one
-    // scale — share of estimate, or margin so far — worst first; a red ring is over estimate / under 15%.
+    // "Where every job stands" (Koy liked it on the artifact): each job's rough (red wire) and finish (blue wire) on
+    // one scale — share of estimate, or margin so far — biggest overrun (or $ lost) first, as the table sorts; the value
+    // turns orange when over / under 15%.
     const cLo = isM ? -0.6 : 0, cHi = isM ? 0.8 : 2.5, cRef = isM ? OD_COST_GOAL : 1;
     const cTicks = isM ? [-0.5, -0.25, 0, 0.25, 0.5, 0.75] : [0, 0.5, 1, 1.5, 2, 2.5];
     const cPos = (x) => `${Math.min(Math.max((x - cLo) / (cHi - cLo), 0), 1) * 100}%`;
@@ -49928,103 +49935,116 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const chartRows = list.map(j => { const p = v.pct.get(j.no) || {};
       const r = isM ? p.rough_mAct : p[`rough_${cm}_pct`];
       const f = isM ? p.finish_mAct : ((j[`finish_${uKey(cm)}`] || 0) > 0 ? p[`finish_${cm}_pct`] : null);
-      return { j, r, f }; }).filter(x => x.r != null && (isM ? (x.j.josh && x.j.josh.counts) || OD_COST_DONE.rough.includes(x.j.status) : (x.j[`rough_${uKey(cm)}`] || 0) > 0))
-      .sort((a, b) => isM ? a.r - b.r : b.r - a.r);
+      return { j, r, f, k: isM ? p.rough_profit : p[`rough_${cm}_overBy`] }; }).filter(x => x.r != null && (isM ? (x.j.josh && x.j.josh.counts) || OD_COST_DONE.rough.includes(x.j.status) : (x.j[`rough_${uKey(cm)}`] || 0) > 0))
+      .sort((a, b) => isM ? (a.k == null) - (b.k == null) || a.k - b.k : (b.k || 0) - (a.k || 0));   // like the table: most hours / $ over, or most $ lost, first
     const openFromChart = (no) => { setCSel(no); setTimeout(() => { const el = document.getElementById(`cost-job-${no}`); if (el) el.scrollIntoView({ block: "center", behavior: "smooth" }); }, 60); };
     const chart = (
-      <div className="od-white od-pad" id="cost-chart">
-        <div className="od-ct">Where every job stands<span className="od-cost-key"><i style={{ background: OD_B }}/>Rough<i style={{ background: OD_CYAN }}/>Finish</span></div>
-        <small className="od-cost-cap">{isM
-          ? "Margin so far, rough and finish, every cost center · the dashed line is the 15% goal · a red ring is under it · tap a job to see its cost centers"
-          : `${NOUN[cm][0].toUpperCase() + NOUN[cm].slice(1)} ${USED[cm]} as a share of the estimate from every cost center, jobs with rough logged · the dark line is 100% · a red ring is over · tap a job to see its cost centers`}</small>
-        {!chartRows.length ? <div className="od-empty">No jobs to chart.</div> : <div className="od-cost-chart">
-          <div className="od-cost-cax"><span/><span className="od-cost-track">{cTicks.map(t => <em key={t} style={{ left: cPos(t) }}>{t === cHi && !isM ? "≥" : ""}{Math.round(t * 100)}%</em>)}</span><span/></div>
-          {chartRows.map(({ j, r, f }) => (
-            <button type="button" key={j.no} className={`od-cost-crow${cOff.has(j.no) ? " off" : ""}${cSel === j.no ? " on" : ""}`} onClick={() => openFromChart(j.no)}
+      <section className="jc-sec" id="cost-chart">
+        <h3 className="jc-h">Where every job stands<span className="jc-key"><i className="r"/>Rough<i className="f"/>Finish</span></h3>
+        <p className="jc-cap">{isM
+          ? "Margin so far, rough and finish, every cost center. The dashed line is the 15% goal. Tap a job to see its cost centers."
+          : `${NOUN[cm][0].toUpperCase() + NOUN[cm].slice(1)} ${USED[cm]} as a share of the estimate from every cost center, jobs with rough logged. The light line is 100%. Tap a job to see its cost centers.`}</p>
+        {!chartRows.length ? <div className="jc-night"><div className="jc-empty dark">No jobs to chart.</div></div> : <div className="jc-night">
+          <div className="jc-ax"><span/><span className="jc-tr">{cTicks.map(t => <em key={t} className={(isM ? [-0.5, 0, 0.5] : [0, 1, cHi]).includes(t) ? "" : "mn"} style={{ left: cPos(t) }}>{t === cHi && !isM ? "≥" : ""}{Math.round(t * 100)}%</em>)}</span><span/></div>
+          <div className="jc-rows">{chartRows.map(({ j, r, f }) => (
+            <button type="button" key={j.no} className={`jc-crow${cOff.has(j.no) ? " off" : ""}${cSel === j.no ? " on" : ""}`} onClick={() => openFromChart(j.no)}
               title={`${j.name} · #${j.no}\nRough: ${fp(r)}\nFinish: ${f == null ? "not started" : fp(f)}${cOff.has(j.no) ? "\nSwitched off: left out of the totals" : ""}`}>
               <span className="nm">{j.name}</span>
-              <span className="od-cost-track">
+              <span className="jc-tr">
                 {cTicks.map(t => <b key={t} className="g" style={{ left: cPos(t) }}/>)}
                 <b className={`ref${isM ? " goal" : ""}`} style={{ left: cPos(cRef) }}/>
-                {f != null ? <i className={`od-cost-dot f${cBad(f) ? " bad" : ""}`} style={{ left: cPos(f), background: OD_CYAN }}/> : null}
-                <i className={`od-cost-dot${cBad(r) ? " bad" : ""}`} style={{ left: cPos(r), background: OD_B }}/>
+                {f != null ? <i className="jc-dot f" style={{ left: cPos(f) }}/> : null}
+                <i className="jc-dot r" style={{ left: cPos(r) }}/>
               </span>
-              <span className="val" style={{ color: cBad(r) ? OD_R : OD_B }}>{fp(r)}</span>
-            </button>))}
+              <span className={`val${cBad(r) ? " bad" : ""}`}>{fp(r)}</span>
+            </button>))}</div>
         </div>}
-      </div>);
+      </section>);
     const pending = costsDoc && costsDoc.counts && costsDoc.counts.pending;
-    right = null;   // full width: the foreman list sits above the job table (Koy: see the whole table at once)
-    main = (<>
-      <div className="od-head"><div><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split item by item into rough and finish · credit and finished-job margins by Josh's rule (Simpro technician; invoiced this year, in full, costs posted){costsDoc && costsDoc.generated_at ? ` · pulled ${fmtAt(costsDoc.generated_at)}` : ""}</p></div>
-        <div className="od-ct-actions">
-          <button type="button" className="od-mini-btn" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
-          {canOpenDash(identity) ? <button type="button" className="od-mini-btn run" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
-        </div></div>
-      {costsPull && costsPull !== "busy" ? <div className="od-goal-note">{costsPull}</div> : null}
-      {costsDoc === undefined ? <div className="od-white od-pad"><div className="od-empty">Reading the last Simpro pull…</div></div>
-      : !costsDoc ? <div className="od-white od-pad"><div className="od-ct">No Simpro pull yet</div><div className="od-empty">The nightly pull runs at 2:15, 3:15 and 4:15 AM. Press Pull from Simpro now to start it.</div></div>
+    right = null;   // full width: the foreman list sits above the chart and the table (Koy: see the whole table at once)
+    main = (<div className="jc">
+      <header className="jc-top">
+        <img src="/hs-logo-white.png" alt="Homestead Electric"/>
+        <div className="jc-title"><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split into rough and finish. Credit and finished-job margins follow Josh's rule.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}</p></div>
+        <div className="jc-act">
+          <button type="button" className="jc-btn dark" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
+          {canOpenDash(identity) ? <button type="button" className="jc-btn hv" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
+        </div>
+      </header>
+      <div className="jc-body">
+      {costsPull && costsPull !== "busy" ? <div className="jc-note">{costsPull}</div> : null}
+      {costsDoc === undefined ? <div className="jc-empty">Reading the last Simpro pull…</div>
+      : !costsDoc ? <div className="jc-lbl"><h4>No Simpro pull yet</h4><p className="jc-cap">The nightly pull runs at 2:15, 3:15 and 4:15 AM. Press Pull from Simpro now to start it.</p></div>
       : <>
-        {pending ? <div className="od-goal-note">{pending} jobs still to pull from Simpro · they show after the next run.</div> : null}
-        <div className="od-cost-ctl">
+        {pending ? <div className="jc-note">{pending} jobs still to pull from Simpro. They show after the next run.</div> : null}
+        <div className="jc-ctl">
           {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", "Labor $"], ["margin", "Margin"]], "What to compare")}
           {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["josh", `Invoiced ${joshYear} (Josh)`]], "Which jobs")}
         </div>
-        {cWho ? <div className="od-cost-spot"><div><small>{cWho.role === "foreman" ? "Foreman" : "Lead"}</small><b>{cWho.person}</b></div>
+        {cWho ? <div className="jc-spot"><div><small>{cWho.role === "foreman" ? "Foreman, Simpro technician" : "Lead"}</small><b>{cWho.person}</b></div>
           <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
-          <button type="button" className="od-mini-btn" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
-        {cOff.size ? <div className="od-cost-wi"><b>What-if</b><span>{cOff.size} {cOff.size === 1 ? "job" : "jobs"} switched off: {v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}. The boxes and the foreman list leave {cOff.size === 1 ? "it" : "them"} out. Nothing in Simpro or the app changes.</span>
-          <button type="button" className="od-mini-btn" onClick={() => setCOff(new Set())}>Turn all back on</button></div> : null}
-        <div className={`od-minis${isM ? " six" : ""}`}>{tiles.map(x => <OdMini key={x.t} title={x.t} color={x.c} icon={x.i} value={x.v} sub={x.sub} hint={x.h}/>)}</div>
-      <div className="od-white od-pad">
-        <div className="od-ct">{cRole === "foreman" ? "By foreman" : "By lead"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"]], "Group by")}</div>
-        <small className="od-cost-cap">{cRole === "foreman" ? "Foreman = the job's Simpro technician (Josh's rule) · " : "Lead = the Job Board's lead · "}{isM ? "whole-job margin on Josh's jobs, Simpro net profit ÷ contract · rough beside" : `rough ${NOUN[cm]} ${USED[cm]} ÷ estimate, jobs with rough logged`} · tap a name to see their numbers</small>
-        <div className="od-cost-ppl wide">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
-          const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
-          return (
-            <button type="button" key={r0.person} className={on ? "on" : ""} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: cRole, person: r0.person }); setCSel(null); }}>
-              <span className="nm">{r0.person}<small>{r.jobs} jobs{isM ? ` · ${r.whole.n} Josh counts` : ` · ${r.rough_started} started`}</small></span>
-              <span className="val"><b style={{ color: isM ? mC(val) : val != null && val > 1 ? OD_R : OD_B }}>{fp(val)}</b>
-                <small>{isM ? `avg ${fp(r.whole.avg)} · rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? ` · all jobs ${fp(was)}` : ""}</small></span>
-            </button>); })}</div>
-      </div>
+          <button type="button" className="jc-btn hv" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
+        {cOff.size ? <div className="jc-wi"><b>What-if</b><span>{cOff.size} {cOff.size === 1 ? "job" : "jobs"} switched off: {v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}. The boxes and the foreman list leave {cOff.size === 1 ? "it" : "them"} out. Nothing in Simpro or the app changes.</span>
+          <button type="button" className="jc-btn dark" onClick={() => setCOff(new Set())}>Turn all back on</button></div> : null}
+        <div className="jc-hero">{tiles.map(x => (
+          <div key={x.key} className={`jc-lbl w-${x.wire}`}>
+            <h4>{x.title}</h4>
+            <div className="jc-big">{x.big}<small>{x.unit}</small></div>
+            <div className="jc-sub">{x.sub}{x.tag}</div>
+            {x.co}
+          </div>))}</div>
+        <section className="jc-sec">
+          <h3 className="jc-h">{cRole === "foreman" ? "By foreman" : "By lead"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"]], "Group by")}</h3>
+          <p className="jc-cap">{cRole === "foreman" ? "Foreman is the job's Simpro technician (Josh's rule). " : "Lead is the lead on the app's Job Info. "}{isM ? "Whole-job margin on Josh's jobs, rough beside." : `Rough ${NOUN[cm]} ${USED[cm]} as a share of the estimate.`} Tap a name to see their numbers.</p>
+          <div className="jc-ppl">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
+            const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
+            const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
+            return (
+              <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: cRole, person: r0.person }); setCSel(null); }}>
+                <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
+                <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b>
+                  <small>{isM ? `avg ${fp(r.whole.avg)}, rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? `, all jobs ${fp(was)}` : ""}</small></span>
+              </button>); })}</div>
+        </section>
         {chart}
-        <div className="od-white od-pad">
-          <div className="od-ct">{isM ? "Every job, margin by phase" : `Every job, ${NOUN[cm]}`}<small>{isM
-            ? "margin = sell less what's been spent and committed, over sell · every cost center · red is below zero, orange below 15% · untick Count to leave a job out"
-            : `est = the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on · untick Count to leave a job out`}</small></div>
-          <input className="od-cost-q" type="search" value={cQ} onChange={e => setCQ(e.target.value)} placeholder="Search jobs, foremen, leads" aria-label="Search jobs"/>
-          <div className="od-cost-scroll tall"><table className="od-cost-tbl jobs">
-            <thead><tr><th className="l">Count</th>{th("name", "Job", "l")}{th("foremanShown", "Technician", "l n", "The job's Simpro technician — who gets credit under Josh's rule (the Goals tab's). Change it on the job in Simpro.")}{th("status", "Status", "l n")}
+        <section className="jc-sec">
+          <h3 className="jc-h">{isM ? "Every job, margin by phase" : `Every job, ${NOUN[cm]}`}</h3>
+          <p className="jc-cap">{isM
+            ? "Margin is sell less what's been spent and committed, over sell, across every cost center. Orange is under the 15% goal. Flip Count off to leave a job out."
+            : "Est is the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on. Orange is over the estimate. Flip Count off to leave a job out."}</p>
+          <input className="jc-q" type="search" value={cQ} onChange={e => setCQ(e.target.value)} placeholder="Search jobs, technicians, leads" aria-label="Search jobs"/>
+          <div className="jc-scroll tall"><table className="jc-tbl">
+            <thead><tr><th className="l">Count</th>{th("name", "Job", "l")}{th("foremanShown", "Technician", "l n", "The job's Simpro technician, who gets credit under Josh's rule (the Goals tab's). Change it on the job in Simpro.")}{th("status", "Status", "l n")}
               {cols.map(([k, l, cls, , title]) => th(k, l, cls, title))}</tr></thead>
             <tbody>{list.map(j => { const p = v.pct.get(j.no) || {}, off = cOff.has(j.no), open = cSel === j.no;
               return (<Fragment key={j.no}>
                 <tr id={`cost-job-${j.no}`} className={`${off ? "off" : ""}${open ? " open" : ""}`} onClick={() => setCSel(open ? null : j.no)}>
-                  <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
-                  <td className="l job">{j.name}<small>#{j.no}{j.site ? ` · ${j.site}` : ""}</small></td>
-                  <td className={`l n fm${j.foreman ? "" : " dim"}`}>{j.foremanShown}</td>
-                  <td className="l n"><span className="od-cost-st">{j.status || "—"}</span></td>
-                  {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k], /finish/.test(k)) : typeof fmt === "function" ? fmt(j)
-                    : fmt === "mEst" ? <>{margin(p[k])}<small className="od-cost-sub">est {fp(p[k.replace("_mAct", "_mEst")])}</small></> : margin(p[k])}</td>)}
+                  <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" className="jc-brk" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
+                  <td className="l job"><b>{j.name}</b><small>#{j.no}{j.site ? `, ${j.site}` : ""}</small></td>
+                  <td className={`l n fm${j.foreman ? "" : " jc-dim"}`}>{j.foremanShown}</td>
+                  <td className="l n"><span className="jc-st">{j.status || "—"}</span></td>
+                  {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k]) : typeof fmt === "function" ? fmt(j)
+                    : fmt === "mEst" ? <>{margin(p[k])}<small className="jc-subv">est {fp(p[k.replace("_mAct", "_mEst")])}</small></> : margin(p[k])}</td>)}
                 </tr>
                 {open ? detail(j) : null}
               </Fragment>); })}
-              {!list.length ? <tr><td colSpan={4 + cols.length}><div className="od-empty">No jobs match.</div></td></tr> : null}</tbody></table></div>
-        </div>
-      <div className="od-white od-pad">
-        <div className="od-ct">How it is counted</div>
-        <ul className="od-cost-how">
-          <li>Every cost center on the job counts: the base bid and every change order.</li>
-          <li>An item ending "(Rough In)" goes to rough, "(Finish)" to finish. Its hours, materials, labor and sell price go with it. An item with neither follows its cost center's type; a cost center with no phase (Change Order, Generators) is untagged.</li>
-          <li>Simpro's total for each cost center is the budget; items only decide how it splits. A credit comes off its phase.</li>
-          <li>Spending is recorded per cost center, so it splits the same way as that cost center's estimate. Spent dollars include committed (ordered, scheduled), as Simpro's margin does.</li>
-          <li>Margins are weighted (big jobs count more); the plain average of each job's margin is beside it.</li>
-          <li>Josh's rule, the same as the Goals tab: a job is credited to its Simpro technician (the first one listed). A finished job counts when it has a customer invoice dated this year, is invoiced in full and has costs posted; its whole-job margin is Simpro's net profit ÷ contract, summed over those jobs. Rough and finish margins are the item split on those same jobs; on Active, they are open jobs past that phase, so far.</li>
-          <li>Jobs: Simpro's in progress and complete, the invoiced jobs still on the Job Board, and every job Josh's rule counts this year. Pulled nightly; read-only.</li>
-        </ul>
-      </div>
+              {!list.length ? <tr><td colSpan={4 + cols.length}><div className="jc-empty">No jobs match.</div></td></tr> : null}</tbody></table></div>
+        </section>
+        <section className="jc-sec jc-how">
+          <h3 className="jc-h">How it is counted</h3>
+          <ul>
+            <li>Every cost center on the job counts: the base bid and every change order.</li>
+            <li>An item ending "(Rough In)" goes to rough, "(Finish)" to finish. Its hours, materials, labor and sell price go with it. An item with neither follows its cost center's type; a cost center with no phase (Change Order, Generators) is untagged.</li>
+            <li>Simpro's total for each cost center is the budget; items only decide how it splits. A credit comes off its phase.</li>
+            <li>Spending is recorded per cost center, so it splits the same way as that cost center's estimate. Spent dollars include committed (ordered, scheduled), as Simpro's margin does.</li>
+            <li>Margins are weighted (big jobs count more); the plain average of each job's margin is beside it.</li>
+            <li>Josh's rule, the same as the Goals tab: a job is credited to its Simpro technician (the first one listed). A finished job counts when it has a customer invoice dated this year, is invoiced in full and has costs posted; its whole-job margin is Simpro's net profit ÷ contract, summed over those jobs. Rough and finish margins are the item split on those same jobs; on Active, they are open jobs past that phase, so far.</li>
+            <li>Jobs: Simpro's in progress and complete, the invoiced jobs still on the Job Board, and every job Josh's rule counts this year. Pulled nightly; read-only.</li>
+          </ul>
+        </section>
       </>}
-    </>);
+      </div>
+    </div>);
   } else if (tab === "goals") {
     // v562: the Team Goals sheet beside today's numbers. Simpro cards follow Josh's rule
     // (jobs invoiced this year, weighted, technician credit); the rest read this page's model.
@@ -50580,82 +50600,122 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-goal-mission b{color:var(--o-ink)}
         .odash .od-goal-note{font-size:12.5px;color:var(--cdim);padding:2px 4px}
         .odash .od-goal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-        .odash .od-minis.six{grid-template-columns:repeat(3,minmax(0,1fr))}
         .odash .od-grid.one{grid-template-columns:minmax(0,1fr)}
-        .odash .od-cseg{display:inline-flex;gap:2px;background:var(--inset);border:1px solid var(--line);border-radius:999px;padding:3px}
-        .odash .od-cseg button{border:0;background:transparent;color:var(--dim);border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap}
-        .odash .od-cseg button[aria-pressed="true"]{background:var(--o);color:var(--on-o)}
-        .odash .od-cseg button:focus-visible,.odash .od-cost-ppl button:focus-visible,.odash .od-cost-tbl th button:focus-visible{outline:2px solid var(--o);outline-offset:2px}
-        .odash .od-ct .od-cseg{margin-left:auto}
-        .odash .od-cost-ctl{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-        .odash .od-cost-spot,.odash .od-cost-wi{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-radius:16px;padding:12px 16px}
-        .odash .od-cost-spot{background:#292119;color:#F6F1E8}
-        .odash .od-cost-spot small{display:block;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:#C9B9A4;font-weight:700}
-        .odash .od-cost-spot b{font-family:'Bebas Neue','DM Sans',sans-serif;font-weight:400;font-size:30px;letter-spacing:.04em;line-height:1}
-        .odash .od-cost-spot>span{flex:1;min-width:0;font-size:12.5px;color:#D9CDBB}
-        .odash .od-cost-wi{background:var(--o-soft);border:1px solid var(--o);font-size:12.5px}
-        .odash .od-cost-wi>b{font-family:'Bebas Neue','DM Sans',sans-serif;font-weight:400;font-size:20px;letter-spacing:.05em;color:var(--o-ink)}
-        .odash .od-cost-wi>span{flex:1;min-width:0;color:var(--cdim)}
-        .odash .od-cost-q{width:100%;max-width:340px;margin:8px 0;font:inherit;font-size:13px;padding:7px 11px;border:1px solid var(--cline);border-radius:10px;background:var(--card);color:var(--cink)}
-        .odash .od-cost-scroll{overflow:auto;border-radius:10px}
-        .odash .od-cost-scroll.tall{max-height:620px}
-        .odash .od-cost-tbl{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
-        .odash .od-cost-tbl th{position:sticky;top:0;background:var(--card);z-index:1;text-align:right;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);font-weight:700;padding:7px 7px;border-bottom:2px solid var(--cline);white-space:normal;line-height:1.25;vertical-align:bottom;max-width:110px}
-        .odash .od-cost-tbl th.r{box-shadow:inset 0 3px 0 ${OD_B}}.odash .od-cost-tbl th.f{box-shadow:inset 0 3px 0 ${OD_CYAN}}
-        .odash .od-cost-tbl th button{border:0;background:transparent;padding:0;font:inherit;letter-spacing:inherit;text-transform:inherit;color:inherit;cursor:pointer}
-        .odash .od-cost-tbl th[aria-sort="ascending"] button::after{content:" ▲"}.odash .od-cost-tbl th[aria-sort="descending"] button::after{content:" ▼"}
-        .odash .od-cost-tbl td{text-align:right;padding:6px 7px;border-bottom:1px solid var(--cline);white-space:nowrap}
-        .odash .od-cost-tbl .l{text-align:left}
-        .odash .od-cost-tbl td.job{white-space:normal;min-width:150px;font-weight:600}
-        .odash .od-cost-tbl td.fm{white-space:normal;max-width:150px;line-height:1.3}
-        .odash .od-cost-tbl td .od-cost-sub{display:block;font-size:10.5px;font-weight:500;color:var(--cdim)}
-        .odash .od-cost-tbl td.job small{display:block;font-weight:400;color:var(--cdim);font-size:11px}
-        .odash .od-cost-tbl .dim{color:var(--cdim)}
-        .odash .od-cost-tbl.jobs tbody tr{cursor:pointer}
-        .odash .od-cost-tbl.jobs tbody tr:hover td,.odash .od-cost-tbl.jobs tbody tr.open td{background:var(--hov)}
-        .odash .od-cost-tbl.jobs tbody tr.off td{opacity:.45}.odash .od-cost-tbl.jobs tbody tr.off td:first-child{opacity:1}
-        .odash .od-cost-tbl input[type="checkbox"]{width:17px;height:17px;accent-color:var(--o);cursor:pointer}
-        .odash .od-cost-st{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--inset);color:var(--cdim)}
-        .odash .od-cost-pct{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end}
-        .odash .od-cost-bar{position:relative;width:54px;height:7px;border-radius:999px;background:var(--trk);flex-shrink:0}
-        .odash .od-cost-bar i{position:absolute;left:0;top:0;bottom:0;border-radius:999px}
-        .odash .od-cost-bar em{position:absolute;left:calc(66.67% - 1px);top:-3px;bottom:-3px;width:2px;background:var(--cink);opacity:.45}
-        .odash .od-cost-det>td{background:var(--inset);padding:10px 12px;cursor:default;white-space:normal}
-        .odash .od-cost-det-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;font-size:12.5px}.odash .od-cost-det-h span{flex:1;min-width:0;color:var(--cdim)}
-        .odash .od-cost-det .od-cost-tbl th{background:var(--card-solid)}
-        .odash .od-cost-cap{display:block;color:var(--cdim);font-size:11.5px;margin:4px 0 8px}
-        .odash .od-cost-ppl{display:flex;flex-direction:column;gap:4px}
-        .odash .od-cost-ppl.wide{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px}
-        .odash .od-cost-ppl.wide button{border-color:var(--cline)}
-        .odash .od-cost-ppl button{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;border:1px solid transparent;background:transparent;border-radius:12px;padding:8px 10px;cursor:pointer}
-        .odash .od-cost-ppl button:hover{background:var(--hov)}
-        .odash .od-cost-ppl button.on{background:var(--o-soft);border-color:var(--o)}
-        .odash .od-cost-ppl .nm{font-weight:700;font-size:13px;min-width:0}.odash .od-cost-ppl small{display:block;font-weight:500;font-size:11px;color:var(--cdim)}
-        .odash .od-cost-ppl .val{text-align:right;flex-shrink:0}.odash .od-cost-ppl .val b{font-size:16px;font-variant-numeric:tabular-nums}
-        .odash .od-cost-key{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--cdim)}
-        .odash .od-cost-key i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:8px}
-        .odash .od-cost-chart{max-height:560px;overflow:auto;margin-top:4px}
-        .odash .od-cost-cax,.odash .od-cost-crow{display:grid;grid-template-columns:minmax(110px,210px) minmax(0,1fr) 46px;gap:12px;align-items:center}
-        .odash .od-cost-cax{position:sticky;top:0;z-index:2;background:var(--card);padding:2px 0 6px}
-        .odash .od-cost-cax .od-cost-track{height:14px}
-        .odash .od-cost-cax em{position:absolute;top:0;transform:translateX(-50%);font-style:normal;font-size:10.5px;color:var(--cdim);font-variant-numeric:tabular-nums;white-space:nowrap}
-        .odash .od-cost-crow{width:100%;border:0;background:transparent;padding:0 4px;border-radius:8px;cursor:pointer;text-align:left;min-height:24px}
-        .odash .od-cost-crow:hover,.odash .od-cost-crow.on{background:var(--hov)}
-        .odash .od-cost-crow:focus-visible{outline:2px solid var(--o);outline-offset:-2px}
-        .odash .od-cost-crow.off{opacity:.35}
-        .odash .od-cost-crow .nm{font-size:12px;font-weight:600;color:var(--cink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
-        .odash .od-cost-crow .val{font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums}
-        .odash .od-cost-track{position:relative;display:block;height:24px}
-        .odash .od-cost-crow .od-cost-track::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px dotted var(--cline)}
-        .odash .od-cost-track .g{position:absolute;top:0;bottom:0;width:1px;background:var(--trk)}
-        .odash .od-cost-track .ref{position:absolute;top:-2px;bottom:-2px;width:2px;margin-left:-1px;background:var(--cink);opacity:.45}
-        .odash .od-cost-track .ref.goal{background:none;border-left:2px dashed ${OD_O};opacity:.9}
-        .odash .od-cost-dot{position:absolute;top:50%;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%);border:2px solid var(--card);box-sizing:content-box}
-        .odash .od-cost-dot.f{width:10px;height:10px}
-        .odash .od-cost-dot.bad{border-color:${OD_R}}
-        @media (max-width:700px){.odash .od-cost-cax,.odash .od-cost-crow{grid-template-columns:96px minmax(0,1fr) 40px;gap:8px}}
-        .odash .od-cost-how{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--cdim);line-height:1.45}
-        @media (max-width:700px){.odash .od-cost-tbl .n{display:none}.odash .od-minis.six{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        /* ── Job Costs (v567): the Panel Schedule with the Night Shift chart. Scoped to .jc. ── */
+        .odash .jc{--jc-steel:#DDE2E7;--jc-steel2:#C9D0D7;--jc-cover:#F5F7F9;--jc-char:#22272C;--jc-char2:#2B3137;--jc-ink:#14181C;--jc-dim:#59636D;
+          --jc-red:#C8102E;--jc-blue:#1F5FBF;--jc-hv:#FF6A13;--jc-gnd:#1E8F4E;--jc-redg:#FF4D5E;--jc-blueg:#4FA3FF;--jc-bone:#EFE7DA;
+          --jc-cond:'Barlow Condensed','Bebas Neue','DM Sans',sans-serif;--jc-body:'Barlow','DM Sans',sans-serif;
+          font-family:var(--jc-body);color:var(--jc-ink);background:linear-gradient(180deg,var(--jc-steel),#D3D9DF);border-radius:18px;overflow:hidden;
+          box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 14px 30px -22px rgba(20,24,28,.5)}
+        .odash .jc button{font-family:inherit}
+        .odash .jc-top{display:flex;align-items:center;gap:18px;flex-wrap:wrap;background:var(--jc-char);color:#F2F4F6;padding:16px 22px;border-bottom:4px solid var(--jc-hv)}
+        .odash .jc-top img{height:46px;width:auto;flex-shrink:0}
+        .odash .jc-title{flex:1;min-width:220px}
+        .odash .jc-title h1{margin:0;font:800 34px/1 var(--jc-cond);letter-spacing:.02em}
+        .odash .jc-title p{margin:4px 0 0;color:#AAB4BE;font-size:13.5px;max-width:78ch}
+        .odash .jc-act{display:flex;gap:8px;flex-wrap:wrap}
+        .odash .jc-btn{border:1px solid var(--jc-steel2);background:var(--jc-cover);color:var(--jc-ink);border-radius:6px;padding:7px 13px;font:700 14px var(--jc-cond);letter-spacing:.02em;cursor:pointer}
+        .odash .jc-btn.dark{background:transparent;border-color:#4A535C;color:#F2F4F6}
+        .odash .jc-wi .jc-btn.dark{color:var(--jc-ink);border-color:var(--jc-ink)}
+        .odash .jc-btn.hv{background:var(--jc-hv);border-color:var(--jc-hv);color:var(--jc-ink)}
+        .odash .jc-btn:disabled{opacity:.55;cursor:default}
+        .odash .jc-btn:focus-visible,.odash .jc-seg button:focus-visible,.odash .jc-p:focus-visible,.odash .jc-crow:focus-visible,.odash .jc-tbl th button:focus-visible,.odash .jc-brk:focus-visible,.odash .jc-q:focus-visible{outline:2px solid var(--jc-hv);outline-offset:2px}
+        .odash .jc-body{padding:16px 22px 22px;display:flex;flex-direction:column;gap:14px}
+        .odash .jc-note{background:var(--jc-cover);border:1px solid var(--jc-steel2);border-left:5px solid var(--jc-hv);border-radius:6px;padding:8px 12px;font-size:13.5px}
+        .odash .jc-empty{color:var(--jc-dim);font-size:14px;padding:14px 4px}
+        .odash .jc-empty.dark{color:#93A3B4}
+        .odash .jc-ctl{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+        .odash .jc-seg{display:inline-flex;gap:2px;background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:6px;padding:3px;box-shadow:inset 0 1px 0 #fff}
+        .odash .jc-seg button{border:0;background:transparent;color:var(--jc-dim);border-radius:4px;padding:6px 13px;font:700 15px var(--jc-cond);letter-spacing:.02em;cursor:pointer;white-space:nowrap}
+        .odash .jc-seg button[aria-pressed="true"]{background:var(--jc-char);color:#fff}
+        .odash .jc-h .jc-seg{margin-left:auto}
+        .odash .jc-spot{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--jc-char);color:#F2F4F6;border-radius:8px;padding:12px 16px;border-left:6px solid var(--jc-hv)}
+        .odash .jc-spot small{display:block;font-size:12px;color:#AAB4BE;font-weight:600}
+        .odash .jc-spot b{font:800 28px/1 var(--jc-cond);letter-spacing:.02em}
+        .odash .jc-spot>span{flex:1;min-width:0;font-size:13.5px;color:#C9D1D9}
+        .odash .jc-wi{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--jc-cover);border:2px solid var(--jc-hv);border-radius:8px;padding:10px 14px;font-size:13.5px}
+        .odash .jc-wi>b{font:800 20px var(--jc-cond);letter-spacing:.03em;color:var(--jc-ink);background:var(--jc-hv);padding:1px 8px;border-radius:4px}
+        .odash .jc-wi>span{flex:1;min-width:0;color:var(--jc-dim)}
+        .odash .jc-hero{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+        .odash .jc-lbl{position:relative;background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px;padding:12px 16px 12px 22px;box-shadow:0 1px 0 #fff inset,0 2px 0 rgba(20,24,28,.06)}
+        .odash .jc-lbl::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:6px;border-radius:0 3px 3px 0;background:var(--jc-char)}
+        .odash .jc-lbl.w-r::before{background:var(--jc-red)}.odash .jc-lbl.w-f::before{background:var(--jc-blue)}.odash .jc-lbl.w-g::before{background:var(--jc-gnd)}
+        .odash .jc-lbl h4{margin:0 0 2px;font:700 16px var(--jc-cond);color:var(--jc-dim);letter-spacing:.02em}
+        .odash .jc-big{font:800 52px/1.02 var(--jc-cond);font-variant-numeric:tabular-nums}
+        .odash .jc-big small{font:600 15px var(--jc-body);color:var(--jc-dim);margin-left:7px}
+        .odash .jc-sub{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13.5px;color:var(--jc-dim);margin-top:6px}
+        .odash .jc-co{display:block;margin-top:6px;font-size:12.5px;color:var(--jc-dim)}
+        .odash .jc-tag{font:800 14px var(--jc-cond);letter-spacing:.02em;padding:1px 7px;border-radius:4px}
+        .odash .jc-tag.over{background:var(--jc-hv);color:var(--jc-ink)}.odash .jc-tag.ok{background:rgba(30,143,78,.12);color:var(--jc-gnd)}
+        .odash .jc-sec{display:flex;flex-direction:column;gap:6px}
+        .odash .jc-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 0;font:800 22px var(--jc-cond);letter-spacing:.02em}
+        .odash .jc-cap{margin:0;font-size:13.5px;color:var(--jc-dim);max-width:90ch}
+        .odash .jc-key{display:inline-flex;align-items:center;gap:6px;font:600 13px var(--jc-body);color:var(--jc-dim)}
+        .odash .jc-key i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-left:8px}
+        .odash .jc-key i.r{background:var(--jc-redg);box-shadow:0 0 6px rgba(255,77,94,.7)}.odash .jc-key i.f{background:var(--jc-blueg);box-shadow:0 0 6px rgba(79,163,255,.7)}
+        .odash .jc-ppl{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+        .odash .jc-p{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:6px;padding:8px 12px;cursor:pointer;color:var(--jc-ink)}
+        .odash .jc-p:hover{border-color:var(--jc-char)}
+        .odash .jc-p.on{background:var(--jc-char);border-color:var(--jc-char);color:#F2F4F6}.odash .jc-p.on small{color:#AAB4BE}
+        .odash .jc-p .nm{min-width:0}.odash .jc-p .nm b{display:block;font:700 17px var(--jc-cond);letter-spacing:.01em}
+        .odash .jc-p small{display:block;font-size:12px;color:var(--jc-dim)}
+        .odash .jc-p .v{text-align:right;flex-shrink:0}.odash .jc-p .v b{font:800 24px var(--jc-cond);font-variant-numeric:tabular-nums}
+        .odash .jc-p .v b.bad{color:var(--jc-hv)}.odash .jc-p .v b.good{color:var(--jc-gnd)}.odash .jc-p .v b.none{color:var(--jc-dim)}
+        .odash .jc-p.on .v b.good{color:#6CD49B}
+        .odash .jc-night{background:radial-gradient(120% 90% at 85% 0%,#2A3946 0%,#162029 60%);border:1px solid #0E141A;border-radius:10px;padding:12px 16px;color:var(--jc-bone);box-shadow:inset 0 0 0 1px rgba(255,255,255,.04)}
+        .odash .jc-rows{max-height:560px;overflow:auto}
+        .odash .jc-ax,.odash .jc-crow{display:grid;grid-template-columns:minmax(110px,220px) minmax(0,1fr) 54px;gap:12px;align-items:center}
+        .odash .jc-ax{height:18px;margin-bottom:4px}
+        .odash .jc-ax em{position:absolute;top:0;transform:translateX(-50%);font:600 11px var(--jc-body);font-style:normal;color:#8796A6;white-space:nowrap}
+        .odash .jc-crow{width:100%;height:30px;border:0;background:transparent;border-radius:6px;padding:0 4px;cursor:pointer;text-align:left;color:inherit}
+        .odash .jc-crow:hover,.odash .jc-crow.on{background:rgba(255,255,255,.06)}
+        .odash .jc-crow.off{opacity:.35}
+        .odash .jc-crow .nm{text-align:right;font:600 15px var(--jc-cond);color:var(--jc-bone);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .jc-crow .val{font:800 17px var(--jc-cond);color:var(--jc-bone);font-variant-numeric:tabular-nums}.odash .jc-crow .val.bad{color:var(--jc-hv)}
+        .odash .jc-tr{position:relative;display:block;height:100%}
+        .odash .jc-crow .jc-tr::before{content:"";position:absolute;left:0;right:0;top:50%;border-top:1px solid #2C3C4B}
+        .odash .jc-tr .g{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.05)}
+        .odash .jc-tr .ref{position:absolute;top:3px;bottom:3px;width:2px;margin-left:-1px;background:var(--jc-bone);opacity:.4}
+        .odash .jc-tr .ref.goal{background:none;opacity:.9;border-left:2px dashed var(--jc-hv)}
+        .odash .jc-dot{position:absolute;top:50%;width:13px;height:13px;border-radius:50%;transform:translate(-50%,-50%)}
+        .odash .jc-dot.r{background:var(--jc-redg);box-shadow:0 0 0 3px rgba(255,77,94,.22),0 0 14px rgba(255,77,94,.6)}
+        .odash .jc-dot.f{width:10px;height:10px;background:var(--jc-blueg);box-shadow:0 0 10px rgba(79,163,255,.55)}
+        .odash .jc-q{width:100%;max-width:340px;font:inherit;font-size:14px;padding:8px 12px;border:1px solid var(--jc-steel2);border-radius:6px;background:var(--jc-cover);color:var(--jc-ink)}
+        .odash .jc-scroll{overflow:auto}
+        .odash .jc-scroll.tall{max-height:640px}
+        .odash .jc-tbl,.odash .jc-cct{width:100%;border-collapse:separate;border-spacing:0 5px;font-variant-numeric:tabular-nums;font-size:13.5px}
+        .odash .jc-tbl th,.odash .jc-cct th{position:sticky;top:0;z-index:1;background:#D7DDE3;text-align:right;font:700 13px var(--jc-cond);color:var(--jc-dim);letter-spacing:.03em;padding:6px 8px;white-space:normal;line-height:1.2;vertical-align:bottom;max-width:120px}
+        .odash .jc-tbl th.r,.odash .jc-cct th.r{box-shadow:inset 0 -3px 0 var(--jc-red)}.odash .jc-tbl th.f,.odash .jc-cct th.f{box-shadow:inset 0 -3px 0 var(--jc-blue)}
+        .odash .jc-tbl th button{border:0;background:transparent;padding:0;font:inherit;letter-spacing:inherit;color:inherit;cursor:pointer;text-align:inherit}
+        .odash .jc-tbl th[aria-sort="ascending"] button::after{content:" ▲"}.odash .jc-tbl th[aria-sort="descending"] button::after{content:" ▼"}
+        .odash .jc-tbl td,.odash .jc-cct td{background:var(--jc-cover);padding:7px 8px;text-align:right;white-space:nowrap;border-top:1px solid var(--jc-steel2);border-bottom:1px solid var(--jc-steel2)}
+        .odash .jc-tbl td:first-child,.odash .jc-cct td:first-child{border-left:1px solid var(--jc-steel2);border-radius:6px 0 0 6px}
+        .odash .jc-tbl td:last-child,.odash .jc-cct td:last-child{border-right:1px solid var(--jc-steel2);border-radius:0 6px 6px 0}
+        .odash .jc-tbl .l,.odash .jc-cct .l{text-align:left}
+        .odash .jc-tbl td.job,.odash .jc-cct td.job{white-space:normal;min-width:150px}
+        .odash .jc-tbl td.job b,.odash .jc-cct td.job b{display:block;font:700 16px var(--jc-cond);letter-spacing:.01em}
+        .odash .jc-tbl td.job small,.odash .jc-cct td.job small{display:block;color:var(--jc-dim);font-size:12px}
+        .odash .jc-tbl td.fm{white-space:normal;max-width:150px;line-height:1.3}
+        .odash .jc-tbl .dim,.odash .jc-dim{color:var(--jc-dim)}
+        .odash .jc-tbl tbody tr{cursor:pointer}
+        .odash .jc-tbl tbody tr:hover>td,.odash .jc-tbl tbody tr.open>td{background:#fff;border-color:var(--jc-char)}
+        .odash .jc-tbl tbody tr.off>td{opacity:.45}.odash .jc-tbl tbody tr.off>td:first-child{opacity:1}
+        .odash .jc-st{font:700 13px var(--jc-cond);letter-spacing:.02em;padding:2px 8px;border-radius:4px;background:#E3E8ED;color:var(--jc-dim);white-space:nowrap}
+        .odash .jc-pct{font:800 17px var(--jc-cond);font-variant-numeric:tabular-nums}
+        .odash .jc-pct.over{background:var(--jc-hv);color:var(--jc-ink);padding:1px 7px;border-radius:4px}
+        .odash .jc-pct.good{color:var(--jc-gnd)}
+        .odash .jc-subv{display:block;font-size:11.5px;color:var(--jc-dim)}
+        .odash .jc-brk{appearance:none;-webkit-appearance:none;width:34px;height:18px;border-radius:4px;background:#9AA5B1;position:relative;cursor:pointer;margin:0;vertical-align:middle;transition:background .15s}
+        .odash .jc-brk::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:3px;background:var(--jc-cover);transition:left .15s}
+        .odash .jc-brk:checked{background:var(--jc-char)}.odash .jc-brk:checked::after{left:18px;background:var(--jc-gnd)}
+        .odash .jc-det>td{background:#E6EBEF !important;padding:10px 12px;cursor:default;white-space:normal}
+        .odash .jc-det-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;font-size:13.5px}
+        .odash .jc-det-h b{font:800 18px var(--jc-cond)}.odash .jc-det-h span{flex:1;min-width:0;color:var(--jc-dim)}
+        .odash .jc-cct th{background:#E6EBEF}
+        .odash .jc-how ul{margin:0;padding:12px 16px 12px 34px;display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--jc-dim);line-height:1.45;background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px}
+        @media (prefers-reduced-motion: reduce){.odash .jc-brk,.odash .jc-brk::after{transition:none}}
+        @media (max-width:760px){.odash .jc-hero{grid-template-columns:minmax(0,1fr)}.odash .jc-tbl .n,.odash .jc-cct .n{display:none}
+          .odash .jc-ax,.odash .jc-crow{grid-template-columns:96px minmax(0,1fr) 44px;gap:8px}.odash .jc-ax em.mn{display:none}.odash .jc-top{padding:14px 16px}.odash .jc-body{padding:14px 14px 18px}.odash .jc-big{font-size:44px}}
         .odash .od-goal{border:1px solid var(--cline);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;background:var(--card);min-width:0}
         .odash .od-goal .h{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
         .odash .od-goal .h b{font-size:13.5px}
@@ -59343,10 +59403,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-23 · App SW version: v566
+**Last manifest update:** 2026-10-23 · App SW version: v567
 
 ---
 
+- **Job Costs redesigned: the Panel Schedule with the Night Shift chart** · 'shipped 2026-10-23' · 'SW v567' · 'OfficeDash' · '.jc' · Koy, of v566's look: *"I hate it, I want it redone: new color scheme, more Homestead-branded … super … cool visually, but also easy to read the information."* Three directions were mocked up on live numbers (Night Shift, Tally Book, Panel Schedule); Koy: *"i like the panel schedule but the night shift graph"*, then *"Build it with the red and blue wire dots."* The tab now has its own scoped theme (every class 'jc-*', the old 'od-cost-*' styles removed): a charcoal header with the white longhorn ('/hs-logo-white.png'), **Job Costs** in Barlow Condensed and a hi-vis orange stripe; a steel panel; three white label-strip boxes per view with a wire-coloured edge — **red = rough, blue = finish, green ground = Josh's whole job** — big condensed numbers and orange (over / under 15%) or green tags (Hours: rough, finish, whole job; Margin: whole job, rough, finish; margins to a tenth so they match the Goals tab, 11.2%); foreman cards; **Where every job stands** set into a dark slate panel with glowing red / blue dots, the light 100% line (Margin: dashed orange 15% goal), values orange when over, and now sorted like the table (most hours / $ over, or most $ lost, first — small service calls no longer crowd the top); the job table as breaker labels with a **breaker-handle Count switch**, red / blue under the rough / finish headings and orange % tags. Orange tags carry dark text (white on that orange is too faint). Barlow and Barlow Condensed added to 'public/index.html'. Checked on live data: desktop 1280 (table fits), phone 390 (one column, no sideways page scroll, chart scale thins to 0% / 100% / ≥250%). Guide 'dashboard.html' step 8. **Why it won't lose data:** look only — the same model, data reads and switches; no write, function or rules change.
 - **Job Costs follows Josh's rule, and its "Where every job stands" chart is back** · 'shipped 2026-10-23' · 'SW v566' · 'OfficeDash' · 'odCostsJoin' · 'odCostsJosh' · 'odCostsSummary' · 'phaseCostsNightly' · Koy: *"i really likes the graph view we had"* and *"we need to use joshs logic, hes the boss and his numbers hes pulling should be the truth"*. **Josh's rule (the Goals tab's, functions/goalsPull.js):** credit = the job's **Simpro technician** (the first listed) instead of v564's Job Board foreman (titled Foreman only) — so Gage Lund, Louis Hoffman, Jacob Spackman etc. are credited where Simpro names them, and a wrong person is fixed on the job's technician in Simpro; finished-job margins use Josh's jobs from 'settings/goalsSimpro' (a customer invoice dated this year, ≥ 99.95% invoiced, costs posted): **Whole job margin (Josh)** = Σ Simpro net profit ÷ Σ contract — verified 11.2% on today's 153 jobs, the Goals tab's number to the decimal — plain average of Simpro's job margins beside, under-15% count; rough / finish margins are the item split on those same jobs (on Active: open jobs past that phase, so far, as v564 had them). The stage switch is All jobs / Active / Invoiced <year> (Josh). The foreman list's Margin view leads with each technician's whole-job margin; By lead still uses the Job Board lead. **Server:** 'phaseCostsNightly' also pulls every job in 'settings/goalsSimpro' (78 invoiced-this-year jobs were not on the Job Board — service calls, old jobs) and keeps each job's Simpro technicians (the job list's 'Technicians' column — no extra calls); cached invoiced jobs without a technician are looked up once. **Chart:** the artifact's dot chart, built into the tab as plain HTML: one row per job (same filters as the table — stage, picked person, search; switched-off jobs greyed), rough (blue) and finish (teal) on one scale, worst first, 100% line (Margin: dashed 15% goal), a red ring when over / under goal, tap a row to open that job's cost centers in the table; finish is teal everywhere on the tab now (violet was too close to blue). Tests: 'scripts/jobcosts-model-test.js' rewritten for the technician credit and Josh's margin (6 checks). Guide 'dashboard.html' step 8. **Needs 'firebase deploy --only functions:phaseCostsNightly,functions:sendTestPhaseCosts'** (then Pull from Simpro now once or twice for the 78 new jobs). **Why it won't lose data:** read-only against Simpro and the jobs; the tab now also reads settings/goalsSimpro (getDoc); the function writes the same settings docs and server-only state as before, with one more field per job (its technician); no job write, no loader or rules change.
 - **Job Costs: the whole job table fits across the screen** · 'shipped 2026-10-23' · 'SW v565' · 'OfficeDash' · Koy, right after v564: *"its annoying that you cant see the whole table horizonatlly at once"*. The Job Costs tab now uses the dashboard's full width (the 310 px right rail is dropped on this tab only — '.od-grid.one'); **By foreman / By lead** moved above the job table as a grid of name cards, **How it is counted** below it. Cost views: used and estimate share one column per phase ("1,249 / 395"; sorts by used), so the table is 9 columns; Margin: one column per phase — margin so far with the estimate's margin small under it — plus sell and whole job. Headings and the long "No foreman (…, why)" text wrap, bars are shorter. Measured on today's data: both views fit with no sideways scroll at 1440, 1280, 1200 and 1100 px; phones still scroll the table (narrow-screen columns hide as before). Guide 'dashboard.html' says the foreman list is above the table. **Why it won't lose data:** layout only — no data, write, function or rules change.
 - **Job Costs tab on the office dashboard: rough and finish across every cost center, by foreman, with a what-if** · 'shipped 2026-10-23' · 'SW v564' · 'OfficeDash' · 'odCostsJoin' · 'odCostsSummary' · 'odCostsCrew' · 'odCostsJobPct' · 'phaseCostsNightly' · 'sendTestPhaseCosts' · 'functions/phaseCosts.js' · Koy: *"show what the rough profit margin is and the finish profit margin is"* — crews are scheduled and materials ordered on Base → Rough In, so the base cost center carries every hour while the extras' estimates sit on their own cost centers and rough looks over (Pierce #1277: 129% of the Rough In cost center's 313.6 h, 94% of the 427.3 h the job was sold with for rough). **Split ('functions/phaseCosts.js'):** every cost center (base bid and every change order) into rough / finish / untagged, item by item — an item ending "(Rough In)" → rough, "(Finish)"/"(Trim)" → finish, else the cost center's type ("Residential (Rough In)"), else its name, else untagged (Change Order, Generators); hours, materials, labor with overhead and sell price all follow the item; Simpro's cost-center total is the budget (items over it scale down, labor not on an item goes to the cost center's phase, a credit comes off its phase); spending is per cost center in Simpro, so it splits in the same shares as that cost center's estimate (DMF Lighting #694: $12,187 → $1,776 rough / $7,073 finish / rest untagged); spent $ include committed, as Simpro's margin does. **Server:** 'phaseCostsNightly' (2:15, 3:15, 4:15 AM MT) + 'sendTestPhaseCosts' (admins, "Pull from Simpro now"): Simpro's Progress + Complete jobs plus the Invoiced jobs still on the Job Board (Keegan's 8 invoiced jobs were missing otherwise); each job's last pull in server-only 'phaseCostsState/{simproNo}' (the rules' catch-all closes it to the app) so a cost center's items are re-read only when its estimate changes and invoiced jobs weekly; a run stops at a 7-minute budget and the next run continues; writes 'settings/phaseCosts' (one row per job) and 'settings/phaseCostsCc0..N' (each job's cost centers, sharded under the doc limit, read when a job is opened). Verified read-only against live Simpro: Pierce and #694 match the hand pull exactly, and a second run reads no items. **Tab:** Hours / Materials / Labor $ / Margin × All jobs / Active / Invoiced; boxes for jobs over estimate and used vs estimate, rough and finish; Margin: whole job (punch list / RTI / invoiced), rough (past rough) and finish, **weighted** (Σ sell − Σ spent ÷ Σ sell — Koy's pick, the bank's number) with the plain per-job average smaller beside it, and how many are under 15%; Every job table (worst first: hours / $ over estimate, or $ lost on Margin), rough and finish side by side, 'Est (all)' explained as every cost center, tap a job for its cost centers + Open job; **Count** checkboxes for a what-if (boxes and foreman list leave switched-off jobs out, What-if bar names them, Turn all back on; page-only); right rail **By foreman / By lead** — tap a name and the boxes become theirs with the company's under each. **Foreman = the Job Board's, counted only when titled Foreman on Team Members** (Koy: Gage is a jr foreman, not a foreman; "No foreman (Gage Lund, jr foreman)"; Paul = outside contractor) — deliberately not the Goals tab's Simpro-technician credit (they differ on 29 jobs). Tests: 'scripts/phasecosts-test.js' (split, budget, credit, spent, Pierce's seven cost centers, shards) and 'scripts/jobcosts-model-test.js' (foreman rule, weighted vs average, summary, crew, per job), both in prebuild; 'odash-model-test' sandbox exports them. Guide 'dashboard.html' step 8. Crew brief 'docs/crew-briefs/v564.md'. **Needs 'firebase deploy --only functions:phaseCostsNightly,functions:sendTestPhaseCosts' before the push**; the first full pull takes about three runs (press Pull from Simpro now a few times, or wait for the night). **Why it won't lose data:** read-only against Simpro and the jobs; the only writes are new docs — 'settings/phaseCosts', 'settings/phaseCostsCc*' (existing settings read rule) and the server-only 'phaseCostsState' collection — no job write, no loader or rules change; the what-if switches never leave the page.
