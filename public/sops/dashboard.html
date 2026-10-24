@@ -210,18 +210,22 @@
     Simpro's total for each cost center is the budget; the items only decide the split, and a credit comes off its phase. What was
     spent is recorded per cost center, so it splits the same way as that cost center's estimate; spent dollars include committed
     (ordered, scheduled), the way Simpro figures margin.
-    Pick <b>Hours</b>, <b>Materials</b>, <b>Labor $</b> or <b>Margin</b>, and <b>All jobs</b>, <b>Active</b> or <b>Invoiced</b>. The boxes show jobs
-    over estimate and used vs estimate for rough and finish; on Margin, the whole job (on jobs at punch list, ready to invoice or
-    invoiced), rough (jobs past rough) and finish, each <b>weighted</b> (total sell less total spent, over total sell — big jobs count
-    more) with the plain average of each job's margin smaller beside it, and how many are under 15%.
-    <b>Every job</b> lists rough and finish side by side, worst first; <b>Est (all)</b> is the estimate from every cost center, not just
-    the base one. Tap a job to see its cost centers and how each splits; <b>Open job</b> opens it in the app. Untick <b>Count</b> to leave a
-    job out: a <b>What-if</b> bar names what is off and the boxes and the foreman list leave it out (<b>Turn all back on</b> to undo;
-    nothing in Simpro or the app changes, and it resets when you leave).
-    <b>By foreman</b> / <b>By lead</b> (above the job table) adds up each person's jobs; tap a name and the boxes become theirs, with the company
-    number under each. The foreman is the one on the <b>Job Board</b>, counted only when titled <b>Foreman</b> on Team Members — a jr foreman,
-    lead or office person named in the foreman field shows as <b>No foreman (name, why)</b>; fix the job's foreman field to move it.
-    This is not the Goals tab's rule (Simpro's technician), so the two tabs can credit a job to different people.
+    Credit and finished-job margins follow <b>Josh's rule</b>, the same as the Goals tab, so the two tabs agree: each job is credited to its
+    <b>Simpro technician</b> (the first one listed), and a finished job counts when it has a customer invoice dated this year, is invoiced in full
+    and has costs posted. Pick <b>Hours</b>, <b>Materials</b>, <b>Labor $</b> or <b>Margin</b>, and <b>All jobs</b>, <b>Active</b> or
+    <b>Invoiced this year (Josh)</b>. The boxes show jobs over estimate and used vs estimate for rough and finish; on Margin, <b>Whole job
+    margin (Josh)</b> is Simpro's net profit over contract on Josh's jobs — the Goals tab's number — and rough and finish are the item split on
+    those same jobs (on <b>Active</b>: open jobs past that phase, so far). Each is <b>weighted</b> (big jobs count more) with the plain average of
+    each job's margin smaller beside it, and how many are under 15%.
+    <b>Where every job stands</b> charts each job's rough (blue) and finish (teal) on one scale, worst first: the dark line is 100% of the
+    estimate (on Margin, the dashed line is the 15% goal) and a red ring is over it (or under the goal); tap a job to open its cost centers.
+    <b>Every job</b> lists rough and finish side by side, worst first; <b>est</b> is the estimate from every cost center, not just the base one.
+    Tap a job to see its cost centers and how each splits; <b>Open job</b> opens it in the app. Untick <b>Count</b> to leave a job out: a
+    <b>What-if</b> bar names what is off and the boxes and the foreman list leave it out (<b>Turn all back on</b> to undo; nothing in Simpro or
+    the app changes, and it resets when you leave).
+    <b>By foreman</b> / <b>By lead</b> (above the chart) adds up each person's jobs; tap a name and the boxes become theirs, with the company
+    number under each. A job credited to the wrong person is fixed on the job's <b>technician in Simpro</b> (it shows here after the next
+    night's pull); <b>By lead</b> uses the lead on the app's Job Info.
     The numbers are pulled from Simpro every night (2:15, 3:15 and 4:15 AM; read-only); <b>Pull from Simpro now</b> (admins) runs it on
     demand. Nothing on this tab writes to Simpro or to a job.</p>
   </div></div>

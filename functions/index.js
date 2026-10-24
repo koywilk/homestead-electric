@@ -8371,7 +8371,8 @@ exports.sendTestGoalsPull = functions
 
 // ─────────────────────────────────────────────────────────────
 // JOB COSTS — nightly rough / finish split for Dashboard › Job Costs (SW v564, 2026-10-23)
-// Every Simpro job in progress or complete, plus the invoiced jobs still on the Job Board,
+// Every Simpro job in progress or complete, plus the invoiced jobs still on the Job Board, plus (v566)
+// every job the Goals tab counts under Josh's rule (settings/goalsSimpro, invoiced this year),
 // split item by item into rough / finish / untagged across every cost center (base bid and
 // change orders). Math in functions/phaseCosts.js (scripts/phasecosts-test.js).
 // Writes settings/phaseCosts (one row per job) and settings/phaseCostsCc0..N (each job's cost
@@ -8384,7 +8385,9 @@ exports.sendTestGoalsPull = functions
 // ─────────────────────────────────────────────────────────────
 const _pc = require("./phaseCosts");
 const PC_DOC = "phaseCosts", PC_CC_DOC = "phaseCostsCc", PC_STATE = "phaseCostsState";
-const pcMetaOf = (x) => ({ no: String(x.ID), name: x.Name || "", site: (x.Site && x.Site.Name) || "", stage: x.Stage || "", status: (x.Status && x.Status.Name) || "" });
+// tech = Simpro's technicians, as the Goals tab names them (Josh's rule credits the first one; v566).
+const pcTechOf = (x) => { const t = Array.isArray(x && x.Technicians) ? x.Technicians.map(y => y && y.Name).filter(Boolean) : []; return t.length ? t.join(" / ") : "UNASSIGNED"; };
+const pcMetaOf = (x) => ({ no: String(x.ID), name: x.Name || "", site: (x.Site && x.Site.Name) || "", stage: x.Stage || "", status: (x.Status && x.Status.Name) || "", tech: pcTechOf(x) });
 const pcJob = (meta, prevState) => _pc.pullJob(meta, prevState, simproReqWithRetry);
 async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
   const startedAt = Date.now();
@@ -8393,7 +8396,7 @@ async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
   const metas = new Map();
   for (const st of ["Progress", "Complete"]) {
     for (let page = 1; page <= 10; page++) {
-      const r = await simproReqWithRetry("GET", `/jobs/?Stage=${st}&pageSize=250&page=${page}&columns=ID,Name,Stage,Status,Site`);
+      const r = await simproReqWithRetry("GET", `/jobs/?Stage=${st}&pageSize=250&page=${page}&columns=ID,Name,Stage,Status,Site,Technicians`);
       if (!r.ok || !Array.isArray(r.data)) throw new Error(`[phaseCosts] ${st} job list failed on page ${page} (${r.status})`);
       r.data.forEach(x => { if (x && x.ID != null) metas.set(String(x.ID), pcMetaOf(x)); });
       if (r.data.length < 250) break;
@@ -8404,13 +8407,17 @@ async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
   snap.docs.forEach(d => { const j = (d.data() || {}).data || {}; const sn = String(j.simproNo || "").trim(); if (sn && !j.deleted && !j.archived && j.type !== "quote") board.add(sn); });
   const stateSnap = await db.collection(PC_STATE).get();
   const state = {}; stateSnap.docs.forEach(d => { state[d.id] = d.data(); });
-  for (const sn of board) {
+  // v566 (Koy: "use joshs logic … his numbers … should be the truth"): every job the Goals tab counts —
+  // settings/goalsSimpro, jobs with a customer invoice dated this year — is pulled too, whatever its stage.
+  const goals = ((await db.collection("settings").doc(GOALS_DOC).get()).data() || {});
+  const goalsIds = new Set((Array.isArray(goals.jobs) ? goals.jobs : []).map(j => j && j.id != null ? String(j.id) : "").filter(Boolean));
+  for (const sn of new Set([...board, ...goalsIds])) {
     if (metas.has(sn)) continue;
     const st = state[sn];
-    if (st && st.meta && st.meta.stage === "Invoiced") { metas.set(sn, st.meta); continue; }   // invoiced stays invoiced
-    const r = await simproReqWithRetry("GET", `/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Name,Stage,Status,Site`);
+    if (st && st.meta && st.meta.stage === "Invoiced" && st.meta.tech !== undefined) { metas.set(sn, st.meta); continue; }   // invoiced stays invoiced
+    const r = await simproReqWithRetry("GET", `/jobs/?ID=${encodeURIComponent(sn)}&pageSize=1&columns=ID,Name,Stage,Status,Site,Technicians`);
     const x = r.ok && Array.isArray(r.data) ? r.data[0] : null;
-    if (x && x.Stage === "Invoiced") metas.set(sn, pcMetaOf(x));
+    if (x && (x.Stage === "Invoiced" || goalsIds.has(sn))) metas.set(sn, pcMetaOf(x));
   }
   // 2. Pull: never-pulled jobs first, then the rest; invoiced jobs only once a week. Stop at the budget.
   const WEEK = 7 * 86400000;
@@ -8434,7 +8441,7 @@ async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
   const rows = [], ccsByNo = {};
   all.forEach(m => {
     const st = state[m.no]; if (!st || !st.row) return;
-    const row = { ...st.row, name: m.name, site: m.site, stage: m.stage, status: m.stage === "Invoiced" ? "Invoiced" : String(m.status || "").replace(/^Job\s*-\s*/i, "").trim(), pulledAt: st.at };
+    const row = { ...st.row, name: m.name, site: m.site, stage: m.stage, status: m.stage === "Invoiced" ? "Invoiced" : String(m.status || "").replace(/^Job\s*-\s*/i, "").trim(), tech: m.tech || "UNASSIGNED", pulledAt: st.at };
     if (!_pc.hasEstimate(row)) return;
     rows.push(row); ccsByNo[m.no] = st.ccs || [];
   });
