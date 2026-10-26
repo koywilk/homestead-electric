@@ -130,6 +130,7 @@ t("PO form helpers + attached wording", () => {
 t("one key per card", () => {
   eq(R.logKey("job_abc", "rough", "1791484665123"), "job-abc_rough_1791484665123", "underscore in job id can't break the key");
   eq(R.logKey("J1", "finish", "17"), "J1_finish_17", "finish");
+  eq(R.logKey("J1", "comm", "17"), "J1_comm_17", "commercial Materials tab (v528)");
   eq(R.logKey("J1", "gear", "17"), "", "bad phase");
   eq(R.logKey("", "rough", "17"), "", "no job");
   eq(R.logKey("J1", "rough", ""), "", "no card");

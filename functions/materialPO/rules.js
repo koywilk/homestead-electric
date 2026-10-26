@@ -228,7 +228,7 @@ function logKey(jobId, phase, orderId) {
   const clean = (v) => String(v || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
   const job = String(jobId || "").replace(/[^A-Za-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
   const k = `${job}_${clean(phase)}_${clean(orderId)}`;
-  return /^[A-Za-z0-9-]+_(rough|finish)_[A-Za-z0-9_-]+$/.test(k) ? k : "";
+  return /^[A-Za-z0-9-]+_(rough|finish|comm)_[A-Za-z0-9_-]+$/.test(k) ? k : "";
 }
 
 // ── Store-run receipts (SW v548) ─────────────────────────────────────────────
