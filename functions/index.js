@@ -8406,7 +8406,7 @@ exports.sendTestGoalsPull = functions
 // minute or two). Read-only against Simpro; no job write.
 // ─────────────────────────────────────────────────────────────
 const _pc = require("./phaseCosts");
-const PC_DOC = "phaseCosts", PC_CC_DOC = "phaseCostsCc", PC_STATE = "phaseCostsState";
+const PC_DOC = "phaseCosts", PC_CC_DOC = "phaseCostsCc", PC_STATE = "phaseCostsState", PC_HRS_DOC = "phaseHours";
 // tech = Simpro's technicians, as the Goals tab names them (Josh's rule credits the first one; v566).
 const pcTechOf = (x) => { const t = Array.isArray(x && x.Technicians) ? x.Technicians.map(y => y && y.Name).filter(Boolean) : []; return t.length ? t.join(" / ") : "UNASSIGNED"; };
 const pcMetaOf = (x) => ({ no: String(x.ID), name: x.Name || "", site: (x.Site && x.Site.Name) || "", stage: x.Stage || "", status: (x.Status && x.Status.Name) || "", tech: pcTechOf(x) });
@@ -8477,6 +8477,8 @@ async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
   const bytes = Buffer.byteLength(JSON.stringify(payload));
   if (bytes > 900000) throw new Error(`[phaseCosts] doc would be ${bytes} bytes — over the document limit, not written`);
   await db.collection("settings").doc(PC_DOC).set(payload);
+  // Hours only (no dollars) for the field app's Rough / Finish badges — crew phones read this one, never phaseCosts.
+  await db.collection("settings").doc(PC_HRS_DOC).set({ generated_at: payload.generated_at, jobs: _pc.hoursDoc(rows) });
   functions.logger.info("[phaseCosts] written", { ...payload.counts, bytes, shards: shards.length, seconds: payload.seconds, reason });
   return { ok: true, ...payload.counts, shards: shards.length, bytes, seconds: payload.seconds, generated_at: payload.generated_at };
 }
@@ -8485,6 +8487,22 @@ exports.phaseCostsNightly = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .pubsub.schedule("15 2,3,4 * * *").timeZone(TZ)
   .onRun(async () => { try { return await runPhaseCosts({ reason: "nightly" }); } catch (e) { functions.logger.error("[phaseCosts] nightly failed", { error: e.message }); return null; } });
+// v577: live rough / finish hours for ONE job (the field app's Rough / Finish badges). Reads the job's
+// cost-center totals now (sections + one list per section) and reuses each cost center's saved split from
+// the nightly pull; items are re-read only for a cost center whose estimate changed since. Hours only.
+exports.getPhaseHours = functions
+  .runWith({ timeoutSeconds: 120 })
+  .https.onCall(async (data) => {
+    requireAppKey(data);
+    const no = String((data && data.simproJobNo) || "").trim();
+    if (!/^\d+$/.test(no)) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+    const ref = db.collection(PC_STATE).doc(no);
+    const snap = await ref.get(); const prev = snap.exists ? snap.data() : null;
+    const r = await pcJob({ ...((prev && prev.meta) || {}), no }, prev);
+    // Item reads mean an estimate changed: keep the new split so the next open and tonight's pull skip them.
+    if (r.itemReads) await ref.set({ at: new Date().toISOString(), meta: (prev && prev.meta) || { no }, row: r.row, ccs: r.ccs, cache: r.cache });
+    return { ok: true, at: new Date().toISOString(), itemReads: r.itemReads, ...(_pc.hoursDoc([r.row])[no] || {}) };
+  });
 // "Pull from Simpro now" on the Job Costs tab (admins; same app-key guard as every other callable).
 exports.sendTestPhaseCosts = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })

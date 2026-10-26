@@ -92,6 +92,16 @@ t("job", () => {
   assert.ok(X.hasEstimate(row) && !X.hasEstimate(X.jobRow({ no: 2 }, [])));
 });
 
+t("hours", () => {
+  const row = X.jobRow({ no: 1277, name: "Pierce Residence", stage: "Progress" }, pierce);
+  const h = X.hoursDoc([row, X.jobRow({ no: 2 }, []), { no: 3, rough_hrsEst: 0, rough_hrsUsed: 0, finish_hrsEst: 12, finish_hrsUsed: 0, finish_sell: 900 }]);
+  assert.deepStrictEqual(Object.keys(h).sort(), ["1277", "3"], "jobs with no rough / finish hours left out");
+  near(h["1277"].r[0], 403.8, "rough used", 0.1); near(h["1277"].r[1], 427.3, "rough estimate", 0.1);
+  near(h["1277"].f[1], 393.2, "finish estimate", 0.1);
+  assert.deepStrictEqual(h["3"], { f: [0, 12] }, "a phase with no hours is left off");
+  assert.ok(!/sell|mat|lab|\$/.test(JSON.stringify(h)), "hours only, no dollar field");
+});
+
 t("shards", () => {
   const byNo = {}; for (let i = 0; i < 40; i++) byNo[String(1000 + i)] = pierce;
   const { shards, where } = X.shardCcs(byNo, 20000);
@@ -100,4 +110,37 @@ t("shards", () => {
   Object.keys(byNo).forEach(no => assert.ok(shards[where[no]][no], `job ${no} findable`));
 });
 
-console.log(`phasecosts-test: ${passed} checks passed`);
+// Live reads (getPhaseHours): a used-hours change costs no item reads; only a changed estimate re-reads items.
+async function liveCheck() {
+  const job = { base: { est: 100, act: 10 }, co: { est: 20, act: 0 } };
+  const calls = [];
+  const cc = (id, name, h) => ({ ID: id, Name: name, CostCenter: { Name: "Residential (Rough In)" },
+    Totals: { ResourcesCost: { LaborHours: { Estimate: h.est, Actual: h.act }, Total: { Estimate: h.est * 70, Actual: h.act * 70 } }, MaterialsCost: { Estimate: 0 } } });
+  const item = (id, name, min) => ({ ID: id, Description: name, Total: { Qty: 1, Amount: { ExTax: 0 } }, Totals: { EstimatedTime: min, PriceEx: 0 }, EstimatedTime: min, BasePrice: 0, LaborCost: 70 });
+  const req = async (m, path) => {
+    calls.push(path);
+    if (/\/sections\/\?/.test(path)) return { ok: true, data: [{ ID: 1, Name: "Base", DisplayOrder: 0 }] };
+    if (/costCenters\/\?/.test(path)) return { ok: true, data: [cc(11, "Base", job.base), cc(12, "CO", job.co)] };
+    if (/costCenters\/11\/oneOffs/.test(path)) return { ok: true, data: [item(1, "Pipe (Rough In)", 4800), item(2, "Devices (Finish)", 1200)] };
+    if (/costCenters\/12\/oneOffs/.test(path)) return { ok: true, data: [item(3, "Feed (Rough In)", 1200)] };
+    return { ok: true, data: [] };
+  };
+  const itemCalls = () => calls.filter(c => /costCenters\/\d+\//.test(c)).length;
+  const cold = await X.pullJob({ no: "9" }, null, req);
+  assert.strictEqual(cold.itemReads, 2, "first read opens both cost centers' items");
+  near(X.hoursDoc([cold.row])["9"].r[1], 100, "rough estimate 80 + 20", 0.1);
+  near(X.hoursDoc([cold.row])["9"].f[1], 20, "finish estimate", 0.1);
+  calls.length = 0; job.base.act = 50;
+  const warm = await X.pullJob({ no: "9" }, { cache: cold.cache }, req);
+  assert.strictEqual(warm.itemReads, 0, "hours used moved: no item reads");
+  assert.strictEqual(itemCalls(), 0, "only sections + cost-center lists asked");
+  assert.strictEqual(calls.length, 2, "two Simpro requests for a one-section job");
+  near(X.hoursDoc([warm.row])["9"].r[0], 40, "live used hours split 80 / 20 like the estimate", 0.1);
+  near(X.hoursDoc([warm.row])["9"].f[0], 10, "finish share of the used hours", 0.1);
+  calls.length = 0; job.co.est = 30;
+  const changed = await X.pullJob({ no: "9" }, { cache: warm.cache }, req);
+  assert.strictEqual(changed.itemReads, 1, "a changed estimate re-reads that one cost center only");
+  passed++; console.log("  ok  live");
+}
+
+liveCheck().then(() => console.log(`phasecosts-test: ${passed} checks passed`)).catch(e => { console.error("  FAIL live:", e.message); process.exit(1); });

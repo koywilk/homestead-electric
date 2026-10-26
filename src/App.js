@@ -2452,6 +2452,29 @@ async function fetchSimproOnSchedulePids(httpsCallableFn, functionsInstance, for
 function subscribeSimproPids(cb) { _simproPidsListeners.add(cb); return () => _simproPidsListeners.delete(cb); }
 function getCachedSimproPids() { return _simproPidsCache.pids; }
 
+// v577: Rough / Finish tab hours from the nightly Job Costs split (settings/phaseHours, written by
+// phaseCostsNightly — hours only, never dollars). One read per 30 min, shared by every open job.
+let _phaseHoursCache = { at: 0, p: null };
+function loadPhaseHours() {
+  if (_phaseHoursCache.p && Date.now() - _phaseHoursCache.at < 30 * 60 * 1000) return _phaseHoursCache.p;
+  _phaseHoursCache = { at: Date.now(), p: getDoc(doc(db, "settings", "phaseHours"))
+    .then(s => (s.exists() && s.data().jobs) || {})
+    .catch(e => { console.warn("[phaseHours]", e); _phaseHoursCache.at = 0; return {}; }) };
+  return _phaseHoursCache.p;
+}
+// Live hours for one job (getPhaseHours: this job's Simpro cost-center totals now, last night's split).
+// Cached 5 min per job so flipping between jobs doesn't re-ask Simpro; null on any failure.
+const _phaseHoursLive = new Map();
+function loadPhaseHoursLive(sjn) {
+  const hit = _phaseHoursLive.get(sjn);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.p;
+  const p = httpsCallable(functions, "getPhaseHours")({ simproJobNo: sjn })
+    .then(res => (res.data && res.data.ok) ? { ...(res.data.r ? { r: res.data.r } : {}), ...(res.data.f ? { f: res.data.f } : {}) } : null)
+    .catch(e => { console.warn("[phaseHours live]", e); _phaseHoursLive.delete(sjn); return null; });
+  _phaseHoursLive.set(sjn, { at: Date.now(), p });
+  return p;
+}
+
 // ── Simpro Job Basics auto-pull ─────────────────────────────────────────────
 // Called from the Job Info forms in QuickJobDetail / TempPedDetail / JobDetail.
 // When the user enters a Simpro Job # and tabs out (or clicks the refresh
@@ -31785,6 +31808,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
 
+  // v577: this job's rough / finish hours ({ r: [used, est], f: [used, est] }) for the phase tabs' badges.
+  const [phaseHrs, setPhaseHrs] = useState(null);
+  useEffect(() => {
+    const sjn = simproJobNoOf(job); let live = true;
+    if (!sjn) { setPhaseHrs(null); return; }
+    // Last night's numbers show at once; the live read replaces them a second or two later.
+    let gotLive = false;
+    loadPhaseHours().then(all => { if (live && !gotLive) setPhaseHrs(all[sjn] || null); });
+    loadPhaseHoursLive(sjn).then(h => { if (live && h) { gotLive = true; setPhaseHrs(h); } });
+    return () => { live = false; };
+  }, [job.simproNo]);
+
   // ── Simpro "on current schedule" (14-day window) ─────────────────
   // Powers the In Progress → On Schedule / Ongoing pill. Only fires
   // while a phase is in progress to avoid wasted fetches. Uses a
@@ -33032,13 +33067,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       {/* STATUS — top */}
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
-                        {(simproFinancials?.roughHoursActual != null || simproFinancials?.roughHoursEstimate != null) && (()=>{
-                          const ha = simproFinancials.roughHoursActual;
-                          const he = simproFinancials.roughHoursEstimate;
+                        {phaseHrs?.r && (()=>{
+                          const [ha, he] = phaseHrs.r;
                           const over = ha != null && he != null && ha > he;
                           const hc = over ? C.red : "#6A3FB5";
                           return (
-                            <span title="Rough labor hours: used / estimated"
+                            <span title="Rough labor hours: used / estimated, across every cost center"
                               style={{fontSize:12.5,fontWeight:800,color:hc,background:`${hc}18`,
                                 border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 8px",
                                 fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
@@ -33433,13 +33467,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       {/* STATUS — top */}
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
-                        {(simproFinancials?.finishHoursActual != null || simproFinancials?.finishHoursEstimate != null) && (()=>{
-                          const ha = simproFinancials.finishHoursActual;
-                          const he = simproFinancials.finishHoursEstimate;
+                        {phaseHrs?.f && (()=>{
+                          const [ha, he] = phaseHrs.f;
                           const over = ha != null && he != null && ha > he;
                           const hc = over ? C.red : "#6A3FB5";
                           return (
-                            <span title="Finish labor hours: used / estimated"
+                            <span title="Finish labor hours: used / estimated, across every cost center"
                               style={{fontSize:12.5,fontWeight:800,color:hc,background:`${hc}18`,
                                 border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 8px",
                                 fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
@@ -60288,10 +60321,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-29 · App SW version: v576
+**Last manifest update:** 2026-10-29 · App SW version: v577
 
 ---
 
+- **Rough and Finish tabs show their own hours, live** · 'shipped 2026-10-29' · 'SW v577' (built 2026-10-26 as v568, replayed onto v576) · 'JobDetail' · 'getPhaseHours' · 'loadPhaseHoursLive' · 'loadPhaseHours' · 'hoursDoc' · 'phaseCostsNightly' · The crew asked to see rough and finish hours apart, not only the job total. The clock badges on the **Rough** and **Finish** tabs (left of the stage status, built long ago, empty until now because 'getSimproJobFinancials' never sent 'roughHoursActual' / 'finishHoursActual') now read **used / estimated** for that phase, the same item-by-item split as the office Job Costs tab: every cost center (base and change orders), split by the "(Rough In)" / "(Finish)" item names; red once used passes the estimate. The job header keeps its total badges exactly as before. **Live like the header:** new callable 'getPhaseHours' reads the job's cost-center totals from Simpro on open (sections + one list per section) and reuses each cost center's saved split from 'phaseCostsState'; items are re-read only for a cost center whose estimate changed (then saved back). Timed on live Simpro: Pierce #1277 1.2 s / 4 requests, Fuller #1099 2.1 s / 7, Battle Creek #1412 (13 sections) 4.4 s / 13, zero item reads; a job never pulled before takes one slow first read (15–47 s) and is fast after. The phone shows last night's numbers at once from 'settings/phaseHours' (written by 'phaseCostsNightly', 6.5 KB, hours only) and swaps in the live read; live results are cached 5 min per job; on any failure the nightly numbers stay. Both return **hours only, no dollar field** (a test asserts it), so crew phones never receive Job Costs' dollar data. A job with no split (a quote, no estimate) shows no badge, as before. Untagged 'other' hours (~4% company-wide) stay in the header total only. Test 'phasecosts-test' adds the hours doc and the live read (a used-hours change asks Simpro twice and reads no items; a changed estimate re-reads that one cost center). Guides 'rough.html' / 'finish.html' explain the badge. **Needs 'firebase deploy --only functions:getPhaseHours,functions:phaseCostsNightly,functions:sendTestPhaseCosts'** (before the app). **Why it won't lose data:** the app only reads (one getDoc, one callable); the functions add one new 'settings/' doc under the existing rule and re-save a job's server-only split cache in 'phaseCostsState' in the same shape the nightly pull writes; no job field, loader or rules change.
 - **Projects: add an existing job to a project** · 'shipped 2026-10-29' · 'SW v576' · 'JobProjectSection' · Koy: *"i have a battle creek project made already, i dont see an option to move it to that project."* Job Info → Project on a job that isn't in one now has **Or add it to an existing project**: pick a live project in the job's division, Add to project. The job keeps its own name, Simpro #, plans and everything on it (own-number building); if it carries the project's shared Simpro #, the section then asks for its Simpro folder. Leave project undoes it. **Why it won't lose data:** writes only the 'projectGroupId' / 'projectRole' / 'simproLead' / 'simproFolder' pointers through the job's 'u()' funnel; nothing renamed, moved or deleted. No rules or functions changes.
 - **Projects: several houses on one job become one project — each building its own job, grouped on the Job Board; add-only field milestones on every job; Plans & Links starts folded** · 'shipped 2026-10-29' · 'SW v575' · 'ProjectsCtx' · 'ProjectSheet' · 'AddBuildingForm' · 'SimproFolderPicker' · 'FieldMilestones' · 'FoldSection' · 'functions:listSimproJobFolders' · Meeting 2026-10-14 (Fratto Farms). **Projects:** a project is a '/projects' record grouping normal jobs via 'projectGroupId'; the Job Board shows one folded PROJECTS group (buildings leave the stage groups, nothing shown twice); project page with buildings first, + Add Building (Simpro folder picker reading Simpro's real folders through 'listSimproJobFolders', app-key gated, with a typed-name fallback and warning if Simpro can't be read; own-number option; Job Sections toggles), folded Project info; breadcrumb + labeled hops inside a building; Job Info → Project (Make this a project → the job becomes Site / Shared, nothing moved; not offered on quotes, temp peds or quick jobs). Subcontractors (contractor access) don't see the project page, breadcrumb or Project section — only their own buildings under the project row. A shared Simpro # joins only its lead building (client lookups, Scoreboard margin, Friday Packet, foreman prep, and the crew planner's scheduled crew/hours go to the lead building or Site / Shared). **Milestones:** add-only, starts empty, stamped who + date, Remove + Undo; commercial's 9 GC dates moved to a folded GC Schedule Dates section (same data, Forecast + Ufer reminders unchanged). **Plans & Links:** every block folded with a count. **Why it won't lose data:** new job fields live inside 'data' (loader passes them through); milestones are id'd items so the save transaction's three-way merge keeps two phones' adds; '/projects' is a new additive collection (create/update validated like '/needs', delete denied); buildings never get a top-level Drive folder ('_needsDriveFolder' guard); nothing is ever deleted. SOP guides: new Projects guide (HelpDot on the project page), plus Job Info, Plans & Links and Commercial Mode updated. Deploy: rules ('projects') + functions ('ensureJobDriveFolder', 'nightlyDriveSync', 'listSimproJobFolders', 'foremanMeetingPrep', 'sendTestForemanMeetingPrep', 'strategyPrep', 'sendTestStrategyPrep'; the retired Friday Packet's guarded 'buildModel' is no longer called by any function). Phase 2 (project Drive folders + plan routing) is separate.
 - **Approved COs: pick Rough or Finish punch, the crew can mark work completed, and the CO block can't be missed** · 'shipped 2026-10-28' · 'SW v574' · 'coPunchPhaseFor' · 'approvedCOsOnPhase' · 'ApprovedCOsPunch' · 'ChangeOrders' · 'Section badge' · Koy: *"need some other option for approved COs, like add to finish punchlist, add to rough punch list … crews should be able to mark things as work completed as well. I also want the COs tab in the punch lists to be more obvious its there, right now a lot of people have a hard time seeing it and half dont even know its there"* → approved the mockup 'docs/mockups/approved-co-routing.html' (*"looks good i hate purple tho"* → teal, the app's 'C.teal'). **(1) Which punch list:** every approved CO on the COs tab has a **Rough punch | Finish punch** toggle, stored on the CO as 'punchPhase'; blank keeps the v417 rule ('coPunchPhase': Rough until rough hits 100%), so no existing CO moved. The punch-list card carries *Wrong list? Move to Finish/Rough punch*. A CO pinned to Rough that is still open once the job is on Finish **stays on Rough**, and the Finish tab's bar adds *N still open on the Rough punch — open Rough ▸*. The approved-CO auto task names the list (*on the Rough punch, mark work completed when done*). **(2) Crew complete:** *Mark Work Completed* on the approved CO card is no longer office-only (Approve / Deny / the status picker / Undo Complete still are, 'cos.setStatus'); it writes the same 'coStatus:"completed"' with the same 10-second Undo, so the invoice task is made exactly as before. The punch-list button (was *Mark CO done*, already open to everyone) is now a full-width green *Mark Work Completed*. Convert to Return Trip now shows on every approved CO, not only when no crew is on site today. **(3) Can't miss it:** the Approved COs header is a solid teal bar (was thin purple text) that lists each open CO by number and description even while closed (up to 4, then *+ N more*), still starting closed; the Punch List section header gets a teal *N change orders* badge visible while the section is closed ('Section' gained an optional 'badge' prop); the Rough / Finish job tabs get a teal *N CO* pill beside the Questions *NEW* pill. Up Next was considered and dropped (unused). Guides: 'changeorders.html', 'rough.html', 'finish.html'. Gate: 'scripts/copunch-test.js' (+7 pin cases). **Why it won't lose data:** one new optional field ('punchPhase') on a CO, written through the same 'changeOrders.map(...)' patch every CO edit already uses; blank means today's behaviour, so nothing moves on deploy; completing writes the pre-existing 'coStatus' value with the existing Undo; everything else is display. No loader, rules or functions change.

@@ -116,6 +116,17 @@ function jobRow(meta, ccRows) {
     status: meta.stage === "Invoiced" ? "Invoiced" : String(meta.status || "").replace(/^Job\s*-\s*/i, "").trim(), ...t };
 }
 const hasEstimate = (row) => P.some(p => row[p + "_hrsEst"] || row[p + "_matEst"] || row[p + "_sell"]);
+// Hours only, for the field app's Rough / Finish badges: { [simproNo]: { r: [used, est], f: [used, est] } }.
+// No dollar field ever goes in this doc — crew phones read it.
+function hoursDoc(rows) {
+  const out = {};
+  (rows || []).forEach(row => {
+    const ph = (p) => (n(row[p + "_hrsUsed"]) || n(row[p + "_hrsEst"])) ? [r1(row[p + "_hrsUsed"]), r1(row[p + "_hrsEst"])] : null;
+    const r = ph("rough"), f = ph("finish");
+    if (r || f) out[String(row.no)] = { ...(r ? { r } : {}), ...(f ? { f } : {}) };
+  });
+  return out;
+}
 
 // Pack job → cost-center lists into shards that each stay well under Firestore's 1 MiB doc limit.
 function shardCcs(byNo, maxBytes = 700000) {
@@ -175,4 +186,4 @@ async function pullJob(meta, prevState, req) {
   return { row: jobRow(meta, ccs), ccs, cache, itemReads };
 }
 
-module.exports = { pullItems, pullJob, P, phaseOfType, phaseOfItem, ITEM_KINDS, ITEM_COLUMNS, itemOf, weightsOf, split, spentSplit, ccTotals, ccSig, needsItems, ccRow, jobRow, hasEstimate, shardCcs };
+module.exports = { pullItems, pullJob, P, phaseOfType, phaseOfItem, ITEM_KINDS, ITEM_COLUMNS, itemOf, weightsOf, split, spentSplit, ccTotals, ccSig, needsItems, ccRow, jobRow, hasEstimate, hoursDoc, shardCcs };
