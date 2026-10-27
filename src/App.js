@@ -2118,6 +2118,18 @@ if ("serviceWorker" in navigator) {
 window.__HE_DB = db;
 window.__HE_REGISTER_FCM = registerFCMToken;
 // Diagnostic: dump the current user's tokens from Firestore
+// v570, admins, one time: put the PO form PDF on every Simpro PO the app emailed
+// before v570. __HE_PO_FORMS_BACKFILL() lists them (dry run); (true) attaches,
+// 40 at a time until none are left. Safe to re-run: a PO that has it is skipped.
+window.__HE_PO_FORMS_BACKFILL = async (go = false) => {
+  const call = memberCallable("backfillPoForms", getIdentity(), { timeout: 540000 });
+  if (!go) { const r = (await call({})).data; console.log(`${r.todo} PO(s) need the form:`, r.pos.join(", ")); return r; }
+  let r;
+  do { r = (await call({ go: true })).data; console.log(`attached ${r.attached}, ${r.left} left`, r.failed.length ? r.failed : ""); }
+  while (r.attached > 0 && r.left > 0);
+  return r;
+};
+
 window.__HE_FCM_STATUS = async () => {
   const identity = JSON.parse(localStorage.getItem("he_identity") || "{}");
   const snap = await getDoc(doc(db, "settings", "users"));
@@ -14484,6 +14496,7 @@ function receiptShrinkPlan(w0, h0, lastBytes, step) {
 }
 const newReceiptId = () => `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 // STORE_RECEIPT_HELPERS_END
+const PO_FORM_CALL = { timeout: 90000 }; // rebuild the PDF + put it on the Simpro PO if it's missing
 const RECEIPT_CALL = { timeout: 150000 }; // Simpro check + upload (the server allows 60 s for the upload itself)
 
 // Browser half of the shrink: decode, redraw on a canvas, JPEG until it fits.
@@ -14547,6 +14560,29 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
       const m = String((e && e.message) || e || "Something went wrong.");
       if (typeof toast !== "undefined" && toast.error) toast.error(m); else window.alert(m);
     } finally { setResuming(null); }
+  };
+
+  // v570: PO form — the exact PDF CED got, rebuilt by getPoForm from the send record.
+  // Opening it also puts it on the Simpro PO if the send couldn't.
+  const [formBusy, setFormBusy] = useState(null); // card id
+  const openPoForm = async (o) => {
+    const me = getIdentity(); if (!me) return;
+    setFormBusy(o.id);
+    try {
+      const r = await memberCallable("getPoForm", me, PO_FORM_CALL)({ jobId, phase, orderId: o.poOrderId || o.id,
+        ...(o.poOrderId ? { ccId: String(o.poCcId || "") } : {}), po: String(o.po || "") });
+      const res = (r && r.data) || {};
+      const bin = atob(res.pdf || "");
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      const a = document.createElement("a"); a.href = url; a.download = res.fileName || `Purchase_Order_No_${o.po}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+      const m = String((e && e.message) || e || "Couldn't open the PO form.");
+      if (typeof toast !== "undefined" && toast.error) toast.error(m); else window.alert(m);
+    } finally { setFormBusy(null); }
   };
 
   // v548: store-run receipts — the Add receipt sheet and the once-only Picked up reminder.
@@ -14780,6 +14816,18 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                     </button>
                   );
                 })()}
+
+                {/* v570: the PO form CED got (also on the PO in Simpro). Every PO
+                    the app emailed, from a card or an order from the bid. */}
+                {o.poSentVia === "app" && poSendKind(o.source) === "email" && o.po && o.poEmailOk
+                  && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) && can(getIdentity(), "materials.sendPO") && (
+                  <button disabled={formBusy===o.id} onClick={()=>openPoForm(o)}
+                    style={{marginTop:8,width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:7,
+                      background:C.surface,border:`1px solid ${C.border}`,color:C.text,borderRadius:9,
+                      padding:"10px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    {formBusy===o.id ? <><Spinner size={13}/> Opening PO form…</> : <><Icon name="fileText" size={16}/> PO form · {o.po}</>}
+                  </button>
+                )}
 
                 {/* Copy-for-Simpro helper. The TA stores items as HTML
                     (<br> separators + entities) but Simpro's PO line entry
@@ -59457,10 +59505,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-27 · App SW version: v569
+**Last manifest update:** 2026-10-27 · App SW version: v570
 
 ---
 
+- **The PO form goes on the PO by itself: in Simpro and on the card** · 'shipped 2026-10-27' · 'SW v570' · 'getPoForm' · 'backfillPoForms' · 'attachForm' · 'functions/materialPO/send.js' · Koy: *"can we have the attachment that is made when you send a po to supplier etc, attach itself automatically to the pos in the cc app?"* — then picked app card + Simpro PO, and every PO already sent too. Before this the 'Purchase_Order_No_####.pdf' CED got was built for the email and thrown away. **Simpro:** right after a PO email goes (a card's Send to CED, or New order from the bid, one form per PO), 'attachForm' puts the same PDF on that PO's Attachments ('POST /vendorOrders/{id}/attachments/files/', same route as v548 receipts), named 'Purchase_Order_No_####.pdf' like Simpro Mobile's. It never blocks or fails a send: it runs after the email result is saved, a Simpro refusal is kept as 'formError', and it is retried the next time anyone opens the form. Duplicate-safe like receipts: claimed in a transaction ('formAttachingAt', 90 s), the PO's attachments are checked for the filename before any upload, and a lost upload answer keeps the claim so the next try finds the file instead of uploading again; done = 'formFileId' on the 'material_po_log' doc. **Card:** every card the app emailed ('poSentVia:"app"', CED, 'poEmailOk'; also cards from an order, by 'poOrderId' + 'poCcId') shows **PO form · ####** for anyone with 'materials.sendPO'; it calls the new callable **'getPoForm'**, which rebuilds the PDF from the send record with the same 'pdfFor' the email used, refuses in plain words if the card's PO # no longer matches the one sent, and downloads it like the Lighting loads PDF. Store runs and test leftovers get no button. **Older POs:** admin-only callable **'backfillPoForms'** (console '__HE_PO_FORMS_BACKFILL()' lists them, '(true)' attaches 40 a call until done; skips test sends and anything already attached; safe to re-run). Gate: 'scripts/materialpo-sim.js' +8 scenarios, 38 total (form lands after the email, failed email attaches nothing, Simpro refusal then attach on open, lost upload answer → no 2nd copy, order → one form per PO, card form + mismatched PO # / never sent / contractor / bad key refused, 3 opens at once → 1 upload, store run has no form, backfill dry run / go / re-run / test skipped / admins only); passes with and without pdf-lib; mutation-checked (6 of 7 caught; the in-transaction 'formFileId' re-check is a backup to the filename lookup and can't be seen). Guides: rough, finish, materials. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder,functions:getPoForm,functions:backfillPoForms' before the app push**, then '__HE_PO_FORMS_BACKFILL()' once. **Why it won't lose data:** no job field, loader or rules change; the card button only reads. The only new writes are four fields on the function-only 'material_po_log' docs ('formFileId', 'formAttachedAt', 'formAttachingAt', 'formError') and one added file per Simpro PO, so nothing is overwritten or deleted. The send path's existing writes happen before the attach and are unchanged.
 - **Dashboard Foreman view: no dollar amounts anywhere** · 'shipped 2026-10-27' · 'SW v569' · 'OfficeDash' · 'useOdMoneyMask' · 'OD_TABS_MONEY' · Koy: *"lets make a foreman visible friendly version that show no dollar amounts everywhere so i can show them and review all the info without having to worry about them seeing job dollar numbers"*. A **Foreman view** switch in the dashboard's top bar (eye icon; icon only on a phone), kept per device in 'he_odash_fview', with a copper bar while it is on. Koy's picks: a switch on his screen (foremen still can't open '/dashboard', canOpenDash unchanged), margin % stays, Materials / Labor as share of estimate, whole dashboard. **Job Costs:** Hours unchanged; Materials / Labor drop the $ used / estimate columns, the "$12k of $15k" box lines and Untagged est, keeping rough % / finish %, and a job's cost centers show % used per phase; Margin drops Rough sell / Finish sell and the cost centers show each one's share of sell to rough / finish / untagged; "Labor $" reads "Labor"; Pull from Simpro now hides. **Jobs tab:** the Simpro line drops billed / left to bill (keeps % invoiced). **Goals tab** hides (falls back to Overview). **Safety net:** while it is on, a MutationObserver on the dashboard masks any "$1,234" / "$12k" / "$1.2M" left in text, tooltips or aria labels as "$•••" (Overview CO quote totals, Simpro-sync lines, typed CO notes); turning it off remounts the page so React redraws the real text. Guide 'dashboard.html' (new Foreman view callout, Job Costs step 8). **Why it won't lose data:** display only: one localStorage key, no Firestore read, write, loader, function or rule change; the mask edits only the dashboard's on-screen text, never a job.
 
 - **Job Board: commercial job names no longer draw over the ROUGH bar** · 'shipped 2026-10-26' · 'SW v568' · 'job-row' · 'isCommercial' · Koy, with a screenshot of the Pre-Con rows: *"why is this shit overlapping"*. The card's left column is a fixed 210 px ('flex:"0 0 210px"') and its title line did not wrap; on commercial rows the ~200 px PHASE pill (e.g. "PHASE 1 · CONTRACT AWARD · 1/4", nowrap, no shrink) took nearly the whole column, so "#1396 Prosteel - Provo" and the margin % were pushed past the column edge and painted over the ROUGH label and bar (long names like #1412 Battle Creek Plaza also ran into the Ready date). Commercial rows only: the title line wraps ('flexWrap:"wrap"', rowGap 3) and the name may break ('minWidth:0', 'overflowWrap:"anywhere"'), so the name drops under the pill inside its own column. Residential rows get no new styles and render exactly as before. **Why it won't lose data:** two inline style tweaks on one card's display; no reads, writes, loader or rules touched.

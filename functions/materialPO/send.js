@@ -39,6 +39,8 @@ const CREATE_STALE_MS = 3 * 60e3;   // a "creating" claim older than this was ki
 const UNKNOWN_WAIT_MS = 60e3;       // after an unanswered POST, wait this long before checking Simpro
 const EMAIL_STALE_MS = 90e3;        // an email claim older than this was killed mid-send
 const POST_TIMEOUT_MS = 45e3;
+const FORM_STALE_MS = 90e3;         // a PO-form upload claim older than this was killed mid-upload
+const FORM_POST_TIMEOUT_MS = 30e3;
 
 module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, requireMember, accessOf, loadMailConfig, TZ, gmailSend = null }) {
   const HttpsError = functions.https.HttpsError;
@@ -185,9 +187,59 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     try { pdf = await pdfFor(log); } catch (e) { pdfError = String(e.message || e).slice(0, 200); functions.logger.warn("[materialPO] PDF failed, sending the list in the email instead", { po: log.poNo, error: pdfError }); }
     const mail = R.buildPoEmail({ mode, poNo: log.poNo, jobName: log.jobName, supplierName: log.supplierName,
       lines: log.lines, pickup: log.pickup, sender: log.sender, intended: live, attached: !!pdf });
-    const attachments = pdf ? [{ filename: `Purchase_Order_No_${log.poNo}.pdf`, content: pdf.toString("base64") }] : null;
+    const attachments = pdf ? [{ filename: formName(log.poNo), content: pdf.toString("base64") }] : null;
     const res = await sendMail(cfg, { ...rcpt, ...mail, attachments });
-    return { ...res, to: rcpt.to, cc: rcpt.cc, mode, pdf: !!pdf, pdfError };
+    return { ...res, to: rcpt.to, cc: rcpt.cc, mode, pdf: !!pdf, pdfError, pdfBuf: pdf };
+  }
+
+  // ── The PO form on the PO in Simpro (v570) ──
+  // Every PO the app emails gets the same PDF in its Simpro Attachments, like a
+  // Simpro Mobile PO. Never blocks or fails a send: a miss is retried the next
+  // time anyone opens the form on the card, or by backfillPoForms. Claimed
+  // (formAttachingAt) and looked up by filename before any upload, so a lost
+  // Simpro answer never puts two copies on one PO.
+  const formName = (poNo) => `Purchase_Order_No_${poNo}.pdf`;
+  async function attachForm(ref, log, pdf) {
+    if (log.formFileId) return T(log.formFileId);
+    if (!pdf || !log.simproPoId || !log.poNo) return "";
+    let claimed = false;
+    try {
+      const c = await db.runTransaction(async (tx) => {
+        const cur = (await tx.get(ref)).data() || {};
+        if (cur.formFileId) return { have: T(cur.formFileId) };
+        if (cur.formAttachingAt && age(cur.formAttachingAt) < FORM_STALE_MS) return { busy: true };
+        tx.set(ref, { formAttachingAt: nowIso() }, { merge: true });
+        return {};
+      });
+      if (c.have) return c.have;
+      if (c.busy) return "";
+      claimed = true;
+      const name = formName(log.poNo);
+      const ls = await simproReqWithRetry("GET", `/vendorOrders/${log.simproPoId}/attachments/files/?pageSize=250`);
+      if (!okList(ls)) throw new Error(`Couldn't read the PO's attachments. ${simproErr(ls)}`);
+      const hit = ls.data.find(f => T(f.Filename || f.Name) === name);
+      let id = hit ? T(hit.ID) : "";
+      if (!hit) {
+        const r = await Promise.race([
+          simproReqWithRetry("POST", `/vendorOrders/${log.simproPoId}/attachments/files/`, { Filename: name, Base64Data: pdf.toString("base64") }, { maxAttempts: 1 }),
+          new Promise((res) => setTimeout(() => res({ timedOut: true }), FORM_POST_TIMEOUT_MS)),
+        ]);
+        if (r.timedOut || r.status >= 500) {
+          // It may have landed: keep the claim until it goes stale, so the next try looks before uploading.
+          claimed = false;
+          await ref.set({ formError: r.timedOut ? "Simpro didn't answer in time." : simproErr(r) }, { merge: true });
+          return "";
+        }
+        if (!r.ok) throw new Error(simproErr(r));
+        id = T(r.data && r.data.ID) || "added";
+      }
+      await ref.set({ formFileId: id, formAttachedAt: nowIso(), formAttachingAt: null, formError: "" }, { merge: true });
+      return id;
+    } catch (e) {
+      functions.logger.warn("[materialPO] couldn't put the PO form on the Simpro PO", { po: log.poNo, error: String(e.message || e) });
+      try { await ref.set({ formError: String(e.message || e).slice(0, 200), ...(claimed ? { formAttachingAt: null } : {}) }, { merge: true }); } catch (e2) {}
+      return "";
+    }
   }
 
   async function markSent(simproPoId) {
@@ -225,6 +277,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       emailId: em.id || "", statusMarked: sent, emailingAt: null, doneAt: nowIso() };
     await ref.set(upd, { merge: true });
     if (!em.ok) functions.logger.warn("[materialPO] email failed", { po: log.poNo, error: em.error });
+    if (em.ok && em.pdfBuf) await attachForm(ref, { ...log, ...upd }, em.pdfBuf);
     return result({ ...log, ...upd });
   }
 
@@ -440,12 +493,13 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     const live = { to: first.vendorEmail, cc: [cfg.bids, first.sender && first.sender.email].filter(Boolean).join(", ") };
     const rcpt = R.recipients({ mode, testTo: cfg.testTo, vendorEmail: first.vendorEmail, bids: cfg.bids, senderEmail: first.sender && first.sender.email });
     let em;
+    const pdfs = {};
     if (!rcpt) em = { ok: false, error: mode === "test" ? "No test inbox set (gc_config/material_po.testTo)." : "This supplier has no email address in Simpro." };
     else {
       const attachments = [];
       let allPdf = true;
       for (const l of logs) {
-        try { const pdf = await pdfFor(l); attachments.push({ filename: `Purchase_Order_No_${l.poNo}.pdf`, content: pdf.toString("base64") }); }
+        try { const pdf = await pdfFor(l); pdfs[l.poNo] = pdf; attachments.push({ filename: formName(l.poNo), content: pdf.toString("base64") }); }
         catch (e) { allPdf = false; functions.logger.warn("[materialPO] PDF failed in an order", { po: l.poNo, error: e.message }); }
       }
       const lines = allPdf ? [] : logs.flatMap(l => [`PO ${l.poNo} (${l.costCenter}):`, ...(l.lines || []), ""]);
@@ -460,6 +514,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     const emailedPoNos = em.ok ? [...claimed.done, ...logs.map(l => String(l.poNo))] : claimed.done;
     await orderRef.set({ ...per, emailedPoNos, emailingAt: null, doneAt: nowIso() }, { merge: true });
     if (!em.ok) functions.logger.warn("[materialPO] order email failed", { pos: logs.map(l => l.poNo), error: em.error });
+    if (em.ok) for (const m of claimed.fresh) await attachForm(LOG().doc(m.key), { ...m.log, ...per }, pdfs[m.log.poNo]);
     return { emailOk: !!em.ok, emailedTo: em.to || [], emailError: per.emailError, mode };
   }
 
@@ -537,5 +592,56 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
         pos: posOf(made) };
     });
 
-  return { sendMaterialPO, sendMaterialOrder };
+  // ── PO form on the card (v570) ─────────────────────────────────────────────
+  // The card's PO form button: the exact form CED got, rebuilt from the send
+  // record (the same pdfFor the email used). Works for every PO the app ever
+  // emailed. Opening it also puts it on the Simpro PO if that hasn't happened yet.
+  // A card from an order passes its order id + cost center (poOrderId / poCcId).
+  const VIEW_ACCESS = ["admin", "manager", "standard", "limited"];
+  const getPoForm = functions
+    .runWith({ timeoutSeconds: 90, memory: "256MB" })
+    .https.onCall(async (data) => {
+      const user = await requireMember(data);
+      if (!VIEW_ACCESS.includes(accessOf(user))) throw new HttpsError("permission-denied", "You can't open PO forms.");
+      const base = R.logKey(T(data.jobId), T(data.phase), T(data.orderId));
+      const key = T(data.ccId) ? R.groupKey(base, data.ccId) : base;
+      if (!key) throw new HttpsError("invalid-argument", "Missing job, phase or card.");
+      const ref = LOG().doc(key);
+      const snap = await ref.get();
+      const log = snap.exists ? (snap.data() || {}) : null;
+      if (!log || log.kind !== "email" || !log.poNo) throw new HttpsError("not-found", "This PO wasn't emailed from the app, so there's no PO form to open.");
+      if (T(data.po) && T(data.po) !== String(log.poNo)) throw new HttpsError("failed-precondition", `This card says PO ${T(data.po)}, but the app sent PO ${log.poNo}. Fix the PO # on the card first.`);
+      let pdf;
+      try { pdf = await pdfFor(log); } catch (e) { throw new HttpsError("internal", `Couldn't build the PO form: ${String(e.message || e).slice(0, 200)}`); }
+      const inSimpro = log.emailOk ? !!(await attachForm(ref, log, pdf)) : false;
+      return { ok: true, poNo: String(log.poNo), fileName: formName(log.poNo), pdf: pdf.toString("base64"), inSimpro };
+    });
+
+  // ── One-time backfill (admins): the PO form onto every app-emailed Simpro PO ──
+  // Dry run unless {go:true}; does up to `limit` POs per call and says how many are left.
+  // Skips test sends (their POs get voided) and anything already attached.
+  const backfillPoForms = functions
+    .runWith({ timeoutSeconds: 540, memory: "512MB" })
+    .https.onCall(async (data) => {
+      const user = await requireMember(data);
+      if (accessOf(user) !== "admin") throw new HttpsError("permission-denied", "Only admins can run the PO form backfill.");
+      const snap = await LOG().where("kind", "==", "email").get();
+      const todo = snap.docs.filter(d => {
+        const l = d.data() || {};
+        return l.poNo && l.simproPoId && l.emailOk && !l.formFileId && l.mode !== "test" && !l.archivedAt && !d.id.includes("__test_");
+      });
+      if (data.go !== true) return { ok: true, dryRun: true, todo: todo.length, pos: todo.map(d => String(d.data().poNo)) };
+      const limit = Math.min(Math.max(Number(data.limit) || 40, 1), 100);
+      let attached = 0; const failed = [];
+      for (const d of todo.slice(0, limit)) {
+        const l = d.data();
+        let pdf;
+        try { pdf = await pdfFor(l); } catch (e) { failed.push({ po: String(l.poNo), error: `PDF: ${String(e.message || e).slice(0, 150)}` }); continue; }
+        if (await attachForm(d.ref, l, pdf)) attached++;
+        else failed.push({ po: String(l.poNo), error: ((await d.ref.get()).data() || {}).formError || "busy" });
+      }
+      return { ok: true, attached, failed, left: todo.length - attached };
+    });
+
+  return { sendMaterialPO, sendMaterialOrder, getPoForm, backfillPoForms };
 };

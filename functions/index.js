@@ -8186,6 +8186,12 @@ exports.poMailerTest = _poGmail.test;
 exports.sendMaterialPO = _materialPO.sendMaterialPO;
 // v524: one order from the bid → one PO per cost center, one email (deploy with sendMaterialPO).
 exports.sendMaterialOrder = _materialPO.sendMaterialOrder;
+// v570: the PO form PDF also lands on the Simpro PO (inside the two sends above), the
+// card's PO form button opens it (getPoForm), and admins backfill older POs once
+// (backfillPoForms, console: __HE_PO_FORMS_BACKFILL). Deploy with the sends:
+//   firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder,functions:getPoForm,functions:backfillPoForms
+exports.getPoForm = _materialPO.getPoForm;
+exports.backfillPoForms = _materialPO.backfillPoForms;
 // v548: receipt photo on a Home Depot / ACE / Amazon card → that PO's Attachments in
 // Simpro (functions/materialPO/receipt.js). Deploy ONLY this:
 //   firebase deploy --only functions:attachStoreReceipt

@@ -35,7 +35,13 @@ function makeDb() {
   let lock = Promise.resolve();
   const db = {
     store,
-    collection: (col) => ({ doc: (id) => ref(col, id) }),
+    collection: (col) => ({ doc: (id) => ref(col, id),
+      // single equality only (backfillPoForms)
+      where: (field, op, val) => ({ async get() {
+        const docs = [...store.entries()].filter(([k, d]) => k.startsWith(`${col}/`) && d && d[field] === val)
+          .map(([k, d]) => { const id = k.slice(col.length + 1); return { id, ref: ref(col, id), data: () => clone(d) }; });
+        return { docs };
+      } }) }),
     runTransaction(fn) {
       const run = lock.then(async () => {
         const writes = [];
@@ -79,6 +85,19 @@ function makeSimpro() {
       if (s.loseNextAnswer) { s.loseNextAnswer = false; return { ok: false, status: 504, data: "gateway timeout" }; }
       return { ok: true, status: 201, data: { ID: po.ID } };
     }
+    // PO attachments (v570: the PO form goes on the Simpro PO)
+    const am = p.match(/^\/vendorOrders\/(\d+)\/attachments\/files\//);
+    if (am) {
+      const id = Number(am[1]); s.files = s.files || {}; const list = (s.files[id] = s.files[id] || []);
+      if (method === "GET") return { ok: true, status: 200, data: list.map(f => ({ ID: f.ID, Filename: f.Filename })) };
+      if (method === "POST") {
+        s.filePosts = (s.filePosts || 0) + 1;
+        if (s.refuseFile) { s.refuseFile = false; return { ok: false, status: 422, data: { errors: [{ message: "Attachments are locked" }] } }; }
+        const f = { ID: `f${id}_${list.length + 1}`, Filename: body.Filename, bytes: Buffer.from(body.Base64Data, "base64") }; list.push(f);
+        if (s.loseFileAnswer) { s.loseFileAnswer = false; return { ok: false, status: 504, data: "gateway timeout" }; }
+        return { ok: true, status: 201, data: { ID: f.ID } };
+      }
+    }
     if (method === "PATCH" && /^\/vendorOrders\/\d+$/.test(p)) { s.patches.push({ p, body }); return { ok: true, status: 200, data: {} }; }
     return { ok: false, status: 404, data: { errors: [{ message: `fake has no ${method} ${p}` }] } };
   };
@@ -94,12 +113,12 @@ global.fetch = async (url, opts) => {
   return { ok: true, status: 200, json: async () => ({ id: `em_${mails.length}` }), text: async () => "" };
 };
 
-const USERS = { koy: { name: "Koy Wilkinson", role: "admin" }, keegan: { name: "Keegan Wilkinson", access: "manager" } };
+const USERS = { koy: { name: "Koy Wilkinson", role: "admin" }, keegan: { name: "Keegan Wilkinson", access: "manager" }, sub: { name: "Sub Contractor", access: "contractor" } };
 function setup(mode, extraCfg, gmailSend) {
   const db = makeDb(); const simpro = makeSimpro();
   if (mode || extraCfg) db.store.set("gc_config/material_po", { ...(mode ? { mode } : {}), ...(extraCfg || {}) });
   db.store.set("jobs/J1438", { data: { name: "Miller Residence", simproNo: "1438" } });
-  const { sendMaterialPO, sendMaterialOrder } = require(path.join(__dirname, "../functions/materialPO/send.js"))({
+  const { sendMaterialPO, sendMaterialOrder, getPoForm, backfillPoForms } = require(path.join(__dirname, "../functions/materialPO/send.js"))({
     functions, db, TZ: "America/Denver", simproReqWithRetry: simpro.req,
     requireMember: async (d) => { const u = USERS[d.by]; if (!u) throw new HttpsError("permission-denied", "who?"); return u; },
     accessOf: (u) => u.access || (u.role === "admin" ? "admin" : "limited"),
@@ -112,7 +131,7 @@ function setup(mode, extraCfg, gmailSend) {
       { ccId: 19094, items: [{ catalogId: 1, part: "ALUM SER1/0", name: "SER ALUMINUM 1/0-1/0-1/0-2", qty: 275 }, { catalogId: 2, part: "QO2125", name: "QO BREAKER PLUG IN 2P 240V 125A", qty: 1 }],
         typed: ["Please bundle the SER on one reel"] },
     ] };
-  return { db, simpro, order: (o = {}) => sendMaterialOrder({ ...ORDER, ...o }), send: (o = {}) => sendMaterialPO({ by: "koy", jobId: "J1438", phase: "rough", orderId: "1791484665123", source: "CED", items: "10x spanners<br>500' 12/2 romex", get: "willcall", date: "10/9/2026", clientTest: true, ...o }) };
+  return { db, simpro, getPoForm, backfillPoForms, order: (o = {}) => sendMaterialOrder({ ...ORDER, ...o }), send: (o = {}) => sendMaterialPO({ by: "koy", jobId: "J1438", phase: "rough", orderId: "1791484665123", source: "CED", items: "10x spanners<br>500' 12/2 romex", get: "willcall", date: "10/9/2026", clientTest: true, ...o }) };
 }
 const rejects = async (p, code, m) => { try { await p; } catch (e) { if (code) assert.strictEqual(e.code, code, `${m}: got ${e.code} ${e.message}`); return e; } assert.fail(`${m}: expected a refusal`); };
 let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew = 0; await fn(); n++; };
@@ -451,6 +470,112 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     const r2 = await send({ get: "custom", custom: "Edited words" });
     assert.strictEqual(r2.emailOk, true); assert.strictEqual(simpro.pos.length, 1, "no second PO");
     assert(mails[0].html.includes("First words") && !mails[0].html.includes("Edited words"), "the PO already made carries its first words");
+  });
+
+  // ── v570: the PO form on the Simpro PO and on the card ──
+  const CARD_LOG = "material_po_log/J1438_rough_1791484665123";
+  const CARD = { by: "keegan", jobId: "J1438", phase: "rough", orderId: "1791484665123", po: "7300" };
+  const isPdf = (b) => Buffer.from(b).slice(0, 5).toString() === "%PDF-";
+
+  await t("PO form: lands on the Simpro PO right after the email, named like Simpro's", async () => {
+    const { db, simpro, send } = setup("test");
+    const r = await send();
+    assert(r.emailOk, "emailed");
+    const files = (simpro.files || {})[7300] || [];
+    if (!HAS_PDF) { assert.strictEqual(files.length, 0, "no PDF library: nothing to attach"); assert(!simpro.filePosts, "no upload"); return; }
+    assert.strictEqual(files.length, 1, "one file on the PO");
+    assert.strictEqual(files[0].Filename, "Purchase_Order_No_7300.pdf");
+    assert(isPdf(files[0].bytes), "a real PDF");
+    assert.strictEqual(db.store.get(CARD_LOG).formFileId, files[0].ID, "remembered on the send record");
+    const again = await send();
+    assert(again.again && simpro.filePosts === 1, "a later tap uploads nothing");
+  });
+
+  await t("PO form: an email that fails puts nothing on the PO", async () => {
+    const { simpro, send } = setup("test");
+    failMail = 1;
+    const r = await send();
+    assert.strictEqual(r.emailOk, false);
+    assert(!simpro.filePosts, "nothing attached before the PO was really sent");
+  });
+
+  await t("PO form: Simpro refuses the file — the send still succeeds, opening the form attaches it", async () => {
+    const { db, simpro, send, getPoForm } = setup("test");
+    simpro.refuseFile = true;
+    const r = await send();
+    assert(r.emailOk && r.poNo === "7300", "the send itself is fine");
+    if (!HAS_PDF) { await rejects(getPoForm(CARD), "internal", "no PDF library"); return; }
+    assert.strictEqual(((simpro.files || {})[7300] || []).length, 0, "refused");
+    assert(/locked/.test(db.store.get(CARD_LOG).formError), "the reason is kept");
+    assert(!db.store.get(CARD_LOG).formAttachingAt, "claim released");
+    const f = await getPoForm(CARD);
+    assert(f.inSimpro, "attached when opened"); assert.strictEqual(simpro.files[7300].length, 1);
+    assert.strictEqual(db.store.get(CARD_LOG).formError, "", "error cleared");
+  });
+
+  await t("PO form: a lost upload answer never puts a 2nd copy on the PO", async () => {
+    const { simpro, send, getPoForm } = setup("test");
+    simpro.loseFileAnswer = true;
+    const r = await send();
+    assert(r.emailOk, "send fine");
+    if (!HAS_PDF) return;
+    assert.strictEqual(simpro.files[7300].length, 1, "Simpro did get it");
+    const f1 = await getPoForm(CARD);
+    assert.strictEqual(f1.inSimpro, false, "too soon: the claim is held"); assert.strictEqual(simpro.filePosts, 1, "no 2nd upload");
+    skew = 2 * 60e3;
+    const f2 = await getPoForm(CARD);
+    assert(f2.inSimpro, "found it by filename"); assert.strictEqual(simpro.filePosts, 1, "still one upload"); assert.strictEqual(simpro.files[7300].length, 1);
+  });
+
+  await t("PO form: an order puts each PO's own form on each PO", async () => {
+    const { simpro, order, getPoForm } = setup("test");
+    const r = await order();
+    assert(r.ok && r.emailOk, "order sent");
+    if (!HAS_PDF) return;
+    for (const id of [7300, 7301]) {
+      const files = simpro.files[id] || [];
+      assert.strictEqual(files.length, 1, `one form on ${id}`); assert.strictEqual(files[0].Filename, `Purchase_Order_No_${id}.pdf`);
+    }
+    const f = await getPoForm({ by: "keegan", jobId: "J1438", phase: "rough", orderId: "o1791500000000", ccId: "19094", po: "7301" });
+    assert.strictEqual(f.poNo, "7301", "the order card finds its own cost center's PO"); assert(f.inSimpro && simpro.filePosts === 2, "no extra upload");
+  });
+
+  await t("PO form on the card: the right PDF, refusals in plain words, 3 taps → 1 upload", async () => {
+    const { db, simpro, send, getPoForm } = setup("test");
+    await send();
+    if (!HAS_PDF) { await rejects(getPoForm(CARD), "internal", "no PDF library"); return; }
+    delete simpro.files[7300]; const l = db.store.get(CARD_LOG); delete l.formFileId; simpro.filePosts = 0; // as if sent before v570
+    const out = await Promise.all([getPoForm(CARD), getPoForm(CARD), getPoForm(CARD)]);
+    for (const f of out) { assert(isPdf(Buffer.from(f.pdf, "base64")), "a PDF every time"); assert.strictEqual(f.fileName, "Purchase_Order_No_7300.pdf"); }
+    assert.strictEqual(simpro.filePosts, 1, "three opens at once → one upload"); assert.strictEqual(simpro.files[7300].length, 1);
+    const e = await rejects(getPoForm({ ...CARD, po: "7299" }), "failed-precondition", "card PO # changed");
+    assert(/7299.*7300/.test(e.message), e.message);
+    await rejects(getPoForm({ ...CARD, orderId: "nope" }), "not-found", "never sent from the app");
+    await rejects(getPoForm({ ...CARD, by: "sub" }), "permission-denied", "contractors");
+    await rejects(getPoForm({ ...CARD, phase: "" }), "invalid-argument", "bad key");
+  });
+
+  await t("PO form on the card: a store-run PO has no form", async () => {
+    const { send, getPoForm } = setup("test");
+    const r = await send({ source: "Home Depot", items: "" });
+    assert.strictEqual(r.kind, "number");
+    await rejects(getPoForm({ ...CARD, po: r.poNo }), "not-found", "store run");
+  });
+
+  await t("backfill: dry run lists, go attaches each old PO once, test sends skipped, admins only", async () => {
+    const { db, simpro, send, backfillPoForms } = setup("live");
+    await send({ by: "keegan", clientTest: false });
+    if (!HAS_PDF) return;
+    delete simpro.files[7300]; const l = db.store.get(CARD_LOG); delete l.formFileId; simpro.filePosts = 0; // sent before v570
+    db.store.set("material_po_log/J1438_rough_old__test_1", { ...l, mode: "test", archivedAt: "x" });
+    db.store.set("material_po_log/J1438_rough_t2", { ...l, poNo: "7290", simproPoId: 7290, mode: "test" }); // a test send never re-sent live
+    await rejects(backfillPoForms({ by: "keegan" }), "permission-denied", "not an admin");
+    const dry = await backfillPoForms({ by: "koy" });
+    assert(dry.dryRun && dry.todo === 1 && dry.pos[0] === "7300", JSON.stringify(dry)); assert.strictEqual(simpro.filePosts, 0, "dry run uploads nothing");
+    const go = await backfillPoForms({ by: "koy", go: true });
+    assert.strictEqual(go.attached, 1); assert.strictEqual(go.left, 0); assert.strictEqual(simpro.files[7300].length, 1);
+    const again = await backfillPoForms({ by: "koy", go: true });
+    assert.strictEqual(again.attached, 0); assert.strictEqual(again.left, 0); assert.strictEqual(simpro.filePosts, 1, "a 2nd run uploads nothing");
   });
 
   console.log(`materialpo-sim: ${n} scenarios passed (${HAS_PDF ? "with" : "without"} the PDF library)`);
