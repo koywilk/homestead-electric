@@ -47492,6 +47492,7 @@ function PlansCard({ identity, users = [] }) {
 // import (one My Day task through the stamped needs write) and Run now on the
 // Wednesday / Friday meeting-prep docs (their existing test-trigger callables).
 const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["goals","Goals"],["costs","Job Costs"]];
+const OD_TABS_MONEY = new Set(["goals"]);   // v569: hidden in Foreman view (the Goals tab is mostly revenue)
 // Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
 // what Koy's two Claude Routines produced, read from where they already put it.
 // Plan intake → agentFindings (the Today Plans card's source, live listener
@@ -48748,10 +48749,45 @@ function odCostsJobPct(j) {
   return o;
 }
 
+// v569 Foreman view's safety net: while it is on, any "$1,234" / "$12k" / "$1.2M" still in the dashboard's text
+// or tooltips (a CO note someone typed, a line no view knows about) shows as "$•••". Each view drops its own
+// dollar columns first; this only catches what slips through. Display only: it never reads or writes data.
+// Turning the switch off remounts the page (OfficeDash's key below), so React redraws the real text.
+const OD_MONEY_RE = /\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[kKmM]\b)?/g;
+const OD_MONEY_ATTRS = ["title", "aria-label", "placeholder"];
+function useOdMoneyMask(ref, on) {
+  useEffect(() => {
+    const root = ref.current;
+    if (!on || !root) return undefined;
+    const fix = (s) => s.replace(OD_MONEY_RE, () => "$•••");
+    const text = (t) => { const v = t.nodeValue, p = t.parentNode; if (!v || !v.includes("$") || (p && p.nodeName === "STYLE")) return; const n = fix(v); if (n !== v) t.nodeValue = n; };
+    const attrs = (el) => OD_MONEY_ATTRS.forEach(a => { const v = el.getAttribute(a); if (v && v.includes("$")) { const n = fix(v); if (n !== v) el.setAttribute(a, n); } });
+    const scrub = (node) => {
+      if (node.nodeType === 3) { text(node); return; }
+      if (node.nodeType !== 1) return;
+      attrs(node);
+      const w = document.createTreeWalker(node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) { if (n.nodeType === 3) text(n); else attrs(n); }
+    };
+    scrub(root);
+    const mo = new MutationObserver(ms => ms.forEach(m => m.type === "characterData" ? text(m.target) : m.type === "attributes" ? attrs(m.target) : m.addedNodes.forEach(scrub)));
+    mo.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: OD_MONEY_ATTRS });
+    return () => mo.disconnect();
+  }, [ref, on]);
+}
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
-  const [tab, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
+  // v569 Foreman view (Koy: "a foreman friendly version that show no dollar amounts everywhere so i can show
+  // them"): a switch on this screen, kept per device. Every $ comes off the page (margin % stays, Koy's pick),
+  // and the money-only tabs hide. The dashboard itself stays admin-only (canOpenDash).
+  const [fview, setFview] = useState(() => read("he_odash_fview", v => v === "1" || v === "0", "0") === "1");
+  const pickFview = (on) => { setFview(on); keep("he_odash_fview", on ? "1" : "0"); trackDash("dash_fview", { on }); };
+  const [tabPicked, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
+  const tab = fview && OD_TABS_MONEY.has(tabPicked) ? "overview" : tabPicked;
+  const odRoot = useRef(null);
+  useOdMoneyMask(odRoot, fview);
   // v552 (item 9): dash_open / dash_tab / dash_tap go to PostHog (no autocapture), tied
   // to the signed-in name by syncPostHogIdentity like every other app event.
   const pickTab = (t) => { setTab(t); keep("he_odash_tab", t); if (t !== tab) trackDash("dash_tab", { tab: t }); };
@@ -49833,6 +49869,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     // v564: every cost center (base bid and change orders) split item by item into rough / finish;
     // credit and finished-job margins by Josh's rule (v566); margins weighted, plain average beside.
     const v = costsView, s = v.boxes, co = v.company, isM = cm === "margin";
+    // v569 Foreman view: percentages and hours only. The sell columns, the $ used / estimate columns and the
+    // "$12k of $15k" lines come off; Materials and Labor show as a share of the estimate; margin % stays (Koy's pick).
+    const noM = fview;
+    const moneyCol = (k) => noM && (isM ? /_sell$/.test(k) : cm !== "hrs" && !/_pct$/.test(k));
     const scoped = !!cWho || cOff.size > 0;
     const NOUN = { hrs: "hours", mat: "materials", lab: "labor" }, USED = { hrs: "used", mat: "spent", lab: "spent" };
     const uKey = (m) => m === "hrs" ? "hrsUsed" : m + "Act";
@@ -49870,7 +49910,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const phaseBox = (p) => {
       const pct = s[`${p}_${cm}_pct`], over = s[`${p}_${cm}_over`], st = s[`${p}_started`];
       return { key: p, wire: p === "rough" ? "r" : "f", title: `${p === "rough" ? "Rough" : "Finish"} ${NOUN[cm]}`, big: fp(pct), unit: "of estimate",
-        sub: `${fvk(cm, s[`${p}_${cm}_used`])}${fu(cm)} of ${fvk(cm, s[`${p}_${cm}_est`])}${fu(cm)}`, tag: tag(over > 0, over ? `${over} of ${st} over` : `none of ${st} over`),
+        sub: noM && cm !== "hrs" ? "" : `${fvk(cm, s[`${p}_${cm}_used`])}${fu(cm)} of ${fvk(cm, s[`${p}_${cm}_est`])}${fu(cm)}`, tag: tag(over > 0, over ? `${over} of ${st} over` : `none of ${st} over`),
         co: coLine(`${fp(co[`${p}_${cm}_pct`])}, ${co[`${p}_${cm}_over`]} of ${co[`${p}_started`]} over`) };
     };
     const fp1 = (x) => x == null ? "—" : `${(Math.round(x * 1000) / 10).toFixed(1)}%`;   // margins to a tenth, as the Goals tab shows them
@@ -49885,7 +49925,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     // The job table: the picked person's jobs in this stage; every job stays listed so it can be switched back on.
     const q = cQ.trim().toLowerCase();
     const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q));
-    const cols = isM ? [
+    const cols = (isM ? [
       ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)],
       ["rough_mAct", "Rough margin so far", "r", "mEst", "Rough sell less what has been spent and committed on rough, every cost center. Under it: the margin the estimate expected."],
       ["finish_sell", "Finish sell", "f", (j) => fk(j.finish_sell)],
@@ -49897,7 +49937,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       [`finish_${uKey(cm)}`, `Finish ${USED[cm]} / est`, "f", (j) => <>{fv(cm, j[`finish_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`finish_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on finish / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
       [`finish_${cm}_pct`, "Finish %", "f", "bar"],
       [`other_${cm}Est`, "Untagged est", "n", (j) => j[`other_${cm}Est`] ? fv(cm, j[`other_${cm}Est`]) : "–"],
-    ];
+    ]).filter(c => !moneyCol(c[0]));
     const valOf = (j, k) => (k in j ? j[k] : (v.pct.get(j.no) || {})[k]);
     const sort = cSort || (isM ? { k: "rough_profit", dir: 1 } : { k: `rough_${cm}_overBy`, dir: -1 });   // worst first
     list.sort((a, b) => { const x = valOf(a, sort.k), y = valOf(b, sort.k); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir; });
@@ -49908,7 +49948,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const margin = (x) => x == null ? <span className="jc-dim">not started</span> : <span className={`jc-pct${x < OD_COST_GOAL ? " over" : " good"}`}>{fp(x)}</span>;
     const toggle = (no) => setCOff(prev => { const n = new Set(prev); if (n.has(no)) n.delete(no); else n.add(no); return n; });
     const ccs = cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
-    const ccCols = isM ? [["sell", "Sell"], ["rough_sell", "To rough", "r"], ["finish_sell", "To finish", "f"], ["other_sell", "Untagged", "n"]]
+    // Foreman view: a cost center's share of the sell going to each phase (Margin), or what's used as a share of its estimate.
+    const ccPct = (a, b) => b > 0 ? fp((a || 0) / b) : "–";
+    const ccCols = noM && isM ? [["rough_sh", "To rough", "r", (c) => ccPct(c.rough_sell, c.sell)], ["finish_sh", "To finish", "f", (c) => ccPct(c.finish_sell, c.sell)], ["other_sh", "Untagged", "n", (c) => ccPct(c.other_sell, c.sell)]]
+      : noM && cm !== "hrs" ? [["rough_p", `Rough % ${USED[cm]}`, "r", (c) => ccPct(c[`rough_${uKey(cm)}`], c[`rough_${cm}`])], ["finish_p", `Finish % ${USED[cm]}`, "f", (c) => ccPct(c[`finish_${uKey(cm)}`], c[`finish_${cm}`])]]
+      : isM ? [["sell", "Sell"], ["rough_sell", "To rough", "r"], ["finish_sell", "To finish", "f"], ["other_sell", "Untagged", "n"]]
       : [[`rough_${cm}`, "Rough est", "r"], [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r"], [`finish_${cm}`, "Finish est", "f"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f"], [`other_${cm}`, "Untagged est", "n"]];
     const detail = (j) => (
       <tr className="jc-det"><td colSpan={4 + cols.length}>
@@ -49920,7 +49964,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           : <div className="jc-scroll"><table className="jc-cct">
               <thead><tr><th className="l">Section</th><th className="l">Cost center</th><th className="l n">Type</th>{ccCols.map(([k, l, c]) => <th key={k} className={c}>{l}</th>)}</tr></thead>
               <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job"><b>{c.cc}</b><small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n jc-dim">{c.type || "–"}</td>
-                {ccCols.map(([k, , cl]) => <td key={k} className={cl}>{c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
+                {ccCols.map(([k, , cl, fn]) => <td key={k} className={cl}>{fn ? fn(c) : c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
       </td></tr>);
     const wiOf = (r) => (v.crewWi || []).find(x => x.person === r.person) || null;
     const personVal = (r) => isM ? r.whole.w : r[`rough_${cm}_pct`];
@@ -49968,7 +50012,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <div className="jc-title"><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split into rough and finish. Credit and finished-job margins follow Josh's rule.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}</p></div>
         <div className="jc-act">
           <button type="button" className="jc-btn dark" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
-          {canOpenDash(identity) ? <button type="button" className="jc-btn hv" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
+          {canOpenDash(identity) && !noM ? <button type="button" className="jc-btn hv" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
         </div>
       </header>
       <div className="jc-body">
@@ -49978,7 +50022,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       : <>
         {pending ? <div className="jc-note">{pending} jobs still to pull from Simpro. They show after the next run.</div> : null}
         <div className="jc-ctl">
-          {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", "Labor $"], ["margin", "Margin"]], "What to compare")}
+          {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", noM ? "Labor" : "Labor $"], ["margin", "Margin"]], "What to compare")}
           {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["josh", `Invoiced ${joshYear} (Josh)`]], "Which jobs")}
         </div>
         {cWho ? <div className="jc-spot"><div><small>{cWho.role === "foreman" ? "Foreman, Simpro technician" : "Lead"}</small><b>{cWho.person}</b></div>
@@ -50199,7 +50243,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             {fact("Coordinator", d.coordOf(j).name ? `${d.coordOf(j).name}${d.coordOf(j).via === "book" ? " (foreman's book)" : ""}` : "")}
             {/* v553: dollars stay on the office dashboard (Koy: "dollar amounts can show in dashboard but no the app crews use"). */}
             {d.simOf(j) && d.billedPct(j) != null ? fact("Simpro", [d.simOf(j).stage, d.fullyBilled(j) ? "invoiced in full" : `${Math.round(d.billedPct(j))}% invoiced`,
-              typeof d.simOf(j).inv === "number" && d.simOf(j).inv > 0 && `${odMoney(d.simOf(j).inv)} billed`, d.leftOf(j) ? `${odMoney(d.leftOf(j))} left to bill` : ""].filter(Boolean).join(" · ")) : null}
+              !fview && typeof d.simOf(j).inv === "number" && d.simOf(j).inv > 0 && `${odMoney(d.simOf(j).inv)} billed`, !fview && d.leftOf(j) ? `${odMoney(d.leftOf(j))} left to bill` : ""].filter(Boolean).join(" · ")) : null}
           </div>
           {canWrite && (
             <div className="od-edit">
@@ -50273,7 +50317,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   }
 
   return (
-    <div className="odash">
+    <div className={"odash" + (fview ? " fview" : "")} ref={odRoot} key={fview ? "fview" : "full"}>
       <style>{`
         .odash{--pan:rgba(255,255,255,.66);--inset:rgba(41,33,25,.045);--line:rgba(41,33,25,.1);--ink:#292119;--dim:#6B6157;--faint:${C.faint};
           --card:${C.card};--card-solid:${C.card};--cink:#292119;--cdim:#6B6157;--cline:#E6DFD3;--hov:rgba(142,99,54,.07);--trk:rgba(41,33,25,.08);
@@ -50289,6 +50333,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-tabs button:hover{color:var(--ink)}
         .odash .od-tabs button[aria-selected="true"]{background:var(--o);color:var(--on-o);box-shadow:0 6px 14px -6px rgba(142,99,54,.45)}
         .odash .od-help{display:inline-flex;align-items:center}
+        .odash .od-fv{display:inline-flex;align-items:center;gap:6px;flex:none;height:34px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:var(--inset);color:var(--dim);font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+        .odash .od-fv:hover{color:var(--ink)}
+        .odash .od-fv[aria-pressed="true"]{background:var(--o);border-color:var(--o);color:var(--on-o)}
+        .odash .od-fvbar{display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:9px 14px;border-radius:14px;background:var(--o-soft);color:var(--ink);font-size:13px;line-height:1.35}
+        .odash .od-fvbar svg{flex:none;color:var(--o)}
         .odash .od-help > span > span{display:none}
         .odash .od-help button{width:34px;height:34px;justify-content:center;background:var(--inset)!important;border:1px solid var(--line)!important;color:var(--o)!important}
         .odash .od-help button:hover{border-color:rgba(142,99,54,.45)!important}
@@ -50755,6 +50804,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           .odash .od-tabs{flex:1 1 auto;min-width:0;flex-wrap:wrap;border-radius:18px;overflow:visible}
           .odash .od-tabs button{padding:8px 12px}
           .odash .od-top .live{display:none}
+          .odash .od-fv{padding:0 10px}.odash .od-fv .t{display:none}
           .odash .od-ctrl .od-fbtn,.odash .od-ctrl .live{display:inline-flex}
           .odash .od-ctrl .live{margin-left:auto}
           .odash .od-ctrl:not(.open) .od-fpanel{display:none}
@@ -50766,11 +50816,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       `}</style>
       <div className="od-top">
         <div className="od-tabs" role="tablist" aria-label="Dashboard views">
-          {OD_TABS.map(([k, l]) => <button type="button" role="tab" key={k} aria-selected={tab === k} onClick={() => pickTab(k)}>{l}</button>)}
+          {OD_TABS.filter(([k]) => !(fview && OD_TABS_MONEY.has(k))).map(([k, l]) => <button type="button" role="tab" key={k} aria-selected={tab === k} onClick={() => pickTab(k)}>{l}</button>)}
         </div>
+        <button type="button" className="od-fv" aria-pressed={fview} onClick={() => pickFview(!fview)}
+          title={fview ? "Foreman view is on: no dollar amounts. Tap to show everything." : "Foreman view: hide every dollar amount before showing a foreman"}>
+          <Icon name={fview ? "eyeOff" : "eye"} size={14}/><span className="t">Foreman view</span></button>
         <span className="od-help"><HelpDot section="dashboard" color={OD_A}/></span>
         <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
       </div>
+      {fview ? <div className="od-fvbar"><Icon name="eyeOff" size={14}/><span><b>Foreman view.</b> No dollar amounts on this page; hours and percentages only.</span></div> : null}
       {tab !== "cc" && (
         <div className={"od-ctrl" + (filtersOpen ? " open" : "")}>
           <button type="button" className="od-fbtn" aria-expanded={filtersOpen} aria-controls="od-fpanel" onClick={() => setFiltersOpen(o => !o)}>
@@ -59403,10 +59457,14 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-23 · App SW version: v567
+**Last manifest update:** 2026-10-27 · App SW version: v569
 
 ---
 
+- **Dashboard Foreman view: no dollar amounts anywhere** · 'shipped 2026-10-27' · 'SW v569' · 'OfficeDash' · 'useOdMoneyMask' · 'OD_TABS_MONEY' · Koy: *"lets make a foreman visible friendly version that show no dollar amounts everywhere so i can show them and review all the info without having to worry about them seeing job dollar numbers"*. A **Foreman view** switch in the dashboard's top bar (eye icon; icon only on a phone), kept per device in 'he_odash_fview', with a copper bar while it is on. Koy's picks: a switch on his screen (foremen still can't open '/dashboard', canOpenDash unchanged), margin % stays, Materials / Labor as share of estimate, whole dashboard. **Job Costs:** Hours unchanged; Materials / Labor drop the $ used / estimate columns, the "$12k of $15k" box lines and Untagged est, keeping rough % / finish %, and a job's cost centers show % used per phase; Margin drops Rough sell / Finish sell and the cost centers show each one's share of sell to rough / finish / untagged; "Labor $" reads "Labor"; Pull from Simpro now hides. **Jobs tab:** the Simpro line drops billed / left to bill (keeps % invoiced). **Goals tab** hides (falls back to Overview). **Safety net:** while it is on, a MutationObserver on the dashboard masks any "$1,234" / "$12k" / "$1.2M" left in text, tooltips or aria labels as "$•••" (Overview CO quote totals, Simpro-sync lines, typed CO notes); turning it off remounts the page so React redraws the real text. Guide 'dashboard.html' (new Foreman view callout, Job Costs step 8). **Why it won't lose data:** display only: one localStorage key, no Firestore read, write, loader, function or rule change; the mask edits only the dashboard's on-screen text, never a job.
+
+- **Job Board: commercial job names no longer draw over the ROUGH bar** · 'shipped 2026-10-26' · 'SW v568' · 'job-row' · 'isCommercial' · Koy, with a screenshot of the Pre-Con rows: *"why is this shit overlapping"*. The card's left column is a fixed 210 px ('flex:"0 0 210px"') and its title line did not wrap; on commercial rows the ~200 px PHASE pill (e.g. "PHASE 1 · CONTRACT AWARD · 1/4", nowrap, no shrink) took nearly the whole column, so "#1396 Prosteel - Provo" and the margin % were pushed past the column edge and painted over the ROUGH label and bar (long names like #1412 Battle Creek Plaza also ran into the Ready date). Commercial rows only: the title line wraps ('flexWrap:"wrap"', rowGap 3) and the name may break ('minWidth:0', 'overflowWrap:"anywhere"'), so the name drops under the pill inside its own column. Residential rows get no new styles and render exactly as before. **Why it won't lose data:** two inline style tweaks on one card's display; no reads, writes, loader or rules touched.
+- **Send to CED works on commercial jobs ("Missing job, phase or card.")** · 'shipped 2026-10-26' · 'server only, SW stays v567' · '4f100ee' · 'logKey' · 'functions/materialPO/rules.js' · A crew member on #1467 Grit Marketing – Lindon picked Charge to (Podcast Studio Power · Power Rough In) and still got *"Missing job, phase or card."*, then hunted for a field that doesn't exist. Cause: v528 gave commercial cards phase 'comm' and taught 'sendMaterialPO' and 'receiptKey' about it, but the one-send-per-card claim key 'logKey' still only accepted rough|finish, so every commercial Send to CED, and every commercial Order from the bid ('sendMaterialOrder', "Missing job, phase or order."), was refused before Simpro was called. Fix: 'logKey' accepts comm, matching 'receiptKey'. Test 'materialpo-test' gains the comm case (it failed before the fix): 14 groups pass, 'materialpo-sim' 30. Deployed 'functions:sendMaterialPO,functions:sendMaterialOrder'; no app bundle, rules or guide change ('materials.html' already says Charge to is the only pick). **Why it won't lose data:** one regex widened. Rough / Finish keys are byte-identical, so existing claim docs still match and no double PO can happen. Commercial sends never got a key before, so no old comm claim can collide.
 - **Job Costs redesigned: the Panel Schedule with the Night Shift chart** · 'shipped 2026-10-23' · 'SW v567' · 'OfficeDash' · '.jc' · Koy, of v566's look: *"I hate it, I want it redone: new color scheme, more Homestead-branded … super … cool visually, but also easy to read the information."* Three directions were mocked up on live numbers (Night Shift, Tally Book, Panel Schedule); Koy: *"i like the panel schedule but the night shift graph"*, then *"Build it with the red and blue wire dots."* The tab now has its own scoped theme (every class 'jc-*', the old 'od-cost-*' styles removed): a charcoal header with the white longhorn ('/hs-logo-white.png'), **Job Costs** in Barlow Condensed and a hi-vis orange stripe; a steel panel; three white label-strip boxes per view with a wire-coloured edge — **red = rough, blue = finish, green ground = Josh's whole job** — big condensed numbers and orange (over / under 15%) or green tags (Hours: rough, finish, whole job; Margin: whole job, rough, finish; margins to a tenth so they match the Goals tab, 11.2%); foreman cards; **Where every job stands** set into a dark slate panel with glowing red / blue dots, the light 100% line (Margin: dashed orange 15% goal), values orange when over, and now sorted like the table (most hours / $ over, or most $ lost, first — small service calls no longer crowd the top); the job table as breaker labels with a **breaker-handle Count switch**, red / blue under the rough / finish headings and orange % tags. Orange tags carry dark text (white on that orange is too faint). Barlow and Barlow Condensed added to 'public/index.html'. Checked on live data: desktop 1280 (table fits), phone 390 (one column, no sideways page scroll, chart scale thins to 0% / 100% / ≥250%). Guide 'dashboard.html' step 8. **Why it won't lose data:** look only — the same model, data reads and switches; no write, function or rules change.
 - **Job Costs follows Josh's rule, and its "Where every job stands" chart is back** · 'shipped 2026-10-23' · 'SW v566' · 'OfficeDash' · 'odCostsJoin' · 'odCostsJosh' · 'odCostsSummary' · 'phaseCostsNightly' · Koy: *"i really likes the graph view we had"* and *"we need to use joshs logic, hes the boss and his numbers hes pulling should be the truth"*. **Josh's rule (the Goals tab's, functions/goalsPull.js):** credit = the job's **Simpro technician** (the first listed) instead of v564's Job Board foreman (titled Foreman only) — so Gage Lund, Louis Hoffman, Jacob Spackman etc. are credited where Simpro names them, and a wrong person is fixed on the job's technician in Simpro; finished-job margins use Josh's jobs from 'settings/goalsSimpro' (a customer invoice dated this year, ≥ 99.95% invoiced, costs posted): **Whole job margin (Josh)** = Σ Simpro net profit ÷ Σ contract — verified 11.2% on today's 153 jobs, the Goals tab's number to the decimal — plain average of Simpro's job margins beside, under-15% count; rough / finish margins are the item split on those same jobs (on Active: open jobs past that phase, so far, as v564 had them). The stage switch is All jobs / Active / Invoiced <year> (Josh). The foreman list's Margin view leads with each technician's whole-job margin; By lead still uses the Job Board lead. **Server:** 'phaseCostsNightly' also pulls every job in 'settings/goalsSimpro' (78 invoiced-this-year jobs were not on the Job Board — service calls, old jobs) and keeps each job's Simpro technicians (the job list's 'Technicians' column — no extra calls); cached invoiced jobs without a technician are looked up once. **Chart:** the artifact's dot chart, built into the tab as plain HTML: one row per job (same filters as the table — stage, picked person, search; switched-off jobs greyed), rough (blue) and finish (teal) on one scale, worst first, 100% line (Margin: dashed 15% goal), a red ring when over / under goal, tap a row to open that job's cost centers in the table; finish is teal everywhere on the tab now (violet was too close to blue). Tests: 'scripts/jobcosts-model-test.js' rewritten for the technician credit and Josh's margin (6 checks). Guide 'dashboard.html' step 8. **Needs 'firebase deploy --only functions:phaseCostsNightly,functions:sendTestPhaseCosts'** (then Pull from Simpro now once or twice for the 78 new jobs). **Why it won't lose data:** read-only against Simpro and the jobs; the tab now also reads settings/goalsSimpro (getDoc); the function writes the same settings docs and server-only state as before, with one more field per job (its technician); no job write, no loader or rules change.
 - **Job Costs: the whole job table fits across the screen** · 'shipped 2026-10-23' · 'SW v565' · 'OfficeDash' · Koy, right after v564: *"its annoying that you cant see the whole table horizonatlly at once"*. The Job Costs tab now uses the dashboard's full width (the 310 px right rail is dropped on this tab only — '.od-grid.one'); **By foreman / By lead** moved above the job table as a grid of name cards, **How it is counted** below it. Cost views: used and estimate share one column per phase ("1,249 / 395"; sorts by used), so the table is 9 columns; Margin: one column per phase — margin so far with the estimate's margin small under it — plus sell and whole job. Headings and the long "No foreman (…, why)" text wrap, bars are shorter. Measured on today's data: both views fit with no sideways scroll at 1440, 1280, 1200 and 1100 px; phones still scroll the table (narrow-screen columns hide as before). Guide 'dashboard.html' says the foreman list is above the table. **Why it won't lose data:** layout only — no data, write, function or rules change.
@@ -72533,7 +72591,11 @@ function App() {
 
           <div style={{flex:"0 0 210px",minWidth:140}}>
 
-            <div style={{display:"flex",alignItems:"center",gap:7}}>
+            {/* Commercial rows carry the ~200px PHASE pill on this line; inside the
+                fixed 210px column the name ran past the column edge and drew over
+                the ROUGH bar. Wrapping drops the name under the pill. Residential
+                rows keep the single line they always had. */}
+            <div style={{display:"flex",alignItems:"center",gap:7,...(isCommercial(job)?{flexWrap:"wrap",rowGap:3}:null)}}>
 
               {job.type==="quote"&&<span style={{fontSize:12,fontWeight:700,color:"#fff",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
               {isCommercial(job)&&(()=>{
@@ -72543,7 +72605,7 @@ function App() {
                 return <span title={p!==null?COMM_PHASE_BY_N[p].label:"Commercial stage"} style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:col,background:`${col}15`,border:`1px solid ${col}40`,borderRadius:99,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>{lbl}</span>;
               })()}
 
-              <span style={{fontWeight:600,fontSize:14,color:C.text}}>{job.simproNo&&<span style={{color:C.dim,fontWeight:700,marginRight:5}}>#{job.simproNo}</span>}{job.name||"Untitled Job"}</span>
+              <span style={{fontWeight:600,fontSize:14,color:C.text,...(isCommercial(job)?{minWidth:0,overflowWrap:"anywhere"}:null)}}>{job.simproNo&&<span style={{color:C.dim,fontWeight:700,marginRight:5}}>#{job.simproNo}</span>}{job.name||"Untitled Job"}</span>
 
               <StatusUpdateHover statusUpdate={job.statusUpdate} anchor="left"/>
 
