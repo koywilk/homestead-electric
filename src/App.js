@@ -5329,7 +5329,7 @@ const PERMISSIONS = {
   // Change Order tracker — office only. Jeromy sends most COs and needs
   // one place to see every CO's status across every job (added 2026-05-24).
   "cos.view":               ["admin","manager"],
-  "cos.setStatus":          ["admin","manager"],   // v546: Approved / Completed / Denied are office calls (they push crew + make invoice tasks)
+  "cos.setStatus":          ["admin","manager"],   // v546: Approved / Denied are office calls (they push crew). v574: Mark Work Completed on an approved CO is open to everyone
   // Coordinator Book Worklist — office/coordinators see the panel.
   "worklist.view":          ["admin","manager"],
   // Needs Board — coordinator obligation board for contractor call-in needs.
@@ -6695,7 +6695,7 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
 
 // Collapsible section wrapper — collapsed by default
 
-function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, openSignal=0, children}) {
+function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, openSignal=0, badge=null, children}) {
 
   const [open, setOpen] = useState(defaultOpen);
   // v549: a parent can open the section and scroll to it (the stage summary's
@@ -6714,7 +6714,11 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, 
 
           cursor:"pointer",userSelect:"none"}}>
 
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color}}>{label}</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",minWidth:0}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color}}>{label}</div>
+          {/* v574: shows even while the section is closed (the Punch List's approved-CO count) */}
+          {badge&&<span style={{fontSize:11.5,fontWeight:800,background:C.teal,color:"#fff",borderRadius:99,padding:"3px 9px",whiteSpace:"nowrap"}}>{badge}</span>}
+        </div>
 
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
 
@@ -16283,26 +16287,69 @@ function approvedCOsForPunch(changeOrders, returnTrips) {
   });
   return out.sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0));
 }
+// v574: an approved CO can be pinned to a punch list ('punchPhase' on the CO);
+// blank keeps the job-stage rule above, so no CO moves until someone picks.
+function coPunchPhaseFor(co, job) {
+  return co && (co.punchPhase === "rough" || co.punchPhase === "finish") ? co.punchPhase : coPunchPhase(job);
+}
+function approvedCOsOnPhase(job, phase) {
+  return approvedCOsForPunch(job && job.changeOrders, job && job.returnTrips).filter(e => coPunchPhaseFor(e.co, job) === phase);
+}
 // ── end Approved COs derivations ─────────────────────────────────────────────
-function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough, phaseLabel = "Rough" }) {
+function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], phase = "rough", onJumpPhase = null }) {
   const [open, setOpen] = useState(false);            // starts collapsed (Koy: "as always")
   const [expanded, setExpanded] = useState({});        // done CO id -> reopened view
-  const list = approvedCOsForPunch(job.changeOrders, job.returnTrips);
-  if (!list.length) return null;
+  const list = approvedCOsOnPhase(job, phase);
+  // v574: a CO pinned to Rough that's still open once the job is on Finish
+  // stays on Rough — the Finish bar points at it so it can't get lost.
+  const strandedRough = phase === "finish" && coPunchPhase(job) === "finish"
+    ? approvedCOsOnPhase(job, "rough").filter(e => !e.done).length : 0;
+  if (!list.length && !strandedRough) return null;
+  const otherPhase = phase === "rough" ? "finish" : "rough";
+  const otherLabel = otherPhase === "rough" ? "Rough" : "Finish";
   const me = getIdentity()?.name || "";
   const today = new Date().toLocaleDateString("en-US");
   const first = (n) => String(n || "").split(" ")[0];
   const patchCO = (id, patch) => onUpdate({ changeOrders: (job.changeOrders || []).map(c => c && c.id === id ? { ...c, ...patch } : c) });
   const openN = list.filter(e => !e.done).length, doneN = list.length - openN;
   const cb = (on, big) => ({ width: big ? 26 : 18, height: big ? 26 : 18, borderRadius: big ? 7 : 5, border: `2px solid ${on ? C.green : C.muted}`, background: on ? C.green : "#fff", color: "#fff", fontSize: big ? 15 : 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, marginTop: 1 });
+  const openList = list.filter(e => !e.done);
   return (
     <div style={{ marginBottom: 14 }}>
-      <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "none", padding: "6px 2px", cursor: "pointer", fontFamily: "inherit", textAlign: "left", minHeight:"var(--he-tap, 36px)" }}>
-        <span style={{ color: C.dim, fontSize: 12, width: 10, display: "inline-block" }}>{open ? "▾" : "▸"}</span>
-        <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.06em", color: C.purple }}>Approved COs</span>
-        <span style={{ fontSize: 12.5, color: C.dim }}>{openN} open{doneN ? ` · ${doneN} done` : ""}</span>
-      </button>
+      {/* v574: a solid teal bar (was a thin purple line half the crew never saw).
+          Still starts closed, but names every open CO while closed. */}
+      <div onClick={() => list.length && setOpen(v => !v)}
+        style={{ background: C.teal, color: "#fff", borderRadius: 12, padding: "12px 14px", marginBottom: 12, boxShadow: "0 2px 0 #2C5A57", cursor: list.length ? "pointer" : "default", userSelect: "none" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 9, background: "#ffffff26", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Icon name="checkCircle" size={18} stroke={2.25}/>
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 21, letterSpacing: "0.06em", lineHeight: 1 }}>Approved change orders</div>
+            <div style={{ fontSize: 12.5, opacity: 0.9, marginTop: 2 }}>{openN} to do{doneN ? ` · ${doneN} done` : ""}</div>
+          </div>
+          {list.length > 0 && (
+            <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 800, background: "#fff", color: C.teal, borderRadius: 8, padding: "8px 12px", whiteSpace: "nowrap", minHeight: 36, display: "inline-flex", alignItems: "center" }}>{open ? "Close ▾" : "Open ▸"}</span>
+          )}
+        </div>
+        {!open && (openList.length > 0 || strandedRough > 0) && (
+          <div style={{ marginTop: 10, borderTop: "1px solid #ffffff33", paddingTop: 8, display: "grid", gap: 5 }}>
+            {openList.slice(0, 4).map(({ co, idx }) => (
+              <div key={co.id} style={{ fontSize: 13, display: "flex", gap: 8, alignItems: "baseline", minWidth: 0 }}>
+                <b style={{ fontWeight: 800, opacity: 0.85, whiteSpace: "nowrap" }}>CO #{idx + 1}</b>
+                <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{htmlToText(co.desc || "") || "(no description)"}</span>
+              </div>
+            ))}
+            {openList.length > 4 && <div style={{ fontSize: 12.5, opacity: 0.85 }}>+ {openList.length - 4} more</div>}
+            {strandedRough > 0 && (
+              <div onClick={e => { e.stopPropagation(); onJumpPhase && onJumpPhase("rough"); }}
+                style={{ fontSize: 12.5, fontWeight: 700, textDecoration: onJumpPhase ? "underline" : "none", cursor: onJumpPhase ? "pointer" : "default" }}>
+                {strandedRough} still open on the Rough punch{onJumpPhase ? " — open Rough ▸" : ""}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       {open && list.map(({ co, idx, done }) => {
         const lines = coTaskLines(co.task);
         const items = lines.filter(l => l.kind === "item");
@@ -16322,7 +16369,7 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
         };
         const reopen = () => patchCO(co.id, { coStatus: "approved", punchDoneAt: "", punchDoneBy: "" });
         return (
-          <div key={co.id} style={{ background: done ? "#F6FAF7" : C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${done ? C.green : C.purple}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+          <div key={co.id} style={{ background: done ? "#F6FAF7" : C.card, border: `1px solid ${C.border}`, borderLeft: `4px solid ${done ? C.green : C.teal}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
               <div onClick={done ? reopen : markDone} title={done ? "Reopen this CO" : "Mark the whole CO done"} style={cb(done, true)}>{done ? "✓" : ""}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -16331,7 +16378,7 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4, fontSize: 12.5, color: C.dim }}>
                   <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: done ? C.green : "#1F7A3F18", color: done ? "#fff" : C.green }}>{done ? "Done" : "Approved"}</span>
-                  {co.quoteNumber && <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: "#6A3FB522", color: C.purple }}>Quote #{co.quoteNumber}</span>}
+                  {co.quoteNumber && <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 99, background: "#3E7D7A22", color: C.teal }}>Quote #{co.quoteNumber}</span>}
                   {co.time && <span style={{ border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 6px", background: C.surface }}>Est. {co.time}</span>}
                   {co.coStatusDate && !done && <span>approved {co.coStatusDate}</span>}
                   <span>{co.createdBy ? `by ${first(co.createdBy)} · ` : ""}{co.createdAt || ""}</span>
@@ -16375,12 +16422,19 @@ function ApprovedCOsPunch({ job, onUpdate, assigneeOptions = [], color = C.rough
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
               {!done ? (
                 <>
+                  {/* v574: same words as the COs tab button; anyone on the job can tap it */}
+                  <button type="button" onClick={markDone} style={{ flex: "1 1 220px", minHeight: 44, fontSize: 13.5, fontWeight: 800, padding: "8px 14px", borderRadius: 9, border: "none", background: C.green, color: "#fff", fontFamily: "inherit", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+                    <Icon name="checkCircle" size={14} stroke={2.5}/> Mark Work Completed
+                  </button>
                   <select value={co.assignedTo || ""} onChange={e => patchCO(co.id, { assignedTo: e.target.value })}
-                    style={{ fontSize: 12.5, padding: "5px 9px", borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontFamily: "inherit" }}>
+                    style={{ flex: "1 1 160px", fontSize: 12.5, padding: "8px 10px", minHeight: 40, borderRadius: 7, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontFamily: "inherit" }}>
                     <option value="">Assign to…</option>
                     {(assigneeOptions || []).map(n => <option key={n} value={n}>{n}</option>)}
                   </select>
-                  <button type="button" onClick={markDone} style={{ fontSize: 12.5, fontWeight: 700, padding: "6px 12px", borderRadius: 7, border: `1px solid ${C.green}`, background: "transparent", color: C.green, fontFamily: "inherit", cursor: "pointer" }}>Mark CO done</button>
+                  <button type="button" onClick={() => patchCO(co.id, { punchPhase: otherPhase })}
+                    style={{ flexBasis: "100%", textAlign: "left", background: "none", border: "none", padding: "4px 0", fontSize: 12.5, color: C.dim, fontFamily: "inherit", cursor: "pointer" }}>
+                    Wrong list? <u>Move to {otherLabel} punch</u>
+                  </button>
                 </>
               ) : (
                 <>
@@ -17069,7 +17123,7 @@ function crewOnSiteToday(jobId) {
   return !!(c && (c.lead || (Array.isArray(c.crew) && c.crew.length)));
 }
 
-function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = [], returnTrips = [], ccFieldink = {}, onJumpToPunch = null, punchPhaseLabel = "Rough"}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = [], returnTrips = [], ccFieldink = {}, onJumpToPunch = null, autoPunchPhase = "rough"}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
   const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
@@ -17373,51 +17427,55 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                   </div>
                 )}
 
-                {/* Approved — branch on crew on site */}
-                {isApproved&&(
-                  <div style={{padding:"10px 12px",borderRadius:8,marginBottom:8,
-                    background:crewOnSite?"#1F7A3F08":"#C2410C08",
-                    border:`1px solid ${crewOnSite?"#1F7A3F33":"#C2410C33"}`}}>
-                    {/* v418: approving IS what puts a CO on the punch list (v417) — say so
-                        here, with a jump, so nobody hunts for a "convert to punch" button. */}
-                    {isApproved && onJumpToPunch && (
-                      <div onClick={onJumpToPunch} title={`Open the ${punchPhaseLabel} tab's punch list`}
-                        style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12.5,fontWeight:700,color:"#1F7A3F",background:"#1F7A3F14",border:"1px solid #1F7A3F44",borderRadius:8,padding:"5px 10px",marginBottom:8,cursor:"pointer"}}>
-                        <Icon name="checkCircle" size={12} stroke={2.25}/> On the {punchPhaseLabel} punch list — every task line checkable there · open
+                {/* Approved (v574): pick the punch list, complete it (anyone), or send to a Return Trip.
+                    Approving is still what puts a CO on a punch list (v417); this picks WHICH one. */}
+                {isApproved&&(()=>{
+                  const ph = o.punchPhase==="rough"||o.punchPhase==="finish" ? o.punchPhase : autoPunchPhase;
+                  const phLabel = ph==="finish" ? "Finish" : "Rough";
+                  const divider = (txt) => (
+                    <div style={{display:"flex",alignItems:"center",gap:8,color:C.dim,fontSize:11.5,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",margin:"12px 0 8px"}}>
+                      <span style={{flex:1,height:1,background:C.border}}/>{txt}<span style={{flex:1,height:1,background:C.border}}/>
+                    </div>
+                  );
+                  const seg = (val, label) => {
+                    const on = ph===val;
+                    return (
+                      <button type="button" key={val} onClick={()=>{ if(!on) upd(o.id,{punchPhase:val}); }}
+                        style={{flex:1,minHeight:40,border:"none",fontSize:13,fontWeight:700,fontFamily:"inherit",cursor:on?"default":"pointer",
+                          background:on?(val==="finish"?C.finish:C.rough):C.surface,color:on?"#fff":C.dim}}>
+                        {label}
+                      </button>
+                    );
+                  };
+                  return (
+                    <div style={{padding:"10px 12px",borderRadius:8,marginBottom:8,background:"#1F7A3F08",border:"1px solid #1F7A3F33"}}>
+                      <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.green,marginBottom:6}}>Which punch list?</div>
+                      <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:9,overflow:"hidden"}}>
+                        {seg("rough","Rough punch")}{seg("finish","Finish punch")}
                       </div>
-                    )}
-                    {crewOnSite?(
-                      <>
-                        <div style={{fontSize:12.5,fontWeight:700,color:"#1F7A3F",marginBottom:8}}>
-                          ✓ Crew is on site — mark work complete when done
-                        </div>
-                        {office ? (
-                          <button onClick={()=>setStatus(o,"completed")}
-                            style={{background:C.green,border:"none",borderRadius:8,color:"#fff",
-                              fontSize:12.5,fontWeight:700,padding:"7px 16px",minHeight:40,cursor:"pointer",fontFamily:"inherit"}}>
-                            ✓ Mark Work Completed
-                          </button>
-                        ) : (
-                          <div style={{fontSize:12.5,color:C.dim}}>Done with it? Tell the office on My Day and they'll mark it complete.</div>
-                        )}
-                      </>
-                    ):(
-                      <>
-                        <div style={{fontSize:12.5,fontWeight:700,color:"#C2410C",marginBottom:6,display:"inline-flex",alignItems:"center",gap:6}}>
-                          <Icon name="alertTriangle" size={12} stroke={2.5}/> Crew not on site — convert to Return Trip to schedule
-                        </div>
-                        <button onClick={()=>convertToRT(o,o._idx)} style={{
-                          background:"#6A3FB518",border:"1px solid #6A3FB533",
-                          borderRadius:8,color:"#6A3FB5",fontSize:12.5,fontWeight:700,
-                          padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
-                          display:"flex",alignItems:"center",gap:6,
-                        }}>
-                          <Icon name="rotateCw" size={12}/> Convert to Return Trip
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
+                      <div style={{fontSize:12,color:C.dim,marginTop:5}}>
+                        {o.punchPhase ? "Picked by hand. " : "Picked for you from the job's stage. Tap the other one to move it. "}
+                        {onJumpToPunch && <span onClick={()=>onJumpToPunch(ph)} style={{textDecoration:"underline",cursor:"pointer",whiteSpace:"nowrap"}}>Open {phLabel} punch ▸</span>}
+                      </div>
+                      {divider("when the work's done")}
+                      <button onClick={()=>setStatus(o,"completed")}
+                        style={{width:"100%",background:C.green,border:"none",borderRadius:9,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",gap:7,
+                          fontSize:13.5,fontWeight:800,padding:"8px 16px",minHeight:44,cursor:"pointer",fontFamily:"inherit"}}>
+                        <Icon name="checkCircle" size={14} stroke={2.5}/> Mark Work Completed
+                      </button>
+                      {divider("crew not going back soon")}
+                      <button onClick={()=>convertToRT(o,o._idx)} style={{
+                        width:"100%",minHeight:44,justifyContent:"center",
+                        background:"#6A3FB518",border:"1px solid #6A3FB533",
+                        borderRadius:9,color:"#6A3FB5",fontSize:13,fontWeight:700,
+                        padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
+                        display:"flex",alignItems:"center",gap:6,
+                      }}>
+                        <Icon name="rotateCw" size={12}/> Convert to Return Trip
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -32407,6 +32465,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // cheap localStorage reads). The pill is the whole point of the tab —
   // visible from the moment the job opens, before any scrolling.
   const qNewCount = countUnseenAnswers(job);
+  // v574: open approved COs per punch list — shown on the Rough/Finish tab and the Punch List header
+  const coOpenRough = approvedCOsOnPhase(job, "rough").filter(e => !e.done).length;
+  const coOpenFinish = approvedCOsOnPhase(job, "finish").filter(e => !e.done).length;
+  const coBadge = (n) => n > 0 ? `${n} change order${n === 1 ? "" : "s"}` : null;
 
   // V2.4 — Scheduled-RT map for punch items. Builds {punchItemId → {date,
   // crew, rtId, phase}} from job.returnTrips, so PunchSection can show a
@@ -32738,6 +32800,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {t}
               {t==="Questions"&&qNewCount>0&&(
                 <span style={{marginLeft:5,fontSize:11,fontWeight:800,background:'#1F7A3F',color:'#fff',borderRadius:99,padding:'1px 6px',verticalAlign:'middle',letterSpacing:'0.03em'}}>{qNewCount} NEW</span>
+              )}
+              {((t==="Rough"&&coOpenRough>0)||(t==="Finish"&&coOpenFinish>0))&&(
+                <span title="Approved change orders on this punch list" style={{marginLeft:5,fontSize:11,fontWeight:800,background:C.teal,color:'#fff',borderRadius:99,padding:'1px 6px',verticalAlign:'middle',letterSpacing:'0.03em'}}>{t==="Rough"?coOpenRough:coOpenFinish} CO</span>
               )}
 
             </button>
@@ -33079,13 +33144,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
 
-              <Section label="Punch List" color={C.rough} anchorId="he-punch-rough" openSignal={punchOpenSig.rough} action={
+              <Section label="Punch List" color={C.rough} anchorId="he-punch-rough" openSignal={punchOpenSig.rough} badge={coBadge(coOpenRough)} action={
                 <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}
                   filter={job.roughPunchFilter||null} filterLabel={job.roughPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({roughPunchFilter:v,roughPunchFilterLabel:lbl})}
                   shares={job.roughPunchShares||[]} onSaveShares={v=>u({roughPunchShares:v})}/>
               }>
 
-                {coPunchPhase(job) === "rough" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.rough} phaseLabel="Rough"/>}
+                <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} phase="rough"/>
                 <PunchNotesCtx.Provider value={punchNotesCtx('roughPunch')}>
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
@@ -33412,12 +33477,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 />
               </Section>
 
-              <Section label="Punch List" color={C.finish} anchorId="he-punch-finish" openSignal={punchOpenSig.finish} action={
+              <Section label="Punch List" color={C.finish} anchorId="he-punch-finish" openSignal={punchOpenSig.finish} badge={coBadge(coOpenFinish)} action={
                 <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}
                   filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}
                   shares={job.finishPunchShares||[]} onSaveShares={v=>u({finishPunchShares:v})}/>
               }>
-                {coPunchPhase(job) === "finish" && <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} color={C.finish} phaseLabel="Finish"/>}
+                <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} phase="finish" onJumpPhase={() => setTab("Rough")}/>
                 <PunchNotesCtx.Provider value={punchNotesCtx('finishPunch')}>
                 <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
@@ -35062,8 +35127,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <ChangeOrders
                   orders={job.changeOrders}
                   returnTrips={job.returnTrips||[]}
-              onJumpToPunch={() => setTab(coPunchPhase(job) === "finish" ? "Finish" : "Rough")}
-              punchPhaseLabel={coPunchPhase(job) === "finish" ? "Finish" : "Rough"}
+              onJumpToPunch={(ph) => setTab(ph === "finish" ? "Finish" : "Rough")}
+              autoPunchPhase={coPunchPhase(job)}
                   onChange={(updatedCOs, newRT) => {
                     if(newRT) {
                       u({changeOrders:updatedCOs, returnTrips:[...(job.returnTrips||[]), newRT]});
@@ -38615,15 +38680,17 @@ function computeTasks(jobs, opts) {
         dueDate: co.coStatusDate||"",
       });
 
-      // Approved — context-aware: crew on site → complete, no crew → convert to RT
+      // Approved — context-aware: crew on site → complete, no crew → convert to RT.
+      // v574: names the punch list it sits on (the CO's own pick, else the job's stage).
       if(co.coStatus === "approved") {
         const crewOnSite = crewOnSiteToday(job.id);
+        const onPunch = coPunchPhaseFor(co, job) === "finish" ? "Finish" : "Rough";
         tasks.push({
           id: job.id+"_co_"+co.id+"_approved", jobId: job.id, jobName: job.name,
           type: "auto", category: "co", foreman,
           title: crewOnSite
-            ? `CO #${i+1} Approved — mark work complete`
-            : `CO #${i+1} Approved — convert to Return Trip`,
+            ? `CO #${i+1} Approved — on the ${onPunch} punch, mark work completed when done`
+            : `CO #${i+1} Approved — on the ${onPunch} punch, or convert to Return Trip`,
           desc: co.desc ? `CO: ${co.desc}` : undefined,
           color: "#1F7A3F", cleared: false,
         });
@@ -59671,10 +59738,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-28 · App SW version: v573
+**Last manifest update:** 2026-10-28 · App SW version: v574
 
 ---
 
+- **Approved COs: pick Rough or Finish punch, the crew can mark work completed, and the CO block can't be missed** · 'shipped 2026-10-28' · 'SW v574' · 'coPunchPhaseFor' · 'approvedCOsOnPhase' · 'ApprovedCOsPunch' · 'ChangeOrders' · 'Section badge' · Koy: *"need some other option for approved COs, like add to finish punchlist, add to rough punch list … crews should be able to mark things as work completed as well. I also want the COs tab in the punch lists to be more obvious its there, right now a lot of people have a hard time seeing it and half dont even know its there"* → approved the mockup 'docs/mockups/approved-co-routing.html' (*"looks good i hate purple tho"* → teal, the app's 'C.teal'). **(1) Which punch list:** every approved CO on the COs tab has a **Rough punch | Finish punch** toggle, stored on the CO as 'punchPhase'; blank keeps the v417 rule ('coPunchPhase': Rough until rough hits 100%), so no existing CO moved. The punch-list card carries *Wrong list? Move to Finish/Rough punch*. A CO pinned to Rough that is still open once the job is on Finish **stays on Rough**, and the Finish tab's bar adds *N still open on the Rough punch — open Rough ▸*. The approved-CO auto task names the list (*on the Rough punch, mark work completed when done*). **(2) Crew complete:** *Mark Work Completed* on the approved CO card is no longer office-only (Approve / Deny / the status picker / Undo Complete still are, 'cos.setStatus'); it writes the same 'coStatus:"completed"' with the same 10-second Undo, so the invoice task is made exactly as before. The punch-list button (was *Mark CO done*, already open to everyone) is now a full-width green *Mark Work Completed*. Convert to Return Trip now shows on every approved CO, not only when no crew is on site today. **(3) Can't miss it:** the Approved COs header is a solid teal bar (was thin purple text) that lists each open CO by number and description even while closed (up to 4, then *+ N more*), still starting closed; the Punch List section header gets a teal *N change orders* badge visible while the section is closed ('Section' gained an optional 'badge' prop); the Rough / Finish job tabs get a teal *N CO* pill beside the Questions *NEW* pill. Up Next was considered and dropped (unused). Guides: 'changeorders.html', 'rough.html', 'finish.html'. Gate: 'scripts/copunch-test.js' (+7 pin cases). **Why it won't lose data:** one new optional field ('punchPhase') on a CO, written through the same 'changeOrders.map(...)' patch every CO edit already uses; blank means today's behaviour, so nothing moves on deploy; completing writes the pre-existing 'coStatus' value with the existing Undo; everything else is display. No loader, rules or functions change.
 - **A tab holding an old copy of a job can no longer write that copy over the job** · 'shipped 2026-10-28' · 'SW v573' · 'debouncedSaveMode' · 'drainWrittenKeys' · Namjoshi Basement Remodel #1789498767402: the data-loss alert fired at 18:14:25Z ("13 punch entries gone (13→0)"). PITR reads showed the write exactly: at 18:14:26Z a fresh tab on Koy's 'dev_qrb7zi' replaced EVERY 'data' key from a copy stamped 15:02:41 — Trever's 4 basement rooms / 9 rough-punch items (added 17:42–17:51) gone, 'presence' rolled back, and the loader's own meta ('_device', '_tab', '_merged', '_saved_by', 'updated_at', 'lastActivityAt') written INTO 'data' for the first time in the doc's life, 'merged:false'. Only one writer can do that: 'saveJob''s no-patch branch, which three-way merges the whole in-memory copy; with a baseline fresher than the copy every key takes the "server == base → client verbatim" fast path (tenth incident in the Cougar Moon / Kweller / Miller family). That branch runs when a save timer fires with NOTHING queued — the queue it was armed against was drained by another write for the same job while it waited (the presence ping on job open is such a write). Every real edit reaches 'saveJob' as a patch and the only legitimate no-patch saves create brand-new jobs (Upcoming → Job Board / Quote, temp-ped pickup), so now: with nothing queued a save may only CREATE a missing doc; for an existing doc it writes nothing and logs '[HE] whole-copy save REFUSED'. The queue drain after a confirmed write moved into the pure 'drainWrittenKeys' (same rule: a key is dropped only if the write carried that exact value). Data restored the same afternoon by a field-scoped 'data.roughPunch' write from the 18:13Z PITR read. Gate: 'scripts/full-save-guard-test.js' (20 checks: the 18:14 write replayed through the real '_threeWayMerge' on the real Namjoshi values, the honest-baseline invariant, the drained-queue race through the real helpers, and a static sweep that 'saveJob''s no-patch branch has no update path). **Why it won't lose data:** the refused case has, by construction, nothing queued — every edit that tab made already landed through the patch path that drained the queue — so refusing it drops no user edit; brand-new jobs still create exactly as before; the patch path, the three-way merge, the baseline bookkeeping, the offline queue / replay and 'firestore.rules' are untouched; no field, loader or Firestore shape change.
 - **Job Costs: every name once, credit stays with the technician, the crew view is where a foreman sees his guys' jobs** · 'shipped 2026-10-28' · 'SW v572' · 'odCostsPeople' · 'odCostsByCrew' · Koy, right after v571: *"I dont want anyones name in more than one section. Foreman should have all jobs in one spot on foreman, lead same etc. And then a view for all foremans jobs that include the jr foreman under them and leads"*, and on whose job Ashcraft is: *"louis gets credit, this is just a view from the dashboard. Louis is in charge of that job, but daegan is his foreman and should be able to easily see all the jobs his guys are over in one spot."* **Group by is now People | Crew** (the By foreman / By lead pair that listed Louis twice is gone). **People:** sections by title on Settings › Team (Foremen, Jr. foremen, Leads, Crew, Office, Not on the team), every name once, each with only the jobs credited to them (the Simpro technician, Josh's rule); former crew and jobs with no technician sit under Not on the team; tap a name for their numbers. **Crew:** unchanged shape, but strict: a person's row inside a crew is their credited jobs plus a job they lead whose technician is on no crew (how the crew got it), so each job sits on one row and the rows add up to the crew. Default view is People. **Why it won't lose data:** display grouping only; no Firestore write, field, loader, function or rule change.
 - **Dashboard by crew: a person's jobs are theirs as foreman or as lead, and Daegan's / Keegan's / Colby's crews come from Settings › Team** · 'shipped 2026-10-28' · 'SW v571' · 'odCrews' · 'odCostsByCrew' · 'OfficeDash' · Koy: *"split it up by foreman now, so daegan keegan colby. and then foreman/lead jobs with the same name combined into one list? im noticing louis has foreman jobs and lead jobs. i want them all in the same spot not split up like that. and then a view of all keegan, daegan, colby and whoever is underneath them available"*, then *"same logic with the job costs tab as well"*. **One rule for whose job it is:** on every dashboard tab a job is a person's when they are its foreman OR its lead, so Louis's four lead jobs sit on Louis's one list (and still on Daegan's, whose jobs they are too). **Crews** come from the field Settings › Team already has, *which foreman's crew they belong to* ('foremanId'): a titled foreman plus everyone pointing at him (today Daegan: Louis, Treycen, Trever, Callen · Keegan: Gage, Austin, Payton, James Livingston · Colby: Jacob Spackman, Bailey, Noah, James Coleman · Zane: Braden · Abraham: nobody); the Crew Board's teams (settings/crewTeams) are the ride-along pairs and are not used. A job sits in ONE crew: its foreman's, else its lead's when the foreman is on no crew. **The picker** ("Jobs run by", every tab) gains a *Crews* group above a *People* group (foremen plus leads / jr foremen named as lead on an active job); a crew pick is remembered per device like a person. **Jobs tab:** with nothing picked the table folds into crews (job once; a header row per crew with the people's counts and open punch, closed until tapped) plus *No crew*; with a crew picked a strip of its people (Foreman / Jr. foreman / Lead / Crew, N jobs, as foreman · as lead) sits above the table and each tile picks that person; the Foreman column reads *Foreman · Lead* with the lead under; search matches the lead; the right rail is *By crew* then *By person*. **Overview:** foreman cards count foreman-or-lead jobs and carry a crew tag; a crew pick shows everyone on it who runs a job; a lead can be picked and gets a card. Trouble lines (quiet, return trips, inspections) follow the same ownership. **Job Costs:** a third grouping, *By crew* (Foreman | Lead | Crew): one card per crew with the crew's rough / finish / Josh whole-job numbers over its jobs (each job once, technician's crew else lead's), tap a crew for one row per person with every job they run as technician or as lead (a job can sit on two people's rows; the crew's totals count it once), tap a person for their table; the Technician column shows the lead under. Credit for Josh's numbers stays the Simpro technician. **Tests:** 'scripts/crews-model-test.js' (crews from foremanId, Paul excluded, ownership, crew filter on the model, job-once grouping, leads in the picker, Job Costs by crew with no double count), in 'prebuild'. Guide 'dashboard.html' updated. Mockups (real data) on the Goals canvas, boards 4 and 5. **Why it won't lose data:** read-only: grouping and filtering of what the dashboard already loads (jobs, Settings › Team, the nightly cost rows); no Firestore write, no field, loader, function or rule change; nothing on the Scoreboard tab changes.

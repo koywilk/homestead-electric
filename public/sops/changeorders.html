@@ -141,9 +141,9 @@
       <p><b>Status is the office's.</b> The card shows one status pill (Needs to be Sent,
       Sent &mdash; Pending Approval, Approved, Scheduled, Work Completed, Denied). Office
       staff tap it to change it and get a ten-second <b>Undo</b>; crew can't tap it,
-      because Approved pushes the crew and puts the CO on the punch list, and Work
-      Completed makes an invoice task. Finished the work? Say so on My Day and the office
-      marks it complete.</p>
+      because Approved pushes the crew and puts the CO on the punch list. The one status
+      the crew sets is <b>Work Completed</b>: the green button on an approved CO (or on the
+      punch list) is for anyone who did the work.</p>
       <p>Older cards made before this update may still show the <b>DRAFT — NOT SUBMITTED</b>
       flag on the office CO board until they are submitted.</p>
     </div>
@@ -179,7 +179,7 @@
     <tr><td><span class="pill" style="background:#56657A18;color:#56657A">Sent — Pending Approval</span></td>
         <td>Email went out; waiting on the yes/no.</td></tr>
     <tr><td><span class="pill" style="background:#3E7D5A18;color:#3E7D5A">Approved</span></td>
-        <td>Customer said yes. From here: crew on site closes it, or it converts to a Return Trip.</td></tr>
+        <td>Customer said yes. It sits on the Rough or Finish punch list (you pick which); the crew marks it Work Completed, or it converts to a Return Trip.</td></tr>
     <tr><td><span class="pill" style="background:#3B5BA518;color:#3B5BA5">Scheduled</span></td>
         <td>Approved with a date set (usually via its Return Trip). Shows on the calendar and Crew Planner.</td></tr>
     <tr><td><span class="pill" style="background:#46916A18;color:#46916A">Work Completed</span></td>
@@ -234,9 +234,10 @@
     <div class="num">5</div>
     <div class="body">
       <h3>Get the work done</h3>
-      <p>Crew on the job <b>today</b>, per the Crew Planner? A green <b>Mark Work
-      Completed</b> button sits on the approved CO — one tap in the field closes it.
-      Nobody scheduled today, or it's a weekend? <b>Convert to Return Trip</b> — the RT
+      <p>Every approved CO shows three things. <b>Which punch list?</b> Rough punch or
+      Finish punch: it's picked for you from the job's stage, tap the other side to move it.
+      <b>Mark Work Completed</b>: anyone who did the work taps it, here or on the punch list.
+      <b>Convert to Return Trip</b>: for work nobody is going back for soon; the RT
       pre-fills from the CO with everything on it, photos included; schedule it through
       the Crew Planner.</p>
     </div>
@@ -279,8 +280,10 @@
     <div class="body">
       <h3>Approved means the crew sees it on the punch list</h3>
       <p>The moment a CO is <b>Approved</b>, it appears in full at the top of the punch list
-      on the Rough or Finish tab (whichever phase the job is in) as <b>Approved COs</b>, every
-      task line checkable. When the crew marks it done there, this card flips to <b>Work
+      on the Rough or Finish tab as a teal <b>Approved change orders</b> bar, every task line
+      checkable. It goes on the list the job is in (Rough until rough hits 100%) unless
+      someone picks the other one on the CO card. A CO kept on Rough stays there after rough
+      is done, and the Finish bar points to it. When the crew marks it done there, this card flips to <b>Work
       Completed</b> with a "from the punch list" stamp. No convert step needed — Convert to
       Return Trip is still there for work the crew can't do while on site.</p>
     </div>
@@ -290,14 +293,13 @@
   <div class="qa">
     <div class="row">
       <p class="q">Mark Work Completed isn't showing.</p>
-      <p class="a">It only appears when the CO is Approved AND a crew is on the job TODAY
-      per the Crew Planner. Nobody scheduled today (or a weekend) shows Convert to Return
-      Trip instead. Phase status doesn't matter — flipping rough or finish changes
-      nothing.</p>
+      <p class="a">It shows on every <b>Approved</b> CO, for everyone. If the CO is still
+      Needs to be Sent or Pending, the office hasn't marked it approved yet.</p>
     </div>
     <div class="row">
       <p class="q">I completed / converted by accident.</p>
-      <p class="a">Both have undo. Completed: the <b>↩ Undo Complete</b> button sits on the
+      <p class="a">Both have undo. Right after tapping Mark Work Completed, the bar at the bottom of the
+      screen has <b>Undo</b> for ten seconds — anyone can use it. After that, ask the office: the <b>↩ Undo Complete</b> button sits on the
       collapsed green bar itself — don't expand the card looking for it (once expanded,
       tap the Approved status pill instead). Converted: on the gray card → Undo Convert —
       it asks you to confirm first (the created RT stays — delete it separately). While
@@ -328,7 +330,7 @@
     </div>
   </div>
 
-  <p class="foot">Homestead Electric · Change Orders — Crew &amp; Office Guide · updated August 2026 · updated SW v540 (design pass)</p>
+  <p class="foot">Homestead Electric · Change Orders — Crew &amp; Office Guide · updated August 2026 · updated SW v574 (approved COs)</p>
 
 </div>
 </body>

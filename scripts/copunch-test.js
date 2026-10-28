@@ -5,8 +5,8 @@ const src = fs.readFileSync(path.join(__dirname, "..", "src", "App.js"), "utf8")
 const a = src.indexOf("// ── Approved COs on the punch list"), b = src.indexOf("// ── end Approved COs derivations");
 if (a < 0 || b < 0) { console.error("copunch-test: markers not found"); process.exit(1); }
 const ctx = vm.createContext({ parseStage: (s) => s === "Scheduled" ? 1 : (parseInt(s) || 0), coIsConverted: (co) => co.coStatus === "converted" || !!co._rt });
-vm.runInContext(src.slice(a, b) + "\nthis.coTaskLines = coTaskLines; this.coTaskKey = coTaskKey; this.coPunchPhase = coPunchPhase; this.approvedCOsForPunch = approvedCOsForPunch;", ctx);
-const { coTaskLines, coTaskKey, coPunchPhase, approvedCOsForPunch } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.coTaskLines = coTaskLines; this.coTaskKey = coTaskKey; this.coPunchPhase = coPunchPhase; this.approvedCOsForPunch = approvedCOsForPunch; this.coPunchPhaseFor = coPunchPhaseFor; this.approvedCOsOnPhase = approvedCOsOnPhase;", ctx);
+const { coTaskLines, coTaskKey, coPunchPhase, approvedCOsForPunch, coPunchPhaseFor, approvedCOsOnPhase } = ctx;
 const eq = (x, y, m) => assert.strictEqual(JSON.stringify(x), JSON.stringify(y), m);
 // real Miller CO markup
 const html = '<div><b>Add 5x lighting control switchlegs</b></div><div><b>Basement&nbsp;</b></div>Basement exercise stairs<div>- Add 2 wafers</div><div>Steam shower feed&nbsp;</div><div>- 100 amp circuit&nbsp;</div><div><p>&nbsp;- add 2x fans in sport court</p></div><div><br></div>';
@@ -31,4 +31,18 @@ const cos = [
 ];
 eq(approvedCOsForPunch(cos, []).map(e => [e.co.id, e.idx, e.done]), [["a", 0, false], ["f", 5, false], ["c", 2, true]], "approved (not converted) open first, punch-done last; pending / office-completed / converted excluded; idx = original position");
 eq(approvedCOsForPunch(null, null), [], "null-safe");
+// v574: per-CO pin ('punchPhase') beats the job-stage rule; blank / junk falls back to it
+eq(coPunchPhaseFor({ punchPhase: "finish" }, { roughStage: "5%" }), "finish", "pinned finish while rough is in progress");
+eq(coPunchPhaseFor({ punchPhase: "rough" }, { roughStage: "100%" }), "rough", "pinned rough stays rough after rough is done");
+eq(coPunchPhaseFor({ punchPhase: "" }, { roughStage: "100%" }), "finish", "blank -> job stage");
+eq(coPunchPhaseFor({ punchPhase: "garage" }, { roughStage: "5%" }), "rough", "unknown value -> job stage");
+const job = { roughStage: "100%", returnTrips: [], changeOrders: [
+  { id: "r", coStatus: "approved", punchPhase: "rough" },
+  { id: "x", coStatus: "approved" },
+  { id: "y", coStatus: "approved", punchPhase: "finish" },
+  { id: "z", coStatus: "completed", punchDoneAt: "2026-10-28T00:00:00Z", punchPhase: "rough" },
+] };
+eq(approvedCOsOnPhase(job, "rough").map(e => [e.co.id, e.done]), [["r", false], ["z", true]], "rough list = pinned-rough only once rough is done");
+eq(approvedCOsOnPhase(job, "finish").map(e => e.co.id), ["x", "y"], "finish list = unpinned (stage) + pinned-finish");
+eq(approvedCOsOnPhase({}, "rough"), [], "no COs -> empty");
 console.log("copunch-test ok");
