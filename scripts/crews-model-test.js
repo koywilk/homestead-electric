@@ -10,8 +10,9 @@
  *   3. MODEL — the picker value "crew:<id>" filters the dashboard to the crew's jobs; a lead's name (Louis)
  *      filters to every job he runs; leads named on a job but not on the foreman roster are offered;
  *      crewGroups holds each active job once; noCrewJobs is the rest.
- *   4. JOB COSTS — odCostsByCrew counts each job once per crew (technician's crew, else lead's) while a
- *      person's row holds every job they run as technician or as lead; "No crew" catches the rest.
+ *   4. JOB COSTS — odCostsByCrew counts each job once per crew (technician's crew, else lead's); a person's
+ *      row inside it is their credited jobs plus a lead job whose technician is on no crew (strict, v572).
+ *   5. PEOPLE — odCostsPeople lists every name once, in the section of their Settings › Team title, credited jobs only.
  */
 "use strict";
 const assert = require("assert");
@@ -94,8 +95,15 @@ const g = X.odCostsByCrew(rows, cr);
 eq(g.map(x => [x.person, x.jobs]), [["Colby's crew", 1], ["Daegan's crew", 3], ["Keegan's crew", 1], ["No crew", 1]], "each job once per crew, the rest under No crew");
 const dg = g.find(x => x.person === "Daegan's crew");
 eq(dg.rough_hrs_pct, 1.2, "the crew's hours over its three jobs");
-eq(dg.people.map(p => [p.person, p.title, p.jobs, p.asTech, p.asLead]), [["Daegan Smith", "foreman", 1, 1, 0], ["Louis Hoffman", "jrforeman", 3, 1, 2], ["Trever Worley", "lead", 1, 0, 1], ["Callen Jakeman", "crew", 0, 0, 0]],
-  "a person's row holds every job they run as technician or as lead; Trever's lead job on Colby's crew still shows on his row");
+eq(dg.people.map(p => [p.person, p.title, p.jobs, p.asTech, p.asLead]), [["Daegan Smith", "foreman", 1, 1, 0], ["Louis Hoffman", "jrforeman", 2, 1, 1], ["Trever Worley", "lead", 0, 0, 0], ["Callen Jakeman", "crew", 0, 0, 0]],
+  "v572 strict: a person's row = jobs credited to them (technician) plus a lead job whose technician is on no crew (Patrick's); Daegan's job that Louis leads stays Daegan's; Trever's lead job on Colby's crew is Colby's");
+assert.strictEqual(dg.people.reduce((n, p) => n + p.jobs, 0), dg.jobs, "inside a crew the person rows add up to the crew: each job once");
+// 5. JOB COSTS by person: every name once, in the section of their title; only credited jobs
+const ppl = X.odCostsPeople(rows, users);
+eq(ppl.map(sec => [sec.label, sec.people.map(p => [p.person, p.jobs])]), [["Foremen", [["Daegan Smith", 1], ["Colby Fogh", 1], ["Keegan Wilkinson", 1]]], ["Jr. foremen", [["Louis Hoffman", 1]]], ["Not on the team", [["Patrick Nielsen", 1], ["No technician", 1]]]],
+  "Louis once, under Jr. foremen, with his credited job only; former crew and no-technician jobs under Not on the team; empty sections (Leads) are left out");
+eq(ppl.flatMap(sec => sec.people).reduce((n, p) => n + p.jobs, 0), rows.length, "every row exactly once across the people sections");
+eq(X.odCostsPeople([{ ...row(9, "Koy Wilkinson", "") }], [...users]).map(sec => sec.label), ["Office"], "an admin as technician lands under Office");
 eq(g.find(x => x.person === "Keegan's crew").rough_hrs_pct, 0.9);
 eq(X.odCostsByCrew([], cr).map(x => x.jobs), [0, 0, 0], "no rows: every crew at 0, no No-crew group");
 
