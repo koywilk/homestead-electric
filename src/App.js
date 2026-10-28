@@ -29928,6 +29928,30 @@ function plRepairUnticks(outPl, serverPl) {
   });
   return { pl, repaired };
 }
+// Namjoshi punch wipe (2026-10-28, v573): what a debounced saveJob may write
+// once its timer fires. Every real edit reaches saveJob as a patch, so a timer
+// that fires with NOTHING queued has no edit to deliver — it only got there
+// because another write for the same job drained the queue while this timer
+// was armed. The old no-patch branch then merged the WHOLE in-memory copy over
+// the job, and a copy older than its merge baseline took the "server == base →
+// client verbatim" fast path on every key: at 18:14:26Z a 15:02 copy wrote
+// Trever's 9 basement punch items (and the loader's own meta) over the server.
+// Now that case may only create a doc that does not exist yet (brand-new jobs,
+// the one legitimate no-patch save); saveJob refuses it for an existing doc.
+function debouncedSaveMode(writeKeys, queuedKeys) {
+  if (writeKeys && writeKeys.length) return "patch";
+  if (queuedKeys && queuedKeys.length) return "nothing";   // only the panel-loads intent was left
+  return "createOnly";
+}
+// After a confirmed write, drop from the queue exactly the keys that write
+// carried (same value by reference); a key re-queued with a newer value while
+// the write was in flight stays for the next save. Returns null when empty.
+function drainWrittenKeys(pending, accumulated) {
+  if (!pending) return null;
+  const left = { ...pending };
+  Object.keys(accumulated || {}).forEach(k => { if (left[k] === accumulated[k]) delete left[k]; });
+  return Object.keys(left).length ? left : null;
+}
 // ── end Stale-copy guards ────────────────────────────────────────────────────
 
 // v338 scalar-conflict telemetry support (read-only observability; see
@@ -59647,10 +59671,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-28 · App SW version: v572
+**Last manifest update:** 2026-10-28 · App SW version: v573
 
 ---
 
+- **A tab holding an old copy of a job can no longer write that copy over the job** · 'shipped 2026-10-28' · 'SW v573' · 'debouncedSaveMode' · 'drainWrittenKeys' · Namjoshi Basement Remodel #1789498767402: the data-loss alert fired at 18:14:25Z ("13 punch entries gone (13→0)"). PITR reads showed the write exactly: at 18:14:26Z a fresh tab on Koy's 'dev_qrb7zi' replaced EVERY 'data' key from a copy stamped 15:02:41 — Trever's 4 basement rooms / 9 rough-punch items (added 17:42–17:51) gone, 'presence' rolled back, and the loader's own meta ('_device', '_tab', '_merged', '_saved_by', 'updated_at', 'lastActivityAt') written INTO 'data' for the first time in the doc's life, 'merged:false'. Only one writer can do that: 'saveJob''s no-patch branch, which three-way merges the whole in-memory copy; with a baseline fresher than the copy every key takes the "server == base → client verbatim" fast path (tenth incident in the Cougar Moon / Kweller / Miller family). That branch runs when a save timer fires with NOTHING queued — the queue it was armed against was drained by another write for the same job while it waited (the presence ping on job open is such a write). Every real edit reaches 'saveJob' as a patch and the only legitimate no-patch saves create brand-new jobs (Upcoming → Job Board / Quote, temp-ped pickup), so now: with nothing queued a save may only CREATE a missing doc; for an existing doc it writes nothing and logs '[HE] whole-copy save REFUSED'. The queue drain after a confirmed write moved into the pure 'drainWrittenKeys' (same rule: a key is dropped only if the write carried that exact value). Data restored the same afternoon by a field-scoped 'data.roughPunch' write from the 18:13Z PITR read. Gate: 'scripts/full-save-guard-test.js' (20 checks: the 18:14 write replayed through the real '_threeWayMerge' on the real Namjoshi values, the honest-baseline invariant, the drained-queue race through the real helpers, and a static sweep that 'saveJob''s no-patch branch has no update path). **Why it won't lose data:** the refused case has, by construction, nothing queued — every edit that tab made already landed through the patch path that drained the queue — so refusing it drops no user edit; brand-new jobs still create exactly as before; the patch path, the three-way merge, the baseline bookkeeping, the offline queue / replay and 'firestore.rules' are untouched; no field, loader or Firestore shape change.
 - **Job Costs: every name once, credit stays with the technician, the crew view is where a foreman sees his guys' jobs** · 'shipped 2026-10-28' · 'SW v572' · 'odCostsPeople' · 'odCostsByCrew' · Koy, right after v571: *"I dont want anyones name in more than one section. Foreman should have all jobs in one spot on foreman, lead same etc. And then a view for all foremans jobs that include the jr foreman under them and leads"*, and on whose job Ashcraft is: *"louis gets credit, this is just a view from the dashboard. Louis is in charge of that job, but daegan is his foreman and should be able to easily see all the jobs his guys are over in one spot."* **Group by is now People | Crew** (the By foreman / By lead pair that listed Louis twice is gone). **People:** sections by title on Settings › Team (Foremen, Jr. foremen, Leads, Crew, Office, Not on the team), every name once, each with only the jobs credited to them (the Simpro technician, Josh's rule); former crew and jobs with no technician sit under Not on the team; tap a name for their numbers. **Crew:** unchanged shape, but strict: a person's row inside a crew is their credited jobs plus a job they lead whose technician is on no crew (how the crew got it), so each job sits on one row and the rows add up to the crew. Default view is People. **Why it won't lose data:** display grouping only; no Firestore write, field, loader, function or rule change.
 - **Dashboard by crew: a person's jobs are theirs as foreman or as lead, and Daegan's / Keegan's / Colby's crews come from Settings › Team** · 'shipped 2026-10-28' · 'SW v571' · 'odCrews' · 'odCostsByCrew' · 'OfficeDash' · Koy: *"split it up by foreman now, so daegan keegan colby. and then foreman/lead jobs with the same name combined into one list? im noticing louis has foreman jobs and lead jobs. i want them all in the same spot not split up like that. and then a view of all keegan, daegan, colby and whoever is underneath them available"*, then *"same logic with the job costs tab as well"*. **One rule for whose job it is:** on every dashboard tab a job is a person's when they are its foreman OR its lead, so Louis's four lead jobs sit on Louis's one list (and still on Daegan's, whose jobs they are too). **Crews** come from the field Settings › Team already has, *which foreman's crew they belong to* ('foremanId'): a titled foreman plus everyone pointing at him (today Daegan: Louis, Treycen, Trever, Callen · Keegan: Gage, Austin, Payton, James Livingston · Colby: Jacob Spackman, Bailey, Noah, James Coleman · Zane: Braden · Abraham: nobody); the Crew Board's teams (settings/crewTeams) are the ride-along pairs and are not used. A job sits in ONE crew: its foreman's, else its lead's when the foreman is on no crew. **The picker** ("Jobs run by", every tab) gains a *Crews* group above a *People* group (foremen plus leads / jr foremen named as lead on an active job); a crew pick is remembered per device like a person. **Jobs tab:** with nothing picked the table folds into crews (job once; a header row per crew with the people's counts and open punch, closed until tapped) plus *No crew*; with a crew picked a strip of its people (Foreman / Jr. foreman / Lead / Crew, N jobs, as foreman · as lead) sits above the table and each tile picks that person; the Foreman column reads *Foreman · Lead* with the lead under; search matches the lead; the right rail is *By crew* then *By person*. **Overview:** foreman cards count foreman-or-lead jobs and carry a crew tag; a crew pick shows everyone on it who runs a job; a lead can be picked and gets a card. Trouble lines (quiet, return trips, inspections) follow the same ownership. **Job Costs:** a third grouping, *By crew* (Foreman | Lead | Crew): one card per crew with the crew's rough / finish / Josh whole-job numbers over its jobs (each job once, technician's crew else lead's), tap a crew for one row per person with every job they run as technician or as lead (a job can sit on two people's rows; the crew's totals count it once), tap a person for their table; the Technician column shows the lead under. Credit for Josh's numbers stays the Simpro technician. **Tests:** 'scripts/crews-model-test.js' (crews from foremanId, Paul excluded, ownership, crew filter on the model, job-once grouping, leads in the picker, Job Costs by crew with no double count), in 'prebuild'. Guide 'dashboard.html' updated. Mockups (real data) on the Goals canvas, boards 4 and 5. **Why it won't lose data:** read-only: grouping and filtering of what the dashboard already loads (jobs, Settings › Team, the nightly cost rows); no Firestore write, no field, loader, function or rule change; nothing on the Scoreboard tab changes.
 - **The PO form goes on the PO by itself: in Simpro and on the card** · 'shipped 2026-10-27' · 'SW v570' · 'getPoForm' · 'backfillPoForms' · 'attachForm' · 'functions/materialPO/send.js' · Koy: *"can we have the attachment that is made when you send a po to supplier etc, attach itself automatically to the pos in the cc app?"* — then picked app card + Simpro PO, and every PO already sent too. Before this the 'Purchase_Order_No_####.pdf' CED got was built for the email and thrown away. **Simpro:** right after a PO email goes (a card's Send to CED, or New order from the bid, one form per PO), 'attachForm' puts the same PDF on that PO's Attachments ('POST /vendorOrders/{id}/attachments/files/', same route as v548 receipts), named 'Purchase_Order_No_####.pdf' like Simpro Mobile's. It never blocks or fails a send: it runs after the email result is saved, a Simpro refusal is kept as 'formError', and it is retried the next time anyone opens the form. Duplicate-safe like receipts: claimed in a transaction ('formAttachingAt', 90 s), the PO's attachments are checked for the filename before any upload, and a lost upload answer keeps the claim so the next try finds the file instead of uploading again; done = 'formFileId' on the 'material_po_log' doc. **Card:** every card the app emailed ('poSentVia:"app"', CED, 'poEmailOk'; also cards from an order, by 'poOrderId' + 'poCcId') shows **PO form · ####** for anyone with 'materials.sendPO'; it calls the new callable **'getPoForm'**, which rebuilds the PDF from the send record with the same 'pdfFor' the email used, refuses in plain words if the card's PO # no longer matches the one sent, and downloads it like the Lighting loads PDF. Store runs and test leftovers get no button. **Older POs:** admin-only callable **'backfillPoForms'** (console '__HE_PO_FORMS_BACKFILL()' lists them, '(true)' attaches 40 a call until done; skips test sends and anything already attached; safe to re-run). Gate: 'scripts/materialpo-sim.js' +8 scenarios, 38 total (form lands after the email, failed email attaches nothing, Simpro refusal then attach on open, lost upload answer → no 2nd copy, order → one form per PO, card form + mismatched PO # / never sent / contractor / bad key refused, 3 opens at once → 1 upload, store run has no form, backfill dry run / go / re-run / test skipped / admins only); passes with and without pdf-lib; mutation-checked (6 of 7 caught; the in-transaction 'formFileId' re-check is a backup to the filename lookup and can't be seen). Guides: rough, finish, materials. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder,functions:getPoForm,functions:backfillPoForms' before the app push**, then '__HE_PO_FORMS_BACKFILL()' once. **Why it won't lose data:** no job field, loader or rules change; the card button only reads. The only new writes are four fields on the function-only 'material_po_log' docs ('formFileId', 'formAttachedAt', 'formAttachingAt', 'formError') and one added file per Simpro PO, so nothing is overwritten or deleted. The send path's existing writes happen before the attach and are unchanged.
@@ -71237,7 +71262,8 @@ function App() {
         // Tag every save with device identity so we can trace who changed what
         const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
 
-        if(Object.keys(toWrite).length > 0) {
+        const mode = debouncedSaveMode(Object.keys(toWrite), accumulatedKeys);
+        if(mode === "patch") {
           // Patch mode: only write the fields that changed — but for structural
           // fields (roughPunch, changeOrders, returnTrips, updates, materials,
           // Q&A, …) the value the UI hands us is the ENTIRE field rebuilt from
@@ -71281,15 +71307,9 @@ function App() {
           _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, _rescued);
           // Write succeeded — clear ONLY the keys we just wrote. New patches
           // that arrived during the await stay in the queue for next flush.
-          if (pendingPatches.current[job.id]) {
-            accumulatedKeys.forEach(k => {
-              if (pendingPatches.current[job.id][k] === accumulated[k]) {
-                delete pendingPatches.current[job.id][k];
-              }
-            });
-            if (Object.keys(pendingPatches.current[job.id]).length === 0) {
-              delete pendingPatches.current[job.id];
-            }
+          {
+            const left = drainWrittenKeys(pendingPatches.current[job.id], accumulated);
+            if (left) pendingPatches.current[job.id] = left; else delete pendingPatches.current[job.id];
           }
           persistPending();   // confirmed by the server -> drop from durable queue
           // CONVERGENCE (2026-09-30, Miller panel-loads rollback): a write that
@@ -71312,13 +71332,17 @@ function App() {
             setSelected(s => (s && s.id === job.id) ? apply(s) : s);
             _advanceMergeBaseline(job.id, _writtenPatch, cleanPatch, []);   // local now holds the merged content, so the baseline may too
           }
-        } else if (accumulatedKeys.length > 0) {
+        } else if (mode === "nothing") {
           // Only the intent key was left over (its panel write already landed) — nothing to write.
           delete pendingPatches.current[job.id];
           persistPending();
-        } else {
-          // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
-          // so we never wipe Firestore fields another user added that aren't in our local snapshot.
+        } else if (mode === "createOnly") {
+          // Nothing queued. The only legitimate no-patch save is a brand-new job
+          // (Upcoming → Job Board / Quote, temp-ped pickup) whose doc does not
+          // exist yet: create it whole. For an EXISTING doc there is no edit to
+          // deliver — the queue was drained by another write while this timer
+          // was armed — and writing the in-memory copy over it is the Namjoshi
+          // wipe (see debouncedSaveMode). Refused, loudly, writing nothing.
           const sanitized = sanitize(job);
           // Check estimated size before saving
           const estimatedSize = JSON.stringify(sanitized).length;
@@ -71332,43 +71356,16 @@ function App() {
             }
           }
           const meta = stampWrite({updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID});
-          // MODE-B FIX (Cougar Moon, 2026-07-06): this branch used to rewrite
-          // EVERY field of the job from this device's local snapshot. The old
-          // dot-notation write protected fields this device had never seen,
-          // but for fields it DID know (like roughPunch) it pushed its own —
-          // possibly stale — copy back up, erasing rooms other people added.
-          // Now: brand-new docs are still created whole (nothing to wipe),
-          // but for an EXISTING doc every structural field is three-way
-          // merged against the server's current value first.
-          let _writtenFull = null;
-          const _rescuedFull = [];
+          let refusedExisting = false;
           await runTransaction(db, async (tx) => {
-            _rescuedFull.length = 0; // transactions retry on contention — start each attempt clean
+            refusedExisting = false; // transactions retry on contention — start each attempt clean
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
-            if(!snap.exists()) {
-              tx.set(jref, {data:sanitized, ...meta});
-              return;
-            }
-            const serverData = snap.data()?.data || {};
-            const fullPatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, sanitized, serverData, _rescuedFull)};
-            fullPatch.merged = _rescuedFull.length > 0; // see patch-mode note — echo of a merged write must be re-adopted
-            _writtenFull = fullPatch;
-            tx.update(jref, fullPatch);
+            if(snap.exists()) { refusedExisting = true; return; }
+            tx.set(jref, {data:sanitized, ...meta});
           });
-          // Advance the baseline to what we wrote (see the patch-mode note above) —
-          // EXCEPT fields the merge rescued: there the local copy still holds what
-          // we SENT, so the baseline stays at the sent value to force the next
-          // save to structural-merge instead of fast-pathing over the rescue.
-          if (_writtenFull) {
-            const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
-            Object.keys(_writtenFull).forEach(pk => {
-              if (pk.indexOf("data.") !== 0) return;
-              const f = pk.slice(5);
-              _b[f] = _rescuedFull.includes(f) ? sanitized[f] : _writtenFull[pk];
-            });
-            if (_writtenFull.updated_at) _b.updated_at = _writtenFull.updated_at;
-            serverBaselines.current[job.id] = _b;
+          if (refusedExisting) {
+            console.error(`[HE] whole-copy save REFUSED on ${job.name || job.id}: nothing was queued for it, so this tab's copy (stamped ${job.updated_at || "?"}) was not written over the server — the job is unchanged`);
           }
         }
 

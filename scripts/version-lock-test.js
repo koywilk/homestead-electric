@@ -50,6 +50,8 @@ const refusalSrc = between("const _versionLock = {", "  return true;\n};", { inc
 const persistSrc = between("const persistPending = useCallback(() => {", "\n  }, []);", { inclusiveEnd: true });
 const adoptSrc = between("const adoptPersistedPending = useCallback(() => {", "\n  }, []);", { inclusiveEnd: true });
 const saveJobSrc = componentFn("const saveJob = (job, patch) => {", "\n  // RECONNECT FLUSH:");
+// v573: saveJob picks its write and drains its queue through these (live, not faked).
+const saveModeSrc = between("function debouncedSaveMode(", "// ── end Stale-copy guards");
 const flushJobSrc = componentFn("const flushJob = async (job) => {", "\n  const deleteJobRemote = async");
 const flushSavesSrc = componentFn("const flushSaves = () => {", "\n  // Save on background/close");
 
@@ -117,7 +119,7 @@ function session({ tabId, version, gate, local, sess, pending = {}, txMode = "ok
   vm.createContext(sandbox);
   vm.runInContext(
     `${helpersSrc}\n${refusalSrc}\n_versionLock.onRefusal = (m) => out.refusal.push(m);\n` +
-    `${persistSrc}\n${adoptSrc}\n${saveJobSrc}\n${flushJobSrc}\n${flushSavesSrc}\n` +
+    `${persistSrc}\n${adoptSrc}\n${saveModeSrc}\n${saveJobSrc}\n${flushJobSrc}\n${flushSavesSrc}\n` +
     `out.saveJob = saveJob; out.flushJob = flushJob; out.flushSaves = flushSaves; out.adopt = adoptPersistedPending; out.persist = persistPending;` +
     `out.parseAppBuild = parseAppBuild; out.stampWrite = stampWrite; out.isVersionRefusal = isVersionRefusal; out.isPermissionDenied = isPermissionDenied; out.reportWriteDenied = reportWriteDenied; out.APP_BUILD = APP_BUILD;` +
     `out.lockReduce = lockReduce; out.isHardLock = isHardLock; out.isSoftNewer = isSoftNewer; out.laterFor = laterFor; out.LOCK_LATER_MS = LOCK_LATER_MS;`,

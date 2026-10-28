@@ -271,7 +271,7 @@ const soSrc = body("  const handleSignOffRT = (jobId, rtId) => {", "\n  const al
 const ujSrc = body("  const updateJob = (updated, patch) => {", "  // ── Redline walks save / update / delete / add");
 const sjHead = body("  const saveJob = (job, patch) => {", "    // Always write to localStorage immediately");
 const abSrc = body("  const _advanceMergeBaseline = (", "  const saveJob = (job, patch) => {");
-const convSrc = body("// CONVERGENCE (2026-09-30, Miller panel-loads rollback)", "} else if (accumulatedKeys.length > 0) {");
+const convSrc = body("// CONVERGENCE (2026-09-30, Miller panel-loads rollback)", '} else if (mode === "nothing") {');
 const migSrc = body("  const migrate = (loaded) => {", "  // Real-time listener — all devices stay in sync automatically");
 check("TRIPWIRE: every punch writer and fold point is wired", () => {
   assert(uSrc.includes("punchTickPatches("), "JobDetail u() must call punchTickPatches");
