@@ -48128,6 +48128,45 @@ const odDaysBetween = (a, b) => Math.round((new Date(b.getFullYear(), b.getMonth
 // list for every tab, one reading of return trips, open questions, failed
 // inspections grouped with their re-inspection, money from Simpro, and the
 // Needs attention lines the audit asked for.
+// ── Crews (v571) ──────────────────────────────────────────────────────────────
+// Koy 2026-10-28: "split it up by foreman now, so daegan keegan colby … foreman/lead jobs with the
+// same name combined into one list … a view of all keegan, daegan, colby and whoever is underneath
+// them." A crew = a titled foreman plus everyone whose "which foreman's crew they belong to" on
+// Settings › Team (`foremanId`) points at him. A job is a PERSON's when they are its foreman OR its
+// lead (one list, never two). A job sits in ONE crew: its foreman's, else its lead's when the foreman
+// is on no crew. The Crew Board's teams (settings/crewTeams) are the daily ride-along pairs, not this.
+// Pure; tested by scripts/crews-model-test.js.
+function odCrews(users) {
+  const act = (users || []).filter(u => u && String(u.name || "").trim() && u.active !== false);
+  const titleOf = (u) => u.title || (["admin", "justin", "jeromy"].includes(u.role) ? "admin" : ["foreman", "lead", "crew"].includes(u.role) ? u.role : "crew");
+  const crews = act.filter(u => titleOf(u) === "foreman" && !SBV2_EXCLUDE_NAME(String(u.name).trim())).map(f => {
+    const members = act.filter(u => u.foremanId === f.id && u.id !== f.id).map(u => ({ name: String(u.name).trim(), title: titleOf(u) }));
+    const foreman = String(f.name).trim();
+    return { id: f.id, key: "crew:" + f.id, foreman, first: odFirst(foreman), label: `${odFirst(foreman)}'s crew`, members, people: [foreman, ...members.map(m => m.name)] };
+  }).sort((a, b) => a.foreman.localeCompare(b.foreman));
+  const crewOf = (name) => { const n = String(name || "").trim(); return n ? (crews.find(c => c.people.some(x => sameName(x, n))) || null) : null; };
+  const crewOfJob = (j) => (j && (crewOf(j.foreman) || crewOf(j.lead))) || null;
+  const owns = (j, name) => !!j && !!String(name || "").trim() && (sameName(j.foreman, name) || sameName(j.lead, name));
+  return { crews, crewOf, crewOfJob, owns };
+}
+// Job Costs by crew (v571): the joined rows (foreman = Simpro technician, lead = Job Board lead) grouped
+// once per job into its technician's crew, else its lead's; each crew carries one row per person with
+// EVERY job they run (as technician or as lead), so a job can sit on two people's rows but counts once
+// in the crew's totals. Jobs nobody on a crew runs land in "No crew".
+function odCostsByCrew(rows, cr) {
+  const seen = new Set();
+  const groups = cr.crews.map(c => {
+    const list = rows.filter(j => { const o = cr.crewOfJob(j); return !!o && o.id === c.id; });
+    list.forEach(j => seen.add(j.no));
+    const people = c.people.map(n => { const mine = rows.filter(j => cr.owns(j, n)), asTech = rows.filter(j => sameName(j.foreman, n)).length;
+      return { person: n, title: sameName(n, c.foreman) ? "foreman" : ((c.members.find(m => sameName(m.name, n)) || {}).title || "crew"), asTech, asLead: mine.length - asTech, ...odCostsSummary(mine) }; });
+    return { crew: c, person: c.label, people, ...odCostsSummary(list) };
+  });
+  const rest = rows.filter(j => !seen.has(j.no));
+  if (rest.length) groups.push({ crew: null, person: "No crew", people: [], ...odCostsSummary(rest) });
+  return groups;
+}
+
 function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "", range = 14, pto = [], simTotals = null, now = new Date() }) {
   const today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const secs = OD_PHASES;
@@ -48180,14 +48219,18 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   allLive.forEach(j => { if (!isOpen(j)) return; const u = staff.find(x => sameName(x.name, j.foreman)); if (u) addR(u.name); });
   roster.sort((a, b) => a.localeCompare(b));
   const fmName = (j) => (j && roster.find(n => sameName(n, j.foreman))) || "";
+  // v571: crews from Settings › Team; a person owns a job as foreman OR lead; the picker can hold a crew key.
+  const { crews, crewOf, crewOfJob, owns } = odCrews(users);
+  const crewPick = typeof foreman === "string" && foreman.startsWith("crew:") ? (crews.find(c => c.key === foreman) || null) : null;
+  const inCrew = (j) => { const c = crewOfJob(j); return !!c && !!crewPick && c.id === crewPick.id; };
   // v552: the coordinator a job belongs to — set on the job, else its foreman's book.
   const bookOf = {}; (users || []).forEach(u => { if (u && u.coordinator && String(u.name || "").trim()) bookOf[String(u.name).trim().toLowerCase()] = String(u.coordinator).trim(); });
   const coordOf = (j) => { const own = String((j && j.coordinator) || "").trim(); if (own) return { name: own, via: "job" };
     const b = bookOf[String((j && j.foreman) || "").trim().toLowerCase()]; return b ? { name: b, via: "book" } : { name: "", via: "" }; };
   const coordOk = (j) => !coordinator || (coordinator === OD_NOCOORD ? !coordOf(j).name : sameName(coordOf(j).name, coordinator));
   const coordinators = [...OD_COORDS]; allLive.forEach(j => { const c = coordOf(j).name; if (c && !coordinators.some(x => sameName(x, c))) coordinators.push(c); });
-  const live = (foreman === OD_NOFM ? allLive.filter(j => !fmName(j)) : foreman ? allLive.filter(j => sameName(j.foreman, foreman)) : allLive).filter(coordOk);
-  const up = (upcoming || []).filter(u => u && (!foreman || (foreman === OD_NOFM ? !roster.some(n => sameName(n, u.foreman)) : sameName(u.foreman, foreman))) && coordOk(u));
+  const live = (foreman === OD_NOFM ? allLive.filter(j => !fmName(j)) : crewPick ? allLive.filter(inCrew) : foreman ? allLive.filter(j => owns(j, foreman)) : allLive).filter(coordOk);
+  const up = (upcoming || []).filter(u => u && (!foreman || (foreman === OD_NOFM ? !roster.some(n => sameName(n, u.foreman)) : crewPick ? inCrew(u) : owns(u, foreman))) && coordOk(u));
   const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
   const active = live.filter(isOpen);
   const allActive = allLive.filter(isOpen);
@@ -48434,7 +48477,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   // Names on active jobs that aren't on the roster — still filterable.
   const offTeam = [...new Set(allActive.filter(j => !fmName(j)).map(j => String(j.foreman || "").trim()).filter(n => n && !/^unassigned$/i.test(n)))].sort((a, b) => a.localeCompare(b));
   const troubleOf = (name) => {
-    const m = (k) => (attnBy[k] ? attnBy[k].rows.filter(r => r.job && sameName(r.job.foreman, name)).length : 0);
+    const m = (k) => (attnBy[k] ? attnBy[k].rows.filter(r => r.job && owns(r.job, name)).length : 0);
     const t = { quiet: m("quiet"), rt: m("rtLate"), insp: m("overdue") + m("inspOld") };
     t.total = t.quiet + t.rt + t.insp;
     t.text = [t.quiet && `${odPlural(t.quiet, "job")} quiet 5+ d`, t.rt && `${odPlural(t.rt, "return trip")} past date`, t.insp && `${odPlural(t.insp, "inspection")} unlogged`].filter(Boolean).join(" · ");
@@ -48449,7 +48492,12 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const busy = busyToday[0] ? { ...busyToday[0], when: "today" } : busyRange[0] ? { ...busyRange[0], when: `last ${range} days` } : null;
   if (busy) { const bj = busy.job; busy.qs = (info[bj.id] || { questions: [] }).questions.length; busy.punch = (info[bj.id] || { punch: [] }).punch.length; busy.prep = prepOpen(bj); }
 
-  return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
+  // v571: people the picker offers beside the foremen — leads / jr foremen named as lead on an active job.
+  const leadsNamed = staff.filter(u => ["lead", "jrforeman"].includes(titleOf(u)) && !roster.some(n => sameName(n, u.name)) && allActive.some(j => sameName(j.lead, u.name))).map(u => String(u.name).trim()).sort((a, b) => a.localeCompare(b));
+  // v571: the active jobs once per crew (foreman's crew, else lead's), and the ones on nobody's crew.
+  const crewGroups = crews.map(c => ({ crew: c, jobs: active.filter(j => { const o = crewOfJob(j); return !!o && o.id === c.id; }) }));
+  const noCrewJobs = active.filter(j => !crewOfJob(j));
+  return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, crews, crewOf, crewOfJob, owns, crewPick, leadsNamed, crewGroups, noCrewJobs, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
     openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
     overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
     people, teamN, shortName, foremenP, noForemanJobs, techsOf, suggestFm, coordOf, coordinators, upNoDate, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
@@ -48858,6 +48906,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [fpSel, setFpSel] = useState(null);
   const [week, setWeek] = useState(0);
   const [jobsSort, setJobsSort] = useState({ key: "last", dir: -1 });
+  const [jobsCrewOpen, setJobsCrewOpen] = useState(() => new Set());   // v571: which crew folds are open on the Jobs tab
   const [jobsStage, setJobsStage] = useState("");
   const [jobsQ, setJobsQ] = useState("");
   const [planShow, setPlanShow] = useState("all");
@@ -48997,14 +49046,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const joshJob = (j) => !!(j.josh && j.josh.counts);
     const inStage = (j) => cStage === "all" || (cStage === "josh" ? joshJob(j) : !joshJob(j) && j.status !== "Invoiced");
     const ownerOf = (j, role) => j[role] || (role === "foreman" ? "No technician" : "No lead");
-    const mine = (j) => !cWho || ownerOf(j, cWho.role) === cWho.person;
+    // v571: a crew pick keeps the crew's jobs (technician's crew, else lead's); a person pick keeps every job they run as technician or lead.
+    const crewsInfo = odCrews(users);
+    const mine = (j) => !cWho ? true : cWho.role === "crew" ? ((c) => c ? c.key === cWho.key : cWho.key === "__nocrew")(crewsInfo.crewOfJob(j)) : cWho.role === "person" ? crewsInfo.owns(j, cWho.person) : ownerOf(j, cWho.role) === cWho.person;
     const staged = rows.filter(inStage), counted = staged.filter(j => !cOff.has(j.no));
     return { rows, staged, mine, ownerOf,
       company: odCostsSummary(staged),                       // every job in this stage — the cited number
       boxes: odCostsSummary(counted.filter(mine)),           // the picked person's, less switched-off jobs
-      crew: odCostsCrew(staged, cRole), crewWi: cOff.size ? odCostsCrew(counted, cRole) : null,
+      crew: cRole === "crew" ? odCostsByCrew(staged, crewsInfo) : odCostsCrew(staged, cRole), crewWi: cOff.size ? (cRole === "crew" ? odCostsByCrew(counted, crewsInfo) : odCostsCrew(counted, cRole)) : null,
       pct: new Map(rows.map(j => [j.no, odCostsJobPct(j)])) };
-  }, [costsDoc, costsGoals, jobs, cStage, cWho, cOff, cRole]);
+  }, [costsDoc, costsGoals, jobs, users, cStage, cWho, cOff, cRole]);
   const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
   const [applTick, setApplTick] = useState(0);
   useEffect(() => {
@@ -49055,7 +49106,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
   // The 7/14/30-day window only changes Overview's chart and the Activity tab (v542).
   const rangeApplies = tab === "overview" || tab === "activity";
-  const fmLabel = foreman === OD_NOFM ? "jobs with no foreman" : foreman ? `${foreman}'s jobs` : "";
+  const fmLabel = foreman === OD_NOFM ? "jobs with no foreman" : d.crewPick ? d.crewPick.label : foreman ? `${foreman}'s jobs (foreman or lead)` : "";
   const TONE = { good: OD_G, bad: OD_R };
   const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera", question: "help", note: "fileText" };
   const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_CYAN, question: "#2F8A84", note: OD_GREY };
@@ -49213,7 +49264,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const coStatusRank = { needs_sending: 0, pending: 1, approved: 2, scheduled: 3 };
     const stageCap = d.bySec.slice(0, 5).map(s => `${s.short || s.label} ${s.jobs.length}`).join(" · ") + (d.bySec.length > 5 ? ` · +${d.bySec.slice(5).reduce((n, s) => n + s.jobs.length, 0)}` : "");
     // Foremen: one roster; with a foreman picked, only that card. Worst trouble first.
-    const shownForemen = (foreman && foreman !== OD_NOFM ? d.foremenP.filter(p => sameName(p.name, foreman)) : foreman === OD_NOFM ? [] : d.foremenP)
+    // v571: a crew pick shows everyone on that crew who runs a job (as foreman or lead); a person pick works for a lead too.
+    const crewPeople = (c) => d.people.filter(p => c.people.some(n => sameName(n, p.name)) && d.allActive.some(j => d.owns(j, p.name)));
+    const shownForemen = (foreman === OD_NOFM ? [] : d.crewPick ? crewPeople(d.crewPick) : foreman ? d.people.filter(p => sameName(p.name, foreman)) : d.foremenP)
       .map(p => ({ p, t: d.troubleOf(p.name) })).sort((a, b) => (b.t.total - a.t.total) || (b.p.todayN - a.p.todayN));
     const postedN = shownForemen.filter(x => x.p.todayN > 0).length;
     const notSeen2 = shownForemen.filter(x => !x.p.last || d.now - x.p.last > 2*OD_DAY).length;
@@ -49293,12 +49346,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Sec right={shownForemen.length ? `${postedN} of ${odPlural(shownForemen.length, "foreman").replace(/foremans$/, "foremen")} posted today${notSeen2 ? ` · ${notSeen2} not seen in 2+ days` : ""}` : ""}>Foremen</Sec>
       <div className="od-plan">
         {shownForemen.slice(0, 12).map(({ p, t }, i) => {
-          const fj = d.active.filter(j => sameName(j.foreman, p.name));
+          const fj = d.active.filter(j => d.owns(j, p.name));   // v571: as foreman or as lead
           const op = fj.reduce((n, j) => n + d.info[j.id].punch.length, 0);
+          const pc = d.crewOf(p.name);
           const hot = i === 0 && p.todayN && !t.total;
           return (
             <button type="button" className={"od-white od-crew od-tap" + (hot ? " hot" : "")} key={p.u.id || p.name} aria-label={`${p.name}: ${odPlural(fj.length, "active job")}, ${op} open punch${t.text ? ", " + t.text : ""}${p.status === "active" ? `, ${odPlural(p.todayN, "thing")} logged today` : ""}. Open their panel`} onClick={() => openPerson(p.name)}>
-              <div><b>{p.name}</b><p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
+              <div><b>{p.name}</b>{pc && !d.crewPick ? <small className="od-crewtag">{pc.label}</small> : null}<p>{odPlural(fj.length, "active job")} · {op} open punch{p.lastJob ? ` · last on ${p.lastJob}` : ""}</p>
                 {t.text ? <p className="trouble">{t.text}</p> : null}
                 <span className="day">{p.status === "active" ? (p.todayN ? `${odPlural(p.todayN, "thing")} logged today` : `Opened ${odPlural(p.openedN || p.jobsToday || 1, "job")} today, nothing logged`) : p.status === "off" ? "Off today · approved" : p.last ? `Last on a job ${odWhen({ at: p.last, dateOnly: p.lastDateOnly }, d.now)}` : "Not seen in 30 days"}</span></div>
               <OdBars vals={p.days7} color={hot ? OD_ON_A : OD_A} hi={6} label={`${p.name}: things logged per day, last 7 days: ${p.days7.join(", ")}`}/>
@@ -49332,7 +49386,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const doneCoJobs = d.live.filter(j => d.isDone(j) && d.info[j.id] && d.info[j.id].openCos.length);
     const quietJobs = d.active.filter(quiet21);
     const base = jobsStage === "__doneco" ? doneCoJobs : jobsStage === "__quiet" ? quietJobs : d.active.filter(j => !jobsStage || (d.secOf(j) && d.secOf(j).key === jobsStage));
-    let list = base.filter(j => !jq || `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""}`.toLowerCase().includes(jq));
+    let list = base.filter(j => !jq || `${j.name || ""} ${j.simproNo || ""} ${j.address || ""} ${j.gc || ""} ${j.foreman || ""} ${j.lead || ""}`.toLowerCase().includes(jq));
     const val = {
       name: j => String(j.name || "").toLowerCase(), foreman: j => String(j.foreman || "~").toLowerCase(), stage: j => d.secIdx(j),
       punch: j => d.info[j.id].punch.length, cos: j => d.info[j.id].openCos.length, next: j => d.nextOf[j.id] ? d.nextOf[j.id].at.getTime() : 9e15, last: j => d.lastAct[j.id] ? d.lastAct[j.id].getTime() : 0,
@@ -49341,6 +49395,23 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     list = list.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * jobsSort.dir; });
     const sortBy = (key) => setJobsSort(s => ({ key, dir: s.key === key ? -s.dir : (key === "last" || key === "punch" || key === "cos" ? -1 : 1) }));
     const H = ({ k, children }) => <button type="button" className={"th" + (jobsSort.key === k ? " on" : "")} onClick={() => sortBy(k)}>{children}{jobsSort.key === k ? (jobsSort.dir > 0 ? " ↑" : " ↓") : ""}</button>;
+    // v571: with nothing picked, the table folds into crews (a job once: its foreman's crew, else its lead's), counts on the header, closed until tapped.
+    const grouped = !foreman && !jq && !jobsStage && d.crews.length > 0;
+    const sortList = (arr) => arr.slice().sort((a, b) => { const x = f(a), y = f(b); return (x < y ? -1 : x > y ? 1 : 0) * jobsSort.dir; });
+    const punchOf = (arr) => arr.reduce((n, j) => n + d.info[j.id].punch.length, 0);
+    const flipCrew = (k) => setJobsCrewOpen(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+    const tableRows = !grouped ? list.map(j => ({ j })) : (() => {
+      const out = [];
+      d.crewGroups.filter(g => g.jobs.length).slice().sort((a, b) => b.jobs.length - a.jobs.length).forEach(g => {
+        const open = jobsCrewOpen.has(g.crew.key);
+        const ppl = g.crew.people.map(n => ({ n, k: d.allActive.filter(j => d.owns(j, n)).length })).filter(x => x.k).map(x => `${odFirst(x.n)} ${x.k}`).join(" · ");
+        out.push({ hdr: g.crew.label, sub: ppl || "nobody named on a job", n: g.jobs.length, punch: punchOf(g.jobs), key: g.crew.key, open });
+        if (open) sortList(g.jobs).forEach(j => out.push({ j }));
+      });
+      if (d.noCrewJobs.length) { const open = jobsCrewOpen.has("__nocrew");
+        out.push({ hdr: "No crew", sub: [...new Set(d.noCrewJobs.map(j => j.foreman || "Unassigned"))].join(", "), n: d.noCrewJobs.length, punch: punchOf(d.noCrewJobs), key: "__nocrew", open });
+        if (open) sortList(d.noCrewJobs).forEach(j => out.push({ j })); }
+      return out; })();
     // Stage note extras: why a job on hold / waiting is waiting, and the last inspection result.
     const waitText = (j, s) => {
       if (!s) return "";
@@ -49370,22 +49441,33 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {d.bySec.map(s => <button type="button" key={s.key} aria-pressed={jobsStage === s.key} onClick={() => setJobsStage(jobsStage === s.key ? "" : s.key)} style={{ "--c": s.color }}><i/>{s.label} <span>{s.jobs.length}</span></button>)}
         {doneCoJobs.length > 0 && <button type="button" aria-pressed={jobsStage === "__doneco"} onClick={() => setJobsStage(jobsStage === "__doneco" ? "" : "__doneco")} style={{ "--c": OD_B }}><i/>Finished, COs open <span>{doneCoJobs.length}</span></button>}
       </div>
+      {d.crewPick ? <div className="od-white od-pad">
+        <div className="od-ct">{d.crewPick.label}<small>from Settings › Team · each count is every active job they run, as foreman or as lead · tap a person for their list</small></div>
+        <div className="od-crewstrip">{d.crewPick.people.map(n => { const mine = d.allActive.filter(j => d.owns(j, n)), asF = mine.filter(j => sameName(j.foreman, n)).length, asL = mine.length - asF; const u = d.people.find(p => sameName(p.name, n)); const isFm = sameName(n, d.crewPick.foreman);
+          return (<button type="button" key={n} className={"od-white od-crewp" + (isFm ? " fm" : "")} onClick={() => pickForeman(n)}>
+            <small>{isFm ? "Foreman" : u && u.title === "jrforeman" ? "Jr. foreman" : u && u.title === "lead" ? "Lead" : "Crew"}</small><b>{n}</b>
+            <span className="n">{mine.length}<small>{mine.length === 1 ? "job" : "jobs"}</small></span>
+            <small className="s">{mine.length ? `${asF} as foreman · ${asL} as lead` : "not named on a job"}</small></button>); })}</div>
+      </div> : null}
       <div className="od-white od-pad">
-        <input className="od-q" type="search" value={jobsQ} onChange={e => setJobsQ(e.target.value)} placeholder="Filter by job, number, address, GC or foreman" aria-label="Filter jobs"/>
+        <input className="od-q" type="search" value={jobsQ} onChange={e => setJobsQ(e.target.value)} placeholder="Filter by job, number, address, GC, foreman or lead" aria-label="Filter jobs"/>
         <div className="od-tablewrap">
           <div className="od-table">
-            <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman</H><H k="stage">Where it is</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last work</H></div>
-            {list.map(j => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id], co = coCell(j), pw = planWaitingOn(j), nr = d.notReadyIds.has(j.id), wt = waitText(j, s), inote = inspNote(j, s); return (
+            <div className="tr hd"><H k="name">Job</H><H k="foreman">Foreman · Lead</H><H k="stage">Where it is</H><H k="punch">Punch</H><H k="cos">COs</H><H k="next">Next date</H><H k="last">Last work</H></div>
+            {tableRows.map(x => x.hdr ? (
+              <button type="button" className={"tr grp" + (x.open ? " open" : "")} key={x.key} aria-expanded={x.open} onClick={() => flipCrew(x.key)}>
+                <span className="c nm"><b>{x.hdr}</b><small>{x.sub}</small></span><span className="c">{x.n} {x.n === 1 ? "job" : "jobs"}</span><span className="c st"></span><span className="c num">{x.punch || "—"}</span><span className="c num"></span><span className="c"></span><span className="c">{x.open ? "Hide" : "Show"}</span>
+              </button>) : ((j) => { const s = d.secOf(j), nx = d.nextOf[j.id], la = d.lastAct[j.id], co = coCell(j), pw = planWaitingOn(j), nr = d.notReadyIds.has(j.id), wt = waitText(j, s), inote = inspNote(j, s); return (
               <button type="button" className="tr" key={j.id} onClick={() => openJob(j)}>
                 <span className="c nm"><b>{j.name}</b><small>{[j.simproNo && "#" + j.simproNo, j.address].filter(Boolean).join(" · ")}</small>{pw.length ? <small className="flag">{pw.length > 1 ? `${pw.length} plans waiting` : "Plan waiting"}</small> : null}</span>
-                <span className="c">{j.foreman || "—"}</span>
+                <span className="c">{j.foreman || "—"}{j.lead && !sameName(j.lead, j.foreman) ? <small className="ld">lead {odFirst(j.lead)}</small> : null}</span>
                 <span className="c st"><em className="pill" style={{ "--c": s ? s.color : OD_GREY }}>{s ? s.label : "—"}</em>{s && s.note ? <small>{s.note}</small> : null}{inote ? <small>{inote}</small> : null}{wt ? <small>{wt}</small> : null}{d.prepOpen(j) && s && s.key !== "prep" ? <small>Prep not finished</small> : null}</span>
                 <span className="c num">{d.info[j.id].punch.length || "—"}</span>
                 <span className="c num" style={co.color ? { color: co.color } : null}>{co.n || "—"}{co.split ? <small className="sp">{co.split}</small> : null}</span>
                 <span className="c" style={nr ? { color: OD_R, fontWeight: 700 } : null}>{nx ? <>{odShort(nx.at)} <small>{nx.label}{nr ? " · not ready" : ""}</small></> : notCalled(j) ? <span style={{ color: OD_R, fontWeight: 700 }}>Rough insp. not called</span> : "—"}</span>
                 <span className="c" style={quiet21(j) ? { color: OD_R, fontWeight: 700 } : null}>{la ? odAgo(la, d.now) : "—"}</span>
               </button>
-            ); })}
+            ); })(x.j))}
             {!list.length && <div className="od-empty">No jobs match.</div>}
           </div>
         </div>
@@ -49393,7 +49475,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
     const fmRows = [
       ...(d.noForemanJobs.length ? [{ name: "No foreman", note: d.noForemanJobs.length, v: d.noForemanJobs.length, color: OD_R, on: foreman === OD_NOFM, onClick: () => pickForeman(foreman === OD_NOFM ? "" : OD_NOFM) }] : []),
-      ...d.roster.map(fm => { const n = d.active.filter(j => sameName(j.foreman, fm)).length; return { name: fm, note: n, v: n, color: OD_A, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) }; }).filter(r => r.v),
+      ...[...d.roster, ...d.leadsNamed].map(fm => { const n = d.active.filter(j => d.owns(j, fm)).length; return { name: fm, note: n, v: n, color: OD_A, on: sameName(foreman, fm), onClick: () => pickForeman(sameName(foreman, fm) ? "" : fm) }; }).filter(r => r.v),
+    ];
+    // v571: crews first (a job once per crew), people under.
+    const crewRowsR = [
+      ...d.crewGroups.map(g => ({ name: g.crew.label, note: g.jobs.length, v: g.jobs.length, color: OD_A, on: foreman === g.crew.key, onClick: () => pickForeman(foreman === g.crew.key ? "" : g.crew.key) })).filter(r => r.v),
+      ...(d.noCrewJobs.length ? [{ name: "No crew", note: d.noCrewJobs.length, v: d.noCrewJobs.length, color: OD_GREY, on: false, onClick: () => { setJobsCrewOpen(prev => new Set([...prev, "__nocrew"])); pickForeman(""); } }] : []),
     ];
     right = (<>
       <Me sub={fmLabel ? `Jobs · ${fmLabel}` : "Jobs"}/>
@@ -49401,8 +49488,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       {attnTop.length > 0 && <div className="od-list">{attnTop.map(a => <OdItem key={a.k} color={a.color} icon={a.icon} tag={`${a.rows.length}`} title={a.label} sub={a.extra || ""} onClick={() => openList(a.label, odPlural(a.rows.length, "item"), a.rows)}/>)}</div>}
       <Sec>Where the work is</Sec>
       <div className="od-box light"><OdHBars rows={d.bySec.map(s => ({ name: s.label, note: s.jobs.length, v: s.jobs.length, color: s.color, on: jobsStage === s.key, onClick: () => setJobsStage(jobsStage === s.key ? "" : s.key) }))} empty="No active jobs."/></div>
-      <Sec>By foreman</Sec>
-      <div className="od-box light"><OdHBars rows={fmRows} empty="No foremen set on jobs."/></div>
+      <Sec>By crew</Sec>
+      <div className="od-box light"><OdHBars rows={crewRowsR} empty="No crews on Settings › Team."/></div>
+      <Sec>By person</Sec>
+      <div className="od-box light"><OdHBars rows={fmRows} empty="No foremen or leads set on jobs."/></div>
     </>);
   } else if (tab === "activity") {
     const aq = actQ.trim().toLowerCase();
@@ -50073,7 +50162,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", noM ? "Labor" : "Labor $"], ["margin", "Margin"]], "What to compare")}
           {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["josh", `Invoiced ${joshYear} (Josh)`]], "Which jobs")}
         </div>
-        {cWho ? <div className="jc-spot"><div><small>{cWho.role === "foreman" ? "Foreman, Simpro technician" : "Lead"}</small><b>{cWho.person}</b></div>
+        {cWho ? <div className="jc-spot"><div><small>{cWho.role === "foreman" ? "Foreman, Simpro technician" : cWho.role === "lead" ? "Lead" : cWho.role === "crew" ? "Crew, every job its people run" : "Person, as technician or as lead"}</small><b>{cWho.person}</b></div>
           <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
           <button type="button" className="jc-btn hv" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
         {cOff.size ? <div className="jc-wi"><b>What-if</b><span>{cOff.size} {cOff.size === 1 ? "job" : "jobs"} switched off: {v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}. The boxes and the foreman list leave {cOff.size === 1 ? "it" : "them"} out. Nothing in Simpro or the app changes.</span>
@@ -50086,17 +50175,24 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             {x.co}
           </div>))}</div>
         <section className="jc-sec">
-          <h3 className="jc-h">{cRole === "foreman" ? "By foreman" : "By lead"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"]], "Group by")}</h3>
-          <p className="jc-cap">{cRole === "foreman" ? "Foreman is the job's Simpro technician (Josh's rule). " : "Lead is the lead on the app's Job Info. "}{isM ? "Whole-job margin on Josh's jobs, rough beside." : `Rough ${NOUN[cm]} ${USED[cm]} as a share of the estimate.`} Tap a name to see their numbers.</p>
+          <h3 className="jc-h">{cRole === "foreman" ? "By foreman" : cRole === "lead" ? "By lead" : "By crew"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["foreman", "Foreman"], ["lead", "Lead"], ["crew", "Crew"]], "Group by")}</h3>
+          <p className="jc-cap">{cRole === "foreman" ? "Foreman is the job's Simpro technician (Josh's rule). " : cRole === "lead" ? "Lead is the lead on the app's Job Info. " : "A crew is a foreman and everyone under him on Settings › Team; a job counts once, in its technician's crew, else its lead's. "}{isM ? "Whole-job margin on Josh's jobs, rough beside." : `Rough ${NOUN[cm]} ${USED[cm]} as a share of the estimate.`} Tap a {cRole === "crew" ? "crew, then a person," : "name"} to see their numbers.</p>
           <div className="jc-ppl">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
             const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
             const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
             return (
-              <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: cRole, person: r0.person }); setCSel(null); }}>
-                <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
+              <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : (cRole === "crew" ? { role: "crew", key: r0.crew ? r0.crew.key : "__nocrew", person: r0.person } : { role: cRole, person: r0.person })); setCSel(null); }}>
+                <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{cRole === "crew" && r0.crew ? ` · ${r0.crew.people.length === 1 ? "alone" : r0.crew.people.map(odFirst).join(", ")}` : ""}{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
                 <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b>
                   <small>{isM ? `avg ${fp(r.whole.avg)}, rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? `, all jobs ${fp(was)}` : ""}</small></span>
               </button>); })}</div>
+          {cRole === "crew" && cWho && (cWho.role === "crew" || cWho.crewPerson) ? (() => { const g = v.crew.find(x => x.person === (cWho.role === "crew" ? cWho.person : cWho.crewPerson)); if (!g || !g.people.length) return null;
+            return (<><p className="jc-cap" style={{ marginTop: 10 }}>{g.person}: one row per person, every job they run as technician or as lead. A job can sit on two rows here; the crew's totals count it once.</p>
+              <div className="jc-ppl">{g.people.map(p => { const on = !!cWho && cWho.role === "person" && cWho.person === p.person; const val = isM ? p.whole.w : p[`rough_${cm}_pct`]; const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
+                return (<button type="button" key={p.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? { role: "crew", key: g.crew ? g.crew.key : "__nocrew", person: g.person } : { role: "person", person: p.person, crewPerson: g.person }); setCSel(null); }}>
+                  <span className="nm"><b>{p.person}</b><small>{p.title === "foreman" ? "foreman" : p.title === "jrforeman" ? "jr. foreman" : p.title} · {p.jobs} jobs · {p.asTech} as technician, {p.asLead} as lead</small></span>
+                  <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b><small>{isM ? `avg ${fp(p.whole.avg)}, rough ${fp(p.rough.w)}` : `finish ${fp(p[`finish_${cm}_pct`])}`}</small></span>
+                </button>); })}</div></>); })() : null}
         </section>
         {chart}
         <section className="jc-sec">
@@ -50113,7 +50209,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
                 <tr id={`cost-job-${j.no}`} className={`${off ? "off" : ""}${open ? " open" : ""}`} onClick={() => setCSel(open ? null : j.no)}>
                   <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" className="jc-brk" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
                   <td className="l job"><b>{j.name}</b><small>#{j.no}{j.site ? `, ${j.site}` : ""}</small></td>
-                  <td className={`l n fm${j.foreman ? "" : " jc-dim"}`}>{j.foremanShown}</td>
+                  <td className={`l n fm${j.foreman ? "" : " jc-dim"}`}>{j.foremanShown}{j.lead && !sameName(j.lead, j.foreman) ? <small className="ld">lead {odFirst(j.lead)}</small> : null}</td>
                   <td className="l n"><span className="jc-st">{j.status || "—"}</span></td>
                   {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k]) : typeof fmt === "function" ? fmt(j)
                     : fmt === "mEst" ? <>{margin(p[k])}<small className="jc-subv">est {fp(p[k.replace("_mAct", "_mEst")])}</small></> : margin(p[k])}</td>)}
@@ -50846,6 +50942,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-goal-qtr div.next{border-color:var(--o);box-shadow:0 0 0 3px var(--o-soft)}
         .odash details.od-goal-extra summary{cursor:pointer;list-style:none}.odash details.od-goal-extra summary::-webkit-details-marker{display:none}
         @media (max-width:760px){.odash .od-goal-grid,.odash .od-goal-qtr{grid-template-columns:minmax(0,1fr)}.odash .od-goal-row{grid-template-columns:minmax(0,1fr)}.odash .od-goal-row .area{justify-self:start}.odash .od-goal .n{grid-template-columns:1fr 1fr}.odash .od-goal-ppl{grid-template-columns:1fr 1fr}}
+        /* v571 crews */
+        .odash .od-table .c small.ld{display:block;font-size:11px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .odash .od-table .tr.grp{background:var(--inset);border-radius:10px;border-bottom:0;margin:6px 0 2px;cursor:pointer}
+        .odash .od-table .tr.grp .nm b{font-size:13.5px}.odash .od-table .tr.grp.open{background:var(--o-soft)}
+        .odash .od-crewstrip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+        .odash .od-crewp{padding:12px;display:flex;flex-direction:column;gap:3px;text-align:left;cursor:pointer;min-width:0;font:inherit}
+        .odash .od-crewp.fm{border-color:var(--o);box-shadow:0 0 0 3px var(--o-soft)}
+        .odash .od-crewp>small{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--o-ink);font-weight:700}
+        .odash .od-crewp>small.s{font-size:11.5px;color:var(--cdim);letter-spacing:0;text-transform:none;font-weight:500}
+        .odash .od-crewp b{font-size:13.5px}.odash .od-crewp .n{font-size:22px;font-weight:800;line-height:1.1;margin-top:4px}.odash .od-crewp .n small{font-size:11.5px;font-weight:500;color:var(--cdim);margin-left:4px}
+        .odash .od-crewtag{display:inline-block;font-size:10.5px;color:var(--o-ink);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
+        .odash .jc-tbl td.fm small.ld{display:block;font-size:11px;opacity:.75}
+        @media (max-width:900px){.odash .od-crewstrip{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
         @media (max-width:600px){
           .odash .od-top{flex-wrap:nowrap}
@@ -50881,7 +50990,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"}</span>
           <div className="od-fpanel" id="od-fpanel">
             <select className="od-sel" value={foreman} onChange={e => pickForeman(e.target.value)} aria-label="Jobs run by">
-              <option value="">All foremen</option>{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}
+              <option value="">All foremen</option>
+              {d.crews.length ? <optgroup label="Crews (Settings › Team)">{d.crews.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}</optgroup> : null}
+              <optgroup label="People (foreman or lead)">{d.foremen.map(f => <option key={f} value={f}>{f}</option>)}{d.leadsNamed.map(f => <option key={"lead:" + f} value={f}>{f}</option>)}</optgroup>
               {d.noForemanJobs.length > 0 || foreman === OD_NOFM ? <option value={OD_NOFM}>No active foreman (all)</option> : null}
               {d.offTeam.length > 0 && <optgroup label="Named on jobs, not an active foreman">{d.offTeam.map(f => <option key={f} value={f}>{f}</option>)}</optgroup>}
             </select>
@@ -59505,10 +59616,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-27 · App SW version: v570
+**Last manifest update:** 2026-10-28 · App SW version: v571
 
 ---
 
+- **Dashboard by crew: a person's jobs are theirs as foreman or as lead, and Daegan's / Keegan's / Colby's crews come from Settings › Team** · 'shipped 2026-10-28' · 'SW v571' · 'odCrews' · 'odCostsByCrew' · 'OfficeDash' · Koy: *"split it up by foreman now, so daegan keegan colby. and then foreman/lead jobs with the same name combined into one list? im noticing louis has foreman jobs and lead jobs. i want them all in the same spot not split up like that. and then a view of all keegan, daegan, colby and whoever is underneath them available"*, then *"same logic with the job costs tab as well"*. **One rule for whose job it is:** on every dashboard tab a job is a person's when they are its foreman OR its lead, so Louis's four lead jobs sit on Louis's one list (and still on Daegan's, whose jobs they are too). **Crews** come from the field Settings › Team already has, *which foreman's crew they belong to* ('foremanId'): a titled foreman plus everyone pointing at him (today Daegan: Louis, Treycen, Trever, Callen · Keegan: Gage, Austin, Payton, James Livingston · Colby: Jacob Spackman, Bailey, Noah, James Coleman · Zane: Braden · Abraham: nobody); the Crew Board's teams (settings/crewTeams) are the ride-along pairs and are not used. A job sits in ONE crew: its foreman's, else its lead's when the foreman is on no crew. **The picker** ("Jobs run by", every tab) gains a *Crews* group above a *People* group (foremen plus leads / jr foremen named as lead on an active job); a crew pick is remembered per device like a person. **Jobs tab:** with nothing picked the table folds into crews (job once; a header row per crew with the people's counts and open punch, closed until tapped) plus *No crew*; with a crew picked a strip of its people (Foreman / Jr. foreman / Lead / Crew, N jobs, as foreman · as lead) sits above the table and each tile picks that person; the Foreman column reads *Foreman · Lead* with the lead under; search matches the lead; the right rail is *By crew* then *By person*. **Overview:** foreman cards count foreman-or-lead jobs and carry a crew tag; a crew pick shows everyone on it who runs a job; a lead can be picked and gets a card. Trouble lines (quiet, return trips, inspections) follow the same ownership. **Job Costs:** a third grouping, *By crew* (Foreman | Lead | Crew): one card per crew with the crew's rough / finish / Josh whole-job numbers over its jobs (each job once, technician's crew else lead's), tap a crew for one row per person with every job they run as technician or as lead (a job can sit on two people's rows; the crew's totals count it once), tap a person for their table; the Technician column shows the lead under. Credit for Josh's numbers stays the Simpro technician. **Tests:** 'scripts/crews-model-test.js' (crews from foremanId, Paul excluded, ownership, crew filter on the model, job-once grouping, leads in the picker, Job Costs by crew with no double count), in 'prebuild'. Guide 'dashboard.html' updated. Mockups (real data) on the Goals canvas, boards 4 and 5. **Why it won't lose data:** read-only: grouping and filtering of what the dashboard already loads (jobs, Settings › Team, the nightly cost rows); no Firestore write, no field, loader, function or rule change; nothing on the Scoreboard tab changes.
 - **The PO form goes on the PO by itself: in Simpro and on the card** · 'shipped 2026-10-27' · 'SW v570' · 'getPoForm' · 'backfillPoForms' · 'attachForm' · 'functions/materialPO/send.js' · Koy: *"can we have the attachment that is made when you send a po to supplier etc, attach itself automatically to the pos in the cc app?"* — then picked app card + Simpro PO, and every PO already sent too. Before this the 'Purchase_Order_No_####.pdf' CED got was built for the email and thrown away. **Simpro:** right after a PO email goes (a card's Send to CED, or New order from the bid, one form per PO), 'attachForm' puts the same PDF on that PO's Attachments ('POST /vendorOrders/{id}/attachments/files/', same route as v548 receipts), named 'Purchase_Order_No_####.pdf' like Simpro Mobile's. It never blocks or fails a send: it runs after the email result is saved, a Simpro refusal is kept as 'formError', and it is retried the next time anyone opens the form. Duplicate-safe like receipts: claimed in a transaction ('formAttachingAt', 90 s), the PO's attachments are checked for the filename before any upload, and a lost upload answer keeps the claim so the next try finds the file instead of uploading again; done = 'formFileId' on the 'material_po_log' doc. **Card:** every card the app emailed ('poSentVia:"app"', CED, 'poEmailOk'; also cards from an order, by 'poOrderId' + 'poCcId') shows **PO form · ####** for anyone with 'materials.sendPO'; it calls the new callable **'getPoForm'**, which rebuilds the PDF from the send record with the same 'pdfFor' the email used, refuses in plain words if the card's PO # no longer matches the one sent, and downloads it like the Lighting loads PDF. Store runs and test leftovers get no button. **Older POs:** admin-only callable **'backfillPoForms'** (console '__HE_PO_FORMS_BACKFILL()' lists them, '(true)' attaches 40 a call until done; skips test sends and anything already attached; safe to re-run). Gate: 'scripts/materialpo-sim.js' +8 scenarios, 38 total (form lands after the email, failed email attaches nothing, Simpro refusal then attach on open, lost upload answer → no 2nd copy, order → one form per PO, card form + mismatched PO # / never sent / contractor / bad key refused, 3 opens at once → 1 upload, store run has no form, backfill dry run / go / re-run / test skipped / admins only); passes with and without pdf-lib; mutation-checked (6 of 7 caught; the in-transaction 'formFileId' re-check is a backup to the filename lookup and can't be seen). Guides: rough, finish, materials. **Needs 'firebase deploy --only functions:sendMaterialPO,functions:sendMaterialOrder,functions:getPoForm,functions:backfillPoForms' before the app push**, then '__HE_PO_FORMS_BACKFILL()' once. **Why it won't lose data:** no job field, loader or rules change; the card button only reads. The only new writes are four fields on the function-only 'material_po_log' docs ('formFileId', 'formAttachedAt', 'formAttachingAt', 'formError') and one added file per Simpro PO, so nothing is overwritten or deleted. The send path's existing writes happen before the attach and are unchanged.
 - **Dashboard Foreman view: no dollar amounts anywhere** · 'shipped 2026-10-27' · 'SW v569' · 'OfficeDash' · 'useOdMoneyMask' · 'OD_TABS_MONEY' · Koy: *"lets make a foreman visible friendly version that show no dollar amounts everywhere so i can show them and review all the info without having to worry about them seeing job dollar numbers"*. A **Foreman view** switch in the dashboard's top bar (eye icon; icon only on a phone), kept per device in 'he_odash_fview', with a copper bar while it is on. Koy's picks: a switch on his screen (foremen still can't open '/dashboard', canOpenDash unchanged), margin % stays, Materials / Labor as share of estimate, whole dashboard. **Job Costs:** Hours unchanged; Materials / Labor drop the $ used / estimate columns, the "$12k of $15k" box lines and Untagged est, keeping rough % / finish %, and a job's cost centers show % used per phase; Margin drops Rough sell / Finish sell and the cost centers show each one's share of sell to rough / finish / untagged; "Labor $" reads "Labor"; Pull from Simpro now hides. **Jobs tab:** the Simpro line drops billed / left to bill (keeps % invoiced). **Goals tab** hides (falls back to Overview). **Safety net:** while it is on, a MutationObserver on the dashboard masks any "$1,234" / "$12k" / "$1.2M" left in text, tooltips or aria labels as "$•••" (Overview CO quote totals, Simpro-sync lines, typed CO notes); turning it off remounts the page so React redraws the real text. Guide 'dashboard.html' (new Foreman view callout, Job Costs step 8). **Why it won't lose data:** display only: one localStorage key, no Firestore read, write, loader, function or rule change; the mask edits only the dashboard's on-screen text, never a job.
 
