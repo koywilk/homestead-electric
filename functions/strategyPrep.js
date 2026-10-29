@@ -157,9 +157,11 @@ function daysLabel(dis) {
 // allJobs (optional): every job doc, so a Simpro booking on a job the app has already finished/archived names it.
 function buildScheduleIndex(scheduleEntries, plannerDoc, live, weekYmds, allJobs) {
   const byJob = new Map(), byPerson = new Map(), unknown = new Map();
-  const jobBySn = new Map(); live.forEach(j => { const sn = snOf(j); if (sn) jobBySn.set(sn, j); });
+  // Projects (spec 2026-10-15 §6.3): buildings sharing one Simpro # → only the lead answers for it.
+  const simproJoinable = (j) => !(j.projectGroupId && j.simproFolder) || !!j.simproLead;
+  const jobBySn = new Map(); live.forEach(j => { const sn = snOf(j); if (sn && simproJoinable(j)) jobBySn.set(sn, j); });
   const liveIds = new Set(live.map(j => j.id)), offBySn = new Map();
-  arr(allJobs).forEach(j => { if (!j || j.deleted || j.type === "quote" || liveIds.has(j.id)) return; const sn = snOf(j); if (sn && !jobBySn.has(sn) && !offBySn.has(sn)) offBySn.set(sn, j); });
+  arr(allJobs).forEach(j => { if (!j || j.deleted || j.type === "quote" || liveIds.has(j.id)) return; const sn = snOf(j); if (sn && simproJoinable(j) && !jobBySn.has(sn) && !offBySn.has(sn)) offBySn.set(sn, j); });
   const note = (job, di, person, source) => {
     if (!byJob.has(job.id)) byJob.set(job.id, { name: job.name, days: {} });
     const d = byJob.get(job.id).days; if (!d[di]) d[di] = { people: [], source, by: {} };

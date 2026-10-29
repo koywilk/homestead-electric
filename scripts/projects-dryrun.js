@@ -130,5 +130,8 @@ eq(/if \(job\.projectGroupId\) return false;/.test(fn("index.js")), true, "ensur
 eq(/exports\.listSimproJobFolders = /.test(fn("index.js")), true, "listSimproJobFolders exported");
 eq(/simproJoinable\(j\)/.test(fn("fridayPacket.js")), true, "Friday Packet join guard");
 eq(/simproJoinable\(j\)/.test(fn("foremanMeetingPrep.js")), true, "foreman prep join guard");
+eq(/simproJoinable\(j\)/.test(fn("strategyPrep.js")), true, "strategy prep join guard");
+eq(/Number\(j\.simproNo\) && isSimproJoinable\(j\)\)\.map\(/.test(src), true, "Scoreboard V5 appJobs credits a shared Simpro # once");
+eq(/const prev = out\[sn\]; const mAll = misses/.test(src), true, "Scoreboard V5 QC adds up across buildings sharing a Simpro #");
 
 console.log(`projects-dryrun: ${n} checks passed`);

@@ -66545,7 +66545,8 @@ function ScoreboardV5({ jobs, identity }) {
   useEffect(() => onSnapshot(doc(db, "settings", "scoreboardCompleted"), s => setCache(s.exists() ? s.data() : null), () => setCache(null)), []);
   useEffect(() => onSnapshot(doc(db, "settings", "scoreboardCorrections"), s => setCorr(s.exists() && Array.isArray(s.data().list) ? s.data().list : []), () => {}), []);
   // Who ran each job, by Simpro number. First names in the job doc are fine — the page resolves them.
-  const appJobs = useMemo(() => (jobs || []).filter(j => j && Number(j.simproNo)).map(j => ({ simproNo: Number(j.simproNo), foreman: j.foreman || "", lead: j.lead || "" })), [jobs]);
+  // Projects (spec 2026-10-15 §6.3): buildings sharing one Simpro # credit it once, to the lead building.
+  const appJobs = useMemo(() => (jobs || []).filter(j => j && Number(j.simproNo) && isSimproJoinable(j)).map(j => ({ simproNo: Number(j.simproNo), foreman: j.foreman || "", lead: j.lead || "" })), [jobs]);
   // QC items per job, same walker and severity rule as sb4Agg ("serious" = miss, absent = minor).
   const qc = useMemo(() => {
     const out = {};
@@ -66555,7 +66556,9 @@ function ScoreboardV5({ jobs, identity }) {
       [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => { if (!it || it.voided) return; if (it.fromQC) { walk = true; if (it.severity === "serious") misses++; else minors++; } }));
       const st = _sb3lc(j.qcStatus);
       if (["pass", "fail", "fixed", "completed", "passed_items"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) walk = true;
-      out[sn] = { qcWalk: walk, misses, minors, walkScore: walk ? Math.max(0, 1 - Math.min(1, misses / 4 + minors / 40)) : null };
+      // Buildings sharing one Simpro # (Projects spec §6.3): their QC walks add up into one score for that Simpro job.
+      const prev = out[sn]; const mAll = misses + (prev ? prev.misses : 0), nAll = minors + (prev ? prev.minors : 0), wAll = walk || !!(prev && prev.qcWalk);
+      out[sn] = { qcWalk: wAll, misses: mAll, minors: nAll, walkScore: wAll ? Math.max(0, 1 - Math.min(1, mAll / 4 + nAll / 40)) : null };
     });
     return out;
   }, [jobs]);
