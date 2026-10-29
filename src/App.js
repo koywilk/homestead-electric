@@ -3068,6 +3068,27 @@ let _uid = Date.now();
 
 const uid = () => String(++_uid);
 
+// ── Projects + field milestones (spec 2026-10-15, docs/superpowers/specs/2026-10-15-projects-field-milestones-design.md) ──
+// A project groups normal jobs ("buildings") through job.projectGroupId; the
+// project record lives in /projects (same {data, updated_at} envelope as
+// /needs). Buildings that SHARE the project's Simpro # carry simproFolder (the
+// Simpro attachment folder that feeds them); exactly one may carry simproLead.
+// Pure one-liners — scripts/projects-dryrun.js extracts and tests them verbatim.
+const PROJECT_COLOR = "#3D6FA8";
+const ProjectsCtx = createContext(null);
+const isSimproJoinable = (j) => !(j && j.projectGroupId && j.simproFolder) || !!(j && j.simproLead);
+const projectBuildings = (jobs, pid) => (jobs || []).filter(j => j && pid && j.projectGroupId === pid && !j.archived && !j.deleted).sort((a, b) => ((a.projectRole === "site") !== (b.projectRole === "site")) ? (a.projectRole === "site" ? -1 : 1) : String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
+const projectRollup = (buildings, stageOf) => { const h = (buildings || []).filter(b => b && b.projectRole !== "site"); const st = h.map(b => stageOf(b)); return { houses: h.length, rough: st.filter(s => s === "rough").length, finish: st.filter(s => s === "finish").length, flagged: h.filter(b => b.flagged).length }; };
+const splitProjectJobs = (jobs, projects) => { const live = new Set((projects || []).filter(p => p && p.id && !p.archived).map(p => p.id)); const rest = [], byProject = {}; (jobs || []).forEach(j => { if (j && j.projectGroupId && live.has(j.projectGroupId)) (byProject[j.projectGroupId] = byProject[j.projectGroupId] || []).push(j); else rest.push(j); }); return { rest, byProject }; };
+const buildingHops = (buildings, id) => { const list = buildings || []; const i = list.findIndex(b => b && b.id === id); return { prev: i > 0 ? list[i - 1] : null, next: i >= 0 && i < list.length - 1 ? list[i + 1] : null }; };
+const buildingJobName = (projectName, buildingName) => `${String(projectName || "").trim()} · ${String(buildingName || "").trim()}`;
+const buildingShortName = (job, project) => { const n = String((job && job.name) || ""); const p = String((project && project.name) || "").trim(); return p && n.startsWith(p + " · ") ? n.slice(p.length + 3) : n; };
+const simproNoConflict = (jobs, no, pid) => { const n = String(no || "").replace(/^#/, "").trim(); if (!n) return null; return (jobs || []).find(j => j && !j.archived && !j.deleted && String(j.simproNo || "").replace(/^#/, "").trim() === n && (!pid || j.projectGroupId !== pid)) || null; };
+const liveMilestones = (list) => (Array.isArray(list) ? list : []).filter(m => m && !m.removed);
+const milestoneAdd = (list, text, by, at, id) => { const base = Array.isArray(list) ? list : []; const t = String(text || "").trim().slice(0, 140); return t ? [...base, { id, text: t, by: by || "", at: at || "" }] : base; };
+const milestoneSetRemoved = (list, id, removed, by, at) => (Array.isArray(list) ? list : []).map(m => (!m || m.id !== id) ? m : (removed ? { ...m, removed: true, removedBy: by || "", removedAt: at || "" } : { ...m, removed: false }));
+const milestoneHeaderMeta = (list) => { const l = liveMilestones(list); if (!l.length) return "none yet"; const last = l[l.length - 1]; return `${l.length} · latest: ${last.text}${last.at ? ` (${String(last.at).replace(/\/\d{4}$/, "")})` : ""}`; };
+
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 
@@ -6736,6 +6757,88 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, 
 
   );
 
+}
+
+// Folded section with a count / meta line on the header — Koy's standing rule:
+// everything starts collapsed, counts + badges on the header (Projects spec
+// 2026-10-15). Controlled when `open` is passed (so a header button can open
+// it). keepMounted renders children hidden while folded so they still load and
+// report counts (the Drive listing).
+function FoldSection({label, color=C.dim, meta=null, badge=null, action=null, open: openProp, onToggle, defaultOpen=false, keepMounted=false, children}) {
+  const [openState, setOpenState] = useState(defaultOpen);
+  const open = openProp !== undefined ? openProp : openState;
+  const toggle = () => { if (onToggle) onToggle(!open); else setOpenState(o => !o); };
+  const ink = readableInk(color, C.bg);
+  return (
+    <div style={{marginBottom:4}}>
+      <div onClick={toggle} role="button" aria-expanded={open}
+        style={{display:"flex",alignItems:"center",gap:8,minHeight:46,borderBottom:`2px solid ${color}44`,
+          marginTop:4,marginBottom:open?14:0,cursor:"pointer",userSelect:"none"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color:ink,whiteSpace:"nowrap"}}>{label}</div>
+        {badge && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:badge.color,borderRadius:4,padding:"1px 5px"}}>{badge.text}</span>}
+        <div style={{flex:1,minWidth:0,textAlign:"right",fontSize:13,fontWeight:600,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{meta}</div>
+        {action && <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:6}}>{action}</div>}
+        <span style={{color:ink,fontSize:15,fontWeight:700}}>{open?"▾":"▸"}</span>
+      </div>
+      {keepMounted ? <div style={{display:open?"block":"none"}}>{children}</div> : (open && <div>{children}</div>)}
+    </div>
+  );
+}
+
+// Field milestones (Projects spec §5): an add-only note list on every job. It
+// starts empty and folded; each entry is stamped who + M/D/YYYY; Remove sets
+// removed:true (never deleted) with an inline Undo. patchList(fn) hands fn the
+// job's FRESHEST list (JobDetail's jobRef) — never this render's copy — and the
+// save transaction's three-way merge keeps another phone's adds (items have ids).
+function FieldMilestones({ list, patchList, identity, color = C.teal, badge = null }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [undo, setUndo] = useState(null); // { id, text }
+  const inputRef = useRef(null);
+  useEffect(() => { if (!undo) return; const t = setTimeout(() => setUndo(null), 6000); return () => clearTimeout(t); }, [undo]);
+  const live = liveMilestones(list);
+  const stamp = () => new Date().toLocaleDateString("en-US");
+  const who = identity?.name || "";
+  const ink = readableInk(color, C.bg);
+  const openAndFocus = () => { setOpen(true); setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 0); };
+  const add = () => {
+    if (!String(text).trim()) { toast.info("Type a milestone first"); return; }
+    patchList(cur => milestoneAdd(cur, text, who, stamp(), uid()));
+    setText("");
+  };
+  const remove = (m) => { patchList(cur => milestoneSetRemoved(cur, m.id, true, who, stamp())); setUndo({ id: m.id, text: m.text }); };
+  const restore = () => { if (!undo) return; const id = undo.id; patchList(cur => milestoneSetRemoved(cur, id, false)); setUndo(null); };
+  const btn = { fontFamily:"inherit", cursor:"pointer", minHeight:40, borderRadius:8, fontWeight:700, fontSize:13 };
+  return (
+    <FoldSection label="Milestones" color={color} badge={badge} meta={milestoneHeaderMeta(list)} open={open} onToggle={setOpen}
+      action={<button type="button" onClick={openAndFocus} style={{...btn, border:`1px solid ${ink}`, background:"#fff", color:ink, padding:"0 12px", fontWeight:800}}>+ Add</button>}>
+      {live.length === 0 && <div style={{fontSize:13,color:C.dim,marginBottom:6}}>Nothing logged yet. Add the first one when it happens in the field.</div>}
+      {live.map(m => (
+        <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 6px 6px 10px",marginBottom:6}}>
+          <span style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0}}/>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:14.5,color:C.text}}>{m.text}</div>
+            <div style={{fontSize:13,color:C.faint}}>{m.by}{m.at ? ` · ${m.at}` : ""}</div>
+          </div>
+          <button type="button" onClick={() => remove(m)} style={{...btn, marginLeft:"auto", background:"none", border:`1px solid ${C.border}`, color:C.dim, padding:"0 12px"}}>Remove</button>
+        </div>
+      ))}
+      {undo && (
+        <div style={{display:"flex",alignItems:"center",gap:10,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"4px 6px 4px 10px",marginBottom:6,fontSize:13,color:C.dim}}>
+          <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Removed “{undo.text}”</span>
+          <button type="button" onClick={restore} style={{...btn, marginLeft:"auto", background:"none", border:"none", color:C.accent, fontWeight:800, padding:"0 12px"}}>Undo</button>
+        </div>
+      )}
+      <div style={{display:"flex",gap:8,marginTop:8}}>
+        <input ref={inputRef} value={text} maxLength={140} onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="e.g. Blockouts in, UFR in…"
+          style={{flex:1,minWidth:0,minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit",color:C.text,background:"#fff"}}/>
+        <button type="button" onClick={add} style={{...btn, minHeight:44, border:"none", padding:"0 16px", fontSize:14, background:color, color:"#fff"}}>Add</button>
+      </div>
+      <div style={{fontSize:13,color:C.dim,marginTop:6}}>Stamped with your name and today's date. No due dates yet.</div>
+    </FoldSection>
+  );
 }
 
 
@@ -28066,6 +28169,9 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
   // 2. Match folders to jobs that don't already have a driveFolderId
   const results = { matched: [], skipped: [], ambiguous: [] };
   for (const job of jobs) {
+    // Projects spec 2026-10-15: a building's folder is made INSIDE its project folder in
+    // Phase 2; fuzzy name matching would link it to the project's own folder instead.
+    if (job.projectGroupId) continue;
     if (job.driveFolderId) { results.skipped.push(job.name); continue; }
     const matches = driveFolders.filter(df => namesMatch(df.name, job.name));
     if (matches.length === 1) {
@@ -28324,7 +28430,7 @@ async function runDriveChain(jobId, by) {
   return { folderId, created: !r1?.data?.alreadyLinked, pull: r2?.data || {} };
 }
 
-function DriveFilesSection({ job, onUpdate }) {
+function DriveFilesSection({ job, onUpdate, onCount = null }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -28342,7 +28448,7 @@ function DriveFilesSection({ job, onUpdate }) {
   const folderId = extractDriveFolderId(job.driveFolderId);
 
   useEffect(() => {
-    if (!folderId) { setDriveFiles([]); setTreeFolderIds([]); return; }
+    if (!folderId) { setDriveFiles([]); setTreeFolderIds([]); if (onCount) onCount(0); return; }
     let cancelled = false;
     setLoading(true);
     setError("");
@@ -28351,6 +28457,7 @@ function DriveFilesSection({ job, onUpdate }) {
       .then(allFiles => {
         if (cancelled) return;
         setDriveFiles(allFiles);
+        if (onCount) onCount(allFiles.length);
         setTreeFolderIds([...fids]);
         // Auto-collapse any Archive folders
         const archiveFolders = [...new Set(allFiles.map(f => f._folder))].filter(isArchiveFolder);
@@ -28363,6 +28470,7 @@ function DriveFilesSection({ job, onUpdate }) {
         if (cancelled) return;
         setError(e.message || "Network error loading Drive files");
         setLoading(false);
+        if (onCount) onCount(0);
       });
     return () => { cancelled = true; };
   }, [folderId, job.docPull && job.docPull.finishedAt]);   // v413: re-list once a Simpro pull finishes
@@ -28490,6 +28598,11 @@ function DriveFilesSection({ job, onUpdate }) {
 
   return (
     <div style={{ marginBottom: 24 }}>
+      {job.projectGroupId && !job.driveFolderId && (
+        <div style={{fontSize:13,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:10,lineHeight:1.4}}>
+          This building's Drive folder gets made inside the project's folder in the next step of Projects. Until then its plans live on the project page and in Project-wide plans.
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>GOOGLE DRIVE PLANS</div>
         {folderId && !editingFolder && (
@@ -28579,15 +28692,17 @@ function DriveFilesSection({ job, onUpdate }) {
               Folders are no longer auto-created while you're still typing. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
             <span style={{ fontSize: 12.5, color: C.dim }}>No folder yet?</span>
-            <button onClick={handleCreateFolder} disabled={creating || !String(job.name || "").trim()}
-              style={{ background: "none", border: `1px solid ${C.green}55`, borderRadius: 7, color: C.green,
-                fontSize: 12.5, fontWeight: 600, padding: "6px 12px", fontFamily: "inherit",
-                cursor: creating ? "wait" : "pointer",
-                opacity: (creating || !String(job.name || "").trim()) ? 0.5 : 1,
-                display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Icon name="folder" size={12} />
-              {creating ? "Creating…" : "Create Drive folder"}
-            </button>
+            {!job.projectGroupId && (
+              <button onClick={handleCreateFolder} disabled={creating || !String(job.name || "").trim()}
+                style={{ background: "none", border: `1px solid ${C.green}55`, borderRadius: 7, color: C.green,
+                  fontSize: 12.5, fontWeight: 600, padding: "6px 12px", fontFamily: "inherit",
+                  cursor: creating ? "wait" : "pointer",
+                  opacity: (creating || !String(job.name || "").trim()) ? 0.5 : 1,
+                  display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <Icon name="folder" size={12} />
+                {creating ? "Creating…" : "Create Drive folder"}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -29015,11 +29130,17 @@ function FileUploadSection({ jobId, files, onChange }) {
 }
 
 function PlansTab({job, onUpdate, onOpenBidItems=null}) {
-
+  // v542 (Projects spec §4): every block starts folded with a count on its header.
+  const [driveCount, setDriveCount] = useState(null);
+  const pctx = useContext(ProjectsCtx);
+  const project = job.projectGroupId && pctx ? (pctx.projects || []).find(p => p.id === job.projectGroupId && !p.archived) : null;
+  const linkKeys = LINK_FIELDS.filter(([k])=>!(LINK_FIELD_SECTION[k] && isSectionHidden(job, LINK_FIELD_SECTION[k])));
+  const linksSet = linkKeys.filter(([k]) => ((job.linkSections?.[k]) || (job[k] ? [{url:job[k]}] : [])).some(l => l && l.url)).length;
+  const uploads = (job.planFiles || []).length;
+  const customs = (job.customLinks || []).length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
   return (
-
     <div>
-
       {/* Bid Items used to be a folded section right here; it has its own tab
           now (next one over). This line catches anyone whose thumb still
           comes here first. */}
@@ -29032,25 +29153,26 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
         </button>
       )}
 
-      {/* Google Drive Plans */}
-      <DriveFilesSection job={job} onUpdate={onUpdate} />
+      <FoldSection label="Drive Plans" color={C.blue} keepMounted
+        meta={driveCount == null ? "loading…" : `${plural(driveCount, "file")}${project ? ` · ${buildingShortName(job, project)} folder` : ""}`}>
+        <DriveFilesSection job={job} onUpdate={onUpdate} onCount={setDriveCount} />
+      </FoldSection>
 
-      {/* Divider between Drive and uploads */}
-      <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 16, paddingTop: 16 }}>
-        {/* File Uploads — Firebase Storage */}
-        <FileUploadSection
-          jobId={job.id}
-          files={job.planFiles || []}
-          onChange={v => onUpdate({ planFiles: v })}
-        />
-      </div>
+      {project && (
+        <FoldSection label="Project-wide plans" color={PROJECT_COLOR} badge={{text:"NEW",color:C.blue}}
+          meta={project.wideFolderId ? `every building · ${project.name}` : "made with the project folders"}>
+          <div style={{fontSize:13,color:C.dim,lineHeight:1.4}}>
+            Site, civil and shared sheets for every building in {project.name} live in one Project-wide Drive folder, so a revision gets replaced once and every building sees it. The folder gets made in the next step of Projects.
+          </div>
+        </FoldSection>
+      )}
 
-      <div style={{ fontSize: 12, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 12,
-        paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-        LINKS
-      </div>
+      <FoldSection label="Uploaded Files" color={C.blue} meta={plural(uploads, "file")}>
+        <FileUploadSection jobId={job.id} files={job.planFiles || []} onChange={v => onUpdate({ planFiles: v })} />
+      </FoldSection>
 
-      {LINK_FIELDS.filter(([k])=>!(LINK_FIELD_SECTION[k] && isSectionHidden(job, LINK_FIELD_SECTION[k]))).map(([k,l])=>{
+      <FoldSection label="Links" color={C.blue} meta={`${linksSet} of ${linkKeys.length} set`}>
+      {linkKeys.map(([k,l])=>{
 
         const links = (job.linkSections?.[k]) || (job[k] ? [{id:k+"-0", url:job[k]}] : []);
 
@@ -29150,9 +29272,9 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
         );
 
       })}
+      </FoldSection>
 
-
-      {/* Custom named link sections */}
+      <FoldSection label="Custom Sections" color={C.blue} meta={plural(customs, "section")}>
 
       <div style={{marginTop:8}}>
 
@@ -29260,10 +29382,9 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
 
       </div>
 
+      </FoldSection>
     </div>
-
   );
-
 }
 
 
@@ -31089,6 +31210,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   //   • Same job, change from ANOTHER device → load it (live cross-device sync).
   //   • Same job, OUR OWN device's echo → skip (our local copy is the freshest).
   const jobRef = useRef(job);
+  const pctx = useContext(ProjectsCtx);
   useEffect(()=>{ jobRef.current = job; }, [job]);
   // Temp ped cards that may be this job's ped (ask first — see tpLinkWhy).
   const pedGroupsAll = useMemo(()=>tempPedGroups(jobs), [jobs]);
@@ -31203,6 +31325,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     setJob(updated);
     onUpdate(updated, finalPatch);
   };
+
+  // Field milestones: fn gets the FRESHEST list (jobRef), never a render copy
+  // (stale-copy rule, v473) — the save transaction merges by item id.
+  const patchMilestones = (fn) => u({ fieldMilestones: fn(jobRef.current.fieldMilestones) });
 
   // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
   // name/address/gc/phone from Simpro. Never overwrites typed text.
@@ -32776,6 +32902,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           </div>
 
         </div>
+
+        {job.projectGroupId && pctx && <ProjectCrumb job={job} ctx={pctx}/>}
 
         {/* Tabs */}
 
@@ -35550,6 +35678,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Job Info"&&(
 
             <div>
+              {pctx && <JobProjectSection job={job} ctx={pctx} onPatch={u}/>}
               {pedLinkSuggest.length>0&&onUpdateOtherJob&&!isSectionHidden(job,"tempPed")&&pedLinkSuggest.map(s=>(
                 <div key={s.inst.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14,background:`${C.blue}0D`,
                   border:`1px solid ${C.blue}44`,borderRadius:10,padding:"10px 12px",fontSize:13.5,color:C.text}}>
@@ -35954,6 +36083,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </button>
                 <JobPrepDrawerOverride job={job} identity={identity} u={u}/>
               </Section>
+              {!isCommercial(job) && (
+                <FieldMilestones list={job.fieldMilestones} patchList={patchMilestones} identity={identity} color={C.teal} badge={{text:"NEW",color:C.blue}}/>
+              )}
               </>)}
 
               {isCommercial(job) && (()=>{
@@ -36016,14 +36148,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                   <div style={{fontSize:12,color:C.dim,marginTop:8}}>What this job has (not a checklist). The gear log and the on-site phases group by system; an off system just doesn't appear. The pre-con checklist is on the Job Start tab.</div>
                 </Section>
-                <Section label="Milestones" color={C.teal} defaultOpen={false}>
+                <FoldSection label="GC Schedule Dates" color={C.teal} badge={{text:"MOVED",color:C.dim}}
+                  meta={`${COMM_MILESTONES.filter(([k]) => ms[k]).length} of ${COMM_MILESTONES.length} set`}>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:"10px 14px"}}>
                     {COMM_MILESTONES.map(([k,l]) => (
                       <div key={k}>{lbl(l)}<DateInp value={ms[k]||""} onChange={e=>{ const v=e.target.value; cu(x=>({...x, milestones:{...(x.milestones||{}), [k]:v}})); }}/></div>
                     ))}
                   </div>
-                  <div style={{fontSize:12,color:C.dim,marginTop:8}}>The dates the Forecast shows for a commercial job and the Ufer / underground reminders key on (from the GC schedule — phases 2 and 6).</div>
-                </Section>
+                  <div style={{fontSize:13,color:C.dim,marginTop:8}}>The dates the Forecast shows for a commercial job and the Ufer / underground reminders key on (from the GC schedule — phases 2 and 6). Same dates as before — they just moved out of Milestones.</div>
+                </FoldSection>
+                <FieldMilestones list={job.fieldMilestones} patchList={patchMilestones} identity={identity} color={C.teal}/>
                 </>);
               })()}
               {can(identity,"job.division") && (
@@ -37779,22 +37913,356 @@ const COMM_STAGE_SECTIONS = [
 const COMM_BOARD_SECTIONS = [...STAGE_SECTIONS.filter(sec => sec.key.startsWith("quick") || sec.key.startsWith("tempPed")), ...COMM_STAGE_SECTIONS];
 
 
+// ── Projects UI (spec 2026-10-15 §6.2) ───────────────────────────────────────
+const buildingStage = (b) => { const f = effFS(b), r = effRS(b); const active = ["scheduled","date_confirmed","inprogress"]; if (active.includes(f)) return "finish"; if (active.includes(r)) return "rough"; return "other"; };
+
+// One folded PROJECTS group at the top of the board (plan deviation 3): its
+// buildings are taken out of the stage groups, so no job shows twice.
+function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed = true }) {
+  const [collapsed, setCollapsed] = useState(startCollapsed);
+  const list = Object.keys(byProject).map(id => (ctx.projects || []).find(p => p.id === id)).filter(Boolean)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
+  if (!list.length) return null;
+  // A search / filter that hides some of a project's buildings opens the group by itself
+  // (same "narrowed" idea ProjectGroupRow uses); the header click still flips the user's own state.
+  const narrowedAny = list.some(p => projectBuildings(byProject[p.id], p.id).length < projectBuildings(ctx.allJobs, p.id).length);
+  const open = narrowedAny || !collapsed;
+  const ink = readableInk(PROJECT_COLOR, C.bg);
+  return (
+    <div style={{marginBottom:24}}>
+      <div onClick={() => setCollapsed(c => !c)} role="button" aria-expanded={open}
+        style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,paddingBottom:8,borderBottom:`2px solid ${PROJECT_COLOR}33`,cursor:"pointer",userSelect:"none",minHeight:40}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:PROJECT_COLOR,flexShrink:0}}/>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:ink}}>PROJECTS</div>
+        <div style={{background:`${PROJECT_COLOR}18`,border:`1px solid ${PROJECT_COLOR}33`,borderRadius:99,padding:"2px 10px",fontSize:12.5,color:ink,fontWeight:700}}>{list.length}</div>
+        <div style={{marginLeft:"auto",color:ink,fontSize:14,fontWeight:700}}>{open ? "▾" : "▸"}</div>
+      </div>
+      {open && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc}/>)}
+    </div>
+  );
+}
+
+function ProjectGroupRow({ project, visible, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc }) {
+  const all = projectBuildings(ctx.allJobs, project.id);
+  const shown = projectBuildings(visible, project.id);
+  const narrowed = shown.length < all.length;           // a search / filter is on → open by itself
+  const [openState, setOpenState] = useState(false);
+  const open = narrowed || openState;
+  const r = projectRollup(all, buildingStage);
+  const ink = readableInk(PROJECT_COLOR, C.card);
+  if (!shown.length) return null;
+  return (
+    <div style={{marginBottom:8}}>
+      <div onClick={() => setOpenState(o => !o)} role="button" aria-expanded={open}
+        style={{display:"flex",alignItems:"center",gap:10,background:C.card,border:`1px solid ${C.border}`,borderLeft:`4px solid ${PROJECT_COLOR}`,borderRadius:10,padding:"10px 12px",minHeight:52,cursor:"pointer"}}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:15,color:C.text}}>{project.name}
+            <span style={{display:"inline-block",fontSize:11,fontWeight:800,letterSpacing:"0.06em",border:`1px solid ${PROJECT_COLOR}`,color:ink,borderRadius:4,padding:"2px 6px",marginLeft:6,verticalAlign:2}}>PROJECT · {r.houses} {project.division === "commercial" ? "BUILDING" : "HOUSE"}{r.houses === 1 ? "" : "S"}</span>
+          </div>
+          <div style={{fontSize:13,color:C.faint,marginTop:2}}>{r.rough} in rough · {r.finish} in finish{r.flagged ? <b style={{color:C.red}}> · {r.flagged} flagged</b> : null}</div>
+        </div>
+        <span style={{color:ink,fontWeight:800,fontSize:16}}>{open ? "▾" : "▸"}</span>
+      </div>
+      {open && (
+        <div style={{margin:"6px 0 4px 14px",paddingLeft:10,borderLeft:`2px solid ${PROJECT_COLOR}55`}}>
+          {ctx.canSeeAll && (
+            <div onClick={() => ctx.openProject(project.id)} role="button"
+              style={{display:"flex",alignItems:"center",minHeight:48,padding:"0 12px",marginBottom:6,borderRadius:10,border:`1px solid ${PROJECT_COLOR}66`,background:`${PROJECT_COLOR}0D`,color:ink,fontWeight:800,cursor:"pointer"}}>
+              <span style={{flex:1}}>Project page</span><span>›</span>
+            </div>
+          )}
+          {shown.map(job => (
+            job.quickJob
+              ? <QuickJobCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
+              : job.tempPed
+              ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
+              : <JobRow key={job.id} job={job} fc={fc || undefined} showForeman={!fc}/>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Simpro attachment-folder picker (spec §6.2). Reads the job's real folders via
+// the read-only listSimproJobFolders callable; if that can't be read it falls
+// back to a typed name with a plain warning (Review Focus 4).
+function SimproFolderPicker({ simproNo, value, onChange, usedBy = {} }) {
+  const [state, setState] = useState({ loading: !!simproNo, folders: null, error: "" });
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => { setDraft(value || ""); }, [value]);
+  useEffect(() => {
+    if (!simproNo) { setState({ loading: false, folders: null, error: "" }); return; }
+    let live = true;
+    setState({ loading: true, folders: null, error: "" });
+    httpsCallable(functions, "listSimproJobFolders", { timeout: 30000 })({ simproNo: String(simproNo) })
+      .then(res => { if (live) setState({ loading: false, folders: ((res && res.data && res.data.folders) || []).map(f => f.name).filter(Boolean), error: "" }); })
+      .catch(e => { if (live) setState({ loading: false, folders: null, error: e.message || "Couldn't read Simpro" }); });
+    return () => { live = false; };
+  }, [simproNo]);
+  const field = { width:"100%",minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit",color:C.text,background:"#fff",marginTop:6 };
+  const warn = { border:`1px solid ${C.orange}55`,background:`${C.orange}0D`,color:C.text,borderRadius:8,padding:"8px 10px",fontSize:13,marginTop:8,lineHeight:1.4 };
+  if (!simproNo) return <div style={{fontSize:13,color:C.dim,marginTop:6}}>The project has no Simpro # yet. Add it on the project page to pick a folder.</div>;
+  if (state.loading) return <div style={{fontSize:13,color:C.dim,marginTop:6}}>Reading Simpro folders…</div>;
+  if (!state.folders) return (
+    <div>
+      <input value={draft} onChange={e => setDraft(e.target.value)} onBlur={() => {
+          const t = draft.trim();
+          if (t === String(value || "").trim()) return;
+          // A shared, non-lead building must never end up with an empty folder (that makes it
+          // joinable → a 2nd job answering one Simpro #). Empty never reaches onChange.
+          if (!t) {
+            if (String(value || "").trim()) { setDraft(value || ""); toast.info("A building that shares the project's Simpro # needs a folder name."); }
+            else setDraft("");
+            return;
+          }
+          onChange(t);
+        }}
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
+        placeholder="Simpro folder name, e.g. House 3" style={field}/>
+      <div style={warn}><b>Couldn't read Simpro's folders</b> ({state.error}). Type the folder name exactly as it is in Simpro. If it doesn't match, this building's plans land in Shared / Unsorted.</div>
+    </div>
+  );
+  const found = state.folders.includes(value);
+  return (
+    <div>
+      <select value={value} onChange={e => onChange(e.target.value)} style={field}>
+        {state.folders.map(f => <option key={f} value={f}>{f}{usedBy[f] ? ` · used by ${usedBy[f]}` : ""}</option>)}
+        {!found && <option value={value}>{value || "(no folder)"} · not in Simpro yet</option>}
+      </select>
+      {found
+        ? <div style={{color:C.green,fontWeight:700,fontSize:13,marginTop:6}}>✓ Found in Simpro — plans will route here.</div>
+        : <div style={warn}><b>No Simpro folder named “{value}” yet.</b> Make it in Simpro, or pick one above. Until then this building's plans land in Shared / Unsorted.</div>}
+    </div>
+  );
+}
+
+function AddBuildingForm({ project, ctx, onDone }) {
+  const sibs = projectBuildings(ctx.allJobs, project.id);
+  const [name, setName] = useState(`${project.division === "commercial" ? "Building" : "House"} ${sibs.filter(b => b.projectRole !== "site").length + 1}`);
+  const [share, setShare] = useState(!!project.simproNo);
+  const [folder, setFolder] = useState(name);
+  const [folderTouched, setFolderTouched] = useState(false);
+  const [ownNo, setOwnNo] = useState("");
+  const [hidden, setHidden] = useState({});
+  const [busy, setBusy] = useState(false);
+  const usedBy = Object.fromEntries(sibs.filter(b => b.simproFolder).map(b => [b.simproFolder, buildingShortName(b, project)]));
+  const sections = JOB_SECTIONS.filter(s => !s.parent && (!s.commercial || project.division === "commercial") && (!s.appliesTo || s.appliesTo({ division: project.division })));
+  const k = { fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,margin:"14px 0 4px" };
+  const radio = (on) => ({ display:"flex",gap:10,alignItems:"flex-start",padding:"10px 12px",border:`1px solid ${on ? PROJECT_COLOR : C.border}`,boxShadow:on?`0 0 0 1px ${PROJECT_COLOR}`:"none",borderRadius:8,background:"#fff",marginBottom:6,cursor:"pointer",minHeight:48 });
+  const create = async () => {
+    if (busy) return;                                   // Review Focus 5: one tap, one job
+    setBusy(true);
+    const j = await ctx.createBuilding(project, { name, shareSimpro: share, simproFolder: folder, ownSimproNo: ownNo, hiddenSections: hidden });
+    setBusy(false);
+    if (j) onDone(j);
+  };
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginTop:10}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>Add Building</div>
+      <div style={k}>BUILDING NAME</div>
+      <input value={name} onChange={e => { setName(e.target.value); if (!folderTouched) setFolder(e.target.value); }}
+        style={{width:"100%",minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit"}}/>
+      <div style={k}>SIMPRO</div>
+      <div style={radio(share)} onClick={(e) => { if (e.target.closest("select,input")) return; setShare(true); }}>
+        <div style={{flex:1,minWidth:0}}><b>Shares the project's Simpro {project.simproNo ? `#${project.simproNo}` : "#"}</b>
+          {share && <SimproFolderPicker simproNo={project.simproNo} value={folder} usedBy={usedBy} onChange={(v) => { setFolder(v); setFolderTouched(true); }}/>}
+        </div>
+      </div>
+      <div style={radio(!share)} onClick={(e) => { if (e.target.closest("input")) return; setShare(false); }}>
+        <div style={{flex:1,minWidth:0}}><b>Has its own Simpro #</b>
+          {!share ? <input value={ownNo} onChange={e => setOwnNo(e.target.value)} inputMode="numeric" placeholder="Simpro job # (or leave blank)"
+            style={{width:"100%",minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit",marginTop:6}}/>
+            : <div style={{fontSize:13,color:C.dim,marginTop:2}}>Pulls plans exactly like any job today.</div>}
+        </div>
+      </div>
+      <div style={k}>COPIED FROM THE PROJECT</div>
+      <div style={{fontSize:13,color:C.dim}}>✓ GC + contacts · ✓ Address · ✓ Foreman · ✓ Division</div>
+      <div style={k}>TABS THIS BUILDING SHOWS</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {sections.map(s => { const on = !hidden[s.key]; return (
+          <span key={s.key} role="button" onClick={() => setHidden(h => ({ ...h, [s.key]: on }))}
+            style={{display:"inline-flex",alignItems:"center",gap:6,borderRadius:99,fontSize:12.5,fontWeight:700,letterSpacing:"0.04em",cursor:"pointer",userSelect:"none",minHeight:40,padding:"0 13px",
+              border:`1px ${on?"solid":"dashed"} ${on?C.green:C.faint}`,color:on?C.green:C.dim,background:on?`${C.green}0F`:C.surface}}>
+            {on ? "✓" : "—"} {String(s.label).toUpperCase()}</span>); })}
+      </div>
+      <div style={{fontSize:13,color:C.dim,marginTop:6}}>Same as Job Sections. Job Info, Activity, Photos and Plans &amp; Links always show.</div>
+      <button type="button" onClick={create} disabled={busy}
+        style={{width:"100%",marginTop:14,minHeight:48,border:"none",borderRadius:8,background:PROJECT_COLOR,color:"#fff",fontWeight:700,fontSize:15,cursor:busy?"default":"pointer",opacity:busy?0.6:1,fontFamily:"inherit"}}>
+        {busy ? "Creating…" : "Create building"}</button>
+    </div>
+  );
+}
+
+function ProjectSheet({ projectId, onClose }) {
+  const ctx = useContext(ProjectsCtx);
+  const [adding, setAdding] = useState(false);
+  const [notes, setNotes] = useState(null);   // null = not editing
+  const project = ctx && (ctx.projects || []).find(p => p.id === projectId);
+  if (!ctx || !ctx.canSeeAll || !project) return null;
+  const bl = projectBuildings(ctx.allJobs, project.id);
+  const r = projectRollup(bl, buildingStage);
+  const chip = { background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:10,cursor:"pointer",minHeight:76 };
+  const saveSimproNo = async (raw) => {
+    const no = String(raw || "").replace(/^#/, "").trim();
+    if (no === String(project.simproNo || "")) return;
+    const clash = simproNoConflict(ctx.allJobs, no, project.id);
+    if (clash) { toast.error(`Simpro #${no} already belongs to ${clash.name}. Make that job part of the project instead.`); return; }
+    await ctx.patchProject(project.id, { simproNo: no });
+  };
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:900,background:C.bg,overflowY:"auto"}}>
+      <div style={{maxWidth:900,margin:"0 auto",padding:"14px 16px 80px"}}>
+        <button type="button" onClick={onClose} style={{background:"none",border:"none",color:C.accent,fontWeight:700,fontSize:14,minHeight:40,padding:0,cursor:"pointer",fontFamily:"inherit"}}>‹ Job Board</button>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.06em",lineHeight:1,color:C.text}}>{project.name}</div>
+        <div style={{marginTop:6}}><HelpDot section="projects" label="How projects work" color={PROJECT_COLOR}/></div>
+        <div style={{fontSize:13,color:C.faint,marginTop:4}}>{project.division === "commercial" ? "Commercial" : "Residential"} project · {r.houses} {project.division === "commercial" ? "building" : "house"}{r.houses === 1 ? "" : "s"}{bl.some(b => b.projectRole === "site") ? " + site" : ""}{project.simproNo ? ` · shares Simpro #${project.simproNo}` : ""}</div>
+        <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.1em",color:C.dim,margin:"16px 2px 6px"}}>BUILDINGS</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8}}>
+          {bl.map(b => (
+            <div key={b.id} style={chip} role="button" onClick={() => ctx.openJob(b)}>
+              <div style={{fontWeight:800,fontSize:15,color:C.text}}>{buildingShortName(b, project)}</div>
+              {b.simproLead && <div style={{marginTop:4,fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:readableInk(PROJECT_COLOR, C.card)}}>SIMPRO LEAD</div>}
+              {b.projectRole === "site" && <div style={{fontSize:13,color:C.dim,marginTop:3}}>The original job — every old item is kept here</div>}
+              <div style={{fontSize:13,color:C.faint,marginTop:6}}>{({rough:"In rough",finish:"In finish",other:"Not started / done"})[buildingStage(b)]}</div>
+              {b.flagged && <div style={{fontSize:12.5,color:C.red,fontWeight:700,marginTop:4}}>Flagged</div>}
+            </div>
+          ))}
+          {ctx.canManage && !adding && (
+            <div role="button" onClick={() => setAdding(true)} style={{...chip,border:`1.5px dashed ${PROJECT_COLOR}`,color:readableInk(PROJECT_COLOR, C.bg),display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:15}}>+ Add Building</div>
+          )}
+        </div>
+        {adding && <AddBuildingForm project={project} ctx={ctx} onDone={() => setAdding(false)}/>}
+        <div style={{marginTop:14}}>
+          <FoldSection label="Project info" color={PROJECT_COLOR} meta={`GC · notes · Simpro${project.simproNo ? ` #${project.simproNo}` : ""}`}>
+            <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:4}}>GC</div>
+            <div style={{marginBottom:10,fontSize:14}}>{project.gc || "—"}</div>
+            <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:4}}>PROJECT NOTES</div>
+            {notes === null
+              ? <div style={{marginBottom:10,fontSize:14,lineHeight:1.45,whiteSpace:"pre-wrap"}}>{project.notes || "—"} {ctx.canManage && <button type="button" onClick={() => setNotes(project.notes || "")} style={{background:"none",border:"none",color:C.accent,fontWeight:700,fontSize:13,minHeight:40,cursor:"pointer",fontFamily:"inherit"}}>Edit</button>}</div>
+              : <div style={{marginBottom:10}}>
+                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} style={{width:"100%",padding:10,border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit"}}/>
+                  <button type="button" onClick={async () => { await ctx.patchProject(project.id, { notes }); setNotes(null); }} style={{marginTop:6,minHeight:44,border:"none",borderRadius:8,background:PROJECT_COLOR,color:"#fff",fontWeight:700,padding:"0 16px",cursor:"pointer",fontFamily:"inherit"}}>Save notes</button>
+                </div>}
+            <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:4}}>SHARED SIMPRO #</div>
+            {ctx.canManage
+              ? <input defaultValue={project.simproNo || ""} onBlur={e => saveSimproNo(e.target.value)} inputMode="numeric" placeholder="Only if the buildings share one"
+                  style={{width:"100%",maxWidth:260,minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit"}}/>
+              : <div style={{fontSize:14}}>{project.simproNo || "—"}</div>}
+            <div style={{fontSize:13,color:C.dim,marginTop:10,lineHeight:1.4}}>The project's Drive folder, its Project-wide plans folder and Shared / Unsorted get made in the next step of Projects.</div>
+            {ctx.canManage && (
+              <button type="button" onClick={async () => { if (await showConfirm({ title:`Archive ${project.name}?`, message:"The project grouping goes away and its buildings show as normal jobs again. No job and nothing inside a job is deleted.", confirmLabel:"Archive project" })) { await ctx.patchProject(project.id, { archived:true, archivedBy: ctx.identity?.name || "", archivedAt: new Date().toISOString() }); onClose(); } }}
+                style={{marginTop:14,minHeight:44,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,fontWeight:700,padding:"0 14px",cursor:"pointer",fontFamily:"inherit"}}>Archive project</button>
+            )}
+          </FoldSection>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Breadcrumb + labeled hops at the top of a building's job card (spec §6.2).
+function ProjectCrumb({ job, ctx }) {
+  const project = (ctx.projects || []).find(p => p.id === job.projectGroupId && !p.archived);
+  if (!ctx.canSeeAll || !project) return null;
+  const { prev, next } = buildingHops(projectBuildings(ctx.allJobs, project.id), job.id);
+  const hop = { flex:1,minWidth:0,minHeight:40,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontWeight:700,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 10px",cursor:"pointer",fontFamily:"inherit" };
+  return (
+    <div style={{padding:"6px 22px 4px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+      <div style={{display:"flex",alignItems:"center",gap:6,fontSize:13,fontWeight:700,letterSpacing:"0.05em",color:C.dim}}>
+        <button type="button" onClick={() => ctx.openProject(project.id)} style={{background:"none",border:"none",padding:0,minHeight:40,color:readableInk(PROJECT_COLOR, C.card),fontWeight:800,fontSize:13,letterSpacing:"0.05em",cursor:"pointer",fontFamily:"inherit"}}>{project.name.toUpperCase()}</button>
+        <span>›</span><span style={{color:C.text}}>{buildingShortName(job, project).toUpperCase()}</span>
+      </div>
+      <div style={{display:"flex",gap:6,marginBottom:4}}>
+        <button type="button" disabled={!prev} onClick={() => prev && ctx.openJob(prev)} style={{...hop,textAlign:"left",opacity:prev?1:0.4}}>‹ {prev ? buildingShortName(prev, project) : "First"}</button>
+        <button type="button" disabled={!next} onClick={() => next && ctx.openJob(next)} style={{...hop,textAlign:"right",opacity:next?1:0.4}}>{next ? buildingShortName(next, project) : "Last"} ›</button>
+      </div>
+    </div>
+  );
+}
+
+// Job Info → Project (spec §6.2 / §6.5). In a project: which project, Simpro
+// folder, Leave. Not in one: Make this a project (the job becomes Site / Shared).
+// Every job write goes through JobDetail's u() funnel (onPatch).
+function JobProjectSection({ job, ctx, onPatch }) {
+  const [pname, setPname] = useState(null);   // null = not converting
+  const [busy, setBusy] = useState(false);
+  const project = job.projectGroupId ? (ctx.projects || []).find(p => p.id === job.projectGroupId && !p.archived) : null;
+  const btn = { minHeight:44,background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontWeight:700,fontSize:14,padding:"0 14px",cursor:"pointer",fontFamily:"inherit" };
+  if (!ctx.canSeeAll) return null;
+  if (project) return (
+    <FoldSection label="Project" color={PROJECT_COLOR} badge={{text:"NEW",color:C.blue}} meta={`${project.name}${job.simproFolder ? ` · folder ${job.simproFolder}` : ""}`}>
+      <div style={{fontSize:14}}>{project.name}{job.projectRole === "site" ? " · Site / Shared (the original job)" : ""}</div>
+      {(job.simproFolder || (project.simproNo && job.projectRole !== "site" && String(job.simproNo || "") === String(project.simproNo)))
+        ? <div style={{marginTop:6}}><div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>SIMPRO FOLDER FOR PLANS</div>
+            <SimproFolderPicker simproNo={project.simproNo} value={job.simproFolder || ""} onChange={(v) => onPatch({ simproFolder: String(v || "").trim() })}/></div>
+        : <div style={{fontSize:13,color:C.dim,marginTop:6}}>{job.simproNo && String(job.simproNo) !== String(project.simproNo || "") ? `Own Simpro #${job.simproNo} — pulls plans like any job.` : "Plans come from this job's own Drive folder."}</div>}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
+        <button type="button" style={btn} onClick={() => ctx.openProject(project.id)}>Open project page</button>
+        {ctx.canManage && <button type="button" style={btn} onClick={async () => {
+          // A building that shares the project's Simpro # (and isn't the Site or the lead) must not
+          // leave still holding that number, or it becomes a 2nd job answering it.
+          const stopsSharing = !!(project.simproNo && String(job.simproNo || "") === String(project.simproNo) && job.projectRole !== "site" && !job.simproLead);
+          if (!(await showConfirm({ title:`Take this job out of ${project.name}?`, message:`It becomes a normal job again. Nothing on it is deleted.${stopsSharing ? ` It also stops sharing Simpro #${project.simproNo}.` : ""}`, confirmLabel:"Leave project" }))) return;
+          onPatch({ projectGroupId:"", simproFolder:"", simproLead:false, projectRole:"", ...(stopsSharing ? { simproNo:"" } : {}) });
+        }}>Leave project</button>}
+      </div>
+      <div style={{fontSize:13,color:C.dim,marginTop:6}}>Leaving never deletes anything — this job just becomes standalone again.</div>
+    </FoldSection>
+  );
+  if (!ctx.canManage || job.tempPed || job.quickJob || job.type === "quote") return null;
+  return (
+    <FoldSection label="Project" color={PROJECT_COLOR} meta="not part of a project">
+      {pname === null ? (
+        <>
+          <div style={{fontSize:13,color:C.dim,lineHeight:1.4,marginBottom:8}}>Several houses or buildings on this job? Make it a project. This job becomes the project's <b>Site / Shared</b> building and keeps every item it already has. Then add each house as its own job.</div>
+          <button type="button" style={btn} onClick={() => setPname(job.name || "")}>Make this a project</button>
+        </>
+      ) : (
+        <>
+          <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:4}}>PROJECT NAME</div>
+          <input value={pname} onChange={e => setPname(e.target.value)} style={{width:"100%",minHeight:44,padding:"0 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:15,fontFamily:"inherit"}}/>
+          <div style={{display:"flex",gap:8,marginTop:8}}>
+            <button type="button" disabled={busy} style={{...btn,background:PROJECT_COLOR,color:"#fff",border:"none",opacity:busy?0.6:1}} onClick={async () => {
+              const name = String(pname || "").trim(); if (!name || busy) return;
+              setBusy(true);
+              const p = { id: "prj_" + uid(), name, division: isCommercial(job) ? "commercial" : "", gc: job.gc || "", address: job.address || "", notes: "", simproNo: String(job.simproNo || ""), createdAt: new Date().toISOString(), createdBy: ctx.identity?.name || "" };
+              const ok = await ctx.saveNewProject(p);
+              setBusy(false);
+              if (!ok) return;
+              onPatch({ projectGroupId: p.id, projectRole: "site", simproFolder: "", name: buildingJobName(name, "Site / Shared") });
+              setPname(null);
+              toast.success(`${name} is a project — add its buildings from the project page`);
+            }}>{busy ? "Saving…" : "Create project"}</button>
+            <button type="button" style={btn} onClick={() => setPname(null)}>Cancel</button>
+          </div>
+        </>
+      )}
+    </FoldSection>
+  );
+}
+
 function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true, sections = STAGE_SECTIONS }) {
 
   const initCollapsed = () => Object.fromEntries(sections.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
+  const pctx = useContext(ProjectsCtx);
+  const { rest: stageJobs, byProject } = pctx ? splitProjectJobs(jobs, pctx.projects) : { rest: jobs, byProject: {} };
 
 
   return (
 
     <div>
 
+      {pctx && Object.keys(byProject).length > 0 && (
+        <ProjectsBoardSection byProject={byProject} ctx={pctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc} startCollapsed={startCollapsed}/>
+      )}
       {sections.map(sec => {
 
         const sJobs = (() => {
-          const filtered = jobs.filter(sec.test);
+          const filtered = stageJobs.filter(sec.test);
           // Get the most relevant date for a job in this section
           const getDate = j => {
             const rs = effRS(j), fs = effFS(j);
@@ -40725,7 +41193,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
     const map = {};
-    jobs.forEach(j => { if (j.simproNo) map[String(j.simproNo)] = j; });
+    jobs.forEach(j => { if (j.simproNo && isSimproJoinable(j)) map[String(j.simproNo)] = j; });
     return map;
   }, [jobs]);
 
@@ -42090,7 +42558,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
   // their Time block if present or a sane 8-hour default.
   const sumScheduledHoursForJob = (jobId) => {
     const job = jobs.find(j => j.id === jobId);
-    const simproNo = job?.simproNo ? String(job.simproNo) : null;
+    const simproNo = job?.simproNo && isSimproJoinable(job) ? String(job.simproNo) : null; // a shared Simpro # credits only its lead building
     let total = 0;
     for(let di=0; di<crewDays.length; di++) {
       // Names confirmed in Simpro for this cell — used to dedupe the manual
@@ -42529,7 +42997,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
     if(simproPidsThisWeek.size > 0 && !crewForemanFilter) {
       const fromSimproExtra = jobs.filter(j => {
         if(j.tempPed||j.quickJob) return false;
-        if(!j.simproNo) return false;
+        if(!j.simproNo || !isSimproJoinable(j)) return false;
         if(!simproPidsThisWeek.has(String(j.simproNo))) return false;
         return !union.some(u => u.id === j.id);
       }).map(j => ({...j, _simproOnly: true}));
@@ -44903,7 +45371,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                           // and the manual pill is suppressed (dedupe). The
                           // manual data on crewData stays put; this is purely
                           // a render-time filter.
-                          const simproNamesRaw = job.simproNo
+                          const simproNamesRaw = job.simproNo && isSimproJoinable(job)
                             ? Array.from(simproPeopleByJobDay.get(`${job.simproNo}_${di}`) || [])
                             : [];
                           const simproLower = new Set(simproNamesRaw.map(n=>n.toLowerCase()));
@@ -44987,7 +45455,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                   // "vasa mataafa"). Renders inline on the pill
                                   // so Koy can see WHEN the crew is scheduled,
                                   // not just THAT they're scheduled.
-                                  const simTime = job.simproNo
+                                  const simTime = job.simproNo && isSimproJoinable(job)
                                     ? simproTimeByPersonJobDay.get(`${job.simproNo}_${di}_${(rawName||"").toLowerCase()}`)
                                     : null;
                                   const timeLabel = simTime
@@ -45245,7 +45713,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                             if(first && (pf === first || p === first || pf === name)) { matchedAs = p; break; }
                           }
                           if(!matchedAs) continue;
-                          const matchedJob = jobs.find(j => String(j.simproNo||"") === String(pid));
+                          const matchedJob = jobs.find(j => isSimproJoinable(j) && String(j.simproNo||"") === String(pid));
                           if(matchedJob && matchedJob.id === jid) continue;
                           // Pull this person's specific time on the matched
                           // Simpro entry. Falls back to null when Simpro has
@@ -49953,7 +50421,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
   } else if (tab === "cc") {
     // ── Automations: Plan Intake + Appliance Loads ──
-    const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => String(j.simproNo || "").trim() === k) || null) : null; };
+    const jobByNo = (n) => { const k = String(n || "").replace(/^#/, "").trim(); return /^\d+$/.test(k) ? (d.allLive.find(j => isSimproJoinable(j) && String(j.simproNo || "").trim() === k) || null) : null; };
     const at2 = (at) => at ? `${when(at)} · ${odTime(at)}` : "";
     const go = (url) => { try { window.open(url, "_blank", "noopener,noreferrer"); } catch (e) {} };
     // Plan Intake (v542: "waiting" = not yet filed/dismissed/matched, not "not seen yet").
@@ -52621,7 +53089,7 @@ const sb4Agg = (js, cfg) => {
     // "appVolume-per-job" over the eligible set, so the two app numbers on the
     // stat card can never drift apart under a different counting rule.
     const punch0 = punch, updates0 = updates, questions0 = questions;
-    const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
+    const m = isSimproJoinable(j) ? _sb4Num(j.simproMargin) : null, sp = _sb4Special(j.name); // a shared Simpro # counts its margin once
     if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
     if (m != null && !_sb3Completed(j)) live.push({ job: String(j.name || "?").trim(), m: Math.round(m * 10) / 10, stage: _sb4Stage(j), special: sp }); // watch: live jobs
     let missCount = 0, minorCount = 0, qcWalk = false;
@@ -65664,7 +66132,7 @@ function ApplianceLoadsView({ jobs, onUpdateJob, onlyNo, onOpenTool, tools }) {
     return () => { dead = true; };
   }, [tick]);
 
-  const ccFor = (no) => (jobs||[]).find(j => String(j.simproNo||"").trim() === String(no));
+  const ccFor = (no) => (jobs||[]).find(j => isSimproJoinable(j) && String(j.simproNo||"").trim() === String(no));
 
   // Rows with the CC link a person set by hand count as "in CC" (green) even when the names differ.
   const rowsEff = useMemo(() => st.rows.map(r => {
@@ -70396,6 +70864,8 @@ function App() {
   const [upcomingOpenId, setUpcomingOpenId] = useState(null);
   const clearUpcomingOpen = useCallback(()=>setUpcomingOpenId(null),[]);
   const [needs, setNeeds] = useState([]);
+  const [projects, setProjects] = useState([]);           // Projects spec 2026-10-15
+  const [openProjectId, setOpenProjectId] = useState(null);
   const [needPhotoBusy, setNeedPhotoBusy] = useState({});   // v431: { needId: in-flight upload count } — hides that row's 📷 while uploading
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
@@ -70823,6 +71293,14 @@ function App() {
       (err) => { console.error("Needs snapshot error:",err); }
     );
 
+    // Projects (spec 2026-10-15) — /projects, same `data` envelope as needs.
+    // Until the rule is deployed this errors with permission-denied: we log and
+    // keep going, and every building simply shows as a normal job row.
+    const unsubProjects = onSnapshot(collection(db,"projects"),
+      (snap) => { setProjects(snap.docs.map(d => d.data().data).filter(Boolean)); },
+      (err) => { console.warn("Projects snapshot error (rule not deployed yet?):", err && err.code); }
+    );
+
 
     // Redline walks — same top-level collection + `data` envelope as quoteWalks.
     const unsubRedlineWalks = onSnapshot(collection(db,"redlineWalks"),
@@ -70886,7 +71364,7 @@ function App() {
       window.removeEventListener('focus', onReturn);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('online', onNetUp);
-      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubMydayFocus(); unsubMydayPrio(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
+      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubProjects(); unsubRedlineWalks(); unsubMydayFocus(); unsubMydayPrio(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
     }; // cleanup on unmount
 
   },[]);
@@ -71672,6 +72150,52 @@ function App() {
     // "?" for every need before); the loader returns `data` and ignores it.
     try { await setDoc(doc(db,"needs",n.id),stampWrite({data:n,updated_at:new Date().toISOString(),saved_by:identity?.name||""})); } catch(e){ console.error("saveNeed error:",e); reportWriteDenied(e, "needs", n.id); }
   };
+  // ── Projects funnels (spec 2026-10-15 §6) ── create = one stamped setDoc;
+  // edits = dotted data.<field> updateDoc (field-surgical, like patchNeed) so two
+  // people editing different fields never last-write-wins each other.
+  const canManageProjects = ["admin","manager"].includes(getAccess(identity));
+  const saveNewProject = async (p) => {
+    setProjects(prev => [...(prev||[]).filter(x => x.id !== p.id), p]);
+    try { await setDoc(doc(db,"projects",p.id), stampWrite({ data: sanitize(p), updated_at: new Date().toISOString(), saved_by: identity?.name || "" })); return true; }
+    catch (e) { console.error("saveNewProject error:", e); if (!(await reportWriteDenied(e, "projects", p.id))) toast.error(`Couldn't save the project: ${e.message || e}`); setProjects(prev => (prev||[]).filter(x => x.id !== p.id)); return false; }
+  };
+  const patchProject = async (id, patch) => {
+    setProjects(prev => (prev||[]).map(p => p.id === id ? { ...p, ...patch } : p));
+    const upd = { updated_at: new Date().toISOString(), saved_by: identity?.name || "" };
+    Object.keys(patch).forEach(k => { upd["data." + k] = patch[k]; });
+    try { await updateDoc(doc(db,"projects",id), stampWrite(upd)); return true; }
+    catch (e) { console.error("patchProject error:", e); if (!(await reportWriteDenied(e, "projects", id))) toast.error(`Couldn't save the project: ${e.message || e}`); return false; }
+  };
+  const createBuilding = async (project, opts) => {
+    if (!canManageProjects) { toast.error("Adding a building is office-only."); return null; }
+    const short = String(opts.name || "").trim();
+    if (!short) { toast.error("Name the building first."); return null; }
+    const siblings = projectBuildings(allJobs, project.id);
+    const ownNo = String(opts.ownSimproNo || "").replace(/^#/, "").trim();
+    if (!opts.shareSimpro && ownNo) { const clash = simproNoConflict(allJobs, ownNo, project.id); if (clash) { toast.error(`Simpro #${ownNo} already belongs to ${clash.name}. Make that job part of the project instead.`); return null; } }
+    if (siblings.some(b => buildingShortName(b, project).toLowerCase() === short.toLowerCase())) { toast.error(`${project.name} already has a ${short}.`); return null; }
+    const src = siblings.find(b => b.projectRole === "site") || siblings[0] || null;
+    const pick = (k) => (src && src[k] !== undefined && src[k] !== "") ? src[k] : (project[k] !== undefined ? project[k] : undefined);
+    const j = blankJob();
+    if (project.division === "commercial") j.division = "commercial"; else delete j.division;
+    j.name = buildingJobName(project.name, short);
+    j.projectGroupId = project.id;
+    j.simproNo = opts.shareSimpro ? String(project.simproNo || "") : ownNo;
+    j.simproFolder = opts.shareSimpro && project.simproNo ? String(opts.simproFolder || short).trim() : "";
+    if (j.simproFolder && !siblings.some(b => isSimproJoinable(b) && String(b.simproNo || "") === String(project.simproNo || ""))) j.simproLead = true;
+    ["address","gc","phone","gcContacts","gcContactLead","gcContactLead2","gcContact2","phone2","gcContactLabels","customer"].forEach(k => { const v = pick(k); if (v !== undefined) j[k] = v; });
+    j.foreman = (src && src.foreman) || "Unassigned";
+    j.hiddenSections = { ...(opts.hiddenSections || {}) };
+    try {
+      await setDoc(doc(db,"jobs",j.id), stampWrite({ data: sanitize(j), updated_at: new Date().toISOString() }));
+      setAllJobs(js => [j, ...js]);
+      toast.success(`${short} added to ${project.name}`);
+      return j;
+    } catch (e) { console.error("createBuilding error:", e); if (!(await reportWriteDenied(e, "jobs", j.id))) toast.error(`Couldn't add the building: ${e.message || e}`); return null; }
+  };
+  const openProject = (id) => { if (selected) flushJob(selected); setSelected(null); setOpenTab(null); setOpenProjectId(id); };
+  const openJobFromProject = (j) => { if (selected) flushJob(selected); setOpenProjectId(null); setOpenTab(null); setSelected(allJobs.find(x => x.id === j.id) || j); };
+  const projectsCtx = { projects, allJobs, identity, canManage: canManageProjects, canSeeAll: getAccess(identity) !== "contractor", saveNewProject, patchProject, createBuilding, openProject, openJob: openJobFromProject };
   // Field-surgical update: dotted `data.<field>` paths so two devices editing
   // different fields of one need can't last-write-wins each other. `current`
   // (the caller's copy) lets us fall back to the full funnel if the doc doesn't
@@ -73257,7 +73781,7 @@ function App() {
   }
 
   return (
-
+    <ProjectsCtx.Provider value={projectsCtx}>
     <div style={{minHeight:"100vh",background:"transparent",fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
       {/* Page backdrop + longhorn watermark (design pass 2026-10-14). It used to be a
           z-index 0 layer that painted OVER every non-positioned card. Now it is one
@@ -75536,8 +76060,11 @@ function App() {
       )}
 
       <Analytics />
+      {openProjectId && !selected && (
+        <ProjectSheet projectId={openProjectId} onClose={() => setOpenProjectId(null)} />
+      )}
     </div>
-
+    </ProjectsCtx.Provider>
   );
 
 }

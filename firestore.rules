@@ -266,6 +266,18 @@ service cloud.firestore {
       allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen', 'seenAt', 'seenBy']);
     }
 
+    // ── PROJECTS (multi-building) ─────────────────────────────────────────────
+    // Projects spec 2026-10-15. A project groups normal jobs (buildings) via
+    // job.data.projectGroupId. Same envelope + light validation as /needs.
+    // Never deleted — archived:true inside data (spec §9).
+    match /projects/{projectId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                            && request.resource.data.data is map
+                            && request.resource.data.updated_at is string;
+      allow delete: if false;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
