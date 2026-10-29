@@ -9015,7 +9015,7 @@ function NeedsAttention({jobs, onSelectJob}) {
     const finPOs   = matsHidden ? [] : (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
     if(roughPOs.length) unsentPOs.push({job, name, count:roughPOs.length, phase:'Rough', orders:roughPOs});
     if(finPOs.length)   unsentPOs.push({job, name, count:finPOs.length, phase:'Finish', orders:finPOs});
-    const commPOs = matsHidden ? [] : (job.commMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp); // v539
+    const commPOs = (matsHidden || isSectionHidden(job, "commMaterials")) ? [] : (job.commMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp); // v539
     if(commPOs.length)    unsentPOs.push({job, name, count:commPOs.length, phase:'Materials', orders:commPOs});
 
     // Waiting punch items
@@ -12130,7 +12130,7 @@ function JobNoteCard({
               Promote {selected.size} to:
             </span>
             {/* v440: no PO chip when Material Tracking is hidden (Job Sections) */}
-            {['punch','rt','co','po','question'].filter(t => t !== 'po' || !isSectionHidden(job, 'materials')).map(t => {
+            {['punch','rt','co','po','question'].filter(t => t !== 'po' || !(isSectionHidden(job, 'materials') || (isCommercial(job) && isSectionHidden(job, 'commMaterials')))).map(t => {
               const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO', question:'Question' };
               const colors = { punch:'#6A3FB5', rt:'#3E7D7A', co:C.slate, call:'#2F5BD9', po:'#C2410C', question:'#6A7BAA' };
               const count = tally[t] || 0;
@@ -28459,11 +28459,11 @@ function DriveFilesSection({ job, onUpdate, onCount = null }) {
         setDriveFiles(allFiles);
         if (onCount) onCount(allFiles.length);
         setTreeFolderIds([...fids]);
-        // Auto-collapse any Archive folders
-        const archiveFolders = [...new Set(allFiles.map(f => f._folder))].filter(isArchiveFolder);
-        if (archiveFolders.length > 0) {
-          setCollapsedFolders(new Set(archiveFolders));
-        }
+        // Everything starts collapsed (Koy's standing rule): every folder group
+        // folds on load, Archive included. A lone folder has no header to tap
+        // (the header only shows with 2+ folders), so it stays open.
+        const loadedFolders = [...new Set(allFiles.map(f => f._folder))];
+        setCollapsedFolders(new Set(loadedFolders.length > 1 ? loadedFolders : []));
         setLoading(false);
       })
       .catch(e => {
@@ -28808,6 +28808,7 @@ function DriveFilesSection({ job, onUpdate, onCount = null }) {
                 style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12,
                   color: isArchive ? C.faint : C.accent,
                   fontWeight: 700, letterSpacing: "0.06em",
+                  minHeight: 40,
                   marginBottom: isCollapsed ? 0 : 8,
                   paddingBottom: isCollapsed ? 0 : 4,
                   borderBottom: isCollapsed ? "none" : `1px solid ${C.border}`,
@@ -29496,7 +29497,26 @@ const hrDocHasData = async (jobId, test) => {
   const snap = await getDoc(doc(db, 'homeowner_requests', jobId));
   return test(snap.exists() ? snap.data() : {});
 };
+// Commercial work tabs (Koy: "the addable tabs when creating a building are residential tabs on the
+// commercial side"): the commercial work tabs are switchable too. All HIDE-ONLY —
+// the lists they read (commMaterials, commercial.phases/submittals/rfis) are never
+// touched, so a switch turned back on brings everything back.
+// commercial.phases[key] holds one phase tab's status / dates / notes / checklist /
+// photos / building punch; Underground keeps one record per sub-tab ("underground.utility" …).
+const commPhaseHasData = (j, prefix) => {
+  const phases = (j && j.commercial && j.commercial.phases) || {};
+  return Object.keys(phases).some(k => {
+    if (k !== prefix && !k.startsWith(prefix + ".")) return false;
+    const p = phases[k] || {};
+    return !!(p.status || (p.start || "").trim() || (p.end || "").trim() || (p.notes || "").trim() ||
+      (p.items || []).length > 0 || (p.photos || []).length > 0 ||
+      Object.values(p.punch || {}).some(f => f && ((f.general || []).length > 0 || (f.rooms || []).length > 0)));
+  });
+};
 const JOB_SECTIONS = [
+  { key:"commMaterials", label:"Materials", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Materials tab · PO cards · Bid Items order summary · unsent-PO and Open Items rows for the Materials list",
+    hasData:(j)=>(j.commMaterials||[]).length>0 },
   // v467 (commercial): the pre-con checklist is a section a TI / service job can
   // turn off — the Job Start tab, the Job Start board, the pre-con My Day rows
   // and the Job Board's Pre-Con grouping all follow commPhase(), which reads
@@ -29504,6 +29524,24 @@ const JOB_SECTIONS = [
   { key:"jobstart", label:"Job Start (pre-con checklist)", commercial:true, appliesTo:(j)=>isCommercial(j),
     where:"Job Start tab · Job Start board · pre-con rows on My Day · the Job Board's Pre-Con groups",
     hasData:(j)=>{ const st=commStartOf(j); return Object.keys(st.items||{}).length>0 || Object.keys(st.na||{}).length>0 || Object.keys(st.overrides||{}).length>0; } },
+  { key:"commPower", label:"Power", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Power tab (status, dates, notes, punch list, photos)",
+    hasData:(j)=>commPhaseHasData(j,"power") },
+  { key:"commLighting", label:"Lighting", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Lighting tab (status, dates, notes, punch list, photos)",
+    hasData:(j)=>commPhaseHasData(j,"lighting") },
+  { key:"commGear", label:"Gear", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Gear tab (status, dates, notes, checklist, photos)",
+    hasData:(j)=>commPhaseHasData(j,"gear") },
+  { key:"commUnderground", label:"Underground", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Underground tab · Utility work · Building site work · Building underground",
+    hasData:(j)=>commPhaseHasData(j,"underground") },
+  { key:"commSubmittals", label:"Gear & Submittals", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"Gear & Submittals tab · the gear-check and late-gear tasks on My Day",
+    hasData:(j)=>((j.commercial&&j.commercial.submittals)||[]).length>0 },
+  { key:"commRfis", label:"RFIs", commercial:true, appliesTo:(j)=>isCommercial(j),
+    where:"RFIs tab",
+    hasData:(j)=>((j.commercial&&j.commercial.rfis)||[]).length>0 },
   { key:"panelized", label:"Panelized Lighting", legacy:topFlag("noPanelizedLighting"),
     where:"Panelized Lighting tab · Lighting Schedules link · Tech Lighting's link · Plan Changes · LV / loads share links",
     hasData:(j)=>{ const pl=j.panelizedLighting||{};
@@ -29595,7 +29633,10 @@ const jobSectionPatch = (job, key, hidden) => {
 };
 
 // Tabs owned by a section — hidden from the bar entirely when it's off.
-const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight", "Job Start":"jobstart" };
+const SECTION_TABS = { "Panelized Lighting":"panelized", "Tape Light":"tapeLight", "Job Start":"jobstart",
+  // the commercial work tabs (Materials … RFIs)
+  "Materials":"commMaterials", "Power":"commPower", "Lighting":"commLighting", "Gear":"commGear",
+  "Underground":"commUnderground", "Gear & Submittals":"commSubmittals", "RFIs":"commRfis" };
 
 // Per-job tab list. A hidden section's tab drops out of the bar. `activeTab`
 // keeps a hidden tab visible if something deep-linked straight into it (e.g.
@@ -35225,6 +35266,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               Simpro cost center it's charged to; Order from the bid charges each line's own. */}
           {tab==="Materials" && isCommercial(job) && (
             <div>
+              <HiddenSectionBanner job={job} sectionKey="commMaterials" u={u} identity={identity}/>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>MATERIALS</div><HelpDot section="materials"/></div>
               <MaterialOrders orders={job.commMaterials} onChange={v=>u({commMaterials:v})}
                 simproNo={job.simproNo} jobId={job.id} phase="comm"
@@ -35242,10 +35284,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   u({commMaterials:next}); }}/>
             </div>
           )}
-          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab} assigneeOptions={punchAssigneeOptions}/>)}
+          {COMM_PHASE_TABS[tab] && isCommercial(job) && (<div><HiddenSectionBanner job={job} sectionKey={SECTION_TABS[tab]} u={u} identity={identity}/><CommPhaseTab job={job} u={u} identity={identity} tabLabel={tab} assigneeOptions={punchAssigneeOptions}/></div>)}
           {tab==="Completed"&&(<JobCompletedTab job={job} needs={needs}/>)}
-          {tab==="Gear & Submittals"&&(<CommSubmittalsTab job={job} u={u} identity={identity}/>)}
-          {tab==="RFIs"&&(<CommRfisTab job={job} u={u} identity={identity}/>)}
+          {tab==="Gear & Submittals"&&(<div><HiddenSectionBanner job={job} sectionKey="commSubmittals" u={u} identity={identity}/><CommSubmittalsTab job={job} u={u} identity={identity}/></div>)}
+          {tab==="RFIs"&&(<div><HiddenSectionBanner job={job} sectionKey="commRfis" u={u} identity={identity}/><CommRfisTab job={job} u={u} identity={identity}/></div>)}
 
           {tab==="Change Orders"&&(
 
@@ -35325,7 +35367,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               job's Simpro bid, plus Required vs Assigned. Its own tab since
               v510; the data still loads when the job opens (simproCostCenters /
               simproStock effects above), so switching here is instant. */}
-          {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&(tabsFor(job).includes("Rough")||isCommercial(job))&&(
+          {tab==="Bid Items"&&!isSectionHidden(job,"materials")&&!(isCommercial(job)&&isSectionHidden(job,"commMaterials"))&&(tabsFor(job).includes("Rough")||isCommercial(job))&&(
             <JobOrdersSummary job={job} phases={isCommercial(job) ? ["comm"] : ["rough","finish"]} onOrder={(ph)=>{
               // v523: a fresh card on the right phase, reconciled against the live job copy.
               // v539: commercial jobs order onto their Materials tab.
@@ -37918,15 +37960,17 @@ const buildingStage = (b) => { const f = effFS(b), r = effRS(b); const active = 
 
 // One folded PROJECTS group at the top of the board (plan deviation 3): its
 // buildings are taken out of the stage groups, so no job shows twice.
-function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed = true }) {
+function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed = true, searchActive = false }) {
   const [collapsed, setCollapsed] = useState(startCollapsed);
   const list = Object.keys(byProject).map(id => (ctx.projects || []).find(p => p.id === id)).filter(Boolean)
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }));
   if (!list.length) return null;
   // A search / filter that hides some of a project's buildings opens the group by itself
   // (same "narrowed" idea ProjectGroupRow uses); the header click still flips the user's own state.
+  // An active search opens it too: every building of a project shares one Simpro #, so a "1412"
+  // search keeps them all visible (not "narrowed") but must still show the user the match.
   const narrowedAny = list.some(p => projectBuildings(byProject[p.id], p.id).length < projectBuildings(ctx.allJobs, p.id).length);
-  const open = narrowedAny || !collapsed;
+  const open = narrowedAny || searchActive || !collapsed;
   const ink = readableInk(PROJECT_COLOR, C.bg);
   return (
     <div style={{marginBottom:24}}>
@@ -37937,17 +37981,17 @@ function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob
         <div style={{background:`${PROJECT_COLOR}18`,border:`1px solid ${PROJECT_COLOR}33`,borderRadius:99,padding:"2px 10px",fontSize:12.5,color:ink,fontWeight:700}}>{list.length}</div>
         <div style={{marginLeft:"auto",color:ink,fontSize:14,fontWeight:700}}>{open ? "▾" : "▸"}</div>
       </div>
-      {open && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc}/>)}
+      {open && list.map(p => <ProjectGroupRow key={p.id} project={p} visible={byProject[p.id]} ctx={ctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc} searchActive={searchActive}/>)}
     </div>
   );
 }
 
-function ProjectGroupRow({ project, visible, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc }) {
+function ProjectGroupRow({ project, visible, ctx, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, searchActive = false }) {
   const all = projectBuildings(ctx.allJobs, project.id);
   const shown = projectBuildings(visible, project.id);
   const narrowed = shown.length < all.length;           // a search / filter is on → open by itself
   const [openState, setOpenState] = useState(false);
-  const open = narrowed || openState;
+  const open = narrowed || searchActive || openState;   // a live search opens every project that still has buildings showing
   const r = projectRollup(all, buildingStage);
   const ink = readableInk(PROJECT_COLOR, C.card);
   if (!shown.length) return null;
@@ -38047,7 +38091,7 @@ function AddBuildingForm({ project, ctx, onDone }) {
   const [hidden, setHidden] = useState({});
   const [busy, setBusy] = useState(false);
   const usedBy = Object.fromEntries(sibs.filter(b => b.simproFolder).map(b => [b.simproFolder, buildingShortName(b, project)]));
-  const sections = JOB_SECTIONS.filter(s => !s.parent && (!s.commercial || project.division === "commercial") && (!s.appliesTo || s.appliesTo({ division: project.division })));
+  const sections = JOB_SECTIONS.filter(s => (project.division === "commercial" ? !!s.commercial : !s.commercial) && !s.parent && (!s.appliesTo || s.appliesTo({ division: project.division })));
   const k = { fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim,margin:"14px 0 4px" };
   const radio = (on) => ({ display:"flex",gap:10,alignItems:"flex-start",padding:"10px 12px",border:`1px solid ${on ? PROJECT_COLOR : C.border}`,boxShadow:on?`0 0 0 1px ${PROJECT_COLOR}`:"none",borderRadius:8,background:"#fff",marginBottom:6,cursor:"pointer",minHeight:48 });
   const create = async () => {
@@ -38242,7 +38286,7 @@ function JobProjectSection({ job, ctx, onPatch }) {
   );
 }
 
-function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true, sections = STAGE_SECTIONS }) {
+function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true, sections = STAGE_SECTIONS, searchActive = false }) {
 
   const initCollapsed = () => Object.fromEntries(sections.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
@@ -38257,7 +38301,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
     <div>
 
       {pctx && Object.keys(byProject).length > 0 && (
-        <ProjectsBoardSection byProject={byProject} ctx={pctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc} startCollapsed={startCollapsed}/>
+        <ProjectsBoardSection byProject={byProject} ctx={pctx} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={onSelectJob} onSaveJob={onSaveJob} onDeleteJob={onDeleteJob} fc={fc} startCollapsed={startCollapsed} searchActive={searchActive}/>
       )}
       {sections.map(sec => {
 
@@ -38917,7 +38961,8 @@ function commercialTasks(job, tasks) {
     tasks.push({ ...base, id: job.id + "_comm_ready", route: "commhead", color: C.green, title: `Ready to start — assign a foreman: ${job.name || "Untitled"}`, desc: "All 12 pre-con phases closed", dueDate: "" });
   }
   const open = rows.filter(r => r.releasedAt && !r.deliveredAt);
-  if (open.length) {
+  // Gear & Submittals switched off in Job Sections → no gear-check / late-gear nags (the log itself is untouched).
+  if (open.length && !isSectionHidden(job, "commSubmittals")) {
     const monday = (() => { const d = new Date(); const day = d.getDay(); const diff = (day === 0 ? 6 : day - 1); d.setDate(d.getDate() - diff); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`; })();
     tasks.push({ ...base, id: job.id + "_comm_gearcheck", route: "commstart", title: `Gear check: ${job.name || "Untitled"}`, desc: `${open.length} released, not delivered — call the vendor, confirm ship dates`, dueDate: monday });
     open.forEach(r => { const ps = parseAnyDate(r.promisedShip); if (ps && ps.getTime() < Date.now()) tasks.push({ ...base, id: `${job.id}_comm_gearlate_${r.id || r.item}`, route: "commstart", color: C.red, title: `Gear late: ${r.item || "item"} on ${job.name || "Untitled"}`, desc: `Promised ${r.promisedShip}, not delivered`, dueDate: r.promisedShip }); });
@@ -39800,7 +39845,7 @@ function buildJobActivity(job, cfg) {
       sourceTab: phase === "Rough" ? "Rough" : phase === "Materials" ? "Materials" : "Finish",
     };
   });
-  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish"), ...matsBucket(job.commMaterials,"Materials")];
+  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish"), ...(isSectionHidden(job, "commMaterials") ? [] : matsBucket(job.commMaterials,"Materials"))];
   if (matsAll.length && !isSectionHidden(job, "materials")) groups.push({ key:"materials", label:"Materials & POs", items: matsAll }); // v440
 
   // ── QUESTIONS ─────────────────────────────────────────────────────
@@ -75208,7 +75253,7 @@ function App() {
               {!syncHealth.synced && jobs.length === 0 && <HeSkeleton n={5}/>}
               {(()=>{
                 const homeFiltered = homeBoardFilter(jobs, search);
-                return <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+                return <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={homeFiltered} searchActive={!!search} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
 
@@ -75383,7 +75428,7 @@ function App() {
                   </div>
                 ):(
                   <>
-                  <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
+                  <StageSectionList sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} jobs={filtered} searchActive={!!search} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setAllJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
