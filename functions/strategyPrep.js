@@ -71,6 +71,8 @@ function median(a) { if (!a.length) return null; const s = a.slice().sort((x, y)
 
 // ── jobs ─────────────────────────────────────────────────────────────────────
 const snOf = (j) => String((j && j.simproNo) || "").trim();
+// Projects (spec 2026-10-15 §6.3): buildings sharing one Simpro # → only the lead answers for it.
+const simproJoinable = (j) => !(j.projectGroupId && j.simproFolder) || !!j.simproLead;
 const effStatus = (j, phase) => { const st = j[phase + "Status"]; if (st) return st; const p = parseInt(j[phase + "Stage"]) || 0; return p === 100 ? "complete" : p > 0 ? "inprogress" : ""; };
 const pctOf = (j, phase) => parseInt(j[phase + "Stage"]) || 0;
 const ACTIVE_ST = new Set(["inprogress", "scheduled", "date_confirmed"]);
@@ -157,9 +159,11 @@ function daysLabel(dis) {
 // allJobs (optional): every job doc, so a Simpro booking on a job the app has already finished/archived names it.
 function buildScheduleIndex(scheduleEntries, plannerDoc, live, weekYmds, allJobs) {
   const byJob = new Map(), byPerson = new Map(), unknown = new Map();
-  // Projects (spec 2026-10-15 §6.3): buildings sharing one Simpro # → only the lead answers for it.
-  const simproJoinable = (j) => !(j.projectGroupId && j.simproFolder) || !!j.simproLead;
   const jobBySn = new Map(); live.forEach(j => { const sn = snOf(j); if (sn && simproJoinable(j)) jobBySn.set(sn, j); });
+  // Projects spec §6.3 — when the lead has finished, the first live sibling answers (still exactly one per Simpro #).
+  live.filter(j => j.projectGroupId && snOf(j) && !jobBySn.has(snOf(j)))
+    .sort((a, b) => (b.projectRole === "site") - (a.projectRole === "site") || String(a.name || "").localeCompare(String(b.name || ""), undefined, { numeric: true }))
+    .forEach(j => { const sn = snOf(j); if (!jobBySn.has(sn)) jobBySn.set(sn, j); });
   const liveIds = new Set(live.map(j => j.id)), offBySn = new Map();
   arr(allJobs).forEach(j => { if (!j || j.deleted || j.type === "quote" || liveIds.has(j.id)) return; const sn = snOf(j); if (sn && simproJoinable(j) && !jobBySn.has(sn) && !offBySn.has(sn)) offBySn.set(sn, j); });
   const note = (job, di, person, source) => {
@@ -560,11 +564,11 @@ function collectSimproCandidates(jobs, cap = 50) {
 function moneyRows({ live, simproTotalsById, prevMargin, today }) {
   const totalsOf = (j) => (simproTotalsById || {})[snOf(j)] || null;
   const marginOf = (j) => { const t = totalsOf(j); if (t && typeof t.margin === "number") return Math.round(t.margin * 10) / 10; return (typeof j.simproMargin === "number" && isFinite(j.simproMargin)) ? Math.round(j.simproMargin * 10) / 10 : null; };
-  const rti = live.filter(isRti).map(j => { const t = totalsOf(j), rd = toDateAny(j.readyToInvoiceDate), m = marginOf(j);
+  const rti = live.filter(j => isRti(j) && simproJoinable(j)).map(j => { const t = totalsOf(j), rd = toDateAny(j.readyToInvoiceDate), m = marginOf(j);
     return { name: j.name, foreman: hasForeman(j) ? j.foreman : "", dollars: t && typeof t.total === "number" ? t.total : null, idleDays: rd ? Math.max(0, daysBetween(today, rd)) : null, margin: m, flag: m == null ? "" : m < 0 ? "negative margin, check Simpro costs" : m < MARGIN_TARGET ? `${Math.round((MARGIN_TARGET - m) * 10) / 10} pts under` : "" }; })
     .sort((a, b) => (b.dollars || 0) - (a.dollars || 0) || (b.idleDays || 0) - (a.idleDays || 0));
   const known = rti.filter(r => r.dollars != null);
-  const finishing = live.filter(isFinishingOpen);
+  const finishing = live.filter(j => isFinishingOpen(j) && simproJoinable(j));
   const rows = finishing.map(j => ({ jobId: j.id, name: j.name, margin: marginOf(j), stage: `finish ${pctOf(j, "finish")}%` })).filter(r => r.margin != null).sort((a, b) => a.margin - b.margin);
   const firstRun = !prevMargin || typeof prevMargin !== "object";
   const movers = firstRun ? [] : rows.filter(r => typeof prevMargin[r.jobId] === "number" && Math.abs(r.margin - prevMargin[r.jobId]) >= 3).map(r => ({ name: r.name, from: prevMargin[r.jobId], to: r.margin, delta: Math.round((r.margin - prevMargin[r.jobId]) * 10) / 10 })).sort((a, b) => a.delta - b.delta).slice(0, CAPS.movers);
