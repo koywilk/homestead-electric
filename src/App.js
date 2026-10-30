@@ -50213,6 +50213,109 @@ function odPeopleByCrew(people, crews) {
 // The Appliance Loads card is one status line (v582): the last scheduled pull, the next one, the row count.
 const odPrevRun = (utc, now) => { let best = null; for (let k = 0; k >= -1; k--) utc.forEach(([h, m]) => { const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k, h, m)); if (t <= now && (!best || t > best)) best = t; }); return best; };
 
+
+// ── Dashboard audit (Schedule, Quality) helpers — v581 ──────────────────────────
+// Pure: everything here runs in scripts/schedule-quality-audit-test.js's sandbox.
+// Crew Planner week key, settings/schedule_<monday> (YYYY-MM-DD) — the same key the
+// planner (crewWK) and crewOnSiteToday build; cells are assignments["<jobId>_<dayIdx>"]
+// = { lead, crew: [names], time }, dayIdx Mon=0 … Fri=4.
+const odMondayKey = (d) => { const m = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)); return `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}-${String(m.getDate()).padStart(2, "0")}`; };
+// Simpro schedule entries (getSimproSchedule: Type, Date, Project.ProjectID, Staff.Name) →
+// { [simproNo]: { [ymd]: [names] } }, the overlay the planner draws beside its manual cells.
+function odSimproStaffByDay(entries) {
+  const out = {};
+  (entries || []).forEach(e => {
+    if (!e || e.Type !== "job") return;
+    const no = e.Project && e.Project.ProjectID != null ? String(e.Project.ProjectID) : "", day = String(e.Date || ""), who = e.Staff && e.Staff.Name ? String(e.Staff.Name).trim() : "";
+    if (!no || !day || !who) return;
+    const byDay = out[no] || (out[no] = {}); const list = byDay[day] || (byDay[day] = []);
+    if (!list.includes(who)) list.push(who);
+  });
+  return out;
+}
+// Crew coverage per start: who the Crew Planner has on that job that day — manual cell first
+// (lead, then crew), then Simpro's scheduled staff, one name per first name like the huddle's
+// crewToday merge. weeks = { [mondayKey]: assignments | null (no doc) }; a key not present means
+// that week isn't loaded yet. A start with no job (Upcoming tab) can't be on the planner.
+function odStartCoverage(starts, weeks, simproByNo) {
+  return (starts || []).map(s => {
+    const di = s.at.getDay() - 1, mk = odMondayKey(s.at), ymd = localYmd(s.at);
+    const loaded = !!weeks && Object.prototype.hasOwnProperty.call(weeks, mk), cells = loaded ? (weeks[mk] || {}) : {};
+    const names = [], seen = new Set();
+    const addN = (n) => { const t = String(n || "").trim(); if (!t) return; const k = t.toLowerCase().split(/\s+/)[0]; if (seen.has(k)) return; seen.add(k); names.push(t); };
+    const weekend = di < 0 || di > 4;
+    if (s.job && !weekend) { const c = cells[`${s.job.id}_${di}`]; if (c) { addN(c.lead); (Array.isArray(c.crew) ? c.crew : []).forEach(addN); } }
+    const manualN = names.length;
+    if (s.job && simproByNo && s.job.simproNo) (((simproByNo[String(s.job.simproNo)] || {})[ymd]) || []).forEach(addN);
+    const state = !s.job ? "upcoming" : weekend ? "weekend" : names.length ? "crew" : loaded ? "none" : "loading";
+    const text = state === "crew" ? `Crew: ${names.map(odFirst).join(", ")}` : state === "none" ? "Nobody assigned on the planner" : state === "weekend" ? "Weekend start" : state === "upcoming" ? "Not on the board yet" : "Planner not loaded";
+    return { s, names, manualN, simproN: names.length - manualN, state, none: state === "none", text };
+  });
+}
+// "Inspection called in": the app records no separate flag — the office books an inspection by
+// typing its target date (4-WAY TARGET / FINAL TARGET on the job), and the Jobs tab's "Rough insp.
+// not called" already reads a missing date as not called. (fourWaySetAt / fourWaySetBy are read by
+// the activity feed but nothing writes them.) So a row is "called in" when that phase's target date
+// is set; the office's to-do list is the inverse: jobs 85%+ into a phase with no target and no result.
+function odInspCalled(j, ph) {
+  const fin = ph === "Final", target = odDate(fin ? j.finalInspectionTargetDate : j.fourWayTargetDate), result = (fin ? j.finalInspectionResult : j.roughInspectionResult) || "";
+  return { called: !!target, target, result, text: target ? `Called in · ${odShort(target)}` : "Not called in" };
+}
+function odInspToCall(jobs, secOf) {
+  const out = [];
+  (jobs || []).forEach(j => {
+    if (!j || j.quickJob || j.tempPed || j.division === "commercial") return;
+    const s = secOf(j); if (!s) return;
+    if (s.key === "rough" && parseStage(j.roughStage) >= 85 && !j.fourWayTargetDate && !j.roughInspectionResult) out.push({ job: j, ph: "Rough", pct: parseStage(j.roughStage) });
+    if (s.key === "finish" && parseStage(j.finishStage) >= 85 && !j.finalInspectionTargetDate && !j.finalInspectionResult) out.push({ job: j, ph: "Final", pct: parseStage(j.finishStage) });
+  });
+  return out.sort((a, b) => b.pct - a.pct || String(a.job.name).localeCompare(String(b.job.name)));
+}
+// Approved time off (settings/crewPTO list: name, start, end as M/D/YYYY or ISO) per calendar day,
+// both ends inclusive, each name once — the quiet "Out: …" line under a day column.
+function odTimeOffByDay(pto, days) {
+  const list = (pto || []).filter(p => p && p.name && p.start).map(p => { const a = odDate(p.start), b = odDate(p.end || p.start) || a; return a ? { name: String(p.name).trim(), a: localYmd(a), b: localYmd(b) } : null; }).filter(Boolean);
+  return (days || []).map(dd => {
+    const k = localYmd(dd), names = [];
+    list.forEach(p => { const lo = p.a <= p.b ? p.a : p.b, hi = p.a <= p.b ? p.b : p.a; if (lo <= k && k <= hi && !names.some(n => sameName(n, p.name))) names.push(p.name); });
+    names.sort((x, y) => x.localeCompare(y));
+    return { dd, k, names, text: names.length ? `Out: ${names.map(odFirst).join(", ")}` : "" };
+  });
+}
+// First-pass by foreman: the tab's own rule (each job's FIRST inspection of a phase, last 90 days),
+// credited to every roster name who owns the job (foreman OR lead — d.owns), so a lead's jobs count
+// for him and for his foreman. A job nobody on the roster owns sits under "No foreman". Names with
+// fewer than `min` inspected jobs are split out for a fold.
+function odFirstPassByForeman(firsts, roster, owns, min = 3) {
+  const rows = {}; const row = (n) => rows[n] || (rows[n] = { name: n, n: 0, pass: 0, items: [] });
+  (firsts || []).forEach(f => {
+    let any = false;
+    (roster || []).forEach(n => { if (owns(f.job, n)) { any = true; const r = row(n); r.n++; if (f.pass) r.pass++; r.items.push(f); } });
+    if (!any) { const r = row("No foreman"); r.n++; if (f.pass) r.pass++; r.items.push(f); }
+  });
+  const all = Object.values(rows).map(r => ({ ...r, pct: Math.round(100 * r.pass / r.n) }))
+    .sort((a, b) => (a.name === "No foreman" ? 1 : 0) - (b.name === "No foreman" ? 1 : 0) || b.pct - a.pct || b.n - a.n || a.name.localeCompare(b.name));
+  return { shown: all.filter(r => r.n >= min), few: all.filter(r => r.n < min), min, all };
+}
+// Why each open return trip exists, from the marker the app stamps when it makes one: Convert → RT
+// (fromCOId), a QC walk (fromQCFail, or the legacy "QC Fail …" scope), a failed inspection
+// (fromFailedRough / fromFailedFinal), a GC portal request (fromGC), a job note (createdFromJobNoteId).
+// The rest were typed in on the Return Trips tab: with a scope ("Added by hand") or with nothing at
+// all ("No reason", its own bucket).
+const OD_RT_CAUSES = [["co", "Change order"], ["qc", "QC walk"], ["insp", "Failed inspection"], ["gc", "GC request"], ["note", "Job note"], ["hand", "Added by hand"], ["none", "No reason"]];
+const odRtCause = (rt) => !rt ? "none" : rt.fromCOId ? "co" : (rt.fromQCFail || /^QC (Fail|Items)/.test(String(rt.scope || ""))) ? "qc" : (rt.fromFailedRough || rt.fromFailedFinal) ? "insp" : rt.fromGC ? "gc" : rt.createdFromJobNoteId ? "note" : odText(rt.scope) ? "hand" : "none";
+function odRtCauses(openRTs) {
+  const by = {}; (openRTs || []).forEach(x => { const k = odRtCause(x.rt); (by[k] = by[k] || []).push(x); });
+  return OD_RT_CAUSES.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
+}
+// Failed inspections that HAVE a re-inspection date (a target set after the last fail, no pass since),
+// soonest first and grouped by day; late when that date passed with no result logged.
+function odReinspByDate(failGroups, t0) {
+  const list = (failGroups || []).filter(g => g && !g.passAfter && g.rebook).map(g => ({ g, at: g.rebook, k: localYmd(g.rebook), late: g.rebook < t0 ? odDaysBetween(g.rebook, t0) : 0 })).sort((a, b) => a.at - b.at);
+  const days = []; list.forEach(x => { let dd = days[days.length - 1]; if (!dd || dd.k !== x.k) { dd = { k: x.k, at: x.at, items: [] }; days.push(dd); } dd.items.push(x); });
+  return { list, days, late: list.filter(x => x.late).length };
+}
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -50246,6 +50349,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [chartSel, setChartSel] = useState(null);
   const [fpSel, setFpSel] = useState(null);
   const [week, setWeek] = useState(0);
+  // v581: folded groups on the Schedule / Quality tabs (every new group starts closed, per device session only).
+  const [fold, setFold] = useState(() => new Set());
+  const flipFold = (k) => setFold(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const [jobsSort, setJobsSort] = useState({ key: "last", dir: -1 });
   const [jobsCrewOpen, setJobsCrewOpen] = useState(() => new Set());   // v571: which crew folds are open on the Jobs tab
   const [actQOpen, setActQOpen] = useState(() => new Set());           // v580: which Open-questions folds are open on Activity
@@ -50332,7 +50438,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   // and an approved day off is never counted as a quiet phone (v542).
   const [pto, setPto] = useState([]);
   useEffect(() => {
-    if (!["overview", "people", "activity"].includes(tab)) return;
+    if (!["overview", "people", "activity", "schedule"].includes(tab)) return;
     let dead = false;
     getDoc(doc(db, "settings", "crewPTO")).then(snap => { if (!dead) setPto(snap.exists() ? ((snap.data() || {}).list || []) : []); }, () => {});
     return () => { dead = true; };
@@ -50345,6 +50451,29 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const unsub = onSnapshot(doc(db, "settings", "schedule_" + odPlannerMonday(new Date())), snap => setPlanner(snap.exists() ? (snap.data() || null) : null), () => setPlanner(null));
     return () => { try { unsub(); } catch (e) {} };
   }, [tab]);
+  // v581 Schedule: the Crew Planner's week docs (settings/schedule_<monday>, the same key the planner
+  // and crewOnSiteToday use) for the weeks on screen — the next five weeks plus the week being viewed —
+  // and Simpro's scheduled staff over the same span (getSimproSchedule, what the planner overlays), so
+  // every start can say who is assigned that day. Both read-only; a key read once is kept for the visit.
+  const [planWeeks, setPlanWeeks] = useState({});
+  const [simproDays, setSimproDays] = useState(null);
+  useEffect(() => {
+    if (tab !== "schedule") return undefined;
+    let dead = false;
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    const keys = new Set(); for (let i = -7; i <= 35; i += 7) keys.add(odMondayKey(odAddDays(t0, i))); for (let i = 0; i < 7; i++) keys.add(odMondayKey(odAddDays(odAddDays(t0, week * 7), i)));
+    keys.forEach(k => { if (Object.prototype.hasOwnProperty.call(planWeeks, k)) return;
+      getDoc(doc(db, "settings", "schedule_" + k)).then(snap => { if (!dead) setPlanWeeks(m => ({ ...m, [k]: snap.exists() ? ((snap.data() || {}).assignments || {}) : null })); }, () => { if (!dead) setPlanWeeks(m => ({ ...m, [k]: null })); }); });
+    return () => { dead = true; };
+  }, [tab, week]); // eslint-disable-line
+  useEffect(() => {
+    if (tab !== "schedule" || simproDays) return undefined;
+    let dead = false;
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    const iso = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+    try { httpsCallable(functions, "getSimproSchedule")({ dateFrom: iso(odAddDays(t0, -7)), dateTo: iso(odAddDays(t0, 42)) }).then(res => { if (!dead) setSimproDays(odSimproStaffByDay((res && res.data) || [])); }, () => { if (!dead) setSimproDays({}); }); } catch (e) { if (!dead) setSimproDays({}); }
+    return () => { dead = true; };
+  }, [tab]); // eslint-disable-line
   // Money: Simpro job totals (settings/simproTotals, written by the Friday Packet
   // and the daily dailySimproTotals function, v542).
   // v552: read once on every tab — since v551 it decides which jobs count as active
@@ -50472,6 +50601,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const starts14 = next14.filter(s => s.type === "start");
   const insp7 = next7.filter(s => s.type === "insp");
   const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
+  const redInk = readableInk(OD_R);   // v581: red text on the white cards, never a fill
   // The 7/14/30-day window only changes Overview's chart and the Activity tab (v542).
   const rangeApplies = tab === "overview" || tab === "activity";
   const fmLabel = foreman === OD_NOFM ? "jobs with no foreman" : d.crewPick ? d.crewPick.label : foreman ? `${foreman}'s jobs (foreman or lead)` : "";
@@ -50534,7 +50664,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         const row = (
         <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
           <span className="k" style={{ "--c": r.color || OD_A }}><Icon name={r.icon || "activity"} size={15}/></span>
-          <span className="m"><b>{r.title}</b>{r.tag ? <em style={r.tagColor ? { color: r.tagColor } : null}>{r.tag}</em> : null}<small>{r.sub}</small></span>
+          <span className="m" style={r.ink ? { color: r.ink } : null}><b>{r.title}</b>{r.tag ? <em style={r.tagColor ? { color: r.tagColor } : null}>{r.tag}</em> : null}<small style={r.ink ? { color: r.ink } : null}>{r.sub}</small></span>
           <span className="t" style={r.rightColor ? { color: r.rightColor, fontWeight: 700 } : null}>{r.right || ""}</span>
         </button>);
         // v552: a row can carry one action button (Reassign, Move / unconfirm) beside it.
@@ -50542,6 +50672,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       })}
     </div>
   ) : <div className="od-empty">{empty || "Nothing here."}</div>;
+  // v581: a folded group — closed until tapped, count on the header. `flat` nests it inside a card.
+  const Fold = ({ k, title, count, sub, flat, children }) => { const open = fold.has(k); return (
+    <div className={"od-fold" + (flat ? " flat" : " od-white")}>
+      <button type="button" className="od-foldh" aria-expanded={open} onClick={() => flipFold(k)}><Icon name={open ? "chevronDown" : "chevronRight"} size={14}/><b>{title}</b>{count != null ? <span className="n">{count}</span> : null}{sub ? <small>{sub}</small> : null}<small className="tog">{open ? "Hide" : "Show"}</small></button>
+      {open ? <div className="od-foldb">{children}</div> : null}
+    </div>); };
   // Team pulse (v542): quiet people first, each with the jobs they run; "opened 3 jobs ·
   // nothing logged" instead of "0 updates · 3 jobs touched"; "last on a job" for the
   // job clock (the device list's "app opened" is the other clock).
@@ -50987,13 +51123,23 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const lateRt = d.openRTs.filter(x => x.ri.k === "late");
     const scanRow = (j) => { const si = d.scanInfo[j.id]; return { title: j.name, sub: `${si.state} · ${j.foreman || "No foreman"}`, tag: si.booking, tagColor: si.bookedAt ? undefined : si.urgent ? OD_R : OD_WARN, color: OD_P, icon: "camera", job: j }; };
     const needsRow = (n) => ({ title: n.job ? n.job.name : n.name, sub: [n.what, n.job ? (n.job.foreman || "No foreman") : "Upcoming tab", n.last ? `last update ${odAgo(n.last, d.now)}` : n.job ? "no work logged" : "", n.by].filter(Boolean).join(" · "), color: OD_R, icon: "calendar", job: n.job });
+    // v581: who the Crew Planner has on each start's day, approved time off per day, and the called-in flag.
+    const coverOf = new Map(odStartCoverage(d.sched.filter(s => s.type === "start"), planWeeks, simproDays).map(c => [c.s, c]));
+    const cov = (s) => coverOf.get(s) || null;
+    const offByDay = odTimeOffByDay(pto, days.map(x => x.dd));
+    const toCall = odInspToCall(d.active, d.secOf);
+    const inspPh = (s) => /Final/.test(s.label) ? "Final" : "Rough";
+    const startRow = (s) => { const r = schedRow(s), c = cov(s); return c ? { ...r, sub: [r.sub, c.text].filter(Boolean).join(" · "), tag: [r.tag, c.none && "Nobody assigned"].filter(Boolean).join(" · "), tagColor: c.none ? redInk : r.tagColor, ink: c.none ? redInk : undefined } : r; };
+    const inspRow = (s) => { const r = schedRow(s), ic = s.job ? odInspCalled(s.job, inspPh(s)) : null; return ic ? { ...r, tag: [r.tag, ic.called ? "Called in" : "Not called in"].filter(Boolean).join(" · "), tagColor: ic.called ? r.tagColor : redInk } : r; };
+    const toCallRow = (x) => ({ title: x.job.name, sub: `${x.ph} inspection · ${x.ph === "Rough" ? "rough" : "finish"} ${x.pct}% · ${x.job.foreman || "No foreman"}`, tag: "Not called in", tagColor: redInk, color: OD_R, icon: "checkCircle", job: x.job });
+    const noCrew14 = starts14.filter(s => (cov(s) || {}).none).length;
     const upList = () => openList("In the Upcoming tab", `${odPlural(d.up.length, "job")} not started yet · tap the app's Upcoming tab to edit`, d.up.slice().sort((a, b) => String(a.projectedStart || "~").localeCompare(String(b.projectedStart || "~"))).map(u => ({ title: u.name || "Upcoming job", sub: [u.foreman || "No foreman", u.gc, u.startConfirmed ? "start confirmed" : u.projectedStart ? "start projected" : "no start date"].filter(Boolean).join(" · "), right: u.projectedStart ? (() => { const at = odDate(u.projectedStart); return at ? `${odDow(at)} ${odShort(at)}` : String(u.projectedStart); })() : "", color: OD_O, icon: "flag" })));
     main = (<>
       <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days{fmLabel ? ` · ${fmLabel}` : ""}</p></div></div>
       <div className="od-minis">
-        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} hint={starts14.some(s => schedBits(s).bad) ? `${starts14.filter(s => schedBits(s).fm === "No foreman").length ? starts14.filter(s => schedBits(s).fm === "No foreman").length + " with no foreman · " : ""}${starts14.filter(s => schedBits(s).scanMiss).length ? starts14.filter(s => schedBits(s).scanMiss).length + " scan not done" : ""}`.replace(/ · $/, "") : ""}
-          onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed`, starts14.map(schedRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
-        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="dated" hint={insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length ? `${insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length} on a job not ready` : ""} onClick={() => openList("Inspections in the next 7 days", "", insp7.map(s => ({ ...schedRow(s), tag: d.notReadyIds.has(s.job && s.job.id) ? "Job not ready" : schedRow(s).tag, tagColor: d.notReadyIds.has(s.job && s.job.id) ? OD_R : undefined })))}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
+        <OdMini title="Starts, next 2 weeks" color={OD_O} icon="flag" value={starts14.length} sub={`${starts14.filter(s => !s.confirmed).length} projected`} hint={[starts14.filter(s => schedBits(s).fm === "No foreman").length && `${starts14.filter(s => schedBits(s).fm === "No foreman").length} with no foreman`, starts14.filter(s => schedBits(s).scanMiss).length && `${starts14.filter(s => schedBits(s).scanMiss).length} scan not done`, noCrew14 && `${noCrew14} with nobody on the planner`].filter(Boolean).join(" · ")}
+          onClick={() => openList("Starts in the next 14 days", `${starts14.filter(s => s.confirmed).length} confirmed · crew from the Crew Planner and Simpro`, starts14.map(startRow))}><OdRing pct={starts14.length ? starts14.filter(s => s.confirmed).length/starts14.length : 0} color={OD_O} label="Share of starts confirmed"/></OdMini>
+        <OdMini title="Inspections, 7 days" color={OD_G} icon="checkCircle" value={insp7.length} sub="called in" hint={[insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length && `${insp7.filter(s => d.notReadyIds.has(s.job && s.job.id)).length} on a job not ready`, toCall.length && `${toCall.length} still to call in`].filter(Boolean).join(" · ")} onClick={() => openList("Inspections in the next 7 days", toCall.length ? `then the ${odPlural(toCall.length, "job")} at 85%+ with no inspection called in` : "", [...insp7.map(s => ({ ...inspRow(s), tag: d.notReadyIds.has(s.job && s.job.id) ? `Job not ready · ${inspRow(s).tag}` : inspRow(s).tag, tagColor: d.notReadyIds.has(s.job && s.job.id) ? redInk : inspRow(s).tagColor })), ...(toCall.length ? [{ divider: `Not called in yet (${toCall.length})` }] : []), ...toCall.map(toCallRow)])}><OdBars vals={[0,1,2,3,4,5,6].map(i => insp7.filter(s => localYmd(s.at) === localYmd(odAddDays(d.t0, i))).length)} color={OD_G} hi={0} max={3} label="Inspections per day, next 7 days"/></OdMini>
         <OdMini title="Needs a date" color={OD_R} icon="calendar" value={d.needsDate.length} sub="jobs" hint={`least recent work first${d.upNoDate.length ? ` · ${odPlural(d.upNoDate.length, "Upcoming-tab job")} with no start date not counted` : ""}`} onClick={() => openList("Needs a date", "Least recent work first", d.needsDate.map(needsRow))}><OdRing pct={d.active.length ? d.needsDate.length/d.active.length : 0} color={OD_R} label="Share of active jobs needing a date"/></OdMini>
         <OdMini title="Past their date" color={OD_WARN} icon="alertTriangle" value={od.length} sub={[odInsp.length && `${odInsp.length} inspection${odInsp.length === 1 ? "" : "s"}`, odRt.length && `${odRt.length} return trip${odRt.length === 1 ? "" : "s"}`, odOther.length && `${odOther.length} other`].filter(Boolean).join(" · ") || "none"}
           hint={odOld ? `${odOld} older than 30 days` : ""}
@@ -51014,9 +51160,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
                 <button type="button" className="blk" key={k} style={{ "--c": OD_SCHED_COLOR[s.type] }} onClick={s.job ? () => openJob(s.job) : undefined}>
                   <b>{s.name}</b><small>{s.label}{s.type === "start" && !s.confirmed ? " · projected" : ""}{sb.fm ? ` · ${sb.fm === "No foreman" ? "No foreman" : odFirst(sb.fm)}` : ""}</small>
                   {sb.scanMiss ? <small className="bad">Scan not done</small> : sb.fm === "No foreman" ? <small className="bad">No foreman</small> : d.notReadyIds.has(s.job && s.job.id) && s.type === "insp" ? <small className="bad">Job not ready</small> : null}
+                  {s.type === "start" && cov(s) ? <small className={cov(s).none ? "bad" : "crew"}>{cov(s).text}</small> : null}
+                  {s.type === "insp" && s.job ? <small className={odInspCalled(s.job, inspPh(s)).called ? "crew" : "bad"}>{odInspCalled(s.job, inspPh(s)).text}</small> : null}
                 </button>
               ); })}
               {!x.items.length && <div className="none">—</div>}
+              {offByDay[i] && offByDay[i].text ? <div className="off">{offByDay[i].text}</div> : null}
             </div>
           ))}
         </div></div>
@@ -51030,23 +51179,25 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               onClick: its.length || d.scans.length ? () => openList("Scans", "Dated in the next 30 days, then the jobs that need one", [...its.map(schedRow), ...(d.scans.length ? [{ divider: `Need a scan (${d.scans.length})` }] : []), ...d.scans.map(scanRow)]) : undefined };
             if (k === "rt") return { name: l, note: `${its.length} dated · ${lateRt.length} past date`, v: its.length + lateRt.length, color: OD_SCHED_COLOR[k],
               onClick: its.length || lateRt.length ? () => openList("Return trips", odRtSumText(d.rtSum), [...(lateRt.length ? [{ divider: `Past their date (${lateRt.length})` }] : []), ...lateRt.map(x => ({ title: x.job.name, sub: `${x.ri.text}${odText(x.rt.scope) ? " · " + odText(x.rt.scope) : ""}`, tag: `${x.ri.late} d late`, tagColor: OD_R, color: OD_R, icon: "returntrips", job: x.job })), ...(its.length ? [{ divider: `Dated, next 30 days (${its.length})` }] : []), ...its.map(schedRow)]) : undefined };
-            return { name: l, note: its.length, v: its.length, color: OD_SCHED_COLOR[k], onClick: its.length ? () => openList(`${l}, next 30 days`, "", its.map(schedRow)) : undefined };
+            return { name: l, note: its.length, v: its.length, color: OD_SCHED_COLOR[k], onClick: its.length ? () => openList(`${l}, next 30 days`, "", its.map(k === "start" ? startRow : k === "insp" ? inspRow : schedRow)) : undefined };
           })} empty="Nothing dated."/>
+          <Fold k="s_scans" flat title="Matterport scans due" count={d.scans.length} sub={d.scans.length ? `${d.scans.filter(j => !d.scanInfo[j.id].bookedAt).length} not booked · ${d.scans.filter(j => d.scanInfo[j.id].urgent).length} urgent` : "none due"}>
+            <Rows rows={d.scans.map(scanRow)} empty="No scans due."/>
+          </Fold>
         </div>
         <div className="od-white od-pad">
-          <div className="od-ct">Starts<small>next 14 days · with the foreman</small></div>
-          <Rows rows={starts14.map(s => ({ ...schedRow(s), icon: "flag" }))} empty="No starts dated in the next 14 days."/>
+          <div className="od-ct">Starts<small>next 14 days · foreman · who the Crew Planner has that day</small></div>
+          <Rows rows={starts14.map(s => ({ ...startRow(s), icon: "flag" }))} empty="No starts dated in the next 14 days."/>
+          {simproDays === null && starts14.length ? <div className="od-empty">Reading Simpro's schedule…</div> : null}
         </div>
       </div>
     </>);
     right = (<>
       <Me sub="Scheduling"/>
-      <Stats items={[[d.active.length, "On the board", () => pickTab("jobs")], [d.up.length, "In Upcoming tab", upList], [d.scans.length, "Scans due"]]}/>
+      <Stats items={[[d.active.length, "On the board", () => pickTab("jobs")], [d.up.length, "In Upcoming tab", upList], [d.scans.length, "Scans due", () => openList("Matterport scans due", "Rough % and whether one is booked", d.scans.map(scanRow))]]}/>
       {od.length > 0 && <><Sec right={`see all ${od.length}`} onRight={() => openList("Past their date", "Oldest first", od.map(schedRow))}>Past their date</Sec><div className="od-list">{od.slice(0, 6).map(schedItem)}</div></>}
       <Sec right={d.needsDate.length > 8 ? `see all ${d.needsDate.length}` : `${d.needsDate.length}`} onRight={d.needsDate.length > 8 ? () => openList("Needs a date", "Least recent work first", d.needsDate.map(needsRow)) : undefined}>Needs a date</Sec>
       <div className="od-list">{d.needsDate.slice(0, 8).map((n, i) => <OdItem key={i} color={OD_R} icon="calendar" tag={n.what} title={n.job ? n.job.name : n.name} sub={[n.job ? n.job.foreman || "No foreman" : "Upcoming tab", n.last ? `last update ${odAgo(n.last, d.now)}` : n.job ? "no work logged" : "", n.by].filter(Boolean).join(" · ")} onClick={n.job ? () => openJob(n.job) : null}/>)}{!d.needsDate.length && <div className="od-empty dark">Every job has its next date.</div>}</div>
-      <Sec right={`${d.scans.length}`}>Matterport scans due</Sec>
-      <div className="od-list">{d.scans.slice(0, 6).map((j, i) => { const si = d.scanInfo[j.id]; return <OdItem key={i} color={OD_P} icon="camera" tag={si.done ? "Rough done" : `Rough ${parseStage(j.roughStage)}%`} tagColor={si.urgent ? OD_R : undefined} title={j.name} sub={`${si.booking} · ${si.state}`} onClick={() => openJob(j)}/>; })}{!d.scans.length && <div className="od-empty dark">No scans due.</div>}</div>
     </>);
   } else if (tab === "quality") {
     // Punch by foreman (v542): the one roster, a "No foreman" row when it has items,
@@ -51077,6 +51228,17 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const failRow = (g) => ({ title: g.job.name, tag: `${g.ph} · ${g.job.foreman || "No foreman"}${g.n > 1 ? ` · failed ${g.n} times, ${odShort(g.first)} to ${odShort(g.last)}` : ""}`,
       sub: g.items.length ? g.items.slice(0, 2).join(" · ") : g.noList ? `No correction list — ask ${g.job.foreman || "the foreman"}` : "No items listed",
       right: d.failStatus(g), rightColor: g.passAfter ? OD_G : g.rebook ? undefined : OD_R, color: OD_R, icon: "x", job: g.job });
+    // v581: first-pass by foreman (the tab's firsts, 90 days, credited by d.owns), return-trip causes, re-inspections by date.
+    const fpf = odFirstPassByForeman(d.in90, d.roster, d.owns);
+    const fpMax = Math.max(1, ...fpf.all.map(r => r.n));
+    const fpRow = (r) => { const c = r.pct >= 90 ? OD_G : r.pct >= 75 ? OD_WARN : OD_R; return (
+      <button type="button" className="r fp" key={r.name} onClick={() => openList(`${r.name}: first inspections, 90 days`, `${r.pass} of ${r.n} passed the first time · a job counts for its foreman and its lead`, r.items.slice().sort((a, b) => b.at - a.at).map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed first time" : "failed first time"}${f.job.lead ? " · lead " + odFirst(f.job.lead) : ""}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}>
+        <i className="av sm" style={r.name === "No foreman" ? { background: OD_GREY } : null}>{(r.name[0] || "?").toUpperCase()}</i><span className="nm"><b>{r.name}</b><small>{r.pass} of {odPlural(r.n, "inspected job")} passed first time</small></span>
+        <span className="bar" aria-hidden="true"><i style={{ width: `${(r.pass / fpMax) * 100}%`, background: OD_G }}/><i style={{ width: `${((r.n - r.pass) / fpMax) * 100}%`, background: OD_R }}/></span>
+        <b className="pct" style={{ color: readableInk(c) }}>{r.pct}%</b>
+      </button>); };
+    const rtCauses = odRtCauses(d.openRTs);
+    const reinsp = odReinspByDate(d.failGroups, d.t0);
     main = (<>
       <div className="od-head"><div><h1>Quality</h1><p>Inspections, punch and return trips · first-pass counts each job's first inspection of a phase{fmLabel ? ` · ${fmLabel}` : ""}</p></div></div>
       <div className="od-minis">
@@ -51091,8 +51253,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <Rows rows={inspNext.map(({ s, walked, qs }) => ({ ...schedRow(s), icon: "checkCircle", tag: walked ? "QC walked" : qs ? `QC ${odQcText(qs).toLowerCase()}` : "No QC walk logged", tagColor: walked ? OD_G : OD_R, sub: [s.job && (s.job.foreman || "No foreman"), d.notReadyIds.has(s.job && s.job.id) ? "job not ready" : ""].filter(Boolean).join(" · ") }))} empty="No inspections booked in the next 7 days."/>
         </div>
         <div className="od-white od-pad">
-          <div className="od-ct">Punch on jobs near final<small>{nearN ? `${nearN} items on ${odPlural(nearFinal.length, "job")} · oldest first` : ""}</small></div>
-          <Rows rows={nearFinal.slice(0, 8).map(x => ({ title: x.j.name, sub: `${x.j.foreman || "No foreman"} · ${d.secOf(x.j).label}${d.secOf(x.j).note ? " " + d.secOf(x.j).note : ""}`, right: `${x.items.length} · ${x.oldest} d`, color: OD_O, icon: "openitems", onClick: () => openList(`${x.j.name}: open punch`, "Oldest first", punchRows(x.items)) }))} empty="No open punch on jobs in finish."/>
+          <div className="od-ct">Failed inspections<small>{finalsNotRebooked ? `${odPlural(finalsNotRebooked, "failed final")} not re-booked` : d.failOpenG.length ? "latest first" : ""}</small></div>
+          <Rows rows={d.failOpenG.slice(0, 8).map(failRow)} empty="No failed inspections waiting on a re-inspection."/>
+          {d.failGroups.length > d.failOpenG.length && <button type="button" className="od-more" onClick={() => openList("Failed inspections that passed later", "", d.failGroups.filter(g => g.passAfter).map(failRow))}>{d.failGroups.length - d.failOpenG.length} passed on a later inspection</button>}
         </div>
       </div>
       <div className="od-row2">
@@ -51106,14 +51269,34 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           {fpSel != null && d.months[fpSel] && d.months[fpSel].n > 0 && <div className="od-daysum"><div><b>{d.months[fpSel].label}: {d.months[fpSel].pass} of {d.months[fpSel].n} passed first time</b></div>
             <button type="button" onClick={() => openList(`First inspections in ${d.months[fpSel].m.toLocaleDateString([], { month: "long" })}`, "", d.months[fpSel].list.map(f => ({ title: f.job.name, sub: `${f.ph} · ${f.pass ? "passed" : "failed"}`, right: odShort(f.at), color: f.pass ? OD_G : OD_R, job: f.job })))}>List them</button></div>}
         </div>
-        <div className="od-white od-pad">
+        <Fold k="q_fpf" title="First-pass by foreman" count={fpf.shown.length} sub={`last 90 days · a job counts for its foreman and its lead · ${fpf.few.length ? `${fpf.few.length} with fewer than ${fpf.min} inspected jobs` : "tap a name"}`}>
+          <div className="od-board">{fpf.shown.map(fpRow)}{!fpf.shown.length && <div className="od-empty">Nobody has {fpf.min} inspected jobs in the last 90 days.</div>}</div>
+          {fpf.shown.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Passed first time</span><span style={{ "--c": OD_R }}>Failed first time</span></div>}
+          {fpf.few.length > 0 && <Fold k="q_fpf_few" flat title={`Fewer than ${fpf.min} inspected jobs`} count={fpf.few.length} sub="too few to read as a rate"><div className="od-board">{fpf.few.map(fpRow)}</div></Fold>}
+        </Fold>
+      </div>
+      <div className="od-row2">
+        <Fold k="q_rtc" title="Return-trip causes" count={d.openRTs.length} sub={rtCauses.length ? rtCauses.map(g => `${g.label} ${g.items.length}`).join(" · ") : "no open return trips"}>
+          <OdHBars rows={rtCauses.map(g => ({ name: g.label, note: g.items.length, v: g.items.length, color: g.k === "none" ? OD_GREY : g.k === "hand" ? OD_SLATE : OD_R, onClick: () => openList(`Return trips: ${g.label.toLowerCase()}`, `${odPlural(g.items.length, "open return trip")} · late first`, g.items.map(rtRow)) }))} empty="No open return trips."/>
+          <div className="od-legend light"><span style={{ "--c": OD_R }}>From a change order, QC walk, failed inspection, GC request or job note</span><span style={{ "--c": OD_SLATE }}>Typed in by hand</span><span style={{ "--c": OD_GREY }}>No reason recorded</span></div>
+        </Fold>
+        <Fold k="q_reinsp" title="Re-inspection booked" count={reinsp.list.length} sub={reinsp.list.length ? `${reinsp.late ? `${reinsp.late} past the date · ` : ""}soonest first · failed inspections with a re-inspection date` : "no failed inspection has a re-inspection date"}>
+          <Rows rows={reinsp.days.flatMap(dd => [{ divider: `${odDow(dd.at)} ${odShort(dd.at)} (${dd.items.length})` }, ...dd.items.map(x => ({ ...failRow(x.g), right: x.late ? `${x.late} d past` : `${odDow(x.at)} ${odShort(x.at)}`, rightColor: x.late ? redInk : OD_G }))])} empty="No re-inspection booked."/>
+        </Fold>
+      </div>
+      <Fold k="q_punch" title="Punch" count={d.openPunch.length} sub={`open · ${over30} over 30 days${serious.length ? ` · ${serious.length} serious` : ""} · ${nearN} on ${odPlural(nearFinal.length, "job")} near final · by age, by foreman, near final`}>
+        <div className="od-row2">
+        <div className="od-pad od-sub">
           <div className="od-ct">Open punch by age<small>tap a bar</small></div>
           <OdHBars rows={buckets.map(b => ({ name: b.l, note: b.items.length, v: b.items.length, color: b.c, onClick: b.items.length ? () => openList(`Punch open ${b.l.toLowerCase()}`, odPlural(b.items.length, "item"), punchRows(b.items)) : undefined }))} empty="No open punch."/>
           {serious.length > 0 && <button type="button" className="od-flag" onClick={() => openList("Serious punch items", "", punchRows(serious))}><Icon name="alertTriangle" size={13}/>{odPlural(serious.length, "serious item")} open</button>}
         </div>
-      </div>
-      <div className="od-row2">
-        <div className="od-white od-pad">
+        <div className="od-pad od-sub">
+          <div className="od-ct">Punch on jobs near final<small>{nearN ? `${nearN} items on ${odPlural(nearFinal.length, "job")} · oldest first` : ""}</small></div>
+          <Rows rows={nearFinal.slice(0, 8).map(x => ({ title: x.j.name, sub: `${x.j.foreman || "No foreman"} · ${d.secOf(x.j).label}${d.secOf(x.j).note ? " " + d.secOf(x.j).note : ""}`, right: `${x.items.length} · ${x.oldest} d`, color: OD_O, icon: "openitems", onClick: () => openList(`${x.j.name}: open punch`, "Oldest first", punchRows(x.items)) }))} empty="No open punch on jobs in finish."/>
+        </div>
+        </div>
+        <div className="od-pad od-sub">
           <div className="od-ct">Punch by foreman<small>open now · closed in 30 days · jobs · tap a name</small></div>
           <div className="od-board">
             {fRows.map(r => { const per = r.jobs ? (r.open / r.jobs).toFixed(1) : "0"; const behind = r.open > r.closed; return (
@@ -51126,12 +51309,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           </div>
           {fRows.length > 0 && <div className="od-legend light"><span style={{ "--c": OD_G }}>Closed, 30 days</span><span style={{ "--c": OD_O }}>Open</span><span style={{ "--c": OD_WARN }}>Open more than closed</span></div>}
         </div>
-        <div className="od-white od-pad">
-          <div className="od-ct">Failed inspections<small>{finalsNotRebooked ? `${odPlural(finalsNotRebooked, "failed final")} not re-booked` : d.failOpenG.length ? "latest first" : ""}</small></div>
-          <Rows rows={d.failOpenG.slice(0, 8).map(failRow)} empty="No failed inspections waiting on a re-inspection."/>
-          {d.failGroups.length > d.failOpenG.length && <button type="button" className="od-more" onClick={() => openList("Failed inspections that passed later", "", d.failGroups.filter(g => g.passAfter).map(failRow))}>{d.failGroups.length - d.failOpenG.length} passed on a later inspection</button>}
-        </div>
-      </div>
+      </Fold>
     </>);
     right = (<>
       <Me sub="Quality"/>
@@ -52196,6 +52374,22 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           .od-sheet-h{border-radius:20px 20px 0 0;padding-top:16px}
           .od-sheet .od-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @keyframes odUp{from{transform:translateY(60px);opacity:0}to{transform:none;opacity:1}}
+        /* v581 Schedule / Quality audit: folded groups, time-off line, crew coverage */
+        .odash .od-fold{min-width:0;display:flex;flex-direction:column}
+        .odash .od-fold.flat{border-top:1px dashed var(--cline);margin-top:4px}
+        .odash .od-foldh{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;color:var(--cink);text-align:left;padding:14px 16px;font:inherit;font-weight:700;font-size:14px;cursor:pointer;border-radius:18px;flex-wrap:wrap}
+        .odash .od-fold.flat .od-foldh{padding:10px 0 6px;border-radius:8px}
+        .odash .od-foldh:hover{background:var(--hov)}
+        .odash .od-foldh .n{font-weight:800;color:var(--o-ink);background:var(--o-soft);border-radius:999px;padding:1px 9px;font-size:12.5px}
+        .odash .od-foldh small{font-weight:500;color:var(--cdim);font-size:12px}
+        .odash .od-foldh small.tog{margin-left:auto;font-weight:700;color:var(--o-ink)}
+        .odash .od-foldb{display:flex;flex-direction:column;gap:10px;padding:0 16px 16px}
+        .odash .od-fold.flat .od-foldb{padding:0 0 6px}
+        .odash .od-sub{padding:0}
+        .odash .od-board .pct{font-size:13px;justify-self:end}
+        .odash .od-board .r.fp{grid-template-columns:30px minmax(0,1fr) minmax(70px,34%) 44px}
+        .odash .od-week .off{margin-top:auto;padding-top:5px;border-top:1px dashed var(--cline);font-size:11.5px;color:var(--cdim);line-height:1.3}
+        .odash .od-week .blk small.crew{color:var(--cdim)}
         /* v562 Goals tab */
         .odash .od-goal-mission{border:1px solid var(--cline);border-left:4px solid var(--o);background:var(--card);border-radius:14px;padding:12px 16px;font-size:14px;line-height:1.5}
         .odash .od-goal-mission b{color:var(--o-ink)}
@@ -61033,6 +61227,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 ---
 
+- **Dashboard audit, Schedule and Quality: who the Crew Planner has on each start, the called-in flag, time off under each day, scans folded into Next 30 days; first-pass by foreman, return-trip causes, re-inspections by date, the three punch cards folded into one** · 'shipped 2026-10-30' · 'SW v581' · 'odStartCoverage' · 'odSimproStaffByDay' · 'odInspCalled' · 'odInspToCall' · 'odTimeOffByDay' · 'odFirstPassByForeman' · 'odRtCauses' · 'odReinspByDate' · 'OfficeDash' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 (*"Let's build them"*); this is the Schedule / Quality pair. **Schedule (everything kept):** every **start** now says who the Crew Planner has on that job that day — the manual cell on 'settings/schedule_<monday>' ('assignments["<jobId>_<dayIdx>"]', lead first, then crew) plus Simpro's scheduled staff for that Simpro # and day ('getSimproSchedule', the overlay the planner itself draws), one name per first name like the huddle's crewToday merge — and reads **red ink** ('readableInk', no fill) with *Nobody assigned on the planner* when nobody is; a weekend start, an Upcoming-tab start and a week not read yet never read as nobody. The Starts mini counts them (*N with nobody on the planner*). Every **inspection** row carries the **called-in flag**: the app records no separate field — the office books an inspection by typing its target date (4-WAY TARGET / FINAL TARGET), and the Jobs tab already reads a missing date as *Rough insp. not called* — so a dated row reads *Called in · 11/4*, and the Inspections mini adds *N still to call in*: jobs 85%+ into rough or finish with no target and no result (the list opens under the week's inspections). ('fourWaySetAt' / 'fourWaySetBy' are read by the activity feed but nothing writes them.) **Time off** from 'settings/crewPTO' draws as a quiet grey *Out: Abraham, James* line under each day column (both ends inclusive, one name once; the Schedule tab now loads the PTO doc like Overview / People do). **Matterport scans** left the right rail and sit inside Next 30 days as a folded *Matterport scans due (N)* group with *not booked · urgent* on its header; the rail's Scans due count opens the same list. **Quality (kept: first-pass, failed-not-re-booked, return trips past date, QC walks open, inspections next 7 days without a walk):** the three punch cards (by age, by foreman, near final) are now ONE folded **Punch** section, total open on the header with *over 30 days · serious · on jobs near final*, the three views inside. Added, each folded with a count: **First-pass by foreman** (the tab's own first-inspection rule, last 90 days, credited to every roster name who owns the job as foreman OR lead via 'd.owns', pass / of N beside the rate, green ≥ 90 · pink 75–89 · red below; names with fewer than 3 inspected jobs behind a *Fewer than 3* fold); **Return-trip causes** (open return trips grouped by the marker the app stamps when it makes one: change order 'fromCOId', QC walk 'fromQCFail', failed inspection 'fromFailedRough' / 'fromFailedFinal', GC request 'fromGC', job note 'createdFromJobNoteId', else *Added by hand* when a scope was typed, else *No reason*, its own bucket; live on 2026-10-30: 1 · 1 · 7 by hand); **Re-inspection booked** (failed inspections that HAVE a re-inspection date, soonest first, grouped by day, *N d past* in red when the date passed). Pure logic lives above 'OfficeDash' under the *Dashboard audit (Schedule, Quality) helpers* banner and is gated by **'scripts/schedule-quality-audit-test.js'** (prebuild): coverage states, Simpro folding, called-in and the to-call list, time off by day (M/D/YYYY and ISO, inclusive, de-duplicated), first-pass by owner with the fold split, cause buckets in order, re-inspection grouping, and a run through 'odModel'. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/schedule.html' and 'quality.html' ('pull-readonly.js' + 'build-mockups.js'). Guide 'dashboard.html' Schedule and Quality sections rewritten. **Why it won't lose data:** read-only — two more one-shot reads (the planner week docs and the Simpro schedule callable the planner already calls) and regrouping of what the dashboard already loads; no Firestore write, no job field, loader, function or rule change; the Scoreboard tab and the Koy-only tiles are untouched.
 - **Dashboard audit, People + Automations: everyone by crew with where they are today; Automations trimmed to the docs, the plans waiting and one Appliance Loads line** · 'shipped 2026-10-30' · 'SW v582' · 'OfficeDash' · 'odPeopleByCrew' · 'odTodayByPerson' · 'odPlannerPerson' · 'odTodayText' · 'odPrevRun' · 'getSimproSchedule' · Koy approved the tab-by-tab dashboard audit 2026-10-30 ("Let's build them"). **People:** the people list is now **People by crew** — every active team member once, grouped by crew (Settings › Team 'foremanId' through 'odCrews', never 'settings/crewTeams'), the crew's foreman on top, then jr foremen, leads, crew; **Office** (title admin) and **No crew** are their own groups, last. Every group starts folded with its count; the header says how many are on a job today and how many are quiet. Each row: name + title/jobs, a **Today** column (the job they are on today from the Crew Planner, with the hours, or a quiet "not scheduled"; "weekend" on Sat/Sun), the last-on-a-job line, and their phone's app version (red when behind, "no phone seen" after 14 days). "Today" reads the planner the way the planner itself does: its own week doc 'settings/schedule_<monday>.assignments["<jobId>_<dayIdx>"]' (a filled cell wins) and the Simpro schedule it overlays ('getSimproSchedule', this week, read-only); names resolve the planner's own way (exact, unique first name, first + last initial, an ambiguous bare first name never guessed). Live check 2026-10-30: no planner week doc has ever had a filled cell, so in practice Today is Simpro's schedule, which is what the planner shows. Kept: On the app today, Open My Day tasks, Time off waiting (with its collision context), Phones on latest, Quiet 3+ days, Out today / this week. Trimmed: the activity heat map, the "On the app, no job touched" list, the My Day load card and the Team pulse card grid (its people are the crew rows now); the device list is a folded **Devices behind** with a count and a Show all button (the Phones on latest tile opens it). **Automations:** keeps the automated document cards with Run now, Plan Intake with its chips and the Waiting on you rail with File it / Not ours; the Appliance Loads card is one status line (last scheduled run, next run, jobs · items · amps, Refresh, Open sheet, and the no-appliance-package line); the Plans filed chart tile, the per-job appliance table and the "When they run" list are gone (the counts stay in the rail). Nothing about what the automations do changes. Pure helpers sit under '// ── Dashboard audit (People + Automations) helpers' above 'OfficeDash'; test 'scripts/people-autos-audit-test.js' (in prebuild) proves every name once, the tier order, the name resolution, planner-over-Simpro, block merging, weekends, and the status-line run time. Mockup from a live read-only pull: 'docs/mockups/dashboard-audit/people.html' (+ 'people-thursday.html', a full work day). Guide 'dashboard.html' People and Automations updated. **Why it won't lose data:** read-only everywhere — one new 'getDoc' on the planner's week doc and one call to the existing 'getSimproSchedule' callable when the People tab opens; no 'setDoc' / 'updateDoc' / 'saveJob'; the Ask-to-import My Day task that lived on the removed appliance rows is gone with them (nothing else wrote); no loader, rules or function change.
 - **Dashboard audit, Jobs + Activity: Waiting on and Days in stage columns; Open questions split into Waiting on me / Waiting on others** · 'shipped 2026-10-30' · 'SW v580' · 'odJobWaiting' · 'odDaysInStage' · 'odSplitQuestions' · 'odQuestionSide' · 'odOpenQuestions' · 'OD_WAIT_LABEL' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 ("Let's build them"); this is the Jobs / Activity pair, built on 'dash-audit-jobs-activity' and merged by the coordinator. **Jobs tab.** Kept: the job table, the crew folds, the stage chips, By crew / By person. Trimmed: the right-rail *Where the work is* bars (the chips already say it) and the *Punch* column. Added, both sortable: **Days in stage** — days since the date the job records for entering its current stage: the confirmed start once it has passed (Rough / Finish in progress), the rough inspection pass (Rough done, finish next), the last fail (Rough inspection failed), the start date that passed (start-date-passed stages); the small line under the number says which date it is (*start 9/7*, *rough passed 5/4*, *failed 10/13*). Holds, prep, no status, quick jobs and commercial stages record no entry date, so the cell is blank rather than guessed (24 of 50 active jobs had one on 2026-10-30). **Waiting on** — *GC* (an open question out to the GC, a designer or the homeowner: shared by link, or "for" someone not on the team), *Inspection* (a target date with no result, booked or passed and not logged, or a fail with no re-inspection booked), *Us* (a question the office owes, or an open My Day task on the job); blank when nothing waits; ranked GC, Inspection, Us with the first reason under the label; a crew fold's header says how many of its jobs are waiting. **Activity tab.** Kept: Open questions, Failed inspections, the recent-activity list with its type chips, search and *Done by* filter. Trimmed: the *Everything logged* and *Punch closed* cards, the right-rail *What kind* bars and *Most active jobs* list. Added: an **Open questions** card with two folded groups (closed until tapped, count on the header): **Waiting on me** (asked of nobody or of an admin, so the office answers) and **Waiting on others** (out to the GC / designer / homeowner, or to a foreman or crew member named on it), each oldest first, undated last, older than 2 days flagged red with its age; the card's own caption says *N on me · M on others*. Pure helpers sit in the '// ── Dashboard audit (Jobs, Activity) helpers' block above 'OfficeDash', exported through 'odash-model-test.js''s sandbox; gate 'scripts/jobs-activity-audit-test.js' (prebuild, 38 checks: Ashcraft / Koplin / Pierce / Bukhshtaber / Forth shapes as of 2026-10-30, needs filtering, ranking, the split adding up to the card). Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/jobs.html' and 'activity.html' ('pull-readonly.js' + 'render-readonly.js'). Guide 'dashboard.html' (Jobs, Activity). Crew brief 'docs/crew-briefs/v580.md'. **Why it won't lose data:** read-only — the dashboard draws two columns and two folds from fields the job already holds ('roughProjectedStart', 'finishProjectedStart', inspection attempts and targets, 'roughQuestions' / 'finishQuestions', 'questionShares') and the needs list; nothing is written, no field, loader, rule or function changed.
 - **Dashboard Overview audit: Today strip from the Crew Planner, starts this week not confirmed, money at risk; the punch / activity / CO-tile / inspections minis moved off the landing view** · 'shipped 2026-10-30' · 'SW v579' · 'OfficeDash' · 'odTodayByCrew' · 'odStartsUnconfirmedWeek' · 'odMoneyAtRisk' · 'odWeekBounds' · 'odPlannerMonday' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 (*"Let's build them"*); this is the Overview tab's share. **Rule for the landing view:** the first screen is **Needs you + Today**; foreman-level counts (punch, activity volume) sit a level down on the Foremen cards, nothing above the fold is a per-foreman stat. **Trimmed** (the data stays on its home tab): the Open punch items mini (Quality), the Activity-per-day chart (Activity), the Open change orders total tile (Jobs; the *Change orders waiting on the GC 60+ days* line stays) and the Inspections-30-days mini (Quality). **Kept as they were:** Needs you, Needs attention, Active jobs, Next 14 days, Out this week, the per-foreman cards. **Added:** **(1) Today** right under Needs you: who is on which job today from the **Crew Planner's** week doc ('settings/schedule_<monday>' → 'assignments["<jobId>_<dayIdx>"] = { lead, crew[] }', the same cells 'crewOnSiteToday' reads; not 'settings/crewTeams' ride-along pairs, not the Team hierarchy), grouped by the Settings › Team crews ('odCrews', foremanId) with the lead highlighted; a job with people from two crews sits under each with that crew's names; a cell with a first name only ("Trever") resolves to the one team member it can mean, otherwise it shows as written under *Others*; a folded **Active jobs with nobody scheduled today** list with a count; on a weekend, with no week doc, or with no cell for today it is one quiet line (*The Crew Planner has nothing for today*), nothing else. Live while the Overview is open (one 'onSnapshot', read-only). **(2) Starts this week not confirmed**: a folded list (count on the header) of the starts whose date falls in the current Mon–Sun week and whose start is not confirmed — the same 'confirmed' the Job Board, Up Next and the Schedule tab already read ('roughStartConfirmed' / 'finishStartConfirmed' / an Upcoming entry's 'startConfirmed', or a scheduled / date_confirmed status); each live-job row carries the v552 **Move / confirm** action. **(3) Money at risk** at the top of Needs attention: the count and summed dollars of the change orders waiting on the GC 60+ days (the list the tab already built), each Simpro quote counted once (Thayne: 14 COs on one quote), rows with no quote $ counted apart; tap it for the same list. Dollars are allowed on the office dashboard; the Foreman view mask (v569) still hides them. **Live check 2026-10-30:** 50 active jobs; 26 COs on 11 jobs, $14k across 12 quotes; one unconfirmed start this week (Peterson, Upcoming). Every one of the 9 planner week docs in Firestore has **zero assignment cells** (the last week with people on it was Apr 27 2026), so the strip shows its quiet line until the planner is used again; Simpro's schedule is not read here (follow-up). Mockup from a read-only live pull: 'docs/mockups/dashboard-audit/overview.html' (+ 'overview-pull-readonly.js', 'overview-mockup-build.js'). Gate: 'scripts/overview-audit-test.js' in prebuild (today-by-crew grouping and name resolution, the week window across a Sunday, the dollar sum with a shared quote, and a static check that the four trimmed tiles are gone and the strip sits under Needs you). Guide 'dashboard.html' Overview step updated. **Why it won't lose data:** read-only — one new Firestore listener on a settings doc the planner already writes; no job field, loader, function or rules change; the Move / confirm action is the unchanged v552 patch.

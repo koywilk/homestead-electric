@@ -170,23 +170,40 @@
   <div class="step"><div class="num">3</div><div class="body">
     <h3>Schedule</h3>
     <p>The next 7 days as columns. Starts name the foreman (red <b>No foreman</b> when blank) and say <b>Scan not
-    done</b> when the pre-drywall scan isn't logged. <b>Past their date</b> splits inspections from return trips, oldest
-    first, each saying how many days late. Next 30 days shows scans and return trips both ways: dated, and not booked
-    or past their date. <b>Needs a date</b> is the same list on every tab: jobs on the board with no next date, sorted by
-    the least recent work, with the GC's needs-by window (Upcoming-tab jobs with no date are counted apart). Each rough or
-    finish start in <b>Starts</b> (and in a job's Coming up) has <b>Move / unconfirm</b>: pick the new date, say whether
-    the customer or GC confirmed it, or just unconfirm it; it saves on the job with Undo. Scans
-    due show the rough %, whether one is booked, and red when the rough is done or the finish starts soon.</p>
+    done</b> when the pre-drywall scan isn't logged. Each start also says <b>who the Crew Planner has on that job that
+    day</b>: the planner's own cell (lead, then crew) plus anyone Simpro has scheduled there, in red ink reading
+    <b>Nobody assigned on the planner</b> when it is empty (a weekend start or an Upcoming-tab job never reads as
+    nobody). The Starts card and its list carry the same line, and the Starts tile counts "N with nobody on the
+    planner". Each inspection row carries <b>Called in · date</b>: the app records a booking as the target date the
+    office types on the job (4-WAY TARGET or FINAL TARGET), so a dated row is called in; the Inspections tile adds
+    "N still to call in" for jobs 85%+ into rough or finish with no target and no result, listed under the week's
+    inspections. A quiet grey <b>Out: names</b> line under a day column is approved time off that day. <b>Past their
+    date</b> splits inspections from return trips, oldest first, each saying how many days late. Next 30 days shows
+    scans and return trips both ways: dated, and not booked or past their date; <b>Matterport scans due</b> is a folded
+    group inside it (count, not booked and urgent on the header; tap to open). <b>Needs a date</b> is the same list on
+    every tab: jobs on the board with no next date, sorted by the least recent work, with the GC's needs-by window
+    (Upcoming-tab jobs with no date are counted apart). Each rough or finish start in <b>Starts</b> (and in a job's
+    Coming up) has <b>Move / unconfirm</b>: pick the new date, say whether the customer or GC confirmed it, or just
+    unconfirm it; it saves on the job with Undo.</p>
   </div></div>
 
   <div class="step"><div class="num">4</div><div class="body">
     <h3>Quality</h3>
     <p><b>First-pass</b> is green at 90% or better, pink 75–89%, red below, with how many failed the first time.
     Return trips are counted one way on every tab (open · past date · booked · to book · no date), late first.
-    <b>Inspections next 7 days</b> shows which have a QC walk logged before them. <b>Punch on jobs near final</b> lists
-    the punch that blocks a final. <b>Failed inspections</b> shows one row per job and phase with what happened since
-    (passed, re-inspect booked, or not re-booked) and, when the Fail was tapped before the items were typed, "No
-    correction list — ask the foreman". <b>Punch by foreman</b> shows jobs and punch per job, pink when open beats closed.</p>
+    <b>Inspections next 7 days</b> shows which have a QC walk logged before them. <b>Failed inspections</b> shows one
+    row per job and phase with what happened since (passed, re-inspect booked, or not re-booked) and, when the Fail was
+    tapped before the items were typed, "No correction list — ask the foreman". Four folded groups start closed with a
+    count on the header; tap to open. <b>First-pass by foreman</b>: the same first-inspection rule over the last 90
+    days, per person, counting a job for its foreman and for its lead, "3 of 4 inspected jobs passed first time" beside
+    the rate; anyone with fewer than 3 inspected jobs sits behind a second fold because that is too few to read as a
+    rate. <b>Return-trip causes</b>: open return trips grouped by where they came from (change order, QC walk, failed
+    inspection, GC request, job note), then <b>Added by hand</b> for ones typed on the Return Trips tab with a scope,
+    and <b>No reason</b> for ones with nothing written; tap a bar for the list. <b>Re-inspection booked</b>: failed
+    inspections that have a re-inspection date, soonest first by day, red when the date passed with no result.
+    <b>Punch</b> holds the three punch views in one place: open punch by age (tap a bar), punch on jobs near final (the
+    punch that blocks a final), and punch by foreman (jobs and punch per job, pink when open beats closed); the header
+    shows the total open, how many are over 30 days, serious, and on jobs near final.</p>
   </div></div>
 
   <div class="step"><div class="num">5</div><div class="body">
