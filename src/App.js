@@ -12974,13 +12974,7 @@ const StageBar = ({stages,current,color,animKey}) => {
 
   // interpolate red(0%) -> yellow(50%) -> green(100%)
 
-  const r = pct < 50 ? 220 : Math.round(220 - (pct-50)/50 * 186);
-
-  const g = pct < 50 ? Math.round(40 + (pct/50) * 175) : 215;
-
-  const b = 40;
-
-  const barColor = isScheduled ? "#C2410C" : `rgb(${r},${g},${b})`;
+  const barColor = isScheduled ? "#C2410C" : stageBarColor(pct);
 
   return (
 
@@ -31778,6 +31772,115 @@ function _isFullyDone(job) {
 
 
 
+// ── Job page top section (v587) ────────────────────────────────
+// Which stage the band reads, in the same order the Job Board files a job. The
+// inputs are the same effective statuses STAGE_SECTIONS tests.
+function jobStageBand(o) {
+  const { rs, fs, prepCleared, quote, tempPed, commLabel, roughStage, finishStage } = o;
+  if (quote) return { key: "quote", label: "Quote", pct: "" };
+  if (tempPed) return { key: "tempPed", label: "Temp Ped", pct: "" };
+  if (commLabel) return { key: "commercial", label: commLabel, pct: "" };
+  if (fs === "complete") return { key: "complete", label: "Completed", pct: "" };
+  if (fs === "inprogress") return { key: "finish", label: "Finish in progress", pct: finishStage || "0%" };
+  if (fs === "waiting") return { key: "hold", label: "Finish on hold", pct: finishStage || "0%" };
+  if (rs === "complete") return { key: "between", label: "In between", pct: "" };
+  if (rs === "inprogress") return { key: "rough", label: "Rough in progress", pct: roughStage || "0%" };
+  if (rs === "waiting") return { key: "hold", label: "Rough on hold", pct: roughStage || "0%" };
+  if (!prepCleared) return { key: "prep", label: "Pre-Job Prep", pct: "" };
+  return { key: "notStarted", label: "Rough not started", pct: "" };
+}
+
+// The six tiles under the job title. Each one opens the tab that holds it.
+function jobProgressTiles(job, prepDone) {
+  const insp = (result, attempts) => result === "pass" ? { big: "Passed", tone: "good", sub: attempts ? `${attempts} ${attempts === 1 ? "attempt" : "attempts"}` : "" }
+    : result === "fail" ? { big: "Failed", tone: "bad", sub: attempts ? `${attempts} ${attempts === 1 ? "attempt" : "attempts"}` : "" }
+    : { big: "Not yet", tone: "idle", sub: "" };
+  const prep = prepDone ? { big: "Done", tone: "good", sub: "" }
+    : (job.prepOverride && job.prepOverride.on) ? { big: "Override", tone: "warn", sub: "Started without full prep" }
+    : { big: "Open", tone: "warn", sub: "" };
+  const QC = { needs: ["To schedule", "warn"], scheduled: ["Scheduled", "info"], completed: ["Walked", "info"], pass: ["Passed", "good"], fixed: ["Fixed, pass", "good"], fail: ["Failed", "bad"] };
+  const q = QC[job.qcStatus] || (job.qcStatus ? ["Items called", "warn"] : ["Not yet", "idle"]);
+  return [
+    { key: "prep", label: "Pre-Job Prep", tab: "Job Info", ...prep },
+    { key: "rough", label: "Rough", tab: "Rough", big: job.roughStage || "0%", tone: "rough", sub: "", pct: parseInt(job.roughStage) || 0, hasBar: true },
+    { key: "roughInsp", label: "Rough inspection", tab: "Rough", ...insp(job.roughInspectionResult, (job.roughInspectionAttempts || []).length) },
+    { key: "finish", label: "Finish", tab: "Finish", big: job.finishStage || "0%", tone: "finish", sub: "", pct: parseInt(job.finishStage) || 0, hasBar: true },
+    { key: "finalInsp", label: "Final inspection", tab: "Finish", ...insp(job.finalInspectionResult, (job.finalInspectionAttempts || []).length) },
+    { key: "qc", label: "QC", tab: "QC", big: q[0], tone: q[1], sub: "" },
+  ];
+}
+
+// One red-to-green formula for every progress bar in the app.
+function stageBarColor(pct) {
+  const r = pct < 50 ? 220 : Math.round(220 - (pct - 50) / 50 * 186);
+  const g = pct < 50 ? Math.round(40 + (pct / 50) * 175) : 215;
+  return `rgb(${r},${g},40)`;
+}
+
+// The side list only appears when it leaves the tab body at least as wide as the old
+// 940px page (1180 - 24 padding - 184 list - 44 body padding = 928), so no table or
+// form gets narrower. Below that the tabs stay the row they have always been.
+const CARD_SHADOW_CSS = "0 1px 2px rgba(27,31,36,.05),0 4px 12px rgba(27,31,36,.05)";
+const JOB_SHELL_CSS = `
+.he-jd-dialog{max-width:940px}
+.he-jd-main{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;min-width:0}
+.he-jd-tabs{display:flex;gap:1px;padding:8px 22px 0;border-bottom:1px solid ${C.border};flex-shrink:0;overflow-x:auto;scrollbar-width:none;position:relative}
+.he-jd-tab{padding:6px 13px;font-size:12.5px;border-radius:8px 8px 0 0;white-space:nowrap}
+.he-jd-badge{display:none}
+.he-jd-title{font-size:23px}
+.he-jd-strip-row{display:flex;flex-wrap:wrap;gap:2px;border-radius:12px;overflow:hidden;box-shadow:${CARD_SHADOW_CSS}}
+.he-jd-cell{flex:1 1 104px;min-width:0;padding:7px 11px}
+.he-jd-cellbig{font-size:24px}
+.he-jd-strip-head{display:none}
+@media (max-width:760px){
+  .he-jd-strip-row{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .he-jd-cell{flex:0 0 112px;padding:5px 9px}
+  .he-jd-cellbig{font-size:20px}
+  .he-jd-cellsub{display:none}
+}
+.he-jd-tile:hover{filter:brightness(.97)}
+@media (min-width:1180px){
+  .he-jd-dialog{max-width:1240px}
+  .he-jd-main{flex-direction:row}
+  .he-jd-tabs{flex-direction:column;flex:0 0 184px;box-sizing:border-box;gap:2px;padding:10px 8px;overflow-x:hidden;overflow-y:auto;border-bottom:0;border-right:1px solid ${C.border};background:${C.surface}}
+  .he-jd-tabs .he-tab-ink{border-radius:7px}
+  .he-jd-tab{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px 9px;font-size:13.5px;border-radius:7px;text-align:left}
+  .he-jd-badge{display:inline-block}
+}
+@media (min-width:1180px) and (min-height:1000px){
+  .he-jd-strip-head{display:flex}
+  .he-jd-strip-body{display:none}
+}
+`;
+
+function JobProgressStrip({ job, tabs, onPick, className }) {
+  if (isCommercial(job) || job.tempPed || job.type === "quote") return null;
+  const TONE = { good: C.green, bad: C.red, warn: C.orange, info: C.blue, idle: C.slate, rough: C.rough, finish: C.finish };
+  return (
+    <div className={className}>
+      {jobProgressTiles(job, allPrepChecked(job)).map(t => {
+        const c = TONE[t.tone] || C.slate;
+        const live = tabs.includes(t.tab);
+        const Tag = live ? "button" : "div";
+        return (
+          <Tag key={t.key} className={live ? "he-jd-cell he-jd-tile" : "he-jd-cell"} {...(live ? { type:"button", onClick:()=>onPick(t.tab) } : {})}
+            style={{border:0,textAlign:"left",fontFamily:"inherit",cursor:live?"pointer":"default",
+              background:`linear-gradient(${c}14,${c}14),${C.card}`}}>
+            <span className="he-jd-cellbig" style={{display:"block",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,lineHeight:1,color:c}}>{t.big}</span>
+            <span style={{display:"block",fontSize:12.5,fontWeight:600,color:C.text,marginTop:2}}>{t.label}</span>
+            {t.hasBar && (
+              <span style={{display:"block",height:6,marginTop:4,background:C.card,borderRadius:99,overflow:"hidden"}}>
+                <span style={{display:"block",height:"100%",width:`${t.pct}%`,background:stageBarColor(t.pct),borderRadius:99}}/>
+              </span>
+            )}
+            {t.sub && <span className="he-jd-cellsub" style={{display:"block",fontSize:12,color:C.dim,marginTop:1}}>{t.sub}</span>}
+          </Tag>
+        );
+      })}
+    </div>
+  );
+}
+
 function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, onMoveBackToUpcoming, initialTab, users=[], identity=null, jobs=[], onQuickAdd=null, needs=[], onUpdateOtherJob=null, offline=false}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
@@ -33300,9 +33403,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
       onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 
-      <div role="dialog" aria-modal="true" aria-label={`Job ${job.name||""}`} onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
+      <div role="dialog" aria-modal="true" aria-label={`Job ${job.name||""}`} onClick={e=>e.stopPropagation()} className="he-jd-dialog" style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
 
-        maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
+        maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
         boxShadow:"0 40px 100px rgba(0,0,0,0.7)"}}>
 
@@ -33312,18 +33415,69 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             22→18px. Saves roughly 30-50px vertical before the body
             starts. Header is still flexShrink:0 (always visible). */}
 
-        <div style={{padding:"10px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",
+        <style>{JOB_SHELL_CSS}</style>
+        {(()=>{
+          const commSec = isCommercial(job) ? COMM_STAGE_SECTIONS.find(sec => sec.test(job)) : null;
+          const band = jobStageBand({ rs: effRS(job), fs: effFS(job), prepCleared: prepClearedToStart(job), quote: job.type==="quote", tempPed: !!job.tempPed,
+            commLabel: isCommercial(job) ? (commSec ? commSec.label : "Commercial") : "", roughStage: job.roughStage, finishStage: job.finishStage });
+          const bandColor = { rough:C.rough, finish:C.finish, between:C.purple, prep:C.teal, notStarted:C.slate, hold:C.slate, complete:C.green, quote:C.accent, tempPed:C.purple, commercial:(commSec&&commSec.color)||C.teal }[band.key] || C.slate;
+          return (
+            <div style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:"6px 10px",flexShrink:0,padding:"4px 10px 4px 16px",color:bandColor,
+              background:`linear-gradient(${bandColor}1A,${bandColor}1A),${C.card}`,borderBottom:`1px solid ${bandColor}33`}}>
+              <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",lineHeight:1.05,paddingTop:2}}>{band.label}</span>
+              {band.pct && <span style={{fontSize:13,fontWeight:700}}>{band.pct}</span>}
+              <div className="he-jd-bandbtns" style={{marginLeft:"auto",display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+            {/* v496: who else has this job open right now (job.presence, read only). */}
+            <HePresence presence={job.presence} me={identity && identity.name}/>
+            {onQuickAdd && can(identity,"tasks.create") && (
+              <button onClick={()=>onQuickAdd({job:{id:job.id,name:job.name,foreman:job.foreman||""}})} title="Add a need or task on this job"
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.accent,cursor:"pointer",padding:"5px 10px",
+                  display:"inline-flex",alignItems:"center",gap:5,fontFamily:"inherit",fontSize:13,fontWeight:700}}>
+                <Icon name="plus" size={13} stroke={2.5}/> Need
+              </button>
+            )}
+            {/* v549: the job layer covers the header's LIVE/OFFLINE chip and the
+                offline banner, so the job says it itself. */}
+            {offline && (
+              <span role="status" title="No signal. Your changes are saved on this phone and go up when signal comes back."
+                style={{display:"inline-flex",alignItems:"center",gap:5,borderRadius:99,padding:"4px 10px",fontSize:12.5,fontWeight:700,
+                  color:C.slateInk||C.slate,background:C.slateBg,border:`1px solid ${C.slateLine}`,whiteSpace:"nowrap"}}>Offline</span>
+            )}
+            <button onClick={refreshJob} title="Refresh" aria-label="Refresh job" className="he-tap-sq"
 
-          justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:10,flexWrap:"wrap"}}>
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+
+                color:C.dim,cursor:"pointer",padding:"5px 10px",display:"inline-flex",alignItems:"center",
+
+                opacity:refreshing?0.4:1}} disabled={refreshing}>
+
+              {refreshing?<Spinner size={14}/>:<Icon name="rotateCw" size={14}/>}
+
+            </button>
+
+            <button onClick={onClose} aria-label="Close job" className="he-tap-sq"
+
+              style={{minWidth:"var(--he-tap, 32px)",background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+
+                color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:14}}>✕</button>
+
+              </div>
+            </div>
+          );
+        })()}
+
+        <div style={{padding:"8px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",
+
+          justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:"6px 10px",flexWrap:"wrap"}}>
 
           <div>
 
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
+              <div className="he-jd-title" style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,color:C.text,lineHeight:1.05}}>
 
                 {job.type==="quote"&&<span style={{fontSize:13,color:"#fff",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
 
-                {job.simproNo&&<span style={{fontSize:14,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
+                {job.simproNo&&<span style={{fontSize:16,color:C.slateInk,background:C.slateBg,borderRadius:5,padding:"0 6px",fontWeight:700,marginRight:8}}>#{job.simproNo}</span>}
 
                 {job.name||"New Job"}
 
@@ -33430,8 +33584,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
 
-            {/* v496: who else has this job open right now (job.presence, read only). */}
-            <HePresence presence={job.presence} me={identity && identity.name}/>
             {/* QC FAIL — loud pill so the status can't be missed at a glance. */}
             {/* Stays red until qcStatus moves off "fail" (e.g. back to "fixed" */}
             {/* or "pass"). Return trip is now a confirm choice (Task 6), not  */}
@@ -33533,65 +33685,44 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </button>
             )}
 
-            {onQuickAdd && can(identity,"tasks.create") && (
-              <button onClick={()=>onQuickAdd({job:{id:job.id,name:job.name,foreman:job.foreman||""}})} title="Add a need or task on this job"
-                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.accent,cursor:"pointer",padding:"5px 10px",
-                  display:"inline-flex",alignItems:"center",gap:5,fontFamily:"inherit",fontSize:13,fontWeight:700}}>
-                <Icon name="plus" size={13} stroke={2.5}/> Need
-              </button>
-            )}
-            {/* v549: the job layer covers the header's LIVE/OFFLINE chip and the
-                offline banner, so the job says it itself. */}
-            {offline && (
-              <span role="status" title="No signal. Your changes are saved on this phone and go up when signal comes back."
-                style={{display:"inline-flex",alignItems:"center",gap:5,borderRadius:99,padding:"4px 10px",fontSize:12.5,fontWeight:700,
-                  color:C.slateInk||C.slate,background:C.slateBg,border:`1px solid ${C.slateLine}`,whiteSpace:"nowrap"}}>Offline</span>
-            )}
-            <button onClick={refreshJob} title="Refresh" aria-label="Refresh job" className="he-tap-sq"
-
-              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-
-                color:C.dim,cursor:"pointer",padding:"5px 10px",display:"inline-flex",alignItems:"center",
-
-                opacity:refreshing?0.4:1}} disabled={refreshing}>
-
-              {refreshing?<Spinner size={14}/>:<Icon name="rotateCw" size={14}/>}
-
-            </button>
-
-            <button onClick={onClose} aria-label="Close job" className="he-tap-sq"
-
-              style={{minWidth:"var(--he-tap, 32px)",background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-
-                color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:14}}>✕</button>
-
           </div>
 
         </div>
 
         {job.projectGroupId && pctx && <ProjectCrumb job={job} ctx={pctx}/>}
 
+        <div className="he-jd-strip-head" style={{flexShrink:0,padding:"8px 18px"}}>
+          <div style={{flex:1,minWidth:0}}><JobProgressStrip job={job} tabs={tabsForJob(job, tab)} onPick={setTab} className="he-jd-strip-row"/></div>
+        </div>
+
+        <div className="he-jd-main">
+
         {/* Tabs */}
 
-        <div ref={_tabsRef} style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
-
-          flexShrink:0,overflowX:"auto",scrollbarWidth:"none",position:"relative"}}>
+        <div ref={_tabsRef} className="he-jd-tabs">
 
           <HeTabInk ink={_ink} color={C.accent}/>
 
           {tabsForJob(job, tab).map(t=>(
 
-            <button key={t} data-hetab={t} onClick={()=>setTab(t)} className="he-tap"
+            <button key={t} data-hetab={t} onClick={()=>setTab(t)} className="he-tap he-jd-tab"
 
               style={{background:tab===t&&!_ink?C.accent:"none",color:tab===t?"#fff":C.dim,
 
-                border:"none",borderRadius:"8px 8px 0 0",padding:"6px 13px",fontSize:12.5,
+                border:"none",
 
                 fontWeight:tab===t?700:400,cursor:"pointer",fontFamily:"inherit",
 
-                whiteSpace:"nowrap",transition:"all 0.15s",position:"relative",zIndex:1}}>
+                transition:"all 0.15s",position:"relative",zIndex:1}}>
 
-              {t}
+              <span>{t}</span>
+              {(()=>{
+                // Side list only (.he-jd-badge): the tab row on a phone stays exactly as wide as it was.
+                const rtOpen = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
+                const b = t==="Rough" ? (job.roughStage||"") : t==="Finish" ? (job.finishStage||"") : t==="Questions" ? (openQ||"") : t==="Change Orders" ? (pendingCOs||"") : t==="Return Trips" ? (rtOpen||"") : (t==="QC"&&job.qcStatus==="fail") ? "Fail" : "";
+                return b ? <span className="he-jd-badge" style={{flex:"none",marginLeft:"auto",fontSize:12,fontWeight:700,padding:"0 6px",lineHeight:"18px",borderRadius:99,
+                  background:tab===t?C.card:C.slateBg,color:tab===t?C.accent:(t==="QC"?C.red:C.slateInk)}}>{b}</span> : null;
+              })()}
               {t==="Questions"&&qNewCount>0&&(
                 <span style={{marginLeft:5,fontSize:11,fontWeight:800,background:'#1F7A3F',color:'#fff',borderRadius:99,padding:'1px 6px',verticalAlign:'middle',letterSpacing:'0.03em'}}>{qNewCount} NEW</span>
               )}
@@ -33611,7 +33742,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         {/* v512: no touchAction:"pan-y" here — on iPhone it also blocked sideways
             scrolling of every wide table inside the job (appliance loads, panel
             schedules, …). useHeTabSwipe now steps aside on its own instead. */}
-        <div ref={_bodyRef} style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+        <div ref={_bodyRef} style={{flex:1,minWidth:0,minHeight:0,overflowY:"auto",padding:"14px 22px 20px"}}>
+
+          <div className="he-jd-strip-body" style={{marginBottom:12}}>
+            <JobProgressStrip job={job} tabs={tabsForJob(job, tab)} onPick={setTab} className="he-jd-strip-row"/>
+          </div>
 
           {/* Up Next panel — moved inside the body 2026-05-25 so it
               scrolls with content instead of being pinned above the
@@ -36902,6 +37037,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             </div>
 
           )}
+
+        </div>
 
         </div>
 
@@ -42138,16 +42275,16 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                 const summary = narrow ? "" : dayJobs.length === 0 ? "Nothing scheduled"
                   : `${dayJobs.length} ${dayJobs.length === 1 ? "job" : "jobs"}, ${people} ${people === 1 ? "person" : "people"}`;
                 return (
-                  <div key={ymd} style={{minWidth:0,background:isToday?C.steelBg:"transparent",borderRadius:12,padding:6}}>
+                  <div key={ymd} style={{minWidth:0,background:isToday?C.steelBg:"transparent",borderRadius:10,padding:4}}>
                     {/* Day header */}
-                    <div style={{display:"flex",flexWrap:"wrap",alignItems:"baseline",gap:"2px 7px",padding:"7px 10px",marginBottom:7,borderRadius:8,
+                    <div style={{display:"flex",flexWrap:"wrap",alignItems:"baseline",gap:"0 6px",padding:"3px 8px",marginBottom:4,borderRadius:7,
                       background:isToday?C.accent:"transparent",color:isToday?"#fff":C.text}}>
-                      <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:21,lineHeight:1.05}}>{fmtWeekday(d)}</span>
+                      <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:18,lineHeight:1.1}}>{fmtWeekday(d)}</span>
                       <span style={{fontSize:12,fontWeight:600}}>{fmtDate(d)}</span>
                       {summary && <span style={{marginLeft:"auto",fontSize:12,color:isToday?"#fff":C.dim}}>{summary}</span>}
                     </div>
-                    {/* Job blocks */}
-                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                    {/* Job blocks: a wide day column fits two cards across instead of stretching one */}
+                    <div style={{columns:"230px",columnGap:4}}>
                       {dayJobs.map(g => {
                         const appJob   = jobBySimproNo[g.projectId];
                         const jobNo    = appJob?.simproNo ? `#${appJob.simproNo}` : "";
@@ -42170,20 +42307,20 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                           <button key={g.projectId} type="button" className="he-lift" disabled={!appJob}
                             data-hekey={"crew_"+g.projectId} data-heflash={"crew_"+g.projectId}
                             onClick={()=>{ if(appJob) onSelectJob(appJob); }}
-                            style={{display:"block",width:"100%",padding:0,textAlign:"left",fontFamily:"inherit",color:C.text,
-                              background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",
-                              cursor:appJob?"pointer":"default",boxShadow:CARD_SHADOW}}>
-                            <span style={{display:"flex",height:5,gap:1}}>
+                            style={{display:"block",width:"100%",padding:0,marginBottom:4,breakInside:"avoid",textAlign:"left",fontFamily:"inherit",color:C.text,
+                              background:C.card,border:`1px solid ${C.border}`,borderRadius:7,overflow:"hidden",
+                              cursor:appJob?"pointer":"default",boxShadow:"0 1px 2px rgba(27,31,36,.06)"}}>
+                            <span style={{display:"flex",height:3,gap:1}}>
                               {Object.entries(crewCounts).map(([c,n]) => <span key={c} style={{flex:`${n} 1 0`,background:c}}/>)}
                             </span>
-                            <span style={{display:"block",padding:"9px 11px 11px"}}>
-                              <span style={{display:"flex",alignItems:"flex-start",gap:7,marginBottom:appJob?8:4}}>
-                                {jobNo && <span style={{flex:"none",background:C.slateBg,color:C.slateInk,borderRadius:5,padding:"1px 6px",
-                                  fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:14.5,lineHeight:1.35}}>{jobNo}</span>}
-                                <span style={{minWidth:0,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:18.5,lineHeight:1.16}}>{jobName}</span>
+                            <span style={{display:"block",padding:"3px 7px 4px"}}>
+                              <span style={{display:"flex",flexWrap:"wrap",alignItems:"baseline",gap:"0 5px",marginBottom:1}}>
+                                {jobNo && <span style={{flex:"none",background:C.slateBg,color:C.slateInk,borderRadius:4,padding:"0 4px",
+                                  fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:12.5,lineHeight:1.2}}>{jobNo}</span>}
+                                <span style={{minWidth:0,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:14.5,lineHeight:1.12}}>{jobName}</span>
+                                {!appJob && <span style={{fontSize:11,color:C.faint}}>No job card on this board</span>}
                               </span>
-                              {!appJob && <span style={{display:"block",marginBottom:8,fontSize:12,color:C.faint}}>No job card on this board</span>}
-                              <span style={{display:"flex",flexDirection:"column",gap:7}}>
+                              <span style={{display:"flex",flexDirection:"column"}}>
                                 {sortedEntries.map(e => {
                                   const fullName  = e.Staff?.Name || "";
                                   const parts     = fullName.split(" ");
@@ -42195,20 +42332,18 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                                   const eEnd      = fmtTime(rawEnd);
                                   const bar       = schedHourBar(rawStart, rawEnd);
                                   return shortName ? (
-                                    <span key={fullName} style={{display:"block"}}>
-                                      <span style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
-                                        <span style={{fontSize:13,fontWeight:700,color:nameColor,whiteSpace:"nowrap"}}>{shortName}</span>
-                                        {(eStart||eEnd) && (
-                                          <span style={{fontSize:12,color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
-                                            {eStart}{eEnd?`–${eEnd}`:""}
-                                          </span>
-                                        )}
-                                      </span>
-                                      {bar && (
-                                        <span style={{display:"block",position:"relative",height:5,marginTop:3,background:C.bg,borderRadius:3,overflow:"hidden"}}>
+                                    <span key={fullName} style={{display:"flex",alignItems:"center",gap:6,lineHeight:1.22}}>
+                                      <span style={{flex:"none",minWidth:64,fontSize:11.5,fontWeight:700,color:nameColor,whiteSpace:"nowrap"}}>{shortName}</span>
+                                      <span style={{flex:"1 1 0",minWidth:0,position:"relative",height:4,background:bar?C.bg:"transparent",borderRadius:2,overflow:"hidden"}}>
+                                        {bar && <>
                                           {/* noon */}
                                           <span style={{position:"absolute",top:0,bottom:0,left:"43.75%",width:1,background:C.muted}}/>
-                                          <span style={{position:"absolute",top:0,bottom:0,left:`${bar.left}%`,width:`${bar.width}%`,background:nameColor,borderRadius:3}}/>
+                                          <span style={{position:"absolute",top:0,bottom:0,left:`${bar.left}%`,width:`${bar.width}%`,background:nameColor,borderRadius:2}}/>
+                                        </>}
+                                      </span>
+                                      {(eStart||eEnd) && (
+                                        <span style={{flex:"none",fontSize:11,color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
+                                          {eStart}{eEnd?`–${eEnd}`:""}
                                         </span>
                                       )}
                                     </span>
@@ -61649,10 +61784,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v585
+**Last manifest update:** 2026-10-30 · App SW version: v587
 
 ---
 
+- **Job page, step one: new top of the page and a side list of tabs; everything inside the tabs is unchanged** · 'shipped 2026-10-30' · 'SW v587' · 'JobDetail' · 'jobStageBand' · 'jobProgressTiles' · 'JobProgressStrip' · 'stageBarColor' · 'JOB_SHELL_CSS' · Koy: *"inside of the job cards needs a redesign because we've redesigned the boxes on the homepage and the quick jobs card, so it doesn't really match."* Then, on the first mockup: *"i dont want anything removed or harder to do."* Approved from mockup artifact Eee8C6D9ZkQjLR6JEJLMEc. **Top of the page:** a colored band names the job's stage (same order the Job Board files a job; quotes, temp peds and Commercial read their own), with presence, + Need, Offline, Refresh and Close on it. Below it the title, margin and labor pills, address and GC, schedule pill, status update and access note, and the same action pills and Convert or Back to Upcoming buttons beside them, all the same controls. **Progress strip:** Pre-Job Prep, Rough with its bar, Rough inspection, Finish with its bar, Final inspection, QC; each tile opens the tab that holds it. It reads only, and the Rough and Finish stage dropdowns stay in their tabs. Fixed at the top only when the window is at least 1180 by 1000; otherwise it sits at the top of the tab body and scrolls away, as a slim sideways row on a phone, so the tab body keeps its room. Hidden on quotes, temp peds and Commercial jobs, which don't have those stages. **Tabs:** all of them in today's order. From 1180px wide they become a side list with small counts; that width is chosen so the tab body is never narrower than the old 940px page. Below it they stay the top row they have always been, with no added width. Up Next stays off: it was retired from the job page on 2026-06-05, and the mockup's Up Next box was my mistake. 'StageBar' and the strip share one color formula. Gate: 'scripts/needs-dryrun.js' (+14 checks). No guide change: no guide describes the header or tab row. **Why it won't lose data:** layout only. Every write in the header still runs through the same handlers ('u', 'onQuickAdd', 'onConvertQuote', 'onMoveBackToUpcoming', 'refreshJob'), the strip writes nothing, and no tab body, loader, rules or function changed.
+- **Crew Schedule cards made compact** · 'shipped 2026-10-30' · 'SW v587' · 'SimproCrewSchedule' · Koy, on v585: *"the schedule cards under crew schedule are very big can we shrink thos so they dont take as much room,"* then *"Make them smaller."* Each person is now one line: name, hour bar, times, instead of a line of text with the bar under it. On a wide monitor a day column fits two cards across instead of stretching one. Smaller job names, tighter padding, a thinner crew strip, smaller gaps between cards and a slimmer day header. Nothing was removed: full job names (they still wrap when the column is narrow), crew strip, times and hour bars all stay. Measured with this week's schedule: 1,466 to 424 px tall at 3440 wide, 1,658 to 785 px at 1440. Built as v586 and shipped inside v587. **Why it won't lose data:** styling only; the component has no write path and reads the same Simpro list.
 - **Job Board boxes redesigned; the Pipeline row now counts the same way as the job list** · 'shipped 2026-10-30' · 'SW v585' · 'PipelineStrip' · 'pipelineTiles' · 'schedHourBar' · 'SimproCrewSchedule' · Koy: *"im really starting to hate how these boxes look."* Approved from a clickable mockup (artifact 75SiytEiomLZSQACFxvGMb). **Crew Schedule:** the fixed 160px day columns are gone, so the weekdays share the screen width and an empty Sat or Sun shrinks to a sliver; on a phone the week still scrolls sideways. Each job card shows the full name beside a # chip, a strip across the top with one color band per crew on the job (sized by headcount), and a small hour bar (5a to 9p, with a noon tick) under each person's times. Each day header adds "N jobs, N people". A Simpro entry with no matching job card says "No job card on this board" and cannot be tapped. The Today column no longer moves to tomorrow after 6 PM Mountain. **Pipeline:** Total, one connected strip of stages, and Completed, with big condensed numbers. **The numbers changed on purpose:** the row read the percent fields while ALL JOBS read status, so the same screen disagreed (Completed 37 vs 89, Pre Job Prep 45 vs 6, and the stages added to 137 of 134). 'pipelineTiles' now runs ALL JOBS' own section tests, so the two match; Quick Jobs and Temp Peds each fold into one tile and hide at zero, and Rough and Finish include their On Hold jobs. The foreman page's row uses the same component, and Commercial mode uses its own stages the same way. Jobs inside a Project count in their stage tile though the list files them under Projects. **Crews:** every card, Unassigned included, has the same shape: tinted header, big job count, two progress bars, and a footer action. Rough and Finish percents are unchanged. Gate: 'scripts/needs-dryrun.js' (+15 checks). No guide change: the Job Board has no "?" guide. **Why it won't lose data:** display only. The row, cards and schedule read jobs already loaded and the same Simpro list; no Firestore write, loader, rules or function changed.
 - **Quick jobs redesigned: "Needs to be scheduled" replaces "New," the card shows the scope and one next-step button, and the opened job reads like a page** · 'shipped 2026-10-30' · 'SW v584' · 'QuickJobCard' · 'QuickJobDetail' · 'QuickJobBand' · 'QuickJobSchedulePanel' · 'QuickJobCompletePanel' · 'QuickJobMenu' · 'qjStage' · 'qjBand' · 'qjSchedulePatch' · 'scripts/quickjob-test.js' · Koy: *"there's no option for needs to be scheduled... the whole card needs a redesign so it's more usable."* Then, of the opened job: *"what about the actual card itself when its opened."* Approved off the clickable mockup (artifact KJCxcV3kxLeKZbEGNMecfd), built from the 20 live quick jobs. **The label:** status 'new' now reads "Needs to be scheduled" on the card, the Job Board section, Forecast, Today and the dashboard. The saved value stays 'new', so no job changes and phones on an older version keep working. **The card:** a colored band says where the job is (orange Needs to be scheduled with days waiting, Scheduled date, solid blue Today, red when late, In progress with due date, Ready to invoice). It shows the scope, address and customer, who's on it (a foreman of "Unassigned" no longer leads; "No one assigned" when nobody is), the access note, Call and Directions, and one button for the next step. Delete and the status note move into a ⋯ menu, and the double delete confirm is gone. Finished, invoiced jobs shrink to one line, which also ends the "Ready to Invoice" + "Invoice Sent" contradiction on 12 jobs. Needs to be scheduled sorts oldest first, Scheduled and In Progress soonest first. **The opened job:** read first, with Edit per section, in the order stage, when and who, scope, getting there. Material, Notes, Photos and Job details start folded with previews and counts. The next-step button is pinned to the bottom. A stage track replaces the five status buttons, which removes the path that marked a job Complete with no sign-off. Completed by starts with whoever is signed in. Photos are larger and Delete moves into the full-size view. **Skipping ahead stays:** the ⋯ menu has "Start now without a date" and "Already done: mark complete," because #1399, #1388 and #1370 were finished without ever getting a date. **Data:** existing fields only; stage changes write the same fields as the old buttons, every one can be undone from the Undo bar, and the contractor's view stays look-only.
 - **Goals Phase 2 + Job Costs early warning (dashboard audit, Goals and Job Costs tabs)** · 'shipped 2026-10-30' · 'SW v583' · 'goalsNightly' · 'sendTestGoalsPull' · 'functions/goalsPull.js pullPhase2' · 'odGoalWarranty' · 'odGoalCoHours' · 'odGoalStoreRuns' · 'odGoalHoursWeekly' · 'odCostsRoughOverruns' · 'odCostsOwners' · 'odCostsCoHours' · Koy approved the tab-by-tab audit 2026-10-30 ("Let's build them"). **Goals:** the four 2027-scoreboard cards v562 left grey get real numbers from the nightly Simpro pull, written under ONE new key 'settings/goalsSimpro.phase2' so the Phase 1 numbers stay byte-identical: **Warranty hours** = labor hours on cost centers whose company cost center is Residential (Warranty), on the same jobs as the margin card, ÷ every actual hour on those jobs (live 10/30: 2.2%, 1,206 h of 53,811 h, 51 jobs; goal under 2%); **Change orders with hours booked to their own cost center** = of the CO cost centers sold with hours ("… - Change Order (Rough In / Finish)"), how many have hours booked (live: 33 of 393, 698 h of 2,069 h sold — a CO section put on the Rough In cost center does not count, that is the habit); **Home Depot / ACE runs** = Simpro purchase orders to Home Depot or ACE Hardware by date issued, headline the last 8 full weeks (live 4.1 a week; 171 this year; the app's Get-a-PO-number runs make one of these, so the app count is a sub-line, never added); **Hours tracked weekly** = of the last 8 Mon–Sun weeks, how many had every active crew member (Settings › Team, not contractors) with job hours on their Simpro timesheet (live 0 of 8: 14 of 18 logged all 8, a new hire missed 6; people with no job hours in any week are named, not counted). Probed read-only first: the company-wide '/jobCostCenters/' list (no totals, no cost-center filter) is read once and only warranty / CO sections on this year's jobs are read for totals; '/employees/{id}/timesheets/?StartDate&EndDate' comes back unpaged; '/vendorOrders/?Vendor.ID=' filters. The whole Phase 2 is ~300 calls / 80 s on top of Phase 1's 23 s; it never fails the run (a thrown Phase 2 carries the previous doc's phase2 forward, marked, or leaves the key off). Each card's pill says **No Phase 2 pull yet** until the function is deployed; **How it is counted** on each. The 8 proposed goals are NOT added (Koy: leave off for now). **Job Costs:** a folded early-warning section at the top, **Open jobs already past rough hours** (count on the header): open jobs whose rough hours used are past the rough estimate from every cost center, top five by hours over with **Show all** behind, each naming the foreman and lead by the dashboard's own rule (d.owns), tap for the cost centers; the **Untagged est** column is gone from the job table; the **What-if** bar is a folded section (the Count switches still drive it); on Hours, a **CO hrs, own CC** column per job from the same pull (0 = CO cost centers with nothing booked, – = none), hidden until the pull has run. Hero numbers, People | Crew grouping and the chart unchanged. Tests: 'scripts/goals-pull-test.js' (+Phase 2: cost-center kinds, hours, week ranges, crew matching, weekly, store runs, the whole injected-I/O pull against a fake Simpro) and new 'scripts/goals-costs-audit-test.js' (pending cards, bands, sheet-name matching, overruns, owners, CO column), both in prebuild. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/goals.html', 'costs.html'. Guide 'dashboard.html' Goals + Job Costs. Crew brief 'docs/crew-briefs/v583.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull --project homestead-electric'** (Koy); the first real Phase 2 numbers land on that deploy's next 5:40 AM run or a Pull from Simpro now. **Why it won't lose data:** read-only against Simpro, the jobs and 'material_po_log'; the only write is the function's own 'settings/goalsSimpro' doc, which gains one key; no job write, no loader or rules change; the dashboard only reads.

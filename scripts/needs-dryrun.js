@@ -69,7 +69,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
-  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter","pipelineTiles","schedHourBar",
+  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter","pipelineTiles","schedHourBar","jobStageBand","jobProgressTiles","stageBarColor",
   "homeRunsPanelRows","homeRunsPanelList","homeRunsCsv","homeRunsText",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronRejects","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -691,6 +691,26 @@ eq(H.schedHourBar("13:00","13:01").width, 1.5, "a very short stop stays visible"
 eq(H.schedHourBar("04:00","06:00"), {left:0,width:6.25}, "clips to 5a");
 eq(H.schedHourBar("", "17:00"), null, "no start time, no bar");
 eq(H.schedHourBar("17:00","08:00"), null, "end before start, no bar");
+// v587 job page band: same order the Job Board files a job
+const jb = (o) => H.jobStageBand(Object.assign({ rs:"", fs:"", prepCleared:true, quote:false, tempPed:false, commLabel:"", roughStage:"", finishStage:"" }, o));
+eq([jb({ quote:true, rs:"inprogress" }).key, jb({ tempPed:true }).label, jb({ commLabel:"Pre-Con", rs:"inprogress" }).label], ["quote","Temp Ped","Pre-Con"], "quote, temp ped and commercial win over the residential stages");
+eq(jb({ rs:"inprogress", roughStage:"85%" }), { key:"rough", label:"Rough in progress", pct:"85%" }, "rough in progress shows its percent");
+eq(jb({ rs:"complete", fs:"inprogress", finishStage:"50%" }), { key:"finish", label:"Finish in progress", pct:"50%" }, "finish in progress beats a complete rough");
+eq(jb({ rs:"complete", fs:"scheduled" }).label, "In between", "rough done and finish not started reads In between");
+eq([jb({ rs:"waiting" }).label, jb({ rs:"complete", fs:"waiting" }).label], ["Rough on hold","Finish on hold"], "holds name their phase");
+eq(jb({ rs:"complete", fs:"complete" }).label, "Completed", "finish complete reads Completed");
+eq([jb({ prepCleared:false }).label, jb({ prepCleared:true, rs:"scheduled" }).label], ["Pre-Job Prep","Rough not started"], "prep open, then not started");
+eq(jb({ prepCleared:false, rs:"inprogress" }).label, "Rough in progress", "work already started outranks open prep");
+// v587 job page progress tiles
+const jt = (job, done) => Object.fromEntries(H.jobProgressTiles(job, done).map(t => [t.key, t]));
+const tA = jt({ roughStage:"85%", roughInspectionResult:"pass", roughInspectionAttempts:[1,2,3], qcStatus:"fail" }, true);
+eq(H.jobProgressTiles({}, false).map(t => t.tab), ["Job Info","Rough","Rough","Finish","Finish","QC"], "each tile opens the tab that holds it");
+eq([tA.prep.big, tA.rough.big, tA.rough.pct, tA.rough.hasBar, tA.roughInsp.big, tA.roughInsp.sub, tA.finish.big, tA.finish.pct, tA.finalInsp.big, tA.qc.big], ["Done","85%",85,true,"Passed","3 attempts","0%",0,"Not yet","Failed"], "real values reach the tiles");
+eq([jt({}, false).prep.big, jt({ prepOverride:{ on:true } }, false).prep.big], ["Open","Override"], "open prep and the override read differently");
+eq(jt({ roughInspectionResult:"fail", roughInspectionAttempts:[1] }, true).roughInsp.sub, "1 attempt", "one attempt reads singular");
+eq(jt({ qcStatus:"someNewValue" }, true).qc.big, "Items called", "a QC status the strip doesn't know still shows, not Not yet");
+// v587 one formula for every progress bar, same numbers StageBar always drew
+eq([H.stageBarColor(0), H.stageBarColor(50), H.stageBarColor(100)], ["rgb(220,40,40)","rgb(220,215,40)","rgb(34,215,40)"], "red to green scale unchanged");
 
 // ── v561 — Home Runs export by panel (Gary: "home runs in each panel") ──
 const hrFix = {
