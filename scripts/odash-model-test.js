@@ -73,7 +73,7 @@ const parts = [
   cst("C"), cst("ROUGH_STATUSES"), cst("QC_STATUSES"), cst("getStatusDef"), cst("parseStage"), cst("getAccess"),
   fn("sameName"), fn("localYmd"), cst("parseAnyDate"), cst("effRS"), cst("effFS"), cst("sbv2WalkPunch"), cst("SBV2_EXCLUDE_NAME"),
   cst("commOf"), cst("commPhase"), cst("coIsConverted"), fn("matterportScanNeeded"), fn("qcWalkRows"), fn("qcBucketOf"),
-  fn("isSnoozed"), fn("needIsOpen"), fn("needAssignee"), fn("needPriority"),
+  fn("isSnoozed"), fn("needIsOpen"), fn("needAssignee"), fn("needPriority"), cst("effectiveShareIds"), cst("computeEffectiveSharedIds"),
   src.slice(a, b),
   cst("canOpenDash"),
 ];
@@ -89,7 +89,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odPlannerMonday, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odPlannerMonday, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };

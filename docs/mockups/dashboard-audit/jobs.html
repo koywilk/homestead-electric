@@ -1,0 +1,724 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Jobs tab mockup (v580, live data)</title><style>
+:root{--page:#F7F4EE;--card:#FFFFFF;--ink:#292119;--dim:#6B5F52;--line:#E7E0D4;--inset:#F2EDE4;--a:#8E6336;--r:#C43B3B;--o:#B4531A;--g:#18804A;--grey:#6B7487;--cyan:#127A90;--slate:#5B6B84}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:13px/1.4 -apple-system,Inter,Segoe UI,Helvetica,Arial,sans-serif;padding:24px}
+h1{font-size:22px;margin:0 0 2px}.sub{color:var(--dim);margin:0 0 14px}.note{background:var(--inset);border-radius:10px;padding:10px 14px;margin:0 0 14px;color:var(--dim);font-size:12.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}.chips span{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700;background:var(--card)}.chips span i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px}
+.tbl{min-width:900px}.tr{display:grid;grid-template-columns:minmax(180px,2fr) 1fr 1.2fr .9fr 1.1fr 56px 1.1fr 1fr;gap:8px;align-items:center;padding:9px 4px;border-bottom:1px solid var(--line);font-size:12.5px}
+.hd{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}.hd .on{color:var(--a)}
+.c{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.c small{display:block;color:var(--dim);font-size:11.5px}.c b{display:block;overflow:hidden;text-overflow:ellipsis}
+.pill{display:inline-block;font-style:normal;font-weight:700;font-size:11.5px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--c) 14%,white);color:var(--c)}
+.grp{background:var(--inset);border-radius:10px;border-bottom:0;margin:6px 0 2px;font-weight:700}.grp small{font-weight:400}
+.num{font-weight:700;font-variant-numeric:tabular-nums}.wait b{color:var(--r)}.wait.us b{color:var(--ink)}.wait.insp b{color:var(--o)}
+.sec{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:14px 0 6px}
+.minis{display:grid;grid-template-columns:repeat(2,minmax(200px,280px));gap:10px;margin-bottom:14px}.mini{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}.mini .t{font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}.mini .v{font-size:28px;font-weight:800;margin-top:4px}.mini .v small{display:block;font-size:12px;font-weight:400;color:var(--dim)}
+.fold{width:100%;text-align:left;background:var(--inset);border:0;border-radius:10px;padding:10px 12px;font:inherit;font-weight:700;color:var(--ink);display:flex;justify-content:space-between;margin:6px 0 2px;cursor:pointer}.fold small{font-weight:400;color:var(--dim)}.fold .cnt{background:var(--a);color:#fff;border-radius:999px;padding:1px 9px;font-size:12px}
+.rows{padding:2px 4px}.row{display:grid;grid-template-columns:28px 1fr auto;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--line)}.row .k{width:28px;height:28px;border-radius:8px;background:color-mix(in srgb,var(--c) 16%,white);color:var(--c);display:grid;place-items:center;font-weight:800;font-size:12px}.row .m b{display:block}.row .m small{color:var(--dim)}.row .m em{font-style:normal;font-weight:800;font-size:11px;margin-left:6px;color:var(--r)}.row .t{color:var(--dim);font-size:12px;white-space:nowrap}
+details{margin:4px 0}summary{list-style:none}summary::-webkit-details-marker{display:none}
+</style></head><body>
+<h1>Jobs</h1><p class="sub">50 active jobs · tap a column to sort, a row to open the job · mockup from a live read-only pull 2026-10-30 19:42</p>
+<div class="note">Audit v580: the <b>Punch</b> column and the right-rail <b>Where the work is</b> bars are gone. Two new sortable columns: <b>Days in stage</b> (from the date the job records for entering it; blank where it records none: 24 of 50 jobs have one) and <b>Waiting on</b> (GC 9 · Inspection 10 · Us 8 · nothing waiting 27). Crew folds start closed in the app; opened here so every row shows.</div>
+<div class="chips"><span style="--c:#8E6336"><i></i>Finish in progress 11</span><span style="--c:#127A90"><i></i>Rough done, finish next 16</span><span style="--c:#B4531A"><i></i>Rough in progress 8</span><span style="--c:#5B6B84"><i></i>Rough on hold 1</span><span style="--c:#6B7487"><i></i>Rough not started 1</span><span style="--c:#7A8394"><i></i>No status set 5</span><span style="--c:#B4531A"><i></i>In progress 2</span><span style="--c:#6A4FC8"><i></i>Quick job 1</span></div>
+<div class="card"><div class="tbl"><div class="tr hd"><span>Job</span><span>Foreman · Lead</span><span>Where it is</span><span class="on">Days in stage ↓</span><span>Waiting on</span><span>COs</span><span>Next date</span><span>Last work</span></div><details open><summary><div class="tr grp"><span class="c"><b>Colby's crew</b></span><span class="c">15 jobs</span><span></span><span></span><span class="c">7 waiting</span><span></span><span></span><span class="c">Hide</span></div></summary><div class="tr"><span class="c"><b>Stratton Residence</b><small>#959 · 936 East Ostler Court, Alpine</small></span>
+  <span class="c">Colby Fogh<small>lead Jonathan</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">302 d<small>start 1/1</small></span>
+  <span class="c wait us"><b>Us</b><small>6 questions to answer</small></span>
+  <span class="c num">3</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Austin Cloward Residence</b><small>#1187 · 1068 N 390 E, American Fork</small></span>
+  <span class="c">Colby Fogh<small>lead Braden</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>95%</small></span>
+  <span class="c num">109 d<small>start 7/13</small></span>
+  <span class="c wait gc"><b>GC · Inspection</b><small>1 question out to the</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">3 d ago</span></div><div class="tr"><span class="c"><b>Chapman Residence</b><small>#1316 · 1925 East Pioneer Road, Draper</small></span>
+  <span class="c">Colby Fogh<small>lead Abraham</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">100 d<small>rough passed 7/22</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">29 d ago</span></div><div class="tr"><span class="c"><b>Hightower Remodel</b><small>#1421 · 11669 North Highland Fields Drive, American Fork, UT, 84003</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 8/13, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">78 d<small>start 8/13</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">15 d ago</span></div><div class="tr"><span class="c"><b>Stacy Remodel</b><small>#1425 · 155 W 200 N Midway</small></span>
+  <span class="c">Colby Fogh<small>lead Jacob</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">72 d<small>start 8/19</small></span>
+  <span class="c wait insp"><b>Inspection · Us</b><small>Rough 8/20, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">31 d ago</span></div><div class="tr"><span class="c"><b>The Hideout</b><small>#1302 · 11002 North Golden Eagle Road, Kamas, UT, 84036</small></span>
+  <span class="c">Colby Fogh<small>lead Abraham</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>95%</small></span>
+  <span class="c num">66 d<small>start 8/25</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to the</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Pierce Residence</b><small>#1277 · 4535 North Old Ranch Road, Park City, UT, 84098</small></span>
+  <span class="c">Colby Fogh<small>lead Jacob</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>70%</small></span>
+  <span class="c num">53 d<small>start 9/7</small></span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 10/13, no result logged</small></span>
+  <span class="c num">4</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Murphy Remodel</b><small>#1320 · 10817 South Summerland Cove, South Jordan, UT, 84095</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">52 d<small>rough passed 9/8</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">29 d ago</span></div><div class="tr"><span class="c"><b>Fuller Residence</b><small>#1099 · 253 North 835 East, Lindon</small></span>
+  <span class="c">Colby Fogh<small>lead Braden</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>D32 Payne</b><small>#535 · 3158 N Wasatch Peaks Rd, Morgan, UT 84050</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 10/28, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Micek Residence</b><small>#1321</small></span>
+  <span class="c">Colby Fogh<small>lead Braden</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 6/24, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">122 d ago</span></div><div class="tr"><span class="c"><b>Shaikh Residence - Kamas</b><small>#1383 · 11402 North White Tail Court</small></span>
+  <span class="c">Colby Fogh<small>lead Jacob</small></span>
+  <span class="c"><em class="pill" style="--c:#5B6B84">Rough on hold</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">24 d ago</span></div><div class="tr"><span class="c"><b>Tuhaye Hollow</b><small>#1393 · 3727 East Tuhaye Hollow, Kamas </small></span>
+  <span class="c">Colby Fogh<small>lead Treycen</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 7/10, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">10 d ago</span></div><div class="tr"><span class="c"><b>Tolbert Residence - Wasatch County</b><small>#1407 · Tolbert Residence</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 7/31, no result logged</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">12 d ago</span></div><div class="tr"><span class="c"><b>LaPiana MotoGarage</b><small>8883 North Promontory Ridge Drive Park City</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">78 d ago</span></div></details><details open><summary><div class="tr grp"><span class="c"><b>Keegan's crew</b></span><span class="c">13 jobs</span><span></span><span></span><span class="c">7 waiting</span><span></span><span></span><span class="c">Hide</span></div></summary><div class="tr"><span class="c"><b>Jimenez Residence</b><small>#1224 · 1613 North Dean Court, Alpine, UT, 84004</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 1/1</small></span>
+  <span class="c num">196 d<small>rough passed 4/17</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">1/1 <small>Finish start</small></span>
+  <span class="c">72 d ago</span></div><div class="tr"><span class="c"><b>Forth Residence</b><small>#998 · 2454 Monitor Drive, Park City UT 84060</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 12/1</small></span>
+  <span class="c num">179 d<small>rough passed 5/4</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">12/1 <small>Finish start</small></span>
+  <span class="c">43 d ago</span></div><div class="tr"><span class="c"><b>Colton Residence</b><small>#1260 · 4794 South Annabow Circle</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 11/9</small></span>
+  <span class="c num">164 d<small>rough passed 5/19</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">10/30 <small>Schedule return trip by</small></span>
+  <span class="c">38 d ago</span></div><div class="tr"><span class="c"><b>Pieroth Residence - Hideout</b><small>#1394 · 2139 East Outlaw Road Hideout</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">112 d<small>rough passed 7/10</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Designer</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">17 d ago</span></div><div class="tr"><span class="c"><b>Kweller</b><small>#1107 · 1042 West Skyridge Drive, Heber</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">80 d<small>rough passed 8/11</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Mark</small></span>
+  <span class="c num">5</span>
+  <span class="c">—</span>
+  <span class="c">8 d ago</span></div><div class="tr"><span class="c"><b>Skyridge Lot 208 - Mayflower</b><small>#1419 · 1839 West Aries Place, Heber City, UT, 84032</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">79 d<small>start 8/12</small></span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 10/29, no result logged</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">today</span></div><div class="tr"><span class="c"><b>Brandt Residence </b><small>#1430 · 721 S 2200 E, Springville</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">66 d<small>start 8/25</small></span>
+  <span class="c wait us"><b>Us</b><small>2 questions to answer</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Miller Residence - Alpine</b><small>#1438 · 1732 East Elk Ridge Lane, Alpine, UT, 84004</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">14 d<small>rough passed 10/16</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Terrance</small></span>
+  <span class="c num">3</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Rose</b><small>#889 · 1233 West Tuono Place, Lehi, UT, 84043</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 10/27, status still &quot;Scheduled&quot;</small></span>
+  <span class="c num">4 d<small>start 10/26</small></span>
+  <span class="c wait us"><b>Us</b><small>5 questions to answer</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">today</span></div><div class="tr"><span class="c"><b>Bukhshtaber</b><small>#1048 · 1779 West Galena Ridge Way, Midway, UT, 84049</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 8/18, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough failed, not re-booked</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">9 d ago</span></div><div class="tr"><span class="c"><b>Becker</b><small>#1331 · 1852 West Horn Court, Park City, UT, 84049</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">109 d ago</span></div><div class="tr"><span class="c"><b>Yard Power Disconnect and Reconnect</b><small>#1464 · 5782 West Maddie Lane, American Fork, UT, 84003</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>New Cabinetry Outlet, Fountain Switch Reinstallation</b><small>#1469 · 1520 S 1080 E, Orem, UT</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#6A4FC8">Quick job</em><small>New</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div></details><details open><summary><div class="tr grp"><span class="c"><b>Daegan's crew</b></span><span class="c">10 jobs</span><span></span><span></span><span class="c">8 waiting</span><span></span><span></span><span class="c">Hide</span></div></summary><div class="tr"><span class="c"><b>Mangum Residence</b><small>#920 · 569 West Boulder Point Road, Midway</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>70%</small></span>
+  <span class="c num">156 d<small>start 5/27</small></span>
+  <span class="c wait gc"><b>GC</b><small>4 questions out to Adam</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">3 d ago</span></div><div class="tr"><span class="c"><b>Cougar Moon Lot 84 - Kamas</b><small>#1402 · 8601 North Lark Place, Kamas</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 11/16</small></span>
+  <span class="c num">87 d<small>rough passed 8/4</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">4</span>
+  <span class="c">11/16 <small>Finish start</small></span>
+  <span class="c">5 d ago</span></div><div class="tr"><span class="c"><b>Koplin Residence - Mapleton</b><small>#1443 · 1915 South Preserve Drive, Mapleton, UT, 84664</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>50%</small></span>
+  <span class="c num">46 d<small>start 9/14</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Homeowner, fernando</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Ashcraft</b><small>#1291 · 130 West Brookside Court, Alpine</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>5%</small></span>
+  <span class="c num">28 d<small>start 10/2</small></span>
+  <span class="c wait gc"><b>GC · Us</b><small>8 questions out to Gary, Owner</small></span>
+  <span class="c num">3</span>
+  <span class="c">—</span>
+  <span class="c">9 d ago</span></div><div class="tr"><span class="c"><b>Casten-Vaught</b><small>#1327 · 3951 S Mapleton Estates Dr, Mapleton</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>90%</small></span>
+  <span class="c num">16 d<small>start 10/14</small></span>
+  <span class="c wait insp"><b>Inspection</b><small>Final 9/7, no result logged</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Namjoshi Basement Remodel - SLC</b><small>#1444 · 1189 East Gilmer Drive, Salt Lake City, UT, 84105</small></span>
+  <span class="c">Daegan Smith<small>lead Trever</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>65%</small></span>
+  <span class="c num">11 d<small>start 10/19</small></span>
+  <span class="c wait us"><b>Us</b><small>1 question to answer</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Bridle Wood</b><small>#940 · 228 West Bridlewood Lane, Midway, UT, 84049</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">23 d ago</span></div><div class="tr"><span class="c"><b>Johnson Residence</b><small>#1182 · 923 East Alpine Drive</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 6/23, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Lot 44</b><small>#1440 · 3826 East Islay Drive, Heber City, UT, 84032</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 9/14, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">40 d ago</span></div><div class="tr"><span class="c"><b>Oak Hill 5 - Alpine</b><small>#1454 · 13163 Oak Hill Dr, Alpine, UT, 84004</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>85%</small></span>
+  <span class="c num">—</span>
+  <span class="c wait gc"><b>GC · Us</b><small>1 question out to Hvac</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div></details><details open><summary><div class="tr grp"><span class="c"><b>Zane's crew</b></span><span class="c">4 jobs</span><span></span><span></span><span class="c">—</span><span></span><span></span><span class="c">Hide</span></div></summary><div class="tr"><span class="c"><b>Riverton &amp; Laundromat</b><small>#1382 · 12540 South Rhetski Lane, Riverton, UT, 84065</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">8 d ago</span></div><div class="tr"><span class="c"><b>Battle Creek Plaza Buildings A B· Site / Shared</b><small>#1412 · 345 S 800 W, Lindon</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">In progress</em><small>Rough in progress</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">17 d ago</span></div><div class="tr"><span class="c"><b>Wise Flooring - Draper</b><small>#1449 · 41 W Ikea Way, Draper, UT</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Grit Marketing - Lindon</b><small>#1467 · 755 n geneva road, Lindon, UT</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div></details><details open><summary><div class="tr grp"><span class="c"><b>Abraham's crew</b></span><span class="c">2 jobs</span><span></span><span></span><span class="c">—</span><span></span><span></span><span class="c">Hide</span></div></summary><div class="tr"><span class="c"><b>Bohannan Home Renovation &amp; Addition</b><small>#989 · 1192 E Charlton Avenue</small></span>
+  <span class="c">Abraham Tristan</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">52 d ago</span></div><div class="tr"><span class="c"><b>Prosteel - Provo</b><small>#1396 · 1400 S State St, Provo</small></span>
+  <span class="c">Abraham Tristan</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">In progress</em><small>Rough done, finish next</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">16 d ago</span></div></details><details open><summary><div class="tr grp"><span class="c"><b>No crew</b></span><span class="c">6 jobs</span><span></span><span></span><span class="c">1 waiting</span><span></span><span></span><span class="c">Hide</span></div></summary><div class="tr"><span class="c"><b>Thayne Residence</b><small>#881 · 964 North Twin Creek Circle, Salt Lake City, UT, 84108</small></span>
+  <span class="c">Paul<small>lead Lead</small></span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">31</span>
+  <span class="c">—</span>
+  <span class="c">32 d ago</span></div><div class="tr"><span class="c"><b>Tuhaye Lot 10</b><small>#1308 · 2663 East Timpanogos Court, Kamas, UT, 84036</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">Rough not started</em><small>Rough projected 12/1</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">12/1 <small>Rough start</small></span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>T&amp;M Pool House</b><small>#1006 · 1627 North Elk Ridge Lane</small></span>
+  <span class="c">Vasa Mataafa</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 9/3, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">44 d<small>start 9/16</small></span>
+  <span class="c wait us"><b>Us</b><small>5 questions to answer</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">57 d ago</span></div><div class="tr"><span class="c"><b>Peterson Residence - Midway</b><small>#1456 · 787 South Highlands Drive, Midway, UT, 84049</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Battle Creek Plaza - Building D - Lindon</b><small>#1463 · 345 South 800 West, Lindon, UT, 84042</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Battle Creek Plaza Building C - Lindon</b><small>#1462 · 345 South 800 West, Lindon, UT, 84042</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div></details></div></div>
+<div class="sec">Flat, sorted by days in stage (what the sort button gives)</div><div class="card"><div class="tbl"><div class="tr hd"><span>Job</span><span>Foreman · Lead</span><span>Where it is</span><span class="on">Days in stage ↓</span><span>Waiting on</span><span>COs</span><span>Next date</span><span>Last work</span></div><div class="tr"><span class="c"><b>Stratton Residence</b><small>#959 · 936 East Ostler Court, Alpine</small></span>
+  <span class="c">Colby Fogh<small>lead Jonathan</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">302 d<small>start 1/1</small></span>
+  <span class="c wait us"><b>Us</b><small>6 questions to answer</small></span>
+  <span class="c num">3</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Jimenez Residence</b><small>#1224 · 1613 North Dean Court, Alpine, UT, 84004</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 1/1</small></span>
+  <span class="c num">196 d<small>rough passed 4/17</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">1/1 <small>Finish start</small></span>
+  <span class="c">72 d ago</span></div><div class="tr"><span class="c"><b>Forth Residence</b><small>#998 · 2454 Monitor Drive, Park City UT 84060</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 12/1</small></span>
+  <span class="c num">179 d<small>rough passed 5/4</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">12/1 <small>Finish start</small></span>
+  <span class="c">43 d ago</span></div><div class="tr"><span class="c"><b>Colton Residence</b><small>#1260 · 4794 South Annabow Circle</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 11/9</small></span>
+  <span class="c num">164 d<small>rough passed 5/19</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">10/30 <small>Schedule return trip by</small></span>
+  <span class="c">38 d ago</span></div><div class="tr"><span class="c"><b>Mangum Residence</b><small>#920 · 569 West Boulder Point Road, Midway</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>70%</small></span>
+  <span class="c num">156 d<small>start 5/27</small></span>
+  <span class="c wait gc"><b>GC</b><small>4 questions out to Adam</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">3 d ago</span></div><div class="tr"><span class="c"><b>Pieroth Residence - Hideout</b><small>#1394 · 2139 East Outlaw Road Hideout</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">112 d<small>rough passed 7/10</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Designer</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">17 d ago</span></div><div class="tr"><span class="c"><b>Austin Cloward Residence</b><small>#1187 · 1068 N 390 E, American Fork</small></span>
+  <span class="c">Colby Fogh<small>lead Braden</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>95%</small></span>
+  <span class="c num">109 d<small>start 7/13</small></span>
+  <span class="c wait gc"><b>GC · Inspection</b><small>1 question out to the</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">3 d ago</span></div><div class="tr"><span class="c"><b>Chapman Residence</b><small>#1316 · 1925 East Pioneer Road, Draper</small></span>
+  <span class="c">Colby Fogh<small>lead Abraham</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">100 d<small>rough passed 7/22</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">29 d ago</span></div><div class="tr"><span class="c"><b>Cougar Moon Lot 84 - Kamas</b><small>#1402 · 8601 North Lark Place, Kamas</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Finish projected 11/16</small></span>
+  <span class="c num">87 d<small>rough passed 8/4</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">4</span>
+  <span class="c">11/16 <small>Finish start</small></span>
+  <span class="c">5 d ago</span></div><div class="tr"><span class="c"><b>Kweller</b><small>#1107 · 1042 West Skyridge Drive, Heber</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">80 d<small>rough passed 8/11</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Mark</small></span>
+  <span class="c num">5</span>
+  <span class="c">—</span>
+  <span class="c">8 d ago</span></div><div class="tr"><span class="c"><b>Skyridge Lot 208 - Mayflower</b><small>#1419 · 1839 West Aries Place, Heber City, UT, 84032</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">79 d<small>start 8/12</small></span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 10/29, no result logged</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">today</span></div><div class="tr"><span class="c"><b>Hightower Remodel</b><small>#1421 · 11669 North Highland Fields Drive, American Fork, UT, 84003</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 8/13, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">78 d<small>start 8/13</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">15 d ago</span></div><div class="tr"><span class="c"><b>Stacy Remodel</b><small>#1425 · 155 W 200 N Midway</small></span>
+  <span class="c">Colby Fogh<small>lead Jacob</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">72 d<small>start 8/19</small></span>
+  <span class="c wait insp"><b>Inspection · Us</b><small>Rough 8/20, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">31 d ago</span></div><div class="tr"><span class="c"><b>The Hideout</b><small>#1302 · 11002 North Golden Eagle Road, Kamas, UT, 84036</small></span>
+  <span class="c">Colby Fogh<small>lead Abraham</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>95%</small></span>
+  <span class="c num">66 d<small>start 8/25</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to the</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Brandt Residence </b><small>#1430 · 721 S 2200 E, Springville</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>95%</small></span>
+  <span class="c num">66 d<small>start 8/25</small></span>
+  <span class="c wait us"><b>Us</b><small>2 questions to answer</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Pierce Residence</b><small>#1277 · 4535 North Old Ranch Road, Park City, UT, 84098</small></span>
+  <span class="c">Colby Fogh<small>lead Jacob</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>70%</small></span>
+  <span class="c num">53 d<small>start 9/7</small></span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 10/13, no result logged</small></span>
+  <span class="c num">4</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Murphy Remodel</b><small>#1320 · 10817 South Summerland Cove, South Jordan, UT, 84095</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">52 d<small>rough passed 9/8</small></span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">29 d ago</span></div><div class="tr"><span class="c"><b>Koplin Residence - Mapleton</b><small>#1443 · 1915 South Preserve Drive, Mapleton, UT, 84664</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>50%</small></span>
+  <span class="c num">46 d<small>start 9/14</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Homeowner, fernando</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>T&amp;M Pool House</b><small>#1006 · 1627 North Elk Ridge Lane</small></span>
+  <span class="c">Vasa Mataafa</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 9/3, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">44 d<small>start 9/16</small></span>
+  <span class="c wait us"><b>Us</b><small>5 questions to answer</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">57 d ago</span></div><div class="tr"><span class="c"><b>Ashcraft</b><small>#1291 · 130 West Brookside Court, Alpine</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>5%</small></span>
+  <span class="c num">28 d<small>start 10/2</small></span>
+  <span class="c wait gc"><b>GC · Us</b><small>8 questions out to Gary, Owner</small></span>
+  <span class="c num">3</span>
+  <span class="c">—</span>
+  <span class="c">9 d ago</span></div><div class="tr"><span class="c"><b>Casten-Vaught</b><small>#1327 · 3951 S Mapleton Estates Dr, Mapleton</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>90%</small></span>
+  <span class="c num">16 d<small>start 10/14</small></span>
+  <span class="c wait insp"><b>Inspection</b><small>Final 9/7, no result logged</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Miller Residence - Alpine</b><small>#1438 · 1732 East Elk Ridge Lane, Alpine, UT, 84004</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">14 d<small>rough passed 10/16</small></span>
+  <span class="c wait gc"><b>GC</b><small>2 questions out to Terrance</small></span>
+  <span class="c num">3</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Namjoshi Basement Remodel - SLC</b><small>#1444 · 1189 East Gilmer Drive, Salt Lake City, UT, 84105</small></span>
+  <span class="c">Daegan Smith<small>lead Trever</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>65%</small></span>
+  <span class="c num">11 d<small>start 10/19</small></span>
+  <span class="c wait us"><b>Us</b><small>1 question to answer</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Rose</b><small>#889 · 1233 West Tuono Place, Lehi, UT, 84043</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 10/27, status still &quot;Scheduled&quot;</small></span>
+  <span class="c num">4 d<small>start 10/26</small></span>
+  <span class="c wait us"><b>Us</b><small>5 questions to answer</small></span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">today</span></div><div class="tr"><span class="c"><b>Bukhshtaber</b><small>#1048 · 1779 West Galena Ridge Way, Midway, UT, 84049</small></span>
+  <span class="c">Gage Lund</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 8/18, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough failed, not re-booked</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">9 d ago</span></div><div class="tr"><span class="c"><b>Thayne Residence</b><small>#881 · 964 North Twin Creek Circle, Salt Lake City, UT, 84108</small></span>
+  <span class="c">Paul<small>lead Lead</small></span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">31</span>
+  <span class="c">—</span>
+  <span class="c">32 d ago</span></div><div class="tr"><span class="c"><b>Fuller Residence</b><small>#1099 · 253 North 835 East, Lindon</small></span>
+  <span class="c">Colby Fogh<small>lead Braden</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>D32 Payne</b><small>#535 · 3158 N Wasatch Peaks Rd, Morgan, UT 84050</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 10/28, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Bridle Wood</b><small>#940 · 228 West Bridlewood Lane, Midway, UT, 84049</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">23 d ago</span></div><div class="tr"><span class="c"><b>Tuhaye Lot 10</b><small>#1308 · 2663 East Timpanogos Court, Kamas, UT, 84036</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">Rough not started</em><small>Rough projected 12/1</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">12/1 <small>Rough start</small></span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Johnson Residence</b><small>#1182 · 923 East Alpine Drive</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 6/23, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">2 d ago</span></div><div class="tr"><span class="c"><b>Bohannan Home Renovation &amp; Addition</b><small>#989 · 1192 E Charlton Avenue</small></span>
+  <span class="c">Abraham Tristan</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">52 d ago</span></div><div class="tr"><span class="c"><b>Micek Residence</b><small>#1321</small></span>
+  <span class="c">Colby Fogh<small>lead Braden</small></span>
+  <span class="c"><em class="pill" style="--c:#8E6336">Finish in progress</em><small>Work logged 6/24, status still &quot;Awaiting Start Date&quot;</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">122 d ago</span></div><div class="tr"><span class="c"><b>Becker</b><small>#1331 · 1852 West Horn Court, Park City, UT, 84049</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">109 d ago</span></div><div class="tr"><span class="c"><b>Riverton &amp; Laundromat</b><small>#1382 · 12540 South Rhetski Lane, Riverton, UT, 84065</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">8 d ago</span></div><div class="tr"><span class="c"><b>Shaikh Residence - Kamas</b><small>#1383 · 11402 North White Tail Court</small></span>
+  <span class="c">Colby Fogh<small>lead Jacob</small></span>
+  <span class="c"><em class="pill" style="--c:#5B6B84">Rough on hold</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">2</span>
+  <span class="c">—</span>
+  <span class="c">24 d ago</span></div><div class="tr"><span class="c"><b>Tuhaye Hollow</b><small>#1393 · 3727 East Tuhaye Hollow, Kamas </small></span>
+  <span class="c">Colby Fogh<small>lead Treycen</small></span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 7/10, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">10 d ago</span></div><div class="tr"><span class="c"><b>Prosteel - Provo</b><small>#1396 · 1400 S State St, Provo</small></span>
+  <span class="c">Abraham Tristan</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">In progress</em><small>Rough done, finish next</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">16 d ago</span></div><div class="tr"><span class="c"><b>Tolbert Residence - Wasatch County</b><small>#1407 · Tolbert Residence</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 7/31, no result logged</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">12 d ago</span></div><div class="tr"><span class="c"><b>Battle Creek Plaza Buildings A B· Site / Shared</b><small>#1412 · 345 S 800 W, Lindon</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#B4531A">In progress</em><small>Rough in progress</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">17 d ago</span></div><div class="tr"><span class="c"><b>LaPiana MotoGarage</b><small>8883 North Promontory Ridge Drive Park City</small></span>
+  <span class="c">Colby Fogh</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">78 d ago</span></div><div class="tr"><span class="c"><b>Lot 44</b><small>#1440 · 3826 East Islay Drive, Heber City, UT, 84032</small></span>
+  <span class="c">Daegan Smith</span>
+  <span class="c"><em class="pill" style="--c:#127A90">Rough done, finish next</em><small>Waiting on a finish date</small></span>
+  <span class="c num">—</span>
+  <span class="c wait insp"><b>Inspection</b><small>Rough 9/14, no result logged</small></span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">40 d ago</span></div><div class="tr"><span class="c"><b>Wise Flooring - Draper</b><small>#1449 · 41 W Ikea Way, Draper, UT</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Oak Hill 5 - Alpine</b><small>#1454 · 13163 Oak Hill Dr, Alpine, UT, 84004</small></span>
+  <span class="c">Daegan Smith<small>lead Louis</small></span>
+  <span class="c"><em class="pill" style="--c:#B4531A">Rough in progress</em><small>85%</small></span>
+  <span class="c num">—</span>
+  <span class="c wait gc"><b>GC · Us</b><small>1 question out to Hvac</small></span>
+  <span class="c num">1</span>
+  <span class="c">—</span>
+  <span class="c">1 d ago</span></div><div class="tr"><span class="c"><b>Peterson Residence - Midway</b><small>#1456 · 787 South Highlands Drive, Midway, UT, 84049</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Yard Power Disconnect and Reconnect</b><small>#1464 · 5782 West Maddie Lane, American Fork, UT, 84003</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#7A8394">No status set</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Grit Marketing - Lindon</b><small>#1467 · 755 n geneva road, Lindon, UT</small></span>
+  <span class="c">Zane Watkins</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Battle Creek Plaza - Building D - Lindon</b><small>#1463 · 345 South 800 West, Lindon, UT, 84042</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>Battle Creek Plaza Building C - Lindon</b><small>#1462 · 345 South 800 West, Lindon, UT, 84042</small></span>
+  <span class="c">Unassigned</span>
+  <span class="c"><em class="pill" style="--c:#6B7487">—</em></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div><div class="tr"><span class="c"><b>New Cabinetry Outlet, Fountain Switch Reinstallation</b><small>#1469 · 1520 S 1080 E, Orem, UT</small></span>
+  <span class="c">Keegan Wilkinson</span>
+  <span class="c"><em class="pill" style="--c:#6A4FC8">Quick job</em><small>New</small></span>
+  <span class="c num">—</span>
+  <span class="c wait ">—</span>
+  <span class="c num">—</span>
+  <span class="c">—</span>
+  <span class="c">—</span></div></div></div>
+</body></html>

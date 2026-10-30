@@ -128,24 +128,43 @@
 
   <div class="step"><div class="num">1b</div><div class="body">
     <h3>Jobs</h3>
-    <p>Every active job in one table: foreman, where the work is, open punch, open change orders, next date and
-    the last work logged. <b>Where it is</b> goes by the crew's rough and finish status. A rough whose inspection
-    failed with no pass since shows <b>Rough inspection failed</b> with "re-inspect not booked" or the new date, not
-    "Rough done". On hold or awaiting a date, the row shows what it is <b>waiting on</b> (from the line the crew fills
-    in under the status). The change-order cell splits to send and waiting (red when one is still to send). Next date
-    says <b>Rough insp. not called</b> in red at 85% rough with no target, and goes red when an inspection is booked
-    within a week on a job that isn't ready. Chips: <b>Quiet 21+ d</b> (underway, nothing logged in three weeks) and
-    <b>Finished, COs open</b>. A job with a plan waiting to be filed says so under its name.</p>
+    <p>Every active job in one table: foreman and lead, where the work is, days in that stage, what it is waiting
+    on, open change orders, next date and the last work logged; tap a column header to sort. <b>Where it is</b> goes
+    by the crew's rough and finish status. A rough whose inspection failed with no pass since shows <b>Rough
+    inspection failed</b> with "re-inspect not booked" or the new date, not "Rough done". On hold or awaiting a date,
+    the row shows what it is waiting on (from the line the crew fills in under the status). <b>Days in stage</b>
+    counts from the date the job records for entering its stage, and the small line says which date that is:
+    the confirmed start once it has passed (<i>start 9/7</i>) for rough or finish in progress, the rough inspection
+    pass (<i>rough passed 5/4</i>) for "Rough done, finish next", the last fail (<i>failed 10/13</i>) for a failed
+    rough, the start date that passed for a late start. A hold, job prep, no status, a quick job or a commercial
+    stage records no entry date, so the cell is a dash rather than a guess. <b>Waiting on</b> is blank when nothing
+    waits; otherwise <b>GC</b> (an open question out to the GC, a designer or the homeowner, by link or by name),
+    <b>Inspection</b> (a target date with no result yet, or a fail with no re-inspection booked) or <b>Us</b> (a
+    question the office owes, or an open My Day task on the job), in that order, with the first reason under it.
+    A crew fold's header says how many of its jobs are waiting. The change-order cell splits to send and waiting
+    (red when one is still to send). Next date says <b>Rough insp. not called</b> in red at 85% rough with no
+    target, and goes red when an inspection is booked within a week on a job that isn't ready. Chips: <b>Quiet
+    21+ d</b> (underway, nothing logged in three weeks) and <b>Finished, COs open</b>. A job with a plan waiting to
+    be filed says so under its name. The right rail lists the crews and the people; the stage bars that used to
+    sit there are gone, the chips above the table carry the same counts.</p>
   </div></div>
 
   <div class="step"><div class="num">2</div><div class="body">
     <h3>Activity</h3>
-    <p>Everything logged on the jobs, newest first. Rows that only carry a date (return-trip sign-offs, change orders
-    from Simpro, photo batches) sit at the top of their day under <b>Also today</b>, change orders first. A run of one
-    person's punch or questions on one job folds into one row ("Louis · 14 punch closed, 6 punch added · 8:55–10:19
-    PM"); tap it for the rows. <b>Show 200 more</b> pages further back. Cards: everything logged, punch closed against
-    added, <b>open questions</b> (oldest first) and failed inspections out of those logged; a failed one says whether a
-    re-inspection is booked. "Daily updates" means the foremen's daily and status updates only.</p>
+    <p>Two cards on top: <b>open questions</b> (with how many sit with the office and how many are out to
+    someone else) and failed inspections out of those logged; a failed one says whether a re-inspection is booked.
+    Under them, <b>Open questions</b> in two folds, closed until tapped with the count on each header:
+    <b>Waiting on me</b> is every question asked of nobody in particular or of an admin, so the office owes the
+    answer; <b>Waiting on others</b> is every question out to the GC, a designer or the homeowner (shared by link,
+    or "for" a name that isn't on the team) or to a foreman or crew member named on it, and the row says who.
+    Both run oldest first, undated ones last, and anything older than 2 days is flagged red with its age; tap a
+    row for the job. Then everything logged on the jobs, newest first. Rows that only carry a date (return-trip
+    sign-offs, change orders from Simpro, photo batches) sit at the top of their day under <b>Also today</b>,
+    change orders first. A run of one person's punch or questions on one job folds into one row ("Louis · 14
+    punch closed, 6 punch added · 8:55–10:19 PM"); tap it for the rows. The type chips, the search box and
+    <b>Done by</b> filter the list; <b>Show 200 more</b> pages further back. "Daily updates" means the foremen's
+    daily and status updates only. The "everything logged" total, the punch-closed count, the what-kind bars and
+    the most-active-jobs list were taken off this tab.</p>
   </div></div>
 
   <div class="step"><div class="num">3</div><div class="body">
