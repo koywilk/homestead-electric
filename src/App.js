@@ -49978,6 +49978,53 @@ function useOdMoneyMask(ref, on) {
   }, [ref, on]);
 }
 
+// ── Dashboard audit (overview) helpers ───────────────────────────────────────
+// v579 (dashboard audit 2026-10-30). Pure; tested by scripts/overview-audit-test.js.
+// The Today strip reads the Crew Planner's week doc — settings/schedule_<monday> →
+// assignments["<jobId>_<dayIdx>"] = { lead, crew[] }, Mon=0 … Fri=4 — the same cells
+// crewOnSiteToday reads. Not settings/crewTeams (ride-along pairs) and not Settings ›
+// Team's hierarchy; crews come from odCrews (foremanId). Cells often hold a first name
+// only ("Trever"): it resolves to the one team member it can mean (sameName treats a first
+// name as a prefix), else it is shown as written; a name belongs to a crew only when every
+// person it could mean is on that one crew, otherwise it sits under Others.
+const odPlannerMonday = (now) => { const m = new Date(now.getFullYear(), now.getMonth(), now.getDate()); m.setDate(m.getDate() - ((m.getDay() + 6) % 7)); return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`; };
+function odTodayByCrew({ planner, jobs, crews, now }) {
+  const dayIdx = now.getDay() - 1, weekend = dayIdx < 0 || dayIdx > 4;
+  const cells = (planner && planner.assignments) || {}, extra = (planner && planner.extraJobs) || [];
+  const all = (crews || []).flatMap(c => c.people);
+  const resolve = (n) => { const s = String(n || "").trim(); if (!s) return ""; const exact = all.find(p => p.toLowerCase() === s.toLowerCase()); if (exact) return exact; const hit = all.filter(p => sameName(p, s)); return hit.length === 1 ? hit[0] : s; };
+  const crewsOf = (n) => (crews || []).filter(c => c.people.some(p => sameName(p, n)));
+  const byId = {}; (jobs || []).forEach(j => { byId[j.id] = j; });
+  const onJob = [];
+  if (!weekend) Object.keys(cells).forEach(k => {
+    const m = /^(.+)_(\d)$/.exec(k); if (!m || Number(m[2]) !== dayIdx) return;
+    const c = cells[k] || {}, raw = [c.lead, ...(Array.isArray(c.crew) ? c.crew : [])].map(resolve).filter(Boolean);
+    const people = raw.filter((n, i) => raw.findIndex(x => sameName(x, n)) === i);
+    if (!people.length) return;
+    const job = byId[m[1]] || null, ex = extra.find(x => x && x.id === m[1]);
+    onJob.push({ id: m[1], job, name: String((job && job.name) || (ex && ex.name) || "Job").trim(), lead: resolve(c.lead), people });
+  });
+  onJob.sort((a, b) => a.name.localeCompare(b.name));
+  const groups = (crews || []).map(c => { const rows = onJob.map(x => ({ ...x, names: x.people.filter(n => { const cs = crewsOf(n); return cs.length === 1 && cs[0].id === c.id; }) })).filter(x => x.names.length); return { crew: c, label: c.label, rows, people: rows.reduce((n, r) => n + r.names.length, 0) }; }).filter(g => g.rows.length);
+  const other = onJob.map(x => ({ ...x, names: x.people.filter(n => crewsOf(n).length !== 1) })).filter(x => x.names.length);
+  const empty = weekend || !onJob.length, planned = new Set(onJob.map(x => x.id));
+  const unscheduled = empty ? [] : (jobs || []).filter(j => !planned.has(j.id));
+  const seen = new Set(); onJob.forEach(x => x.people.forEach(n => seen.add(n.toLowerCase())));
+  return { weekend, dayIdx, empty, onJob, groups, other, unscheduled, jobsN: onJob.length, peopleN: seen.size };
+}
+// The Mon–Sun week holding `now`, and the starts in it that are not confirmed — the same
+// `confirmed` flag the Job Board, Up Next and the Schedule tab read (roughStartConfirmed /
+// finishStartConfirmed / an Upcoming entry's startConfirmed, or a scheduled / date_confirmed status).
+function odWeekBounds(now) { const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()); const mon = odAddDays(t0, -((t0.getDay() + 6) % 7)); return { mon, sun: odAddDays(mon, 6), end: odAddDays(mon, 7) }; }
+const odStartsUnconfirmedWeek = (sched, now) => { const { mon, end } = odWeekBounds(now); return (sched || []).filter(s => s.type === "start" && !s.confirmed && s.at >= mon && s.at < end).slice().sort((a, b) => a.at - b.at); };
+// Money at risk: the 60+ day change-order rows (attnBy.coOld.rows) summed with each Simpro
+// quote counted once (Thayne: 14 COs on one quote); rows with no quote $ counted apart.
+function odMoneyAtRisk(rows) {
+  const list = rows || [], seen = new Set(); let dollars = 0, noQuote = 0;
+  list.forEach((r, i) => { if (r.money == null) { noQuote++; return; } const k = r.quote || `row:${i}`; if (seen.has(k)) return; seen.add(k); dollars += r.money; });
+  return { n: list.length, jobs: new Set(list.map(r => r.job && r.job.id)).size, dollars: Math.round(dollars * 100) / 100, quotes: seen.size, noQuote };
+}
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -50082,6 +50129,14 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     let dead = false;
     getDoc(doc(db, "settings", "crewPTO")).then(snap => { if (!dead) setPto(snap.exists() ? ((snap.data() || {}).list || []) : []); }, () => {});
     return () => { dead = true; };
+  }, [tab]);
+  // v579: the Crew Planner's week doc for the Today strip (settings/schedule_<monday>, the
+  // cells crewOnSiteToday reads). Live while the Overview is open; read-only here.
+  const [planner, setPlanner] = useState(null);
+  useEffect(() => {
+    if (tab !== "overview") return;
+    const unsub = onSnapshot(doc(db, "settings", "schedule_" + odPlannerMonday(new Date())), snap => setPlanner(snap.exists() ? (snap.data() || null) : null), () => setPlanner(null));
+    return () => { try { unsub(); } catch (e) {} };
   }, [tab]);
   // Money: Simpro job totals (settings/simproTotals, written by the Friday Packet
   // and the daily dailySimproTotals function, v542).
@@ -50218,7 +50273,6 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const TYPE_COLOR = { punch: OD_O, co: OD_B, insp: OD_G, rt: OD_R, update: OD_P, photo: OD_CYAN, question: "#2F8A84", note: OD_GREY };
   // v542 words: "activity" / "logged" means everything; "Daily updates" means only the foremen's daily and status updates.
   const TYPE_NAME = { punch: "Punch", co: "Change orders", insp: "Inspections", rt: "Return trips", update: "Daily updates", photo: "Photos", question: "Questions", note: "Job notes" };
-  const punchRows = (list) => list.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, job: p.job, tag: [p.who && `On ${odFirst(p.who)}`, p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · ") }));
   // Schedule rows: starts name the foreman ("No foreman" in red), a start on a job whose
   // pre-drywall scan isn't logged says so, and anything past its date says how late.
   const schedBits = (s) => {
@@ -50266,6 +50320,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       </div>
     );
   };
+  const punchRows = (list) => list.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, job: p.job, tag: [p.who && `On ${odFirst(p.who)}`, p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · ") }));
   const Rows = ({ rows, empty }) => rows.length ? (
     <div className="od-rows">
       {rows.map((r, i) => { if (r.divider) return <div className="od-dayh sub" key={i}>{r.divider}</div>;
@@ -50355,20 +50410,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   ].filter(x => x.n > 0);
   let main = null, right = null;
   if (tab === "overview") {
-    const actMax = Math.max(1, ...d.perDay.map(p => p.n));
-    const insPass = d.insp30.filter(a => a.result === "pass").length;
-    const inspNoResult = d.overdue.filter(s => s.type === "insp").length;
-    const selDay = chartSel != null && d.perDay[chartSel] ? d.perDay[chartSel] : null;
-    const selEvents = selDay ? d.events.filter(e => localYmd(e.at) === selDay.k) : [];
-    const selTop = selDay ? (() => { const m = {}; selEvents.forEach(e => { m[e.job.name] = (m[e.job.name] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 3); })() : [];
     // Before noon the greeting reports yesterday: today's count is still ~0 at 7 AM.
     const morning = d.now.getHours() < 12;
     const greetEv = morning ? d.evYest : d.evToday;
     const greetLine = `${morning ? "Yesterday: " : ""}${odPlural(greetEv.length, "thing")} logged ${morning ? "" : "today "}across ${odPlural(new Set(greetEv.map(e => e.job.id)).size, "job")}`;
-    const coCap = [d.coBy.needs_sending && `${d.coBy.needs_sending} to send`, d.coBy.approved && `${d.coBy.approved} approved`, d.coBy.billed && `${d.coBy.billed} billed, mark done`, d.coBy.scheduled && `${d.coBy.scheduled} scheduled`, d.coBy.other && `${d.coBy.other} no status`, d.coOnDone.length && `${d.coOnDone.length} on finished jobs`].filter(Boolean).join(" · ");
-    const coCount = {}; d.openCOs.forEach(x => { coCount[x.job.id] = (coCount[x.job.id] || 0) + 1; });
-    const coStatusRank = { needs_sending: 0, pending: 1, approved: 2, scheduled: 3 };
     const stageCap = d.bySec.slice(0, 5).map(s => `${s.short || s.label} ${s.jobs.length}`).join(" · ") + (d.bySec.length > 5 ? ` · +${d.bySec.slice(5).reduce((n, s) => n + s.jobs.length, 0)}` : "");
+    // v579 (dashboard audit, Koy 2026-10-30): the first screen is Needs you + Today. The open
+    // punch mini, the activity chart, the open-CO tile and the inspections mini left this tab
+    // (Quality / Activity / Jobs keep them); foreman-level counts stay down on the Foremen cards.
+    const todayStrip = odTodayByCrew({ planner, jobs: d.active, crews: d.crews, now: d.now });
+    const todayCols = [...todayStrip.groups.map(g => ({ key: g.crew.key, label: g.label, sub: `${g.people} ${g.people === 1 ? "person" : "people"} · ${odPlural(g.rows.length, "job")}`, rows: g.rows })),
+      ...(todayStrip.other.length ? [{ key: "other", label: "Others", sub: "on no crew in Settings › Team", rows: todayStrip.other }] : [])];
+    const startsWk = odStartsUnconfirmedWeek(d.sched, d.now), wkB = odWeekBounds(d.now);
+    const coOld = d.attnBy.coOld, risk = odMoneyAtRisk(coOld.rows);
     // Foremen: one roster; with a foreman picked, only that card. Worst trouble first.
     // v571: a crew pick shows everyone on that crew who runs a job (as foreman or lead); a person pick works for a lead too.
     const crewPeople = (c) => d.people.filter(p => c.people.some(n => sameName(n, p.name)) && d.allActive.some(j => d.owns(j, p.name)));
@@ -50391,45 +50445,40 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           </div>
         </div>
       )}
-      <div className="od-minis">
-        <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint={stageCap + (d.closedSim.length ? ` · ${d.closedSim.length} closed in Simpro not counted` : "")} value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
-          onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
-          <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_A} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
-        </OdMini>
-        <OdMini title="Inspections, 30 days" color={!d.insp30.length ? OD_G : insPass === 0 ? OD_R : insPass < d.insp30.length ? OD_WARN : OD_G} icon={d.insp30.length && insPass === 0 ? "alertTriangle" : "checkCircle"} value={d.insp30.length ? insPass : "—"} sub={d.insp30.length ? `of ${d.insp30.length} passed${d.insp30.length - insPass ? ` · ${d.insp30.length - insPass} failed` : ""}` : "none logged"}
-          hint={inspNoResult ? `${odPlural(inspNoResult, "inspection")} past the target with no result logged` : ""}
-          onClick={() => openList("Inspections, last 30 days", `${insPass} passed · ${d.insp30.length - insPass} failed${inspNoResult ? ` · ${inspNoResult} with no result logged` : ""}`, [
-            ...d.insp30.slice().sort((a, b) => (a.result === "fail" ? 0 : 1) - (b.result === "fail" ? 0 : 1) || b._at - a._at).map(a => { const g = d.failGroupOf[`${a.job.id}|${a.ph}`]; return { title: a.job.name, sub: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}${a.by ? " · " + a.by : ""}${(a.items || []).length ? " · " + odPlural(a.items.length, "item") : ""}`, tag: a.result === "fail" && g ? d.failStatus(g) : "", tagColor: a.result === "fail" && g && !g.rebook && !g.passAfter ? OD_R : undefined, right: odShort(a._at), color: a.result === "fail" ? OD_R : OD_G, job: a.job }; }),
-            ...d.overdue.filter(s => s.type === "insp").map(s => ({ ...schedRow(s), icon: "alertTriangle", color: OD_WARN, sub: `${s.label} · target was ${odShort(s.at)} · no result logged` })),
-          ])}>
-          <OdRing pct={d.insp30.length ? insPass/d.insp30.length : 0} color={OD_G} label={`${insPass} of ${d.insp30.length} inspections passed`}/>
-        </OdMini>
-        <OdMini title="Open change orders" color={OD_B} icon="changeorders" value={d.openCOs.length} sub={`${d.coWaiting} waiting on GC`} hint={coCap}
-          onClick={() => openList("Open change orders", `Grouped by job, most first · ${d.coWaiting} waiting on the GC${coCap ? " · " + coCap : ""}`, d.openCOs.slice()
-            .sort((a, b) => (coCount[b.job.id] - coCount[a.job.id]) || String(a.job.name).localeCompare(String(b.job.name)) || ((coStatusRank[a.co.coStatus] ?? 9) - (coStatusRank[b.co.coStatus] ?? 9)))
-            .map(x => ({ title: `${x.job.name}${coCount[x.job.id] > 1 ? ` (${coCount[x.job.id]})` : ""}`, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""}${d.isDone(x.job) ? " · job finished" : ""}`, tag: d.coBilledOf(x) ? OD_CO_BILLED : OD_CO_LABEL[x.co.coStatus] || "no status", right: x.co.coStatusDate || x.co.createdAt || "", color: x.co.coStatus === "needs_sending" ? OD_R : x.co.coStatus === "pending" ? OD_WARN : OD_B, job: x.job })))}>
-          <OdRing pct={d.openCOs.length ? d.coWaiting/d.openCOs.length : 0} color={OD_B} label={`${d.coWaiting} of ${d.openCOs.length} waiting on the GC`}/>
-        </OdMini>
-        <OdMini title="Open punch items" color={OD_R} icon="openitems" hint="bars: by foreman, most first" value={d.openPunch.length} sub={odPlural(new Set(d.openPunch.map(p => p.job.id)).size, "job")}
-          onClick={() => openList("Open punch items", "Oldest first", punchRows(d.openPunch))}>
-          <OdBars vals={Object.values(d.byForeman).map(f => f.open).sort((a, b) => b - a).slice(0, 6)} color={OD_R} hi={0} label="Open punch items by foreman"/>
-        </OdMini>
+      <div className="od-white od-pad od-today">
+        <div className="od-ct">Today<small>who is on which job · from the Crew Planner · {odDow(d.now)} {odShort(d.now)}</small></div>
+        {todayStrip.empty ? (
+          <div className="od-empty">{todayStrip.weekend ? "No crew planner on a weekend." : "The Crew Planner has nothing for today. Fill it in on the Crew Planner and this strip shows who is where."}</div>
+        ) : (<>
+          <div className="od-crews">
+            {todayCols.map(g => (
+              <div className="od-crewcol" key={g.key}>
+                <div className="h">{g.label}<small>{g.sub}</small></div>
+                {g.rows.map(r => (
+                  <button type="button" className="od-cj" key={r.id} disabled={!r.job} aria-label={`${r.name}: ${r.names.join(", ")}${r.job ? ". Open the job" : ""}`} onClick={() => openJob(r.job)}>
+                    <b>{r.name}</b><span>{r.names.map(n => <em key={n} className={r.lead && sameName(n, r.lead) ? "lead" : ""}>{n}</em>)}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          <details className="od-fold">
+            <summary>Active jobs with nobody scheduled today<span className="cnt">{todayStrip.unscheduled.length}</span></summary>
+            <Rows rows={todayStrip.unscheduled.map(j => ({ title: j.name, sub: [d.secOf(j) && d.secOf(j).label, j.foreman || "No foreman"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: d.secOf(j) ? d.secOf(j).color : OD_GREY, icon: "hardHat", job: j }))} empty="Every active job has someone on it today."/>
+          </details>
+        </>)}
       </div>
       <div className="od-row2">
         <div className="od-white od-pad">
-          <div className="od-ct">Activity per day<small>everything logged on all jobs, last {range} days · tap a day</small></div>
-          <OdLine vals={d.perDay.map(p => p.n)} labels={d.perDay.map((p, i) => (range > 14 ? i % 5 === 0 : i % 2 === 0) || i === d.perDay.length - 1 ? odShort(p.d) : "")} color={OD_A} min={0} max={Math.ceil(actMax*1.2) || 1}
-            ticks={[0, Math.round(actMax/2), actMax].filter((v, i, a) => a.indexOf(v) === i)} fmt={v => v} label={`Things logged per day: ${d.perDay.map(p => p.n).join(", ")}`}
-            sel={chartSel} onSel={setChartSel} tip={(v, i) => `${v} · ${odDow(d.perDay[i].d)} ${odShort(d.perDay[i].d)}`}/>
-          {selDay ? (
-            <div className="od-daysum">
-              <div><b>{odDow(selDay.d)} {odShort(selDay.d)}: {odPlural(selDay.n, "thing")} logged</b><small>{selTop.length ? selTop.map(([n, c]) => `${n} (${c})`).join(" · ") : "Nothing logged"}</small></div>
-              {selDay.n > 0 && <button type="button" onClick={() => { setActDay(selDay.k); setActFilter("all"); pickTab("activity"); }}>See them</button>}
-            </div>
-          ) : <div className="od-hint">Tap or hover the chart to see a day.</div>}
-        </div>
-        <div className="od-white od-pad">
           <div className="od-ct">Needs attention<small>{d.attn.length ? "chases · tap a line" : ""}</small></div>
+          {risk.n > 0 && (
+            <button type="button" className="od-money" aria-label={`Money at risk: ${odMoney(risk.dollars)} on ${odPlural(risk.n, "change order")} waiting on the GC 60 or more days. Open the list`}
+              onClick={() => openList(coOld.label, [odPlural(coOld.rows.length, "item"), coOld.extra].filter(Boolean).join(" · "), coOld.rows)}>
+              <b>{odMoney(risk.dollars)}</b>
+              <span>Money at risk · {odPlural(risk.n, "change order")} on {odPlural(risk.jobs, "job")} waiting on the GC 60+ days<small>{risk.quotes} Simpro {risk.quotes === 1 ? "quote" : "quotes"}, each counted once{risk.noQuote ? ` · ${risk.noQuote} with no quote $ yet` : ""}</small></span>
+              <Icon name="chevronRight" size={13}/>
+            </button>
+          )}
           {d.attn.length ? (
             <div className="od-attn">
               {d.attn.map(a => {
@@ -50447,6 +50496,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             <small>Most activity {b.when}</small>
             <button type="button" className="od-link" onClick={() => openJob(b.job)}><b>{b.job.name}</b> · {odPlural(b.n, "thing")} logged{b.qs ? ` · ${odPlural(b.qs, "open question")}` : ""}{b.punch ? ` · ${b.punch} punch` : ""}{b.prep ? " · prep not finished" : ""}</button>
           </div>}
+        </div>
+        <div className="od-stack">
+          <OdMini title="Active jobs" color={OD_A} icon="hardHat" hint={stageCap + (d.closedSim.length ? ` · ${d.closedSim.length} closed in Simpro not counted` : "")} value={d.active.length} sub={`${d.active.filter(j => d.secOf(j) && OD_UNDERWAY.includes(d.secOf(j).key)).length} with work underway`}
+            onClick={() => openList("Active jobs", "Grouped by where the work is", d.bySec.flatMap(s => s.jobs.map(j => ({ title: j.name, sub: [s.label + (d.secOf(j).note ? " " + d.secOf(j).note : ""), j.foreman || "No foreman", d.prepOpen(j) && s.key !== "prep" && "prep not finished"].filter(Boolean).join(" · "), right: d.info[j.id].punch.length ? `${d.info[j.id].punch.length} punch` : "", color: s.color, job: j }))))}>
+            <OdBars vals={d.bySec.slice(0, 7).map(s => s.jobs.length)} color={OD_A} hi={0} label={d.bySec.map(s => `${s.label} ${s.jobs.length}`).join(", ")}/>
+          </OdMini>
+          <details className="od-white od-pad od-fold">
+            <summary>Starts this week not confirmed<small>Mon {odShort(wkB.mon)} – Sun {odShort(wkB.sun)}</small><span className="cnt">{startsWk.length}</span></summary>
+            <Rows rows={startsWk.map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}${s.at < d.t0 ? " · date passed" : ""} · ${s.job ? (s.job.foreman || "No foreman") : "on the Upcoming tab"}`, color: OD_O, icon: "flag", job: s.job, action: moveAct(s) }))} empty="Every start this week is confirmed."/>
+          </details>
         </div>
       </div>
       <Sec right={shownForemen.length ? `${postedN} of ${odPlural(shownForemen.length, "foreman").replace(/foremans$/, "foremen")} posted today${notSeen2 ? ` · ${notSeen2} not seen in 2+ days` : ""}` : ""}>Foremen</Sec>
@@ -51666,6 +51725,20 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-attn .n{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
         .odash .od-busy{margin-top:auto;display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--cline);padding-top:10px}
         .odash .od-busy small{font-size:11.5px;color:var(--cdim)}
+        .odash .od-today{border-color:rgba(142,99,54,.35);box-shadow:inset 3px 0 0 ${OD_A},0 1px 2px rgba(41,33,25,.05)}
+        .odash .od-crews{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+        .odash .od-crewcol{border:1px solid var(--cline);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-width:0}
+        .odash .od-crewcol .h{font-weight:700;font-size:12.5px;display:flex;justify-content:space-between;gap:8px}.odash .od-crewcol .h small{font-weight:500;color:var(--cdim);font-size:11.5px;text-align:right}
+        .odash .od-cj{all:unset;cursor:pointer;display:flex;flex-direction:column;gap:3px;border-top:1px dashed var(--cline);padding-top:6px;color:var(--cink)}.odash .od-cj:disabled{cursor:default}.odash .od-cj:not(:disabled):hover b{text-decoration:underline}
+        .odash .od-cj b{font-size:12.5px}.odash .od-cj span{display:flex;flex-wrap:wrap;gap:4px}
+        .odash .od-cj em{font-style:normal;font-size:11.5px;background:var(--inset);border-radius:999px;padding:2px 8px}.odash .od-cj em.lead{background:rgba(142,99,54,.14);color:var(--o-ink);font-weight:700}
+        .odash .od-fold{border-top:1px dashed var(--cline);padding-top:8px}.odash .od-fold.od-white{border-top:1px solid var(--cline);padding-top:16px}
+        .odash .od-fold summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;color:var(--cink)}.odash .od-fold summary::-webkit-details-marker{display:none}
+        .odash .od-fold summary::before{content:"";width:0;height:0;border:5px solid transparent;border-left:7px solid var(--cdim);margin-right:2px;transition:transform .15s}.odash .od-fold[open] summary::before{transform:rotate(90deg)}
+        .odash .od-fold summary small{font-weight:500;color:var(--cdim);font-size:11.5px}.odash .od-fold summary .cnt{margin-left:auto;font-weight:800;font-size:13px;font-variant-numeric:tabular-nums;background:var(--inset);border-radius:999px;padding:1px 9px}
+        .odash .od-stack{display:flex;flex-direction:column;gap:12px;min-width:0}
+        .odash .od-money{display:flex;align-items:center;gap:10px;border:1px solid rgba(196,59,59,.28);background:rgba(196,59,59,.06);border-radius:12px;padding:10px 12px;cursor:pointer;text-align:left;font:inherit;color:var(--cink)}
+        .odash .od-money:hover{background:rgba(196,59,59,.1)}.odash .od-money b{font-size:18px;font-weight:800;color:${OD_R};font-variant-numeric:tabular-nums}.odash .od-money span{flex:1;font-size:12.5px;font-weight:600}.odash .od-money small{display:block;color:var(--cdim);font-size:11.5px;font-weight:500}
         .odash .od-link{all:unset;cursor:pointer;font-size:13px;color:var(--cink)}
         .odash .od-link:hover b{text-decoration:underline}
         .odash .od-flag{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border:0;background:rgba(196,59,59,.1);color:${OD_R};border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer}
@@ -60736,10 +60809,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-29 · App SW version: v578
+**Last manifest update:** 2026-10-30 · App SW version: v579
 
 ---
 
+- **Dashboard Overview audit: Today strip from the Crew Planner, starts this week not confirmed, money at risk; the punch / activity / CO-tile / inspections minis moved off the landing view** · 'shipped 2026-10-30' · 'SW v579' · 'OfficeDash' · 'odTodayByCrew' · 'odStartsUnconfirmedWeek' · 'odMoneyAtRisk' · 'odWeekBounds' · 'odPlannerMonday' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 (*"Let's build them"*); this is the Overview tab's share. **Rule for the landing view:** the first screen is **Needs you + Today**; foreman-level counts (punch, activity volume) sit a level down on the Foremen cards, nothing above the fold is a per-foreman stat. **Trimmed** (the data stays on its home tab): the Open punch items mini (Quality), the Activity-per-day chart (Activity), the Open change orders total tile (Jobs; the *Change orders waiting on the GC 60+ days* line stays) and the Inspections-30-days mini (Quality). **Kept as they were:** Needs you, Needs attention, Active jobs, Next 14 days, Out this week, the per-foreman cards. **Added:** **(1) Today** right under Needs you: who is on which job today from the **Crew Planner's** week doc ('settings/schedule_<monday>' → 'assignments["<jobId>_<dayIdx>"] = { lead, crew[] }', the same cells 'crewOnSiteToday' reads; not 'settings/crewTeams' ride-along pairs, not the Team hierarchy), grouped by the Settings › Team crews ('odCrews', foremanId) with the lead highlighted; a job with people from two crews sits under each with that crew's names; a cell with a first name only ("Trever") resolves to the one team member it can mean, otherwise it shows as written under *Others*; a folded **Active jobs with nobody scheduled today** list with a count; on a weekend, with no week doc, or with no cell for today it is one quiet line (*The Crew Planner has nothing for today*), nothing else. Live while the Overview is open (one 'onSnapshot', read-only). **(2) Starts this week not confirmed**: a folded list (count on the header) of the starts whose date falls in the current Mon–Sun week and whose start is not confirmed — the same 'confirmed' the Job Board, Up Next and the Schedule tab already read ('roughStartConfirmed' / 'finishStartConfirmed' / an Upcoming entry's 'startConfirmed', or a scheduled / date_confirmed status); each live-job row carries the v552 **Move / confirm** action. **(3) Money at risk** at the top of Needs attention: the count and summed dollars of the change orders waiting on the GC 60+ days (the list the tab already built), each Simpro quote counted once (Thayne: 14 COs on one quote), rows with no quote $ counted apart; tap it for the same list. Dollars are allowed on the office dashboard; the Foreman view mask (v569) still hides them. **Live check 2026-10-30:** 50 active jobs; 26 COs on 11 jobs, $14k across 12 quotes; one unconfirmed start this week (Peterson, Upcoming). Every one of the 9 planner week docs in Firestore has **zero assignment cells** (the last week with people on it was Apr 27 2026), so the strip shows its quiet line until the planner is used again; Simpro's schedule is not read here (follow-up). Mockup from a read-only live pull: 'docs/mockups/dashboard-audit/overview.html' (+ 'overview-pull-readonly.js', 'overview-mockup-build.js'). Gate: 'scripts/overview-audit-test.js' in prebuild (today-by-crew grouping and name resolution, the week window across a Sunday, the dollar sum with a shared quote, and a static check that the four trimmed tiles are gone and the strip sits under Needs you). Guide 'dashboard.html' Overview step updated. **Why it won't lose data:** read-only — one new Firestore listener on a settings doc the planner already writes; no job field, loader, function or rules change; the Move / confirm action is the unchanged v552 patch.
 - **Punch rooms from FieldInk: one tap fills a floor's rooms on Rough + Finish; a room typed on one list also lands on the other** · 'shipped 2026-10-29' · 'SW v578' · 'ccRoomOffers' · 'adoptRooms' · 'ccRoomsAdoptPatch' · 'fanOutAddedRooms' · 'CcRoomsSheet' · 'PunchFloor ccRooms' · 'publishCcRoomsOffice' · Koy 2026-10-07: *"option to push rooms to command center to prefill"* — the plan already labels every room and FieldInk already holds those labels, yet the office retyped them per job, per floor, per punch phase. The office half of the FieldInk v757 bridge (spec 'homestead-pdf-markup/docs/superpowers/specs/2026-10-07-rooms-to-command-center-design.md'). **How it works:** FieldInk sends the plan's room names on an explicit *Send rooms to Command Center* tap to 'ccrooms/<ccJobId>' on the field-ink project (a map keyed by a FieldInk-owned string the office never parses; it folds records by floor + name, case- and whitespace-insensitive, because the same room can sit under two plan tokens). The job listens (same self-healing attach as the 'ccloads' listener) and each residential **Rough / Finish › Punch List floor header** gets a **FieldInk rooms (N)** button, shown only while a room FieldInk knows is still missing from that floor on at least one target list. It opens a sheet listing that floor's rooms: rooms with loads or a drawn zone start ticked; a name typed in FieldInk with no loads and no zone (usually an orphaned old spelling) shows greyed and unticked; rooms already on a list carry an *on Rough* / *on Finish* tag and are skipped by the counts. The Add button reads *Add N* with *Rough n · Finish n* above the list, plus *Legacy QC n* only while the Legacy QC Items section is on screen (the QC walks read the Rough/Finish trees, so they get the rooms for free; a hidden tree is never written). **Hide** drops a row (writes ONLY 'rooms.<key>.office.{dismissed, officeUpdatedAt}' on the FieldInk doc by merge-set — FieldInk is never told, no job data); *N hidden · Show* brings it back with **Unhide**. Rooms FieldInk sent without a floor are never offered; a footnote counts the ones with no floored twin and says where to set it, and when NOTHING can be offered because no room carries a floor (Miller #1438 on 2026-10-30: all 113 rooms came through floor-less because no sheet had a floor set in FieldInk’s Pages panel) the residential Punch List shows one note saying so instead of nothing. Questions needs no code: its room picker ('roomSuggestions') reads punch rooms. **Decision 5 fan-out:** a room typed by hand in Rough's or Finish's *+ Room* (or a QC walk's *+ New Room…*) is appended, empty, to the other phase on that floor in the same patch, skipped when that name is already there; renames and deletes stay on the list you are on; items never travel; extras floors never fan out; Legacy QC *+ Room* does not fan out; commercial punch never reaches the funnel. Nothing is automatic — the Miller incidents (2026-09-30 / 10-01, wrong room names flowing into the office on their own) are why a wrong name must pass Send (FieldInk), a tick and Add. Gate: 'scripts/ccrooms-test.js' in prebuild (90 checks on the helpers extracted verbatim from App.js: folding, hidden rows, floor-less footnote, per-phase counts, append-only adopt, fail-closed fan-out, the exact Hide payload). Mockup 'docs/mockups/ccrooms-prefill.html' (Miller #1438's real room names), approved 2026-10-29. Two adversarial reviews. No Firestore rules change in either project (the field-ink 'ccrooms' block is deployed; this repo's rules untouched). Guides 'rough.html' / 'finish.html' updated. **Why it won't lose data:** append-only — every write builds from 'jobRef.current' and replaces only the target floor with '{ ...normFloor(floor), rooms: [...existing, ...fresh] }', fresh = '{ id: uid(), name, items: [] }' (exactly 'addRoom''s shape, a new id per tree); every existing room object, item, photo, general / hotcheck list, other floor and extras entry is the same object; nothing is renamed, deleted or reordered; a tree nothing was added to is left out of the patch. The patch goes through the normal 'u()' → 'saveJob' funnel: '_mergePatchAgainstServer' three-way-merges each tree independently and '_threeWayMerge' unions 'rooms' by 'id', keeping a client-added room absent from the baseline and every server-side room. The fan-out fails closed (no usable previous tree → nothing copied). The only write to the FieldInk project names the office-owned 'office' sub-object of listed records on a map doc with 'merge:true' (the SDK treats nested map keys literally; verified in @firebase/firestore 10.14.1). No new job field, no loader change, no rules change.
 - **Rough and Finish tabs show their own hours, live** · 'shipped 2026-10-29' · 'SW v577' (built 2026-10-26 as v568, replayed onto v576) · 'JobDetail' · 'getPhaseHours' · 'loadPhaseHoursLive' · 'loadPhaseHours' · 'hoursDoc' · 'phaseCostsNightly' · The crew asked to see rough and finish hours apart, not only the job total. The clock badges on the **Rough** and **Finish** tabs (left of the stage status, built long ago, empty until now because 'getSimproJobFinancials' never sent 'roughHoursActual' / 'finishHoursActual') now read **used / estimated** for that phase, the same item-by-item split as the office Job Costs tab: every cost center (base and change orders), split by the "(Rough In)" / "(Finish)" item names; red once used passes the estimate. The job header keeps its total badges exactly as before. **Live like the header:** new callable 'getPhaseHours' reads the job's cost-center totals from Simpro on open (sections + one list per section) and reuses each cost center's saved split from 'phaseCostsState'; items are re-read only for a cost center whose estimate changed (then saved back). Timed on live Simpro: Pierce #1277 1.2 s / 4 requests, Fuller #1099 2.1 s / 7, Battle Creek #1412 (13 sections) 4.4 s / 13, zero item reads; a job never pulled before takes one slow first read (15–47 s) and is fast after. The phone shows last night's numbers at once from 'settings/phaseHours' (written by 'phaseCostsNightly', 6.5 KB, hours only) and swaps in the live read; live results are cached 5 min per job; on any failure the nightly numbers stay. Both return **hours only, no dollar field** (a test asserts it), so crew phones never receive Job Costs' dollar data. A job with no split (a quote, no estimate) shows no badge, as before. Untagged 'other' hours (~4% company-wide) stay in the header total only. Test 'phasecosts-test' adds the hours doc and the live read (a used-hours change asks Simpro twice and reads no items; a changed estimate re-reads that one cost center). Guides 'rough.html' / 'finish.html' explain the badge. **Needs 'firebase deploy --only functions:getPhaseHours,functions:phaseCostsNightly,functions:sendTestPhaseCosts'** (before the app). **Why it won't lose data:** the app only reads (one getDoc, one callable); the functions add one new 'settings/' doc under the existing rule and re-save a job's server-only split cache in 'phaseCostsState' in the same shape the nightly pull writes; no job field, loader or rules change.
 - **Projects: add an existing job to a project** · 'shipped 2026-10-29' · 'SW v576' · 'JobProjectSection' · Koy: *"i have a battle creek project made already, i dont see an option to move it to that project."* Job Info → Project on a job that isn't in one now has **Or add it to an existing project**: pick a live project in the job's division, Add to project. The job keeps its own name, Simpro #, plans and everything on it (own-number building); if it carries the project's shared Simpro #, the section then asks for its Simpro folder. Leave project undoes it. **Why it won't lose data:** writes only the 'projectGroupId' / 'projectRole' / 'simproLead' / 'simproFolder' pointers through the job's 'u()' funnel; nothing renamed, moved or deleted. No rules or functions changes.
