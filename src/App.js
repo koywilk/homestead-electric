@@ -2631,7 +2631,7 @@ const TEMP_PED_STATUSES = [
   {value:"completed", label:"Completed",            color:"#2E8B57"},
 ];
 const QUICK_JOB_STATUSES = [
-  {value:"new",       label:"New",                  color:C.faint},
+  {value:"new",       label:"Needs to be scheduled", color:C.orange},  // saved value stays "new"
   {value:"scheduled", label:"Scheduled",            color:"#2F5BD9", hasDate:true},
   {value:"inprogress",label:"In Progress",          color:"#6A7BAA"},
   {value:"complete",  label:"Complete",             color:"#2E8B57"},
@@ -2643,6 +2643,105 @@ const QUICK_JOB_TYPES = [
   {value:"tempped",    label:"Temp Ped Pickup", color:"#6A3FB5"},
   {value:"other",      label:"Other",           color:C.faint},
 ];
+/* QUICKJOB_HELPERS_START — pure; scripts/quickjob-test.js extracts and tests this block verbatim. */
+// A quick job's stage. "new" is still what's saved; people read it as "Needs to be scheduled".
+// "complete" and "invoice" both mean the work is done, so invoiceSent decides which one shows.
+const qjStage = (j) => {
+  const s = (j && j.quickJobStatus) || "new";
+  if (s === "complete" || s === "invoice") return j.invoiceSent ? "sent" : "ready";
+  return s === "scheduled" || s === "inprogress" ? s : "new";
+};
+const QJ_STEPS = [["new", "To schedule"], ["scheduled", "Scheduled"], ["inprogress", "In progress"], ["ready", "Done"], ["sent", "Invoiced"]];
+const qjDay = (str) => {
+  const s = String(str || "").trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s);
+  if (m) return new Date(m[3].length === 2 ? 2000 + +m[3] : +m[3], +m[1] - 1, +m[2]);
+  return null;
+};
+const qjMidnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const qjDaysFrom = (d, today) => Math.round((qjMidnight(d) - qjMidnight(today)) / 86400000);
+const qjShort = (str, withDay) => {
+  const d = qjDay(str);
+  if (!d) return "";
+  const md = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return withDay ? `${d.toLocaleDateString("en-US", { weekday: "short" })}, ${md}` : md;
+};
+const qjPlural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+// Job ids are the time the job was made (uid() counts up from Date.now()). Anything else: unknown.
+const qjAddedOn = (j, today) => {
+  const n = Number(j && j.id);
+  return n > 1500000000000 && n <= today.getTime() + 86400000 ? new Date(n) : null;
+};
+const qjWhen = (j) => {
+  const start = qjShort(j.quickJobDate, true);
+  if (!start) return "";
+  const end = j.quickJobEndDate && qjDay(j.quickJobEndDate) && qjDay(j.quickJobEndDate).getTime() !== qjDay(j.quickJobDate).getTime() ? qjShort(j.quickJobEndDate, true) : "";
+  return end ? `${start} – ${end}` : start;
+};
+// What the colored band across the top of the card and the page says.
+const qjBand = (j, today = new Date()) => {
+  const stage = qjStage(j), by = String(j.signedOffBy || "").trim();
+  if (stage === "new") {
+    const added = qjAddedOn(j, today);
+    const waited = added ? -qjDaysFrom(added, today) : null;
+    return { tone: "new", icon: "flag", label: "Needs to be scheduled", meta: waited === null ? "" : waited <= 0 ? "Added today" : `Waiting ${qjPlural(waited, "day")}` };
+  }
+  if (stage === "scheduled") {
+    const d = qjDay(j.quickJobDate);
+    if (!d) return { tone: "sched", icon: "calendar", label: "Scheduled", meta: "No date set" };
+    const until = qjDaysFrom(d, today);
+    if (until < 0) return { tone: "late", icon: "clock", label: `${qjPlural(-until, "day")} late`, meta: `Was ${qjShort(j.quickJobDate, true)}` };
+    if (until === 0) return { tone: "today", icon: "calendar", label: "Today", meta: qjShort(j.quickJobDate, true) };
+    return { tone: "sched", icon: "calendar", label: qjWhen(j), meta: until === 1 ? "Tomorrow" : `In ${until} days` };
+  }
+  if (stage === "inprogress") {
+    const e = qjDay(j.quickJobEndDate);
+    const left = e ? qjDaysFrom(e, today) : null;
+    return { tone: left !== null && left < 0 ? "late" : "prog", icon: "play", label: "In progress",
+      meta: left === null ? "" : left < 0 ? `${qjPlural(-left, "day")} over` : left === 0 ? "Due today" : left === 1 ? "Due tomorrow" : `Due ${qjShort(j.quickJobEndDate)}` };
+  }
+  if (stage === "sent") return { tone: "sent", icon: "check", label: "Invoice sent", meta: by ? `Done by ${by}` : "" };
+  return { tone: "ready", icon: "dollarSign", label: "Ready to invoice", meta: by ? `Done by ${by}` : "" };
+};
+// Who's on it: a foreman of "Unassigned" isn't a person, and a lead who is also the foreman shows once.
+const qjWho = (j) => {
+  const clean = (s) => String(s || "").trim();
+  const f = clean(j.foreman), l = clean(j.lead);
+  const out = [];
+  if (f && f.toLowerCase() !== "unassigned") out.push(f);
+  if (l && l.toLowerCase() !== "unassigned" && l.toLowerCase() !== f.toLowerCase()) out.push(l);
+  return out;
+};
+// Every stage change is one of these patches, so the card and the page write the same fields.
+const qjSchedulePatch = (j, { date, end, foreman, lead }) => {
+  const stage = qjStage(j), d = qjDay(date), e = qjDay(end);
+  const status = !d && stage === "scheduled" ? "new" : d && stage === "new" ? "scheduled" : j.quickJobStatus || "new";
+  return { quickJobStatus: status, quickJobDate: d ? date : "", quickJobEndDate: d ? (e && e >= d ? end : date) : "", foreman: foreman || "Unassigned", lead: lead || "" };
+};
+const qjStartPatch = () => ({ quickJobStatus: "inprogress" });
+const qjCompletePatch = (by, today = new Date()) => {
+  const stamp = today.toLocaleDateString("en-US");
+  return { signedOff: true, signedOffBy: by, signedOffDate: stamp, quickJobStatus: "complete", readyToInvoice: true, readyToInvoiceDate: stamp };
+};
+const qjInvoiceSentPatch = () => ({ invoiceSent: true, readyToInvoice: false, invoiceDismissed: true, quickJobStatus: "invoice" });
+// One step back, or null when there's nowhere to go.
+const qjBack = (j) => {
+  const stage = qjStage(j);
+  if (stage === "scheduled") return { label: "Back to Needs to be scheduled", patch: { quickJobStatus: "new", quickJobDate: "", quickJobEndDate: "" } };
+  if (stage === "inprogress") return qjDay(j.quickJobDate)
+    ? { label: "Back to Scheduled", patch: { quickJobStatus: "scheduled" } }
+    : { label: "Back to Needs to be scheduled", patch: { quickJobStatus: "new" } };
+  if (stage === "ready" || stage === "sent") return { label: "Back to In progress", patch: { signedOff: false, signedOffBy: "", signedOffDate: "", quickJobStatus: "inprogress", readyToInvoice: false, invoiceSent: false } };
+  return null;
+};
+// The patch that puts a job back how it was before `patch`. A field that wasn't set comes back blank.
+const qjRevert = (j, patch) => Object.fromEntries(Object.keys(patch).map(k => [k, j[k] !== undefined ? j[k] : (typeof patch[k] === "boolean" ? false : "")]));
+const qjDayOrLast = (s) => { const d = qjDay(s); return d ? d.getTime() : Infinity; };
+const qjOldestFirst = (a, b) => (Number(a.id) || 0) - (Number(b.id) || 0);
+const qjSoonestFirst = (a, b) => qjDayOrLast(a.quickJobDate) - qjDayOrLast(b.quickJobDate);
+/* QUICKJOB_HELPERS_END */
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 // Job display label with the Simpro job number in front, so the crew can read
 // the # everywhere a job name shows without opening the job.
@@ -30806,7 +30905,100 @@ const normalizeJob = (raw) => applyPunchTicks(_normalizeJobShape(raw));
 
 // ── Temp Ped Detail ────────────────────────────────────────────
 // ── Quick Job Detail ───────────────────────────────────────────
-function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList }) {
+// ── Quick job card + page: shared pieces ───────────────────────
+const QJ_TONES = {
+  new:   { bg: C.orange,  ink: "#FFFFFF", line: C.orange,    bar: C.orange },
+  sched: { bg: C.steelBg, ink: "#24479F", line: C.steelLine, bar: C.blue },
+  today: { bg: C.blue,    ink: "#FFFFFF", line: C.blue,      bar: C.blue },
+  late:  { bg: C.red,     ink: "#FFFFFF", line: C.red,       bar: C.red },
+  prog:  { bg: "#E9ECF5", ink: "#4F5F8F", line: "#D2D8E8",   bar: "#4F5F8F" },
+  ready: { bg: C.orange,  ink: "#FFFFFF", line: C.orange,    bar: C.orange },
+  sent:  { bg: `${C.green}14`, ink: C.green, line: `${C.green}33`, bar: C.green },
+};
+const qjFilledBtn = (bg, big) => ({ flex: "999 1 120px", minHeight: big ? 50 : 46, border: "none", borderRadius: 9, background: bg, color: "#FFFFFF",
+  fontWeight: 800, fontSize: big ? 16 : 15, padding: "0 14px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
+  cursor: "pointer", fontFamily: "inherit", boxShadow: "0 1px 2px rgba(20,24,33,.25)" });
+const qjPlainBtn = { minHeight: 46, padding: "0 16px", border: `1px solid ${C.slateLine}`, background: C.card, borderRadius: 9, fontWeight: 700, fontSize: 14,
+  color: C.slateInk, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, textDecoration: "none" };
+const qjSmallLabel = { fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", color: C.dim, textTransform: "uppercase" };
+const qjFieldLabel = { flex: "1 1 130px", minWidth: 0, display: "flex", flexDirection: "column", gap: 3, fontSize: 12, fontWeight: 800, letterSpacing: "0.04em", color: C.dim };
+
+function QuickJobBand({ job, big, children }) {
+  const b = qjBand(job), t = QJ_TONES[b.tone];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "none", padding: big ? "calc(6px + env(safe-area-inset-top, 0px)) 6px 6px 14px" : "8px 13px", minHeight: big ? 52 : 40,
+      background: t.bg, color: t.ink, borderBottom: `1px solid ${t.line}` }}>
+      <Icon name={b.icon} size={big ? 18 : 16} style={{ flexShrink: 0 }}/>
+      <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: big ? 21 : 19, letterSpacing: "0.06em", lineHeight: 1.05, paddingTop: 2 }}>{b.label}</span>
+      {b.meta && <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{b.meta}</span>}
+      {children}
+    </div>
+  );
+}
+
+// Date + crew, on the card and the page. With no date the crew still saves and the job stays Needs to be scheduled.
+function QuickJobSchedulePanel({ job, onSave, onCancel, foremenList, leadsList, flush }) {
+  const [date, setDate] = useState(job.quickJobDate || "");
+  const [end, setEnd] = useState(job.quickJobEndDate || "");
+  const [foreman, setForeman] = useState(job.foreman || "Unassigned");
+  const [lead, setLead] = useState(job.lead || "");
+  const foremen = [...new Set([...(foremenList || getForemenList()), "Unassigned"])];
+  const leads = ["", ...new Set([...(foremenList || getForemenList()), ...(leadsList || getLeadsList())])];
+  const selStyle = { minHeight: 44, fontSize: 15, fontWeight: 600 };
+  return (
+    <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 13px 13px", background: C.surface,
+      borderTop: flush ? "none" : `1px solid ${C.border}`, borderBottom: flush ? `1px solid ${C.border}` : "none" }}>
+      <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
+        <label style={qjFieldLabel}>START DATE<DateInp value={date} onChange={e => setDate(e.target.value)} style={selStyle}/></label>
+        <label style={qjFieldLabel}>END DATE (OPTIONAL)<DateInp value={end} onChange={e => setEnd(e.target.value)} style={selStyle}/></label>
+      </div>
+      <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
+        <label style={qjFieldLabel}>FOREMAN<Sel value={foreman} onChange={e => setForeman(e.target.value)} options={foremen} style={selStyle}/></label>
+        <label style={qjFieldLabel}>LEAD<Sel value={lead} onChange={e => setLead(e.target.value)} options={leads.map(n => n ? n : { value: "", label: "No one yet" })} style={selStyle}/></label>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" onClick={() => onSave({ date, end, foreman, lead })} style={qjFilledBtn(C.blue)}><Icon name="check" size={16}/>{date ? "Save schedule" : "Save crew"}</button>
+        <button type="button" onClick={onCancel} style={qjPlainBtn}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function QuickJobCompletePanel({ onSave, onCancel, flush }) {
+  const [by, setBy] = useState(() => { const me = getIdentity(); return (me && me.name) || ""; });
+  const ok = !!by.trim();
+  return (
+    <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 13px 13px", background: C.surface,
+      borderTop: flush ? "none" : `1px solid ${C.border}`, borderBottom: flush ? `1px solid ${C.border}` : "none" }}>
+      <label style={qjFieldLabel}>COMPLETED BY<Inp value={by} onChange={e => setBy(e.target.value)} placeholder="Completed by..." style={{ minHeight: 44, fontSize: 15 }}/></label>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" disabled={!ok} onClick={() => onSave(by.trim())} style={{ ...qjFilledBtn(ok ? C.green : C.muted), color: ok ? "#FFFFFF" : C.slateInk, cursor: ok ? "pointer" : "not-allowed" }}><Icon name="check" size={16}/>Mark complete</button>
+        <button type="button" onClick={onCancel} style={qjPlainBtn}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// The ⋯ list. Skipping ahead stays possible: small jobs do get finished without ever getting a date.
+function QuickJobMenu({ job, onOpen, onPanel, onApply, onNote, onDelete, flush }) {
+  const stage = qjStage(job), back = qjBack(job);
+  const row = { minHeight: 46, border: "none", borderBottom: `1px solid ${C.border}`, background: "none", textAlign: "left", padding: "0 13px",
+    fontWeight: 700, fontSize: 14.5, color: C.text, cursor: "pointer", fontFamily: "inherit" };
+  return (
+    <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", background: C.surface, flex: "none",
+      borderTop: flush ? "none" : `1px solid ${C.border}`, borderBottom: flush ? `1px solid ${C.border}` : "none" }}>
+      {onOpen && <button type="button" style={row} onClick={() => onOpen(job)}>Open full job</button>}
+      {(stage === "scheduled" || stage === "inprogress") && <button type="button" style={row} onClick={() => onPanel("schedule")}>Change date or crew</button>}
+      {stage === "new" && <button type="button" style={row} onClick={() => onApply(qjStartPatch(), "Job started")}>Start now without a date</button>}
+      {(stage === "new" || stage === "scheduled") && <button type="button" style={row} onClick={() => onPanel("complete")}>Already done: mark complete</button>}
+      <button type="button" style={row} onClick={onNote}>{job.statusUpdate ? "Edit status note" : "Add status note"}</button>
+      {back && <button type="button" style={row} onClick={() => onApply(back.patch, back.label)}>{back.label}</button>}
+      {onDelete && <button type="button" style={{ ...row, color: C.red, borderBottom: "none" }} onClick={() => onDelete(job.id)}>Delete job</button>}
+    </div>
+  );
+}
+
+function QuickJobDetail({ job: rawJob, onUpdate, onClose, onDelete, foremenList, leadsList }) {
   const [job, setJob] = useState(()=>({...normalizeJob(rawJob), quickJob:true}));
   const jobRef = useRef(job);
   useEffect(() => { jobRef.current = job; }, [job]);
@@ -30825,10 +31017,11 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
 
   const [viewPhoto, setViewPhoto] = useState(null);
   const [emailData, setEmailData] = useState(null);
-
-  const qjDef = getStatusDef(QUICK_JOB_STATUSES, job.quickJobStatus || "new");
-  const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
-  const foreman = job.foreman || "Koy";
+  const [panel, setPanel] = useState(null);     // "schedule" | "complete" | null
+  const [menu, setMenu] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [editing, setEditing] = useState(null); // which section is in edit mode
+  const [fold, setFold] = useState({});         // Material / Notes / Photos / Job details start folded
 
   // Photo handling — upload to Firebase Storage
   const [qjUploading, setQjUploading] = useState(false);
@@ -30857,321 +31050,297 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
     heUndo("Photo deleted", () => u({ photos: before }), { onExpire: () => { if(photo.storagePath) { try { deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} } } });
   };
 
+  const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
+  const typeLabel = job.quickJobType === "other" || !job.quickJobType ? "Quick job" : typeDef.label;
+  const stage = qjStage(job);
+  const who = qjWho(job);
+  const when = qjWhen(job);
+  const phoneHref = job.phone ? safeUrl(`tel:${String(job.phone).replace(/[^\d+]/g, "")}`) : "";
+  const stepIdx = QJ_STEPS.findIndex(s => s[0] === stage);
+  const tone = QJ_TONES[qjBand(job).tone];
+
+  // Same undo bar and same patches as the card.
+  const apply = (patch, label) => {
+    const revert = qjRevert(jobRef.current, patch);
+    setPanel(null); setMenu(false);
+    u(patch);
+    heUndo(label, () => u(revert));
+  };
+  const next = stage === "new" ? { label: "Schedule", icon: "calendar", bg: C.orange, go: () => { setMenu(false); setPanel("schedule"); } }
+    : stage === "scheduled" ? { label: "Start job", icon: "play", bg: C.blue, go: () => apply(qjStartPatch(), "Job started") }
+    : stage === "inprogress" ? { label: "Mark complete", icon: "check", bg: C.green, go: () => { setMenu(false); setPanel("complete"); } }
+    : stage === "ready" ? { label: "Invoice sent", icon: "check", bg: C.orange, go: () => apply(qjInvoiceSentPatch(), "Invoice marked sent") }
+    : null;
+
+  const secStyle = { padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 8 };
+  const headStyle = { display: "flex", alignItems: "center", gap: 8, minHeight: 30 };
+  const editBtn = { marginLeft: "auto", minHeight: 36, padding: "0 12px", border: `1px solid ${C.slateLine}`, background: C.card, borderRadius: 8, fontSize: 13, fontWeight: 700, color: C.blue, cursor: "pointer", fontFamily: "inherit" };
+  const rowStyle = { display: "flex", gap: 7, alignItems: "flex-start", fontSize: 14, color: C.dim };
+  const rowIcon = { flexShrink: 0, marginTop: 2, color: C.faint };
+  const quickBtn = { ...qjPlainBtn, flex: "1 1 0", minWidth: 0, minHeight: 48, padding: "0 6px", fontSize: 13.5, boxSizing: "border-box" };
+  const richBody = { fontSize: 15, lineHeight: 1.45, color: C.text, overflowWrap: "anywhere" };
+  const noneBody = { fontSize: 15, color: C.faint, fontStyle: "italic" };
+  const fieldLbl = { fontSize: 12, color: C.dim, marginBottom: 3 };
+
+  const editHead = (key, title, hasValue) => (
+    <div style={headStyle}>
+      <span style={qjSmallLabel}>{title}</span>
+      <button type="button" style={editBtn} onClick={() => setEditing(editing === key ? null : key)}>{editing === key ? "Done" : hasValue === false ? "Add" : "Edit"}</button>
+    </div>
+  );
+  const foldHead = (key, title, count, preview) => (
+    <button type="button" aria-expanded={!!fold[key]} onClick={() => setFold(f => ({ ...f, [key]: !f[key] }))}
+      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", minHeight: 52, padding: "6px 16px", border: "none", borderBottom: `1px solid ${C.border}`, background: C.card, textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: C.text }}>
+      <span style={{ ...qjSmallLabel, flexShrink: 0 }}>{title}</span>
+      {count != null && <span style={{ fontSize: 12.5, fontWeight: 800, background: C.slateBg, color: C.slateInk, borderRadius: 99, padding: "1px 8px", flexShrink: 0 }}>{count}</span>}
+      <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: C.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fold[key] ? "" : preview}</span>
+      <span style={{ fontWeight: 800, color: C.slateInk, flexShrink: 0 }}>{fold[key] ? "▾" : "▸"}</span>
+    </button>
+  );
+  const addPhotoInput = (
+    <input type="file" accept="image/*" multiple style={{ display: "none" }} disabled={qjUploading}
+      onChange={e => { setFold(f => ({ ...f, photos: true })); addPhotos(e.target.files); e.target.value = ""; }} />
+  );
+  const materialText = stripHtml(job.material);
+  const materialLines = htmlToText(job.material).split("\n").filter(l => l.trim()).length;
+  const notesText = stripHtml(job.notes);
+  const photos = job.photos || [];
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 400,
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}
+      display: "flex", alignItems: "center", justifyContent: "center", padding: ON_MOBILE ? 0 : 12 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
 
       <div onClick={e => e.stopPropagation()} style={{
-        background: C.card, border: `1px solid ${C.border}`, borderRadius: 18,
-        width: "100%", maxWidth: 680, maxHeight: "93vh", display: "flex",
+        background: C.card, border: ON_MOBILE ? "none" : `1px solid ${C.border}`, borderRadius: ON_MOBILE ? 0 : 16,
+        width: "100%", maxWidth: ON_MOBILE ? "none" : 680, height: ON_MOBILE ? "100dvh" : "auto", maxHeight: ON_MOBILE ? "100dvh" : "93vh", display: "flex",
         flexDirection: "column", overflow: "hidden", boxShadow: "0 40px 100px rgba(0,0,0,0.7)"
       }}>
 
-        {/* Header */}
-        <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`,
-          display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, gap: 12 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
-              <span style={{ fontSize: 12, fontWeight: 800, color: typeDef.color, letterSpacing: "0.08em",
-                background: typeDef.color + "18", borderRadius: 99, padding: "2px 8px",
-                border: `1px solid ${typeDef.color}33` }}>
-                {typeDef.label.toUpperCase()}
-              </span>
-              <span style={{ fontSize: 12, fontWeight: 800, color: C.faint, letterSpacing: "0.08em",
-                background: "#6E768218", borderRadius: 99, padding: "2px 8px",
-                border: "1px solid #6E768233" }}>
-                QUICK JOB
-              </span>
-              {job.readyToInvoice && (
-                <span style={{ fontSize: 12, fontWeight: 800, color: "#C2410C", background: "#C2410C12",
-                  borderRadius: 99, padding: "2px 8px", border: "1px solid #C2410C33" }}>READY TO INVOICE</span>
-              )}
+        {/* Stage band */}
+        <QuickJobBand job={job} big>
+          <button type="button" aria-label="More actions" aria-expanded={menu} onClick={() => { setMenu(m => !m); setPanel(null); }}
+            style={{ marginLeft: qjBand(job).meta ? 0 : "auto", width: 44, height: 40, flexShrink: 0, border: "none", borderRadius: 8, background: menu ? "rgba(127,135,150,.22)" : "none", color: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Icon name="moreHoriz" size={20}/></button>
+          <button type="button" aria-label="Close job" onClick={onClose}
+            style={{ width: 44, height: 40, flexShrink: 0, border: "none", borderRadius: 8, background: "none", color: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 18, fontWeight: 700, fontFamily: "inherit" }}>✕</button>
+        </QuickJobBand>
+        {menu && <QuickJobMenu job={job} flush onPanel={p => { setMenu(false); setPanel(p); }} onApply={apply} onNote={() => { setMenu(false); setNoteOpen(true); }} onDelete={onDelete || null}/>}
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+
+          {/* Title, stage track, quick actions */}
+          <div style={{ padding: "13px 16px 12px", display: "flex", flexDirection: "column", gap: 9, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.05em", color: C.faint, textTransform: "uppercase" }}>{typeLabel}{job.simproNo ? ` · #${job.simproNo}` : ""}</div>
+            <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 27, letterSpacing: "0.04em", lineHeight: 1.05, color: C.text }}>{job.name || "New Quick Job"}</div>
+            <ol aria-label="Stage" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 5 }}>
+              {QJ_STEPS.map((s, i) => (
+                <li key={s[0]} aria-current={i === stepIdx ? "step" : undefined} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, lineHeight: 1.15, fontWeight: i === stepIdx ? 800 : 700, color: i === stepIdx ? C.text : C.faint }}>
+                  <span style={{ height: 5, borderRadius: 3, background: i === stepIdx ? tone.bar : i < stepIdx ? C.slate : C.slateBg }}/>
+                  {s[1]}
+                </li>
+              ))}
+            </ol>
+            <div style={{ display: "flex", gap: 8 }}>
+              {phoneHref && <a href={phoneHref} style={quickBtn}><Icon name="phone" size={17}/>Call</a>}
+              {job.address && <AddressLink address={job.address} style={quickBtn}><Icon name="mapPin" size={17}/>Directions</AddressLink>}
+              <label style={{ ...quickBtn, cursor: qjUploading ? "not-allowed" : "pointer", opacity: qjUploading ? 0.5 : 1 }}><Icon name="camera" size={17}/>Add photo{addPhotoInput}</label>
             </div>
-            <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.06em",
-              color: C.text, lineHeight: 1 }}>{job.name || "New Quick Job"}</div>
-            <div style={{ fontSize: 12.5, color: C.dim, marginTop: 2 }}>
-              {job.address ? <><AddressLink address={job.address} style={{color:C.dim}}/>{job.gc ? ` · ${job.gc}` : ""}</> : (job.gc||"No details yet")}
-            </div>
+            {job.quickJobType === "tempped" && job.pickupPedFor && (
+              <div style={{ background: `${C.purple}10`, border: `1px solid ${C.purple}44`, borderRadius: 8, padding: "8px 11px", fontSize: 13, color: C.text }}>
+                Picking up <b>{job.pickupPedNumber ? `Ped #${job.pickupPedNumber}` : "the temp ped"}</b>{job.pickupPedJobName ? <> from <b>{job.pickupPedJobName}</b></> : null}.
+                <span style={{ color: C.dim }}> Completing this job marks the ped picked up on Job Prep → Temp Peds Out.</span>
+              </div>
+            )}
           </div>
-          <button onClick={onClose}
-            style={{minWidth:"var(--he-tap, 32px)", background: "none", border: `1px solid ${C.border}`, borderRadius: 8,
-              color: C.dim, cursor: "pointer", padding: "5px 14px", fontSize: 14, flexShrink: 0 }}>✕</button>
-        </div>
 
-        {/* Status bar */}
-        <div style={{ padding: "12px 22px", borderBottom: `1px solid ${C.border}`,
-          background: C.surface, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: C.dim, letterSpacing: "0.08em" }}>STATUS</span>
-          {QUICK_JOB_STATUSES.map(s => {
-            const active = (job.quickJobStatus || "new") === s.value;
-            return (
-              <button key={s.value} onClick={() => {
-                const patch = { quickJobStatus: s.value };
-                if (s.value === "invoice") { patch.readyToInvoice = true; patch.readyToInvoiceDate = new Date().toLocaleDateString("en-US"); }
-                if (s.value === "complete") { patch.readyToInvoice = true; patch.readyToInvoiceDate = new Date().toLocaleDateString("en-US"); }
-                if (!s.hasDate) { patch.quickJobDate = job.quickJobDate; }
-                u(patch);
-              }} style={{
-                padding: "5px 14px", fontSize: 12.5, fontWeight: active ? 700 : 500,
-                borderRadius: 99, border: `1px solid ${active ? s.color : C.border}`,
-                background: active ? `${s.color}22` : "none",
-                color: active ? s.color : C.dim, cursor: "pointer", fontFamily: "inherit",
-                transition: "all 0.15s",
-              }}>{s.label}</button>
-            );
-          })}
-        </div>
+          {panel === "schedule" && <QuickJobSchedulePanel job={job} flush foremenList={foremenList} leadsList={leadsList} onCancel={() => setPanel(null)} onSave={d => apply(qjSchedulePatch(jobRef.current, d), d.date ? `Scheduled for ${qjShort(d.date, true)}` : "Crew saved")}/>}
+          {panel === "complete" && <QuickJobCompletePanel flush onCancel={() => setPanel(null)} onSave={by => apply(qjCompletePatch(by), "Marked complete")}/>}
 
-        {/* Scheduled date row */}
-        {(job.quickJobStatus === "scheduled" || job.quickJobStatus === "inprogress") && (
-          <div style={{ padding: "10px 22px", borderBottom: `1px solid ${C.border}`,
-            background: `${C.blue}06`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>SCHEDULED DATE</div>
-              <DateInp value={job.quickJobDate || ""} onChange={e => u({ quickJobDate: e.target.value })}
-                style={{ width: 140, fontSize: 12.5, borderColor: C.blue + "55", background: C.blue + "08" }} />
+          {(job.statusUpdate || noteOpen) && (
+            <div style={secStyle}><StatusUpdateInline job={job} onSave={u} identity={getIdentity()} fontSize={13.5} maxWidth={420} showEmpty startEditing={noteOpen}/></div>
+          )}
+
+          {/* When and who */}
+          <div style={secStyle}>
+            <div style={headStyle}>
+              <span style={qjSmallLabel}>When and who</span>
+              <button type="button" style={editBtn} onClick={() => { setMenu(false); setPanel(panel === "schedule" ? null : "schedule"); }}>{when ? "Change" : "Set date"}</button>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>END DATE</div>
-              <DateInp value={job.quickJobEndDate || ""} onChange={e => u({ quickJobEndDate: e.target.value })}
-                style={{ width: 140, fontSize: 12.5, borderColor: C.blue + "55", background: C.blue + "08" }} />
-            </div>
+            <div style={rowStyle}><Icon name="calendar" size={15} style={rowIcon}/>{when ? <span style={{ fontWeight: 700, color: C.text }}>{when}</span> : <span>Not scheduled yet</span>}</div>
+            <div style={rowStyle}><Icon name="user" size={15} style={rowIcon}/>{who.length ? <span style={{ fontWeight: 700, color: C.text }}>{who.join(" · ")}</span> : <span style={{ fontWeight: 800, color: C.orange }}>No one assigned</span>}</div>
+            {job.signedOff && <div style={rowStyle}><Icon name="check" size={15} style={rowIcon}/><span>Completed by {job.signedOffBy}{job.signedOffDate ? ` on ${job.signedOffDate}` : ""}</span></div>}
           </div>
-        )}
 
-        {/* Body */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px" }}>
+          {/* Scope */}
+          <div style={secStyle}>
+            {editHead("scope", "Scope of work", !!stripHtml(job.scope))}
+            {editing === "scope"
+              ? <TA value={job.scope || ""} onChange={e => u({ scope: e.target.value })} placeholder="Describe what needs to be done..." rows={4} />
+              : stripHtml(job.scope) ? <div style={richBody}><RichText html={job.scope}/></div> : <div style={noneBody}>No scope written yet</div>}
+          </div>
 
-          {/* Job Info */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>JOB INFO</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-              {[["name", "Job Name"], ["address", "Address"], ["gc", "General Contractor / Customer"], ["phone", "Phone"], ["simproNo", "Simpro Job #"]].map(([k, l]) => (
-                <div key={k}>
-                  <div style={{ fontSize: 12, color: C.dim, marginBottom: 3, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
-                    <span>{l}</span>
-                    {k === "simproNo" && String(job.simproNo || "").trim() && (
+          {/* Getting there */}
+          <div style={secStyle}>
+            {editHead("getin", "Getting there")}
+            {editing === "getin" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[["address", "Address"], ["gc", "General Contractor / Customer"], ["phone", "Phone"]].map(([k, l]) => (
+                  <div key={k}><div style={fieldLbl}>{l}</div><Inp value={job[k] || ""} onChange={e => u({ [k]: e.target.value })} placeholder={l}/></div>
+                ))}
+                <div>
+                  <div style={fieldLbl}>Access Note (gate code, keybox, entry instructions)</div>
+                  <textarea value={job.accessNote || ""} onChange={e => u({ accessNote: e.target.value })}
+                    placeholder="e.g. Gate code: 1234 · Keybox on front door"
+                    rows={2} style={{ width: "100%", boxSizing: "border-box", background: C.surface,
+                      border: `1px solid ${job.accessNote ? C.slate : C.border}`,
+                      borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
+                      color: C.text, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                <div style={rowStyle}><Icon name="mapPin" size={15} style={rowIcon}/>{job.address ? <AddressLink address={job.address} style={{ color: C.dim }}/> : <span>No address yet</span>}</div>
+                {job.gc && <div style={rowStyle}><Icon name="user" size={15} style={rowIcon}/><span>{job.gc}</span></div>}
+                {job.phone && <div style={rowStyle}><Icon name="phone" size={15} style={rowIcon}/><span style={{ userSelect: "text" }}>{job.phone}</span></div>}
+                <div style={rowStyle}><Icon name="lock" size={15} style={rowIcon}/>{job.accessNote ? <span style={{ color: C.text, overflowWrap: "anywhere" }}><RichText html={job.accessNote}/></span> : <span>No access note</span>}</div>
+              </div>
+            )}
+          </div>
+
+          {/* Material */}
+          {foldHead("material", "Material", materialText ? materialLines : null, materialText || "None listed")}
+          {fold.material && (
+            <div style={secStyle}>
+              {editHead("material", "Material", !!materialText)}
+              {editing === "material"
+                ? <TA value={job.material || ""} onChange={e => u({ material: e.target.value })} placeholder="List materials needed..." rows={3} />
+                : materialText ? <div style={richBody}><RichText html={job.material}/></div> : <div style={noneBody}>None listed</div>}
+            </div>
+          )}
+
+          {/* Notes */}
+          {foldHead("notes", "Notes", null, notesText || "None yet")}
+          {fold.notes && (
+            <div style={secStyle}>
+              {editHead("notes", "Notes", !!notesText)}
+              {editing === "notes"
+                ? <TA value={job.notes || ""} onChange={e => u({ notes: e.target.value })} placeholder="Additional notes, updates, follow-up..." rows={4} />
+                : notesText ? <div style={richBody}><RichText html={job.notes}/></div> : <div style={noneBody}>None yet</div>}
+            </div>
+          )}
+
+          {/* Photos: delete lives in the full-size view */}
+          {foldHead("photos", "Photos", photos.length, photos.length ? "" : "None yet")}
+          {fold.photos && (
+            <div style={secStyle}>
+              {qjUploading && <div style={{ fontSize: 12.5, color: C.accent, fontWeight: 600, padding: "6px 10px", background: `${C.accent}12`, border: `1px solid ${C.accent}33`, borderRadius: 7, display: "flex", alignItems: "center", gap: 8 }}><Spinner size={12}/> Uploading...</div>}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(92px,1fr))", gap: 8 }}>
+                {photos.map(p => (
+                  <img key={p.id} src={p.url || p.dataUrl} alt={p.name || "Job photo"} onClick={() => setViewPhoto(p)}
+                    style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 9, cursor: "pointer", border: `1px solid ${C.slateLine}` }} />
+                ))}
+                <label style={{ aspectRatio: "1", border: `1px dashed ${C.slateLine}`, borderRadius: 9, background: C.card, color: C.blue, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, fontSize: 12, fontWeight: 700, cursor: qjUploading ? "not-allowed" : "pointer", opacity: qjUploading ? 0.5 : 1 }}>
+                  <Icon name="camera" size={20}/>Add photo{addPhotoInput}
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Job details */}
+          {foldHead("details", "Job details", null, [typeDef.label, job.simproNo ? `#${job.simproNo}` : ""].filter(Boolean).join(" · "))}
+          {fold.details && (
+            <div style={secStyle}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div><div style={fieldLbl}>Job Name</div><Inp value={job.name || ""} onChange={e => u({ name: e.target.value })} placeholder="Job Name"/></div>
+                <div>
+                  <div style={{ ...fieldLbl, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                    <span>Simpro Job #</span>
+                    {String(job.simproNo || "").trim() && (
                       <button type="button" onClick={() => doPullSimpro({ force: true })} disabled={simproPulling}
                         title="Fill blank fields from Simpro (Site address + Site Contact)"
-                        style={{ background: "none", border: "none", padding: "0 4px", margin: 0,
-                          color: simproPulling ? C.faint : C.accent, fontSize: 11, fontWeight: 700,
-                          cursor: simproPulling ? "wait" : "pointer", fontFamily: "inherit",
-                          letterSpacing: "0.05em", textTransform: "uppercase",
-                          display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        style={{ background: "none", border: "none", padding: "0 4px", margin: 0, color: simproPulling ? C.faint : C.accent, fontSize: 11, fontWeight: 700, cursor: simproPulling ? "wait" : "pointer", fontFamily: "inherit", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 3 }}>
                         {simproPulling ? <Spinner size={9}/> : <Icon name="refresh" size={9}/>}
                         {simproPulling ? "Pulling…" : "Pull"}
                       </button>
                     )}
                   </div>
-                  <Inp value={job[k] || ""} onChange={e => u({ [k]: e.target.value })} placeholder={l}
-                    onBlur={k === "simproNo" ? () => doPullSimpro() : undefined} />
+                  <Inp value={job.simproNo || ""} onChange={e => u({ simproNo: e.target.value })} placeholder="Simpro Job #" onBlur={() => doPullSimpro()}/>
                 </div>
-              ))}
-              <div>
-                <div style={{ fontSize: 12, color: C.dim, marginBottom: 3 }}>Foreman</div>
-                <Sel value={job.foreman || "Koy"} onChange={e => u({ foreman: e.target.value })} options={[...(foremenList || getForemenList()), "Unassigned"]} />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: C.dim, marginBottom: 3 }}>Lead</div>
-                <Sel value={job.lead || ""} onChange={e => u({ lead: e.target.value })} options={["", ...[...new Set([...(foremenList||getForemenList()),...(leadsList||LEADS)])]]} />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: C.dim, marginBottom: 3 }}>Job Type</div>
-                <select value={job.quickJobType || "service"} onChange={e => u({ quickJobType: e.target.value })}
-                  style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`,
-                    borderRadius: 7, color: C.text, padding: "7px 10px", fontSize: 13,
-                    fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
-                  {QUICK_JOB_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
-              </div>
-            </div>
-            {job.quickJobType === "tempped" && job.pickupPedFor && (
-              <div style={{ marginTop: 10, background: `${C.purple}10`, border: `1px solid ${C.purple}44`, borderRadius: 8,
-                padding: "8px 11px", fontSize: 13, color: C.text }}>
-                Picking up <b>{job.pickupPedNumber ? `Ped #${job.pickupPedNumber}` : "the temp ped"}</b>{job.pickupPedJobName ? <> from <b>{job.pickupPedJobName}</b></> : null}.
-                <span style={{ color: C.dim }}> Completing this job marks the ped picked up on Job Prep → Temp Peds Out.</span>
-              </div>
-            )}
-            {/* Access Note */}
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, color: C.dim, marginBottom: 3 }}>Access Note (gate code, keybox, entry instructions)</div>
-              <textarea value={job.accessNote || ""} onChange={e => u({ accessNote: e.target.value })}
-                placeholder="e.g. Gate code: 1234 · Keybox on front door"
-                rows={2} style={{ width: "100%", boxSizing: "border-box", background: C.surface,
-                  border: `1px solid ${job.accessNote ? C.slate : C.border}`,
-                  borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
-                  color: C.text, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
-            </div>
-            {/* Matterport links */}
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, color: C.dim, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span>Matterport Links</span>
-                <span onClick={() => {
-                  const links = [...(job.matterportLinks || [])];
-                  if (!links.length && job.matterportLink) links.push({ label: "Main", url: job.matterportLink });
-                  links.push({ label: "", url: "" });
-                  u({ matterportLinks: links });
-                }} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: C.accent, padding: "2px 8px",
-                  border: `1px solid ${C.accent}33`, borderRadius: 5, background: `${C.accent}10` }}>+ Add</span>
-              </div>
-              {(job.matterportLinks && job.matterportLinks.length > 0 ? job.matterportLinks : (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : [])).map((ml, mi) => (
-                <div key={mi} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
-                  <Inp value={ml.label || ""} onChange={e => {
-                    const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
-                    links[mi] = { ...links[mi], label: e.target.value };
-                    u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
-                  }} placeholder="Label (e.g. Pool House)" style={{ width: 120, flexShrink: 0 }} />
-                  <div style={{ flex: 1 }}>
-                    <Inp value={ml.url || ""} onChange={e => {
-                      const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
-                      links[mi] = { ...links[mi], url: e.target.value };
-                      u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
-                    }} placeholder="Paste Matterport URL…" />
-                  </div>
-                  {ml.url && <a href={safeUrl(ml.url)} target="_blank" rel="noopener noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    style={{ fontSize: 12.5, fontWeight: 700, color: "#6A3FB5", background: "#6A3FB515", border: "1px solid #6A3FB533",
-                      borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
-                    <span style={{display:"inline-flex",alignItems:"center",gap:4}}>Open <Icon name="external" size={11}/></span></a>}
-                  {ml.url && <button onClick={async (e) => {
-                      e.stopPropagation();
-                      try {
-                        await navigator.clipboard.writeText(ml.url);
-                        if (typeof toast !== "undefined" && toast.success)
-                          toast.success(`Matterport link${ml.label?` for ${ml.label}`:""} copied`);
-                      } catch (err) {
-                        if (typeof toast !== "undefined" && toast.error)
-                          toast.error("Couldn't copy — try long-pressing the URL");
-                      }
-                    }}
-                    title="Copy link to clipboard"
-                    style={{ fontSize: 12.5, fontWeight: 700, color: C.accent, background: `${C.accent}15`,
-                      border: `1px solid ${C.accent}33`, borderRadius: 7, padding: "6px 10px",
-                      whiteSpace: "nowrap", cursor: "pointer", fontFamily: "inherit",
-                      display:"inline-flex", alignItems:"center", gap:4 }}>
-                    <Icon name="copy" size={11}/> Copy
-                  </button>}
-                  <span onClick={() => {
-                    const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
-                    links.splice(mi, 1);
-                    u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
-                  }} style={{ cursor: "pointer", fontSize: 14, color: "#C62828", padding: "4px", lineHeight: 1, flexShrink: 0 }}>✕</span>
-                </div>
-              ))}
-              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 12.5, color: C.faint, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
-            </div>
-          </div>
-
-          {/* Scope & Material */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>SCOPE OF WORK</div>
-            <TA value={job.scope || ""} onChange={e => u({ scope: e.target.value })}
-              placeholder="Describe what needs to be done..." rows={4} />
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12, color: C.dim, marginBottom: 3 }}>Material Needed</div>
-              <TA value={job.material || ""} onChange={e => u({ material: e.target.value })}
-                placeholder="List materials needed..." rows={3} />
-            </div>
-          </div>
-
-          {/* Notes */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>NOTES</div>
-            <TA value={job.notes || ""} onChange={e => u({ notes: e.target.value })}
-              placeholder="Additional notes, updates, follow-up..." rows={4} />
-          </div>
-
-          {/* Photos */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>PHOTOS</div>
-            {(job.photos || []).length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                {(job.photos || []).map(p => (
-                  <div key={p.id} style={{ position: "relative", width: 80, height: 80 }}>
-                    <img src={p.url||p.dataUrl} alt={p.name} onClick={() => setViewPhoto(p.url||p.dataUrl)}
-                      style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8, cursor: "pointer",
-                        border: `1px solid ${C.border}` }} />
-                    <button onClick={() => deleteJobPhoto(p)}
-                      style={{ position: "absolute", top: -5, right: -5, background: "#C62828", border: "none",
-                        borderRadius: "50%", color: "#fff", width: 18, height: 18, fontSize: 12,
-                        cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {qjUploading&&<div style={{fontSize:12.5,color:C.accent,fontWeight:600,marginBottom:8,
-              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
-              borderRadius:7,display:"flex",alignItems:"center",gap:8}}><Spinner size={12}/> Uploading...</div>}
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6,
-              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-              padding: "7px 14px", cursor: qjUploading?"not-allowed":"pointer",
-              opacity: qjUploading?0.5:1, fontSize: 12.5, fontWeight: 600, color: C.dim }}>
-              + Add Photos
-              <input type="file" accept="image/*" multiple style={{ display: "none" }}
-                disabled={qjUploading}
-                onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} />
-            </label>
-          </div>
-
-          {/* Sign-off / Complete */}
-          <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>
-              SIGN-OFF & COMPLETE
-            </div>
-            {job.signedOff ? (
-              <div style={{ background: `${C.green}12`, border: `1px solid ${C.green}33`,
-                borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center",
-                justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.green }}>Completed & Signed Off</div>
-                  <div style={{ fontSize: 12.5, color: C.dim, marginTop: 2 }}>
-                    By {job.signedOffBy} · {job.signedOffDate}
-                  </div>
+                  <div style={fieldLbl}>Job Type</div>
+                  <select value={job.quickJobType || "service"} onChange={e => u({ quickJobType: e.target.value })}
+                    style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, color: C.text, padding: "7px 10px", fontSize: 13, fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
+                    {QUICK_JOB_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  {job.readyToInvoice && !job.invoiceSent && (
-                    <button onClick={() => u({ invoiceSent: true, readyToInvoice: false, invoiceDismissed: true, quickJobStatus: "invoice" })}
-                      style={{ background: "#C2410C", border: "none", borderRadius: 7,
-                        color: "#fff", fontSize: 12.5, fontWeight: 700, padding: "6px 14px",
-                        cursor: "pointer", fontFamily: "inherit" }}>
-                      ✓ Invoice Sent
-                    </button>
-                  )}
-                  {job.invoiceSent && (
-                    <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1F7A3F", background: "#1F7A3F12",
-                      borderRadius: 99, padding: "4px 12px", border: "1px solid #1F7A3F33" }}>
-                      ✓ Invoice Sent
-                    </span>
-                  )}
-                  <button onClick={() => u({ signedOff: false, signedOffBy: "", signedOffDate: "",
-                    quickJobStatus: "inprogress", readyToInvoice: false, invoiceSent: false })}
-                    style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
-                      color: C.dim, fontSize: 12.5, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                    Undo
-                  </button>
-                </div>
+                    {/* Matterport links */}
+                    <div>
+                      <div style={{ fontSize: 12, color: C.dim, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span>Matterport Links</span>
+                        <span onClick={() => {
+                          const links = [...(job.matterportLinks || [])];
+                          if (!links.length && job.matterportLink) links.push({ label: "Main", url: job.matterportLink });
+                          links.push({ label: "", url: "" });
+                          u({ matterportLinks: links });
+                        }} style={{ cursor: "pointer", fontSize: 12, fontWeight: 700, color: C.accent, padding: "2px 8px",
+                          border: `1px solid ${C.accent}33`, borderRadius: 5, background: `${C.accent}10` }}>+ Add</span>
+                      </div>
+                      {(job.matterportLinks && job.matterportLinks.length > 0 ? job.matterportLinks : (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : [])).map((ml, mi) => (
+                        <div key={mi} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+                          <Inp value={ml.label || ""} onChange={e => {
+                            const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
+                            links[mi] = { ...links[mi], label: e.target.value };
+                            u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
+                          }} placeholder="Label (e.g. Pool House)" style={{ width: 120, flexShrink: 0 }} />
+                          <div style={{ flex: 1 }}>
+                            <Inp value={ml.url || ""} onChange={e => {
+                              const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
+                              links[mi] = { ...links[mi], url: e.target.value };
+                              u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
+                            }} placeholder="Paste Matterport URL…" />
+                          </div>
+                          {ml.url && <a href={safeUrl(ml.url)} target="_blank" rel="noopener noreferrer"
+                            onClick={e => e.stopPropagation()}
+                            style={{ fontSize: 12.5, fontWeight: 700, color: "#6A3FB5", background: "#6A3FB515", border: "1px solid #6A3FB533",
+                              borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
+                            <span style={{display:"inline-flex",alignItems:"center",gap:4}}>Open <Icon name="external" size={11}/></span></a>}
+                          {ml.url && <button onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await navigator.clipboard.writeText(ml.url);
+                                if (typeof toast !== "undefined" && toast.success)
+                                  toast.success(`Matterport link${ml.label?` for ${ml.label}`:""} copied`);
+                              } catch (err) {
+                                if (typeof toast !== "undefined" && toast.error)
+                                  toast.error("Couldn't copy — try long-pressing the URL");
+                              }
+                            }}
+                            title="Copy link to clipboard"
+                            style={{ fontSize: 12.5, fontWeight: 700, color: C.accent, background: `${C.accent}15`,
+                              border: `1px solid ${C.accent}33`, borderRadius: 7, padding: "6px 10px",
+                              whiteSpace: "nowrap", cursor: "pointer", fontFamily: "inherit",
+                              display:"inline-flex", alignItems:"center", gap:4 }}>
+                            <Icon name="copy" size={11}/> Copy
+                          </button>}
+                          <span onClick={() => {
+                            const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
+                            links.splice(mi, 1);
+                            u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
+                          }} style={{ cursor: "pointer", fontSize: 14, color: "#C62828", padding: "4px", lineHeight: 1, flexShrink: 0 }}>✕</span>
+                        </div>
+                      ))}
+                      {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 12.5, color: C.faint, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
+                    </div>
               </div>
-            ) : (
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <Inp value={job.signedOffBy || ""} onChange={e => u({ signedOffBy: e.target.value })}
-                  placeholder="Completed by..." style={{ flex: "1 1 180px", minWidth: 140 }} />
-                <button onClick={() => {
-                  if (!job.signedOffBy?.trim()) return;
-                  u({ signedOff: true, signedOffDate: new Date().toLocaleDateString("en-US"),
-                    quickJobStatus: "complete", readyToInvoice: true,
-                    readyToInvoiceDate: new Date().toLocaleDateString("en-US") });
-                }} disabled={!job.signedOffBy?.trim()}
-                  style={{ background: job.signedOffBy?.trim() ? C.green : "#2E3640", border: "none",
-                    borderRadius: 8, color: job.signedOffBy?.trim() ? "#000" : C.dim, fontSize: 13,
-                    fontWeight: 700, padding: "9px 20px", cursor: job.signedOffBy?.trim() ? "pointer" : "default",
-                    fontFamily: "inherit", whiteSpace: "nowrap" }}>
-                  Mark Complete
-                </button>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
+
+        {next && !panel && (
+          <div style={{ flex: "none", display: "flex", padding: "10px 14px calc(10px + env(safe-area-inset-bottom, 0px))", borderTop: `1px solid ${C.border}`, background: C.card, boxShadow: "0 -4px 14px rgba(20,24,33,.08)" }}>
+            <button type="button" onClick={next.go} style={qjFilledBtn(next.bg, true)}><Icon name={next.icon} size={18}/>{next.label}</button>
+          </div>
+        )}
       </div>
 
       {/* Photo lightbox */}
@@ -31179,8 +31348,14 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000,
           display: "flex", alignItems: "center", justifyContent: "center" }}
           onClick={() => setViewPhoto(null)}>
-          <img src={viewPhoto} alt="photo"
+          <img src={viewPhoto.url || viewPhoto.dataUrl} alt={viewPhoto.name || "Job photo"}
             style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", borderRadius: 8 }} />
+          <div style={{ position: "absolute", top: "calc(12px + env(safe-area-inset-top, 0px))", right: 12, display: "flex", gap: 8 }}>
+            <button type="button" onClick={e => { e.stopPropagation(); const p = viewPhoto; setViewPhoto(null); deleteJobPhoto(p); }}
+              style={{ minHeight: 44, padding: "0 14px", border: "none", borderRadius: 8, background: C.red, color: "#FFFFFF", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 6 }}><Icon name="trash" size={15}/>Delete</button>
+            <button type="button" aria-label="Close photo" onClick={e => { e.stopPropagation(); setViewPhoto(null); }}
+              style={{ width: 44, minHeight: 44, border: "none", borderRadius: 8, background: "rgba(255,255,255,.18)", color: "#FFFFFF", fontSize: 18, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>✕</button>
+          </div>
         </div>
       )}
 
@@ -37959,66 +38134,82 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
 
 // ── Quick Job Card ─────────────────────────────────────────────
 function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
-  const qjDef = getStatusDef(QUICK_JOB_STATUSES, job.quickJobStatus || "new");
+  const [panel, setPanel] = useState(null);     // "schedule" | "complete" | null
+  const [menu, setMenu] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const jobRef = useRef(job);
+  jobRef.current = job;
+  const save = (patch) => onUpdate({ ...jobRef.current, ...patch }, patch);
+  // Every card action can be undone from the bar, for the same 10 seconds as the rest of the app.
+  const apply = (patch, label) => {
+    const revert = qjRevert(jobRef.current, patch);
+    setPanel(null); setMenu(false);
+    save(patch);
+    heUndo(label, () => save(revert));
+  };
+  const stage = qjStage(job);
+  const open = () => onOpen(job);
+
+  if (stage === "sent") return (
+    <div onClick={open} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "9px 12px", marginBottom: 8, display: "flex",
+      alignItems: "center", gap: 10, minHeight: 48, cursor: "pointer" }}>
+      <div style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: 14, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{jobLabel(job) || "Untitled Job"}</div>
+      <span style={{ fontSize: 12.5, fontWeight: 800, color: C.green, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="check" size={14}/>Invoice sent</span>
+    </div>
+  );
+
+  // onDelete is null only on the contractor's view, which stays look-only.
+  const canAct = onDelete !== null;
   const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
-  const color = qjDef.color || "#6E7682";
-  const foreman = job.foreman || "Koy";
-  const fc = getFC(foreman) || "#6E7682";
+  const typeLabel = job.quickJobType === "other" || !job.quickJobType ? "Quick job" : typeDef.label;
+  const who = qjWho(job);
+  const scope = stripHtml(job.scope);
+  const where = [job.address, job.gc && !/^n\/a$/i.test(String(job.gc).trim()) ? job.gc : ""].filter(Boolean);
+  const phoneHref = job.phone ? safeUrl(`tel:${String(job.phone).replace(/[^\d+]/g, "")}`) : "";
+  const iconBtn = { width: 46, flex: "0 0 46px", minHeight: 46, boxSizing: "border-box", padding: 0, border: `1px solid ${C.slateLine}`, background: C.card, borderRadius: 9,
+    color: C.slateInk, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" };
+  const rowStyle = { display: "flex", gap: 7, alignItems: "flex-start", fontSize: 13.5, color: C.dim };
+  const rowIcon = { flexShrink: 0, marginTop: 2, color: C.faint };
+  const next = stage === "new" ? { label: "Schedule", icon: "calendar", bg: C.orange, go: () => { setMenu(false); setPanel("schedule"); } }
+    : stage === "scheduled" ? { label: "Start job", icon: "play", bg: C.blue, go: () => apply(qjStartPatch(), "Job started") }
+    : stage === "inprogress" ? { label: "Mark complete", icon: "check", bg: C.green, go: () => { setMenu(false); setPanel("complete"); } }
+    : { label: "Invoice sent", icon: "check", bg: C.orange, go: () => apply(qjInvoiceSentPatch(), "Invoice marked sent") };
 
   return (
-    <div style={{
-      background: C.card, borderRadius: 13, padding: "13px 16px", marginBottom: 8,
-      border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, cursor: "default",
-    }}>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 180px", minWidth: 140, cursor: "pointer" }} onClick={() => onOpen(job)}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-            <span style={{ fontSize: 12, fontWeight: 800, color: typeDef.color, letterSpacing: "0.06em",
-              background: typeDef.color + "18", borderRadius: 99, padding: "1px 7px",
-              border: `1px solid ${typeDef.color}33` }}>{typeDef.label.toUpperCase()}</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: C.faint, background: "#6E768215",
-              borderRadius: 99, padding: "1px 6px", border: "1px solid #6E768222" }}>QUICK</span>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 13, marginBottom: 8, overflow: "hidden",
+      boxShadow: "0 1px 2px rgba(20,24,33,.07), 0 5px 14px rgba(20,24,33,.07)" }}>
+      <QuickJobBand job={job}/>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "11px 18px", padding: "11px 13px 13px", alignItems: "flex-start" }}>
+        <div onClick={open} style={{ flex: "999 1 260px", minWidth: 0, display: "flex", flexDirection: "column", gap: 7, cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 800, letterSpacing: "0.05em", color: C.faint, textTransform: "uppercase" }}>
+            <span>{typeLabel}{job.simproNo ? ` · #${job.simproNo}` : ""}</span>
+            {canAct && (
+              <button type="button" aria-label={`More for ${job.name || "this job"}`} aria-expanded={menu}
+                onClick={e => { e.stopPropagation(); setMenu(m => !m); setPanel(null); }}
+                style={{ width: 40, height: 32, margin: "-5px -6px -5px auto", border: "none", borderRadius: 7, background: menu ? C.slateBg : "none",
+                  color: C.slateInk, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><Icon name="moreHoriz" size={20}/></button>
+            )}
           </div>
-          <div style={{ fontWeight: 700, fontSize: 14, color: C.text, marginBottom: 2 }}>{job.name || "Untitled Job"}</div>
-          <div style={{ fontSize: 12.5, color: C.dim, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {job.address && <AddressLink address={job.address} style={{color:C.dim}}/>}
-            <span style={{ fontWeight: 700, color: fc }}>{foreman}</span>
-            {job.lead && <span style={{ color: C.accent }}>· {job.lead}</span>}
+          <div style={{ fontWeight: 700, fontSize: 17, lineHeight: 1.25, color: C.text }}>{job.name || "Untitled Job"}</div>
+          {scope
+            ? <div style={{ fontSize: 14, color: C.slateInk, display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2, overflow: "hidden" }}>{scope}</div>
+            : <div style={{ fontSize: 14, color: C.faint, fontStyle: "italic" }}>No scope written yet</div>}
+          {(job.statusUpdate || noteOpen) && <div onClick={e => e.stopPropagation()}><StatusUpdateInline job={job} onSave={save} identity={getIdentity()} fontSize={13} maxWidth={300} showEmpty startEditing={noteOpen}/></div>}
+          {where.length > 0 && <div style={rowStyle}><Icon name="mapPin" size={15} style={rowIcon}/><span>{where.join(" · ")}</span></div>}
+          <div style={rowStyle}><Icon name="user" size={15} style={rowIcon}/>
+            {who.length ? <span style={{ fontWeight: 700, color: C.text }}>{who.join(" · ")}</span> : <span style={{ fontWeight: 800, color: C.orange }}>No one assigned</span>}
           </div>
-          <div style={{marginTop:4}}>
-            <StatusUpdateInline job={job} onSave={p=>onUpdate({...job, ...p}, p)} fontSize={11} maxWidth={240}/>
-          </div>
+          {job.accessNote && <div style={rowStyle}><Icon name="lock" size={15} style={rowIcon}/><span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{stripHtml(job.accessNote)}</span></div>}
         </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: qjDef.color,
-            background: qjDef.color + "18", borderRadius: 99, padding: "2px 10px",
-            border: `1px solid ${qjDef.color}33` }}>{qjDef.label}</span>
-          {job.quickJobDate && (
-            <span style={{ fontSize: 12, color: C.dim }}>
-              {fmtDisplay(job.quickJobDate)}{job.quickJobEndDate ? " – " + fmtDisplay(job.quickJobEndDate) : ""}
-            </span>
-          )}
-          {job.readyToInvoice && !job.invoiceSent && (
-            <span style={{ fontSize: 12, fontWeight: 800, color: "#C2410C", background: "#C2410C12",
-              borderRadius: 99, padding: "2px 10px", border: "1px solid #C2410C33" }}>
-              READY TO INVOICE
-            </span>
-          )}
-          {job.invoiceSent && (
-            <span style={{ fontSize: 12, fontWeight: 800, color: "#1F7A3F", background: "#1F7A3F12",
-              borderRadius: 99, padding: "2px 10px", border: "1px solid #1F7A3F33" }}>
-              ✓ INVOICE SENT
-            </span>
-          )}
-          {onDelete && (
-            <button onClick={async e => { e.stopPropagation(); if (await showConfirm("Delete this quick job?")) onDelete(job.id); }}
-              style={{ background: "none", border: "1px solid #C6282833", borderRadius: 6,
-                color: "#C62828", fontSize: 12, fontWeight: 600, padding: "3px 8px",
-                cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
-          )}
+        <div style={{ flex: "1 1 260px", minWidth: 0, display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {canAct && <button type="button" onClick={next.go} style={{ ...qjFilledBtn(next.bg), flex: "999 1 calc(100% - 108px)" }}><Icon name={next.icon} size={16}/>{next.label}</button>}
+          {phoneHref && <a href={phoneHref} aria-label={`Call about ${job.name || "this job"}`} style={{ ...iconBtn, textDecoration: "none" }}><Icon name="phone" size={19}/></a>}
+          {job.address && <AddressLink address={job.address} style={{ ...iconBtn, textDecoration: "none" }}><span role="img" aria-label="Directions" style={{ display: "inline-flex" }}><Icon name="mapPin" size={19}/></span></AddressLink>}
         </div>
       </div>
+      {panel === "schedule" && <QuickJobSchedulePanel job={job} onCancel={() => setPanel(null)} onSave={d => apply(qjSchedulePatch(jobRef.current, d), d.date ? `Scheduled for ${qjShort(d.date, true)}` : "Crew saved")}/>}
+      {panel === "complete" && <QuickJobCompletePanel onCancel={() => setPanel(null)} onSave={by => apply(qjCompletePatch(by), "Marked complete")}/>}
+      {menu && <QuickJobMenu job={job} onOpen={onOpen} onPanel={p => { setMenu(false); setPanel(p); }} onApply={apply} onNote={() => { setMenu(false); setNoteOpen(true); }} onDelete={onDelete || null}/>}
     </div>
   );
 }
@@ -38190,8 +38381,8 @@ const applyScheduleMode = (job, phase, next) => {
 // JobDetail). Click the text to edit; Enter saves, Escape cancels, blur saves.
 // `onSave(patch)` should apply the patch to the job (same shape as elsewhere:
 // statusUpdate/statusUpdateBy/statusUpdateAt).
-function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=280, stripeColor=C.slate, style={}, showEmpty=false, placeholder="Add status note…" }) {
-  const [editing, setEditing] = useState(false);
+function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=280, stripeColor=C.slate, style={}, showEmpty=false, placeholder="Add status note…", startEditing=false }) {
+  const [editing, setEditing] = useState(startEditing);
   const [draft, setDraft] = useState(job.statusUpdate || "");
   const inputRef = useRef(null);
 
@@ -38349,13 +38540,13 @@ function StatusUpdateTextarea({ job, identity, onCommit, styleVars }) {
 const STAGE_SECTIONS = [
 
   // Quick Jobs
-  { key:"quickNew",        label:"Quick Jobs — New",              color:C.faint,
+  { key:"quickNew",        label:"Quick Jobs — Needs to Be Scheduled", color:C.orange, loud:true, sortBy:qjOldestFirst,
     test: j => !!j.quickJob && (j.quickJobStatus||"new")==="new" },
 
-  { key:"quickScheduled",  label:"Quick Jobs — Scheduled",        color:"#2F5BD9",
+  { key:"quickScheduled",  label:"Quick Jobs — Scheduled",        color:"#2F5BD9", sortBy:qjSoonestFirst,
     test: j => !!j.quickJob && j.quickJobStatus==="scheduled" },
 
-  { key:"quickInProgress", label:"Quick Jobs — In Progress",      color:"#6A7BAA",
+  { key:"quickInProgress", label:"Quick Jobs — In Progress",      color:"#6A7BAA", sortBy:qjSoonestFirst,
     test: j => !!j.quickJob && j.quickJobStatus==="inprogress" },
 
   // Temp Peds
@@ -38389,6 +38580,7 @@ const STAGE_SECTIONS = [
 
   // All completed — quick jobs, temp peds, and full jobs in one section
   { key:"complete",     label:"Completed",                 color:"#2E8B57",
+    extra: js => { const n = js.filter(j => j.quickJob && qjStage(j) === "ready").length; return n ? `${n} to invoice` : ""; },
     test: j => (j.quickJob && (j.quickJobStatus==="complete"||j.quickJobStatus==="invoice")) ||
                (j.tempPed && j.tempPedStatus==="completed") ||
                (!j.tempPed && !j.quickJob && effFS(j) === "complete") },
@@ -38792,6 +38984,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
         const sJobs = (() => {
           const filtered = stageJobs.filter(sec.test);
+          if(sec.sortBy) return filtered.sort(sec.sortBy);
           // Get the most relevant date for a job in this section
           const getDate = j => {
             const rs = effRS(j), fs = effFS(j);
@@ -38833,13 +39026,15 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
                 letterSpacing:"0.08em",color:readableInk(sec.color,"#EEF0F3")}}>{sec.label}</div>
 
-              <div style={{background:`${sec.color}18`,border:`1px solid ${sec.color}33`,
+              <div style={{background:sec.loud?sec.color:`${sec.color}18`,border:`1px solid ${sec.loud?sec.color:`${sec.color}33`}`,
 
-                borderRadius:99,padding:"2px 10px",fontSize:12.5,color:readableInk(sec.color,"#E2E5EC"),fontWeight:700}}>
+                borderRadius:99,padding:"2px 10px",fontSize:12.5,color:sec.loud?"#FFFFFF":readableInk(sec.color,"#E2E5EC"),fontWeight:700}}>
 
                 {sJobs.length}
 
               </div>
+
+              {isCollapsed && sec.extra && sec.extra(sJobs) && <div style={{fontSize:12.5,fontWeight:800,color:C.orange,whiteSpace:"nowrap"}}>{sec.extra(sJobs)}</div>}
 
               <div style={{marginLeft:"auto",color:readableInk(sec.color,"#EEF0F3"),fontSize:14,fontWeight:700}}>
 
@@ -43645,7 +43840,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             startDate:start,
             endDate:(qjs==="scheduled"||qjs==="inprogress")?job.quickJobEndDate||"":"",
             hardDate:false,
-            status:qjs, statusLabel:qjDef.label||"New",
+            status:qjs, statusLabel:qjDef.label||"Needs to be scheduled",
             desc:job.scope||qjDef.label||"Quick Job",
           });
         }
@@ -49140,7 +49335,7 @@ function odPhase(j, today) {
   const ph = (key, note) => ({ ...OD_PHASE[key], note: note || "" });
   if (j.quickJob) {
     const s = j.quickJobStatus || "new";
-    return ["complete", "invoice"].includes(s) ? ph("complete") : ph("quick", s === "inprogress" ? "In progress" : s === "scheduled" ? "Scheduled" : "New");
+    return ["complete", "invoice"].includes(s) ? ph("complete") : ph("quick", s === "inprogress" ? "In progress" : s === "scheduled" ? "Scheduled" : "Needs to be scheduled");
   }
   if (j.tempPed) return j.tempPedStatus === "completed" ? ph("complete") : ph("ped", j.tempPedStatus === "scheduled" ? "Scheduled" : "Ready to schedule");
   if (j.division === "commercial") {
@@ -61345,10 +61540,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v583
+**Last manifest update:** 2026-10-30 · App SW version: v584
 
 ---
 
+- **Quick jobs redesigned: "Needs to be scheduled" replaces "New," the card shows the scope and one next-step button, and the opened job reads like a page** · 'shipped 2026-10-30' · 'SW v584' · 'QuickJobCard' · 'QuickJobDetail' · 'QuickJobBand' · 'QuickJobSchedulePanel' · 'QuickJobCompletePanel' · 'QuickJobMenu' · 'qjStage' · 'qjBand' · 'qjSchedulePatch' · 'scripts/quickjob-test.js' · Koy: *"there's no option for needs to be scheduled... the whole card needs a redesign so it's more usable."* Then, of the opened job: *"what about the actual card itself when its opened."* Approved off the clickable mockup (artifact KJCxcV3kxLeKZbEGNMecfd), built from the 20 live quick jobs. **The label:** status 'new' now reads "Needs to be scheduled" on the card, the Job Board section, Forecast, Today and the dashboard. The saved value stays 'new', so no job changes and phones on an older version keep working. **The card:** a colored band says where the job is (orange Needs to be scheduled with days waiting, Scheduled date, solid blue Today, red when late, In progress with due date, Ready to invoice). It shows the scope, address and customer, who's on it (a foreman of "Unassigned" no longer leads; "No one assigned" when nobody is), the access note, Call and Directions, and one button for the next step. Delete and the status note move into a ⋯ menu, and the double delete confirm is gone. Finished, invoiced jobs shrink to one line, which also ends the "Ready to Invoice" + "Invoice Sent" contradiction on 12 jobs. Needs to be scheduled sorts oldest first, Scheduled and In Progress soonest first. **The opened job:** read first, with Edit per section, in the order stage, when and who, scope, getting there. Material, Notes, Photos and Job details start folded with previews and counts. The next-step button is pinned to the bottom. A stage track replaces the five status buttons, which removes the path that marked a job Complete with no sign-off. Completed by starts with whoever is signed in. Photos are larger and Delete moves into the full-size view. **Skipping ahead stays:** the ⋯ menu has "Start now without a date" and "Already done: mark complete," because #1399, #1388 and #1370 were finished without ever getting a date. **Data:** existing fields only; stage changes write the same fields as the old buttons, every one can be undone from the Undo bar, and the contractor's view stays look-only.
 - **Goals Phase 2 + Job Costs early warning (dashboard audit, Goals and Job Costs tabs)** · 'shipped 2026-10-30' · 'SW v583' · 'goalsNightly' · 'sendTestGoalsPull' · 'functions/goalsPull.js pullPhase2' · 'odGoalWarranty' · 'odGoalCoHours' · 'odGoalStoreRuns' · 'odGoalHoursWeekly' · 'odCostsRoughOverruns' · 'odCostsOwners' · 'odCostsCoHours' · Koy approved the tab-by-tab audit 2026-10-30 ("Let's build them"). **Goals:** the four 2027-scoreboard cards v562 left grey get real numbers from the nightly Simpro pull, written under ONE new key 'settings/goalsSimpro.phase2' so the Phase 1 numbers stay byte-identical: **Warranty hours** = labor hours on cost centers whose company cost center is Residential (Warranty), on the same jobs as the margin card, ÷ every actual hour on those jobs (live 10/30: 2.2%, 1,206 h of 53,811 h, 51 jobs; goal under 2%); **Change orders with hours booked to their own cost center** = of the CO cost centers sold with hours ("… - Change Order (Rough In / Finish)"), how many have hours booked (live: 33 of 393, 698 h of 2,069 h sold — a CO section put on the Rough In cost center does not count, that is the habit); **Home Depot / ACE runs** = Simpro purchase orders to Home Depot or ACE Hardware by date issued, headline the last 8 full weeks (live 4.1 a week; 171 this year; the app's Get-a-PO-number runs make one of these, so the app count is a sub-line, never added); **Hours tracked weekly** = of the last 8 Mon–Sun weeks, how many had every active crew member (Settings › Team, not contractors) with job hours on their Simpro timesheet (live 0 of 8: 14 of 18 logged all 8, a new hire missed 6; people with no job hours in any week are named, not counted). Probed read-only first: the company-wide '/jobCostCenters/' list (no totals, no cost-center filter) is read once and only warranty / CO sections on this year's jobs are read for totals; '/employees/{id}/timesheets/?StartDate&EndDate' comes back unpaged; '/vendorOrders/?Vendor.ID=' filters. The whole Phase 2 is ~300 calls / 80 s on top of Phase 1's 23 s; it never fails the run (a thrown Phase 2 carries the previous doc's phase2 forward, marked, or leaves the key off). Each card's pill says **No Phase 2 pull yet** until the function is deployed; **How it is counted** on each. The 8 proposed goals are NOT added (Koy: leave off for now). **Job Costs:** a folded early-warning section at the top, **Open jobs already past rough hours** (count on the header): open jobs whose rough hours used are past the rough estimate from every cost center, top five by hours over with **Show all** behind, each naming the foreman and lead by the dashboard's own rule (d.owns), tap for the cost centers; the **Untagged est** column is gone from the job table; the **What-if** bar is a folded section (the Count switches still drive it); on Hours, a **CO hrs, own CC** column per job from the same pull (0 = CO cost centers with nothing booked, – = none), hidden until the pull has run. Hero numbers, People | Crew grouping and the chart unchanged. Tests: 'scripts/goals-pull-test.js' (+Phase 2: cost-center kinds, hours, week ranges, crew matching, weekly, store runs, the whole injected-I/O pull against a fake Simpro) and new 'scripts/goals-costs-audit-test.js' (pending cards, bands, sheet-name matching, overruns, owners, CO column), both in prebuild. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/goals.html', 'costs.html'. Guide 'dashboard.html' Goals + Job Costs. Crew brief 'docs/crew-briefs/v583.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull --project homestead-electric'** (Koy); the first real Phase 2 numbers land on that deploy's next 5:40 AM run or a Pull from Simpro now. **Why it won't lose data:** read-only against Simpro, the jobs and 'material_po_log'; the only write is the function's own 'settings/goalsSimpro' doc, which gains one key; no job write, no loader or rules change; the dashboard only reads.
 - **Dashboard audit, People + Automations: everyone by crew with where they are today; Automations trimmed to the docs, the plans waiting and one Appliance Loads line** · 'shipped 2026-10-30' · 'SW v582' · 'OfficeDash' · 'odPeopleByCrew' · 'odTodayByPerson' · 'odPlannerPerson' · 'odTodayText' · 'odPrevRun' · 'getSimproSchedule' · Koy approved the tab-by-tab dashboard audit 2026-10-30 ("Let's build them"). **People:** the people list is now **People by crew** — every active team member once, grouped by crew (Settings › Team 'foremanId' through 'odCrews', never 'settings/crewTeams'), the crew's foreman on top, then jr foremen, leads, crew; **Office** (title admin) and **No crew** are their own groups, last. Every group starts folded with its count; the header says how many are on a job today and how many are quiet. Each row: name + title/jobs, a **Today** column (the job they are on today from the Crew Planner, with the hours, or a quiet "not scheduled"; "weekend" on Sat/Sun), the last-on-a-job line, and their phone's app version (red when behind, "no phone seen" after 14 days). "Today" reads the planner the way the planner itself does: its own week doc 'settings/schedule_<monday>.assignments["<jobId>_<dayIdx>"]' (a filled cell wins) and the Simpro schedule it overlays ('getSimproSchedule', this week, read-only); names resolve the planner's own way (exact, unique first name, first + last initial, an ambiguous bare first name never guessed). Live check 2026-10-30: no planner week doc has ever had a filled cell, so in practice Today is Simpro's schedule, which is what the planner shows. Kept: On the app today, Open My Day tasks, Time off waiting (with its collision context), Phones on latest, Quiet 3+ days, Out today / this week. Trimmed: the activity heat map, the "On the app, no job touched" list, the My Day load card and the Team pulse card grid (its people are the crew rows now); the device list is a folded **Devices behind** with a count and a Show all button (the Phones on latest tile opens it). **Automations:** keeps the automated document cards with Run now, Plan Intake with its chips and the Waiting on you rail with File it / Not ours; the Appliance Loads card is one status line (last scheduled run, next run, jobs · items · amps, Refresh, Open sheet, and the no-appliance-package line); the Plans filed chart tile, the per-job appliance table and the "When they run" list are gone (the counts stay in the rail). Nothing about what the automations do changes. Pure helpers sit under '// ── Dashboard audit (People + Automations) helpers' above 'OfficeDash'; test 'scripts/people-autos-audit-test.js' (in prebuild) proves every name once, the tier order, the name resolution, planner-over-Simpro, block merging, weekends, and the status-line run time. Mockup from a live read-only pull: 'docs/mockups/dashboard-audit/people.html' (+ 'people-thursday.html', a full work day). Guide 'dashboard.html' People and Automations updated. **Why it won't lose data:** read-only everywhere — one new 'getDoc' on the planner's week doc and one call to the existing 'getSimproSchedule' callable when the People tab opens; no 'setDoc' / 'updateDoc' / 'saveJob'; the Ask-to-import My Day task that lived on the removed appliance rows is gone with them (nothing else wrote); no loader, rules or function change.
 - **Dashboard audit, Schedule and Quality: who the Crew Planner has on each start, the called-in flag, time off under each day, scans folded into Next 30 days; first-pass by foreman, return-trip causes, re-inspections by date, the three punch cards folded into one** · 'shipped 2026-10-30' · 'SW v581' · 'odStartCoverage' · 'odSimproStaffByDay' · 'odInspCalled' · 'odInspToCall' · 'odTimeOffByDay' · 'odFirstPassByForeman' · 'odRtCauses' · 'odReinspByDate' · 'OfficeDash' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 (*"Let's build them"*); this is the Schedule / Quality pair. **Schedule (everything kept):** every **start** now says who the Crew Planner has on that job that day — the manual cell on 'settings/schedule_<monday>' ('assignments["<jobId>_<dayIdx>"]', lead first, then crew) plus Simpro's scheduled staff for that Simpro # and day ('getSimproSchedule', the overlay the planner itself draws), one name per first name like the huddle's crewToday merge — and reads **red ink** ('readableInk', no fill) with *Nobody assigned on the planner* when nobody is; a weekend start, an Upcoming-tab start and a week not read yet never read as nobody. The Starts mini counts them (*N with nobody on the planner*). Every **inspection** row carries the **called-in flag**: the app records no separate field — the office books an inspection by typing its target date (4-WAY TARGET / FINAL TARGET), and the Jobs tab already reads a missing date as *Rough insp. not called* — so a dated row reads *Called in · 11/4*, and the Inspections mini adds *N still to call in*: jobs 85%+ into rough or finish with no target and no result (the list opens under the week's inspections). ('fourWaySetAt' / 'fourWaySetBy' are read by the activity feed but nothing writes them.) **Time off** from 'settings/crewPTO' draws as a quiet grey *Out: Abraham, James* line under each day column (both ends inclusive, one name once; the Schedule tab now loads the PTO doc like Overview / People do). **Matterport scans** left the right rail and sit inside Next 30 days as a folded *Matterport scans due (N)* group with *not booked · urgent* on its header; the rail's Scans due count opens the same list. **Quality (kept: first-pass, failed-not-re-booked, return trips past date, QC walks open, inspections next 7 days without a walk):** the three punch cards (by age, by foreman, near final) are now ONE folded **Punch** section, total open on the header with *over 30 days · serious · on jobs near final*, the three views inside. Added, each folded with a count: **First-pass by foreman** (the tab's own first-inspection rule, last 90 days, credited to every roster name who owns the job as foreman OR lead via 'd.owns', pass / of N beside the rate, green ≥ 90 · pink 75–89 · red below; names with fewer than 3 inspected jobs behind a *Fewer than 3* fold); **Return-trip causes** (open return trips grouped by the marker the app stamps when it makes one: change order 'fromCOId', QC walk 'fromQCFail', failed inspection 'fromFailedRough' / 'fromFailedFinal', GC request 'fromGC', job note 'createdFromJobNoteId', else *Added by hand* when a scope was typed, else *No reason*, its own bucket; live on 2026-10-30: 1 · 1 · 7 by hand); **Re-inspection booked** (failed inspections that HAVE a re-inspection date, soonest first, grouped by day, *N d past* in red when the date passed). Pure logic lives above 'OfficeDash' under the *Dashboard audit (Schedule, Quality) helpers* banner and is gated by **'scripts/schedule-quality-audit-test.js'** (prebuild): coverage states, Simpro folding, called-in and the to-call list, time off by day (M/D/YYYY and ISO, inclusive, de-duplicated), first-pass by owner with the fold split, cause buckets in order, re-inspection grouping, and a run through 'odModel'. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/schedule.html' and 'quality.html' ('pull-readonly.js' + 'build-mockups.js'). Guide 'dashboard.html' Schedule and Quality sections rewritten. **Why it won't lose data:** read-only — two more one-shot reads (the planner week docs and the Simpro schedule callable the planner already calls) and regrouping of what the dashboard already loads; no Firestore write, no job field, loader, function or rule change; the Scoreboard tab and the Koy-only tiles are untouched.
@@ -76711,7 +76907,7 @@ function App() {
 
 
       {selected&&(selected.quickJob
-        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
+        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} onDelete={isContractor?null:(id)=>{flushJob(selected);deleteJob(id);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
