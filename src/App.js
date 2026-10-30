@@ -1286,6 +1286,243 @@ function ccKeypadEngravePatch(loadKey, text) {
 }
 // ── end ccloads SUGGEST derivations ─────────────────────────────────────────
 
+// ── ccrooms OFFICE derivations (v578 Rooms → Command Center prefill) ─────────
+// FieldInk v757 sends the plan's room names on an EXPLICIT tap to
+// ccrooms/<ccJobId> on the field-ink project: { ccJobId, rooms: { <key>: {
+// name, nameKey, floor ('main'|'basement'|'upper'|null), sheet, page, codes[],
+// basis ('load'|'zone'|'name'), loads, auto, planShareId, removedAt,
+// fieldUpdatedAt, office?: { dismissed, officeUpdatedAt } } }, updatedAt, by,
+// updatedBy, planName }. The key is FieldInk's and is for uniqueness only — the
+// office never parses it; it folds records by (floor, nameKey), because the same
+// room can sit under two plan tokens. The office reads the doc per punch floor,
+// offers a checklist, and ONE tap appends the ticked names to Rough + Finish
+// (+ Legacy QC while that section shows) as EMPTY rooms. Nothing is automatic:
+// a wrong name must pass Send (FieldInk), a tick and Add (Miller 2026-09-30 /
+// 10-01, when wrong room names flowed into the office on their own). Pure —
+// extracted and run verbatim by scripts/ccrooms-test.js in prebuild.
+const CC_ROOM_FLOORS = ["upper", "main", "basement"];
+const CC_ROOM_BASIS_RANK = { load: 0, zone: 1, name: 2 };
+// A room name as the office stores it: zero-width characters out, whitespace
+// collapsed, trimmed (FieldInk's cleanName without its 40-char cap, so a name
+// typed in the office is never cut).
+function ccRoomCleanName(v) { return String(v == null ? "" : v).replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim(); }
+// The identity rooms fold and dedupe on: FieldInk's nameKeyOf exactly (cleanName
+// — including its 40-char cap — then lowercase), so an office room typed with a
+// pasted zero-width space or longer than FieldInk's cap still matches its twin.
+function ccRoomNameKey(v) { return ccRoomCleanName(v).slice(0, 40).trim().toLowerCase(); }
+// The doc id rule FieldInk's ccRoomsDocId uses (same as ccloads' ccId).
+function ccRoomsDocId(jobId) { return String(jobId == null ? "" : jobId).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 180); }
+// Live = FieldInk still reports it (no removedAt; removal is a soft mark, never a
+// delete). Hidden = the office pressed Hide (office.dismissed).
+function ccRoomLive(r) { return !!r && typeof r === "object" && !Array.isArray(r) && !r.removedAt; }
+function ccRoomHidden(r) { return !!(r && r.office && r.office.dismissed); }
+function ccRoomRecords(ccDoc) {
+  const rooms = ccDoc && ccDoc.rooms;
+  return rooms && typeof rooms === "object" && !Array.isArray(rooms) ? rooms : {};
+}
+// ccRoomOffers(doc, floorKey) → the rows of ONE floor's checklist: live, not
+// hidden, on that floor, folded by nameKey across plans, sorted page then name.
+// Row: { nameKey, name, floor, page, sheet, basis, loads, checked, hidden, keys[] }
+// — `keys` lists every record the row folds, so Hide / Unhide can flag all of
+// them. load / zone rows start checked; a name-only room ("named in FieldInk, no
+// loads or zone" — the likeliest junk, e.g. an orphaned old spelling) starts
+// unchecked. A row is hidden only when EVERY record it folds is hidden; hidden
+// rows are left out unless opts.includeHidden (the modal's "N hidden · Show").
+function ccRoomOffers(ccDoc, floorKey, opts) {
+  const rooms = ccRoomRecords(ccDoc);
+  const byKey = new Map();
+  for (const key of Object.keys(rooms)) {
+    const r = rooms[key];
+    if (!ccRoomLive(r) || r.floor !== floorKey) continue;
+    const name = ccRoomCleanName(r.name);
+    if (!name) continue;
+    const hidden = ccRoomHidden(r);
+    const nk = ccRoomNameKey(name);
+    const basis = CC_ROOM_BASIS_RANK[r.basis] != null ? r.basis : "name";
+    const pg = Number(r.page);
+    const page = Number.isFinite(pg) && pg > 0 ? Math.floor(pg) : null;
+    const loads = Number(r.loads) > 0 ? Math.floor(Number(r.loads)) : 0;
+    const sheet = typeof r.sheet === "string" && r.sheet.trim() ? r.sheet.trim() : null;
+    const cur = byKey.get(nk);
+    if (!cur) { byKey.set(nk, { nameKey: nk, name, floor: floorKey, page, sheet, basis, loads, hidden, keys: [key] }); continue; }
+    cur.keys.push(key);
+    cur.hidden = cur.hidden && hidden;
+    // duplicates across plan tokens carry the SAME loads (v757 amendment) — never add them up
+    cur.loads = Math.max(cur.loads, loads);
+    // the strongest basis names the row (load beats zone beats name)
+    if (CC_ROOM_BASIS_RANK[basis] < CC_ROOM_BASIS_RANK[cur.basis]) { cur.basis = basis; cur.name = name; }
+    if (page != null && (cur.page == null || page < cur.page)) { cur.page = page; if (sheet) cur.sheet = sheet; }
+    if (!cur.sheet && sheet) cur.sheet = sheet;
+  }
+  const out = [...byKey.values()].filter(o => !o.hidden || (opts && opts.includeHidden)).map(o => ({ ...o, checked: o.basis !== "name" && !o.hidden }));
+  out.sort((a, b) => ((a.page == null ? 1e9 : a.page) - (b.page == null ? 1e9 : b.page)) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  return out;
+}
+// Rooms FieldInk sent with NO floor are never offered (the office can't pick a
+// floor for them). The modal's footnote counts them — but only a nameKey with no
+// live floored record anywhere on the job (any plan, hidden or not): a second
+// device or a plan-token flip can file the same room floor-less beside its
+// floored copy, and that copy must not ask for a floor that is already set.
+function ccRoomsNoFloorCount(ccDoc) {
+  const rooms = ccRoomRecords(ccDoc);
+  const floored = new Set(), bare = new Set();
+  for (const key of Object.keys(rooms)) {
+    const r = rooms[key];
+    if (!ccRoomLive(r)) continue;
+    const nk = ccRoomNameKey(r.name);
+    if (!nk) continue;
+    if (CC_ROOM_FLOORS.includes(r.floor)) floored.add(nk); else bare.add(nk);
+  }
+  let n = 0;
+  for (const nk of bare) if (!floored.has(nk)) n++;
+  return n;
+}
+// The names already on one phase tree's floor, as nameKeys.
+function ccRoomNamesOnFloor(tree, floorKey) {
+  const fl = tree && typeof tree === "object" && !Array.isArray(tree) ? tree[floorKey] : undefined;
+  const rooms = fl && typeof fl === "object" && !Array.isArray(fl) && Array.isArray(fl.rooms) ? fl.rooms : [];
+  const s = new Set();
+  rooms.forEach(r => { const k = ccRoomNameKey(r && r.name); if (k) s.add(k); });
+  return s;
+}
+// Which trees a tap writes. "QC" is not a third room list: the Rough and Finish
+// QC walks read roughPunch / finishPunch, so those two always; qcPunch ("Legacy
+// QC Items") only while that section is on screen — a hidden tree would get
+// rooms nobody can see.
+function ccRoomTargetKeys(legacyShowing) { return legacyShowing ? ["roughPunch", "finishPunch", "qcPunch"] : ["roughPunch", "finishPunch"]; }
+// Per target tree: how many of `names` are NOT yet on that tree's floor
+// (case-insensitive). Drives the footer "Rough 14 · Finish 12 · Legacy QC 3".
+function ccRoomAddCounts(job, floorKey, names, legacyShowing) {
+  const want = new Set((Array.isArray(names) ? names : []).map(ccRoomNameKey).filter(Boolean));
+  const out = {};
+  for (const key of ccRoomTargetKeys(legacyShowing)) {
+    const have = ccRoomNamesOnFloor(job && job[key], floorKey);
+    let n = 0;
+    for (const k of want) if (!have.has(k)) n++;
+    out[key] = n;
+  }
+  return out;
+}
+// The checked-by-default offers still missing from at least one target tree's
+// floor — what the floor-header button counts, and why it shows at all.
+function ccRoomPendingNames(job, floorKey, offers, legacyShowing) {
+  const list = (Array.isArray(offers) ? offers : []).filter(o => o && o.checked && o.name);
+  if (!list.length) return [];
+  const have = ccRoomTargetKeys(legacyShowing).map(key => ccRoomNamesOnFloor(job && job[key], floorKey));
+  return list.filter(o => { const k = ccRoomNameKey(o.name); return k && have.some(set => !set.has(k)); }).map(o => o.name);
+}
+// The floor-header button shows while any checked-by-default offer is still
+// missing from at least one target tree's floor.
+function ccRoomOffersPending(job, floorKey, offers, legacyShowing) {
+  return ccRoomPendingNames(job, floorKey, offers, legacyShowing).length > 0;
+}
+// adoptRooms(tree, floorKey, names, mkId) → the tree with `names` appended to
+// that floor as EMPTY rooms — { id, name, items: [] }, exactly what PunchFloor's
+// addRoom writes — skipping names already on the floor (nameKey) and repeats
+// within the batch. Append-only: the floor keeps its general / hotcheck / photos
+// and every existing room object untouched and in order; every other key of the
+// tree (other floors, extras) is the same object. Returns the SAME tree object
+// when nothing is added, so callers can leave that tree out of the patch.
+// Only upper | main | basement — extras have generated keys FieldInk can't name.
+// A missing tree (null / undefined) starts from emptyPunch's shape; a tree that
+// exists but is not a plain object (an array, a string) is returned UNCHANGED —
+// this never guesses at a shape it doesn't recognise and never writes over it.
+// Names land trimmed and whitespace-collapsed (FieldInk's own cleaning).
+function adoptRooms(tree, floorKey, names, mkId) {
+  if (!CC_ROOM_FLOORS.includes(floorKey)) return tree;
+  if (tree != null && (typeof tree !== "object" || Array.isArray(tree))) return tree;
+  const base = tree != null ? tree : { upper: [], main: [], basement: [] };
+  const floor = normFloor(base[floorKey]);
+  const have = new Set(floor.rooms.map(r => ccRoomNameKey(r && r.name)).filter(Boolean));
+  const fresh = [];
+  for (const n of (Array.isArray(names) ? names : [])) {
+    const name = ccRoomCleanName(n);
+    const k = ccRoomNameKey(name);
+    if (!name || have.has(k)) continue;
+    have.add(k);
+    fresh.push({ id: (mkId || uid)(), name, items: [] });
+  }
+  if (!fresh.length) return tree;
+  return { ...base, [floorKey]: { ...floor, rooms: [...floor.rooms, ...fresh] } };
+}
+// The ONE patch an Add tap writes, built from jobRef.current: each target tree
+// through adoptRooms with its own fresh ids (one room, one id per tree). A tree
+// nothing was added to is left out of the patch, so it is never rewritten.
+function ccRoomsAdoptPatch(job, floorKey, names, legacyShowing, mkId) {
+  const patch = {};
+  for (const key of ccRoomTargetKeys(legacyShowing)) {
+    const before = job ? job[key] : undefined;
+    const after = adoptRooms(before, floorKey, names, mkId);
+    if (after !== before) patch[key] = after;
+  }
+  return patch;
+}
+// Decision 5 fan-out: a room typed by hand in one phase's "+ Room" (or a QC walk's
+// "+ New Room…") is appended to the other phase on that floor in the SAME patch.
+//   prevTrees = { roughPunch, finishPunch, qcPunch } from jobRef.current
+//   phase     = "rough" | "finish"      nextPunch = that phase's edited tree
+// Added = a room whose id is new to that floor in the edited phase, with a
+// non-blank name. upper | main | basement only; deduped by nameKey against the
+// target floor. A rename keeps its id and a delete removes one, so neither ever
+// qualifies — renames and deletes stay per phase. Items never travel: a room
+// created in a QC walk with its first item fans out EMPTY. qcPunch joins only
+// while the Legacy section shows. Returns { [thisKey]: nextPunch, ...others }.
+// FAILS CLOSED: without a plain-object previous tree for the edited phase it
+// cannot tell what is new, so it fans out NOTHING (every room would otherwise
+// look "added" and the other phase would be rewritten from a skeleton — the
+// Miller rule: when in doubt, nothing automatic). normalizeJob guarantees the
+// three trees exist, so this only guards a future caller.
+// Blast radius (for the next forensics): a fan-out writes the WHOLE other
+// tree(s) from jobRef.current, so a Finish rollback can originate from a Rough
+// "+ Room" tap; the same-object check limits that to taps that add a new name.
+function fanOutAddedRooms(prevTrees, phase, nextPunch, legacyShowing, mkId) {
+  const thisKey = phase === "rough" ? "roughPunch" : "finishPunch";
+  const patch = { [thisKey]: nextPunch };
+  const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  if (!isObj(prevTrees) || !isObj(prevTrees[thisKey])) return patch;
+  const prev = prevTrees[thisKey];
+  const others = ccRoomTargetKeys(legacyShowing).filter(k => k !== thisKey);
+  for (const fk of CC_ROOM_FLOORS) {
+    const nextRooms = normFloor(nextPunch && typeof nextPunch === "object" && !Array.isArray(nextPunch) ? nextPunch[fk] : undefined).rooms;
+    if (!nextRooms.length) continue;
+    const prevIds = new Set(normFloor(prev[fk]).rooms.map(r => r && r.id).filter(id => id != null));
+    const added = nextRooms.filter(r => r && r.id != null && !prevIds.has(r.id) && String(r.name == null ? "" : r.name).trim()).map(r => r.name);
+    if (!added.length) continue;
+    for (const key of others) {
+      const before = Object.prototype.hasOwnProperty.call(patch, key) ? patch[key] : (prevTrees ? prevTrees[key] : undefined);
+      const after = adoptRooms(before, fk, added, mkId);
+      if (after !== before) patch[key] = after;
+    }
+  }
+  return patch;
+}
+// THE ONLY shape an office write to ccrooms may take:
+// { rooms: { <key>: { office: { dismissed, officeUpdatedAt } } } } — nothing at
+// the top level, nothing beside `office` on a record. Firestore merge:true
+// deep-merges maps, so every field-owned key and every other record survive with
+// no pre-read (the same contract as ccOfficeWritePayload for ccloads).
+function ccRoomsOfficePayload(keys, dismissed, stamp) {
+  const recs = {};
+  for (const k of (Array.isArray(keys) ? keys : [])) if (typeof k === "string" && k) recs[k] = { office: { dismissed: !!dismissed, officeUpdatedAt: stamp } };
+  return Object.keys(recs).length ? { rooms: recs } : null;
+}
+// ── end ccrooms OFFICE derivations ──────────────────────────────────────────
+
+// Hide / unhide FieldInk room offers: writes ONLY rooms.<key>.office on
+// ccrooms/<jobId> (field-ink project). The field is never told; no job data.
+// One-shot, user-triggered; a denied write self-heals via _ccDenied and no-ops.
+async function publishCcRoomsOffice(jobId, keys, dismissed) {
+  try {
+    if (jobId == null) return false;
+    const payload = ccRoomsOfficePayload(keys, dismissed, serverTimestamp());
+    if (!payload) return false;
+    const user = await ensureFieldinkAuth();
+    if (!user) return false;
+    await setDoc(doc(fieldinkDb, "ccrooms", ccRoomsDocId(jobId)), payload, { merge: true });
+    return true;
+  } catch (e) { _ccDenied(e); console.warn("[fieldink] ccrooms office write failed (rules deployed?):", e?.message); return false; }
+}
+
 // ── FieldInk CREW ROSTER seed + CREW TOKEN mint (CC-SIDE SPEC P4.2 Instant
 // Grants) ───────────────────────────────────────────────────────────────────
 // Two zero-tap grants layered on the personalized Open link (item 1, SW v384):
@@ -13475,7 +13712,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null, roomPlaceholder="Add room (e.g. Master Bath)…", roomBtnLabel="+ Room" }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null, roomPlaceholder="Add room (e.g. Master Bath)…", roomBtnLabel="+ Room", ccRooms=null }) {
 
   const data = normFloor(floorData);
 
@@ -13604,6 +13841,18 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
         {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}>
           <Pill label={`${mineCount} for you`} color="#34507F"/>
         </span>}
+        {/* v578: rooms FieldInk knows on this floor that this list is missing. Shown only
+            while something is missing (JobDetail decides); opens the per-floor checklist. */}
+        {ccRooms && (
+          <button className="he-tap" onClick={e => { e.stopPropagation(); ccRooms.onOpen(); }}
+            title="Rooms named on the plan in FieldInk that aren't on this list yet"
+            style={{ display:'inline-flex', alignItems:'center', gap:6, background:C.card, border:`1px solid ${C.accent}55`,
+              color:C.accent, fontWeight:700, fontSize:12, padding:'3px 9px', borderRadius:8, minHeight:28, cursor:'pointer',
+              fontFamily:'inherit', whiteSpace:'nowrap' }}>
+            FieldInk rooms
+            <span style={{ background:C.accent, color:'#fff', borderRadius:99, padding:'0 6px', fontSize:11, minWidth:18, textAlign:'center' }}>{ccRooms.count}</span>
+          </button>
+        )}
 
         <span style={{ color: floorColor, fontSize: 13 }}>{collapsed ? '▸' : '▾'}</span>
 
@@ -13749,7 +13998,89 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
+// ── v578 FieldInk rooms sheet: one floor's checklist, one tap to add ──────
+// Rows come from ccRoomOffers (live, not hidden, this floor, folded by name);
+// load / zone rows start ticked, name-only rows unticked. Add writes ONE patch
+// through onAdd (JobDetail → ccRoomsAdoptPatch → u()); Hide / Unhide write only
+// rooms.<key>.office on the FieldInk doc through onHide. Nothing is automatic.
+function CcRoomsSheet({ floorKey, floorLabel, ccDoc, job, legacyShowing, onAdd, onHide, onClose }) {
+  const [ticks, setTicks] = useState({});          // nameKey → bool (undefined = the row's default)
+  const [showHidden, setShowHidden] = useState(false);
+  const rows = useMemo(() => ccRoomOffers(ccDoc, floorKey, { includeHidden: showHidden }), [ccDoc, floorKey, showHidden]);
+  const hiddenN = useMemo(() => ccRoomOffers(ccDoc, floorKey, { includeHidden: true }).filter(o => o.hidden).length, [ccDoc, floorKey]);
+  const noFloorN = useMemo(() => ccRoomsNoFloorCount(ccDoc), [ccDoc]);
+  const isOn = (o) => !o.hidden && (ticks[o.nameKey] === undefined ? o.checked : !!ticks[o.nameKey]);
+  const names = rows.filter(isOn).map(o => o.name);
+  const counts = ccRoomAddCounts(job, floorKey, names, legacyShowing);
+  const total = Math.max(0, ...Object.keys(counts).map(k => counts[k]));
+  const onRough = ccRoomNamesOnFloor(job && job.roughPunch, floorKey);
+  const onFinish = ccRoomNamesOnFloor(job && job.finishPunch, floorKey);
+  const sent = (() => {
+    const by = ccDoc && typeof ccDoc.updatedBy === "string" && ccDoc.updatedBy.trim() ? ccDoc.updatedBy.trim() : "";
+    const at = ccDoc && ccDoc.updatedAt && typeof ccDoc.updatedAt.toDate === "function" ? ccDoc.updatedAt.toDate() : null;
+    const when = at ? at.toLocaleString("en-US", { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    return [by ? `sent by ${by}` : "", when].filter(Boolean).join(" · ");
+  })();
+  const plan = ccDoc && typeof ccDoc.planName === "string" ? ccDoc.planName : "";
+  const tag = (txt, on) => <span style={{ fontSize:11, fontWeight:800, letterSpacing:'0.06em', color: on ? C.green : C.slateInk, background: on ? `${C.green}14` : C.slateBg, border:`1px solid ${on ? C.green+'44' : C.slateLine}`, borderRadius:99, padding:'1px 6px', marginLeft:6, verticalAlign:'middle' }}>{txt}</span>;
+  const breakdown = Object.keys(counts).map(k => `${k === "roughPunch" ? "Rough" : k === "finishPunch" ? "Finish" : "Legacy QC"} ${counts[k]}`).join(" · ");
+  return (
+    <SheetShell title={`FieldInk rooms · ${floorLabel}`} onCancel={onClose} onDone={() => onAdd(names)} doneLabel={total ? `Add ${total}` : "Add"} doneDisabled={!total}>
+      <div style={{ padding:'10px 16px 4px' }}>
+        {(plan || sent) && <div style={{ fontSize:12.5, color:C.dim }}>{plan ? <>From <b style={{ color:C.text }}>{plan}</b></> : null}{plan && sent ? " · " : ""}{sent}</div>}
+        <div style={{ fontSize:12.5, color:C.faint, marginTop:4 }}>Ticked rooms are added as empty rooms on this floor. Nothing already on a list is touched.</div>
+        <div style={{ fontSize:13, fontWeight:700, color: total ? C.accent : C.faint, marginTop:8 }}>
+          {total ? `Adds ${total} room${total === 1 ? "" : "s"} to ${floorLabel}: ${breakdown}` : "Nothing new to add"}
+        </div>
+      </div>
+      <div style={{ padding:'4px 10px 6px' }}>
+        {rows.length === 0 && <div style={{ padding:'18px 6px', color:C.faint, fontSize:13 }}>No rooms for this floor from FieldInk yet.</div>}
+        {rows.map(o => {
+          const on = isOn(o);
+          const meta = o.hidden ? "hidden" : o.basis === "load" ? `${o.sheet ? o.sheet + " · " : ""}${o.loads} load${o.loads === 1 ? "" : "s"}` : o.basis === "zone" ? `${o.sheet ? o.sheet + " · " : ""}zone on the plan` : "named in FieldInk, no loads or zone";
+          return (
+            <div key={o.nameKey} style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'9px 6px', borderBottom:`1px solid ${C.border}`, opacity: o.hidden ? .6 : 1 }}>
+              {o.hidden ? <span style={{ width:20, flexShrink:0 }}/> : (
+                <input type="checkbox" checked={on} onChange={e => setTicks(t => ({ ...t, [o.nameKey]: e.target.checked }))}
+                  aria-label={`Add ${o.name}`} style={{ width:20, height:20, margin:'1px 0 0', accentColor:C.accent, flexShrink:0 }}/>
+              )}
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontWeight: o.basis === "name" || o.hidden ? 600 : 700, fontSize:14, color: o.basis === "name" || o.hidden ? C.dim : C.text }}>
+                  {o.name}{onRough.has(o.nameKey) && tag("on Rough", true)}{onFinish.has(o.nameKey) && tag("on Finish", true)}{o.hidden && tag("hidden", false)}
+                </div>
+                <div style={{ fontSize:12, color:C.faint, marginTop:1 }}>{meta}</div>
+              </div>
+              <button className="he-tap" onClick={() => onHide(o.keys, !o.hidden)} title={o.hidden ? "Offer this room again" : "Drop this room from the list (FieldInk is not told)"}
+                style={{ background:'none', border:'none', color:C.faint, font:'inherit', fontSize:12, cursor:'pointer', padding:'2px 6px', minHeight:28, textDecoration:'underline', fontFamily:'inherit' }}>
+                {o.hidden ? "Unhide" : "Hide"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ padding:'8px 16px 12px', fontSize:12, color:C.faint }}>
+        {hiddenN > 0 && <div>{hiddenN} hidden · <button onClick={() => setShowHidden(v => !v)} style={{ background:'none', border:'none', color:C.accent, font:'inherit', fontSize:12, cursor:'pointer', padding:0, fontFamily:'inherit' }}>{showHidden ? "Hide again" : "Show"}</button></div>}
+        {noFloorN > 0 && <div style={{ marginTop: hiddenN ? 4 : 0 }}>{noFloorN} more room{noFloorN === 1 ? " has" : "s have"} no floor; set it on that sheet in FieldInk's Pages panel and Send again.</div>}
+      </div>
+    </SheetShell>
+  );
+}
+
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null, ccRooms=null }) {
+
+  // v578: FieldInk rooms per floor ({ byFloor: { upper|main|basement: { offers, pending, show } }, open(fk) }).
+  // Only the residential Rough / Finish mounts pass it; extras floors never get it. The badge
+  // counts the rooms still missing from a target list (never rooms already on both).
+  const ccRoomsFor = (fk) => {
+    const slice = ccRooms && ccRooms.byFloor && ccRooms.byFloor[fk];
+    if (!slice || !slice.show) return null;
+    return { count: slice.pending.length, onOpen: () => ccRooms.open(fk) };
+  };
+  // FieldInk sent rooms but none can be offered because none carries a floor:
+  // say so here (the per-floor sheet, and its footnote, never opens in that case).
+  const ccRoomsNoFloorNote = ccRooms && ccRooms.noFloor > 0 && !["upper", "main", "basement"].some(fk => ccRooms.byFloor && ccRooms.byFloor[fk] && ccRooms.byFloor[fk].show)
+    ? `FieldInk sent ${ccRooms.noFloor} room${ccRooms.noFloor === 1 ? "" : "s"} with no floor, so none can be added here yet. Set each sheet's floor in FieldInk's Pages panel and tap Send rooms to Command Center again.`
+    : null;
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -13865,11 +14196,17 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
+      {ccRoomsNoFloorNote && (
+        <div style={{ fontSize:12.5, color:C.faint, margin:'0 0 10px', padding:'8px 10px', border:`1px solid ${C.border}`, borderRadius:8, background:C.surface }}>
+          {ccRoomsNoFloorNote}
+        </div>
+      )}
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName} ccRooms={ccRoomsFor('upper')}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName} ccRooms={ccRoomsFor('main')}/>
+
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName} ccRooms={ccRoomsFor('basement')}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -31593,7 +31930,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       });
     };
     walkNext(nextPunch);
-    const patch = phase === "rough" ? { roughPunch: nextPunch } : { finishPunch: nextPunch };
+    // v578 (decision 5): a room typed by hand in this phase is appended, EMPTY, to
+    // the other phase on that floor in this same patch (Legacy QC only while its
+    // section shows). Renames / deletes never qualify; fails closed without a
+    // usable previous tree. See fanOutAddedRooms.
+    const legacyQcShowing = !!(prev.qcPunch && punchOpen(prev.qcPunch) > 0);
+    const patch = fanOutAddedRooms({ roughPunch: prev.roughPunch, finishPunch: prev.finishPunch, qcPunch: prev.qcPunch }, phase, nextPunch, legacyQcShowing);
     if (flipTo.size > 0) {
       let who = "", when = "";
       try {
@@ -32538,6 +32880,74 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return floors.reduce((t,k) => t + countFloor(punch[k]), 0);
   };
 
+  // ── v578 FieldInk ROOMS inbox (ccrooms/<jobId>, FieldInk v757) ────────────
+  // FieldInk sends the plan's room names on an explicit tap; the office offers
+  // them per punch floor (button in the floor header → CcRoomsSheet) and ONE tap
+  // appends the ticked names to Rough + Finish (+ Legacy QC while it shows).
+  // Same self-healing attach as the ccloads listener; inert until the job is
+  // FieldInk-linked and the field-ink `ccrooms` rules are deployed.
+  const [ccRoomsInbox, setCcRoomsInbox] = useState(null);   // the raw doc, or null
+  const [ccRoomsSheet, setCcRoomsSheet] = useState(null);   // floorKey of the open sheet, or null
+  useEffect(() => {
+    let dead = false, unsub = null, retryTimer = null;
+    setCcRoomsInbox(null); setCcRoomsSheet(null);
+    if (job.id == null) return undefined;   // an unsaved job has no doc to listen to
+    const attach = () => { if (dead) return; ensureFieldinkAuth().then(u2 => {
+      if (dead) return;
+      if (!u2) { retryTimer = setTimeout(attach, 20000); return; }
+      try {
+        unsub = onSnapshot(doc(fieldinkDb, "ccrooms", ccRoomsDocId(job.id)), snap => {
+          if (dead) return;
+          setCcRoomsInbox(snap.exists() ? snap.data() : null);
+        }, (err) => {
+          console.warn("[fieldink] ccrooms listener error — retrying in 15s:", err?.message);
+          try { unsub && unsub(); } catch {}
+          if (!dead) retryTimer = setTimeout(attach, 15000);
+        });
+      } catch {}
+    }); };
+    attach();
+    return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
+  }, [job.id]);
+  // The Legacy QC Items section's own render predicate — the adopt and fan-out
+  // writes use the same test, so qcPunch is written only while it is on screen.
+  const legacyQcShowing = !!(job.qcPunch && punchOpen(job.qcPunch) > 0);
+  // Per floor: the offers and whether the floor-header button shows (only while
+  // a checked-by-default name is missing from at least one target tree). null
+  // when nothing is pending anywhere, so PunchSection renders no button at all.
+  const ccRoomOffersByFloor = useMemo(() => {
+    if (!ccRoomsInbox) return null;
+    const byFloor = {};
+    for (const fk of CC_ROOM_FLOORS) {
+      const offers = ccRoomOffers(ccRoomsInbox, fk);
+      const pending = ccRoomPendingNames(job, fk, offers, legacyQcShowing);
+      byFloor[fk] = { offers, pending, show: pending.length > 0 };
+    }
+    // Rooms sent with no floor are never offered; when NOTHING is offered because of
+    // that (Miller 2026-10-30: all 113 rooms floor-less), the Punch List says so,
+    // or the office would never learn why the button is missing.
+    const noFloor = ccRoomsNoFloorCount(ccRoomsInbox);
+    if (!CC_ROOM_FLOORS.some(fk => byFloor[fk].show) && !noFloor) return null;
+    return { byFloor, noFloor, open: (fk) => setCcRoomsSheet(fk) };
+  }, [ccRoomsInbox, job, legacyQcShowing]);
+  const ccFloorLabel = (fk) => fk === "upper" ? "Upper Level" : fk === "basement" ? "Basement" : "Main Level";
+  // Add: ONE u() patch built from jobRef.current (ccRoomsAdoptPatch) — append-only.
+  const adoptCcRooms = (floorKey, names) => {
+    const prev = jobRef.current;
+    const legacy = !!(prev.qcPunch && punchOpen(prev.qcPunch) > 0);
+    const counts = ccRoomAddCounts(prev, floorKey, names, legacy);
+    const patch = ccRoomsAdoptPatch(prev, floorKey, names, legacy);
+    setCcRoomsSheet(null);
+    if (!Object.keys(patch).length) { showToast("Nothing new to add"); return; }
+    u(patch);
+    const n = Math.max(0, ...Object.keys(counts).map(k => counts[k]));
+    showToast(`Added ${n} room${n === 1 ? "" : "s"} to ${ccFloorLabel(floorKey)}`);
+  };
+  // Hide / Unhide: the only office write to ccrooms (rooms.<key>.office).
+  const hideCcRooms = (keys, dismissed) => {
+    publishCcRoomsOffice(job.id, keys, dismissed).then(ok => { if (!ok) showToast(dismissed ? "Couldn't hide that room — try again" : "Couldn't bring that room back — try again"); });
+  };
+
   // v549: one handler for both stage selects — save the plan's patch, show what
   // it set off, and offer the shared Undo bar (re-issues the exact prior values).
   const applyStage = (phase, v) => {
@@ -33361,7 +33771,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} phase="rough"/>
                 <PunchNotesCtx.Provider value={punchNotesCtx('roughPunch')}>
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
-                  jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
+                  jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData} ccRooms={ccRoomOffersByFloor}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapRough}
                   onJumpToRT={onJumpToRT}
@@ -33691,7 +34101,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
                 <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} phase="finish" onJumpPhase={() => setTab("Rough")}/>
                 <PunchNotesCtx.Provider value={punchNotesCtx('finishPunch')}>
-                <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
+                <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData} ccRooms={ccRoomOffersByFloor}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapFinish}
                   onJumpToRT={onJumpToRT}
@@ -36327,6 +36737,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
 
+      )}
+
+      {ccRoomsSheet && ccRoomsInbox && (
+        <CcRoomsSheet floorKey={ccRoomsSheet} floorLabel={ccFloorLabel(ccRoomsSheet)} ccDoc={ccRoomsInbox} job={job}
+          legacyShowing={legacyQcShowing} onAdd={(names)=>adoptCcRooms(ccRoomsSheet, names)} onHide={hideCcRooms} onClose={()=>setCcRoomsSheet(null)}/>
       )}
 
       <QcTripSheet ask={qcAsk} onAnswer={(a)=>{ const r=qcAsk&&qcAsk.resolve; setQcAsk(null); if(r) r(a); }}/>
@@ -60321,10 +60736,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-29 · App SW version: v577
+**Last manifest update:** 2026-10-29 · App SW version: v578
 
 ---
 
+- **Punch rooms from FieldInk: one tap fills a floor's rooms on Rough + Finish; a room typed on one list also lands on the other** · 'shipped 2026-10-29' · 'SW v578' · 'ccRoomOffers' · 'adoptRooms' · 'ccRoomsAdoptPatch' · 'fanOutAddedRooms' · 'CcRoomsSheet' · 'PunchFloor ccRooms' · 'publishCcRoomsOffice' · Koy 2026-10-07: *"option to push rooms to command center to prefill"* — the plan already labels every room and FieldInk already holds those labels, yet the office retyped them per job, per floor, per punch phase. The office half of the FieldInk v757 bridge (spec 'homestead-pdf-markup/docs/superpowers/specs/2026-10-07-rooms-to-command-center-design.md'). **How it works:** FieldInk sends the plan's room names on an explicit *Send rooms to Command Center* tap to 'ccrooms/<ccJobId>' on the field-ink project (a map keyed by a FieldInk-owned string the office never parses; it folds records by floor + name, case- and whitespace-insensitive, because the same room can sit under two plan tokens). The job listens (same self-healing attach as the 'ccloads' listener) and each residential **Rough / Finish › Punch List floor header** gets a **FieldInk rooms (N)** button, shown only while a room FieldInk knows is still missing from that floor on at least one target list. It opens a sheet listing that floor's rooms: rooms with loads or a drawn zone start ticked; a name typed in FieldInk with no loads and no zone (usually an orphaned old spelling) shows greyed and unticked; rooms already on a list carry an *on Rough* / *on Finish* tag and are skipped by the counts. The Add button reads *Add N* with *Rough n · Finish n* above the list, plus *Legacy QC n* only while the Legacy QC Items section is on screen (the QC walks read the Rough/Finish trees, so they get the rooms for free; a hidden tree is never written). **Hide** drops a row (writes ONLY 'rooms.<key>.office.{dismissed, officeUpdatedAt}' on the FieldInk doc by merge-set — FieldInk is never told, no job data); *N hidden · Show* brings it back with **Unhide**. Rooms FieldInk sent without a floor are never offered; a footnote counts the ones with no floored twin and says where to set it, and when NOTHING can be offered because no room carries a floor (Miller #1438 on 2026-10-30: all 113 rooms came through floor-less because no sheet had a floor set in FieldInk’s Pages panel) the residential Punch List shows one note saying so instead of nothing. Questions needs no code: its room picker ('roomSuggestions') reads punch rooms. **Decision 5 fan-out:** a room typed by hand in Rough's or Finish's *+ Room* (or a QC walk's *+ New Room…*) is appended, empty, to the other phase on that floor in the same patch, skipped when that name is already there; renames and deletes stay on the list you are on; items never travel; extras floors never fan out; Legacy QC *+ Room* does not fan out; commercial punch never reaches the funnel. Nothing is automatic — the Miller incidents (2026-09-30 / 10-01, wrong room names flowing into the office on their own) are why a wrong name must pass Send (FieldInk), a tick and Add. Gate: 'scripts/ccrooms-test.js' in prebuild (90 checks on the helpers extracted verbatim from App.js: folding, hidden rows, floor-less footnote, per-phase counts, append-only adopt, fail-closed fan-out, the exact Hide payload). Mockup 'docs/mockups/ccrooms-prefill.html' (Miller #1438's real room names), approved 2026-10-29. Two adversarial reviews. No Firestore rules change in either project (the field-ink 'ccrooms' block is deployed; this repo's rules untouched). Guides 'rough.html' / 'finish.html' updated. **Why it won't lose data:** append-only — every write builds from 'jobRef.current' and replaces only the target floor with '{ ...normFloor(floor), rooms: [...existing, ...fresh] }', fresh = '{ id: uid(), name, items: [] }' (exactly 'addRoom''s shape, a new id per tree); every existing room object, item, photo, general / hotcheck list, other floor and extras entry is the same object; nothing is renamed, deleted or reordered; a tree nothing was added to is left out of the patch. The patch goes through the normal 'u()' → 'saveJob' funnel: '_mergePatchAgainstServer' three-way-merges each tree independently and '_threeWayMerge' unions 'rooms' by 'id', keeping a client-added room absent from the baseline and every server-side room. The fan-out fails closed (no usable previous tree → nothing copied). The only write to the FieldInk project names the office-owned 'office' sub-object of listed records on a map doc with 'merge:true' (the SDK treats nested map keys literally; verified in @firebase/firestore 10.14.1). No new job field, no loader change, no rules change.
 - **Rough and Finish tabs show their own hours, live** · 'shipped 2026-10-29' · 'SW v577' (built 2026-10-26 as v568, replayed onto v576) · 'JobDetail' · 'getPhaseHours' · 'loadPhaseHoursLive' · 'loadPhaseHours' · 'hoursDoc' · 'phaseCostsNightly' · The crew asked to see rough and finish hours apart, not only the job total. The clock badges on the **Rough** and **Finish** tabs (left of the stage status, built long ago, empty until now because 'getSimproJobFinancials' never sent 'roughHoursActual' / 'finishHoursActual') now read **used / estimated** for that phase, the same item-by-item split as the office Job Costs tab: every cost center (base and change orders), split by the "(Rough In)" / "(Finish)" item names; red once used passes the estimate. The job header keeps its total badges exactly as before. **Live like the header:** new callable 'getPhaseHours' reads the job's cost-center totals from Simpro on open (sections + one list per section) and reuses each cost center's saved split from 'phaseCostsState'; items are re-read only for a cost center whose estimate changed (then saved back). Timed on live Simpro: Pierce #1277 1.2 s / 4 requests, Fuller #1099 2.1 s / 7, Battle Creek #1412 (13 sections) 4.4 s / 13, zero item reads; a job never pulled before takes one slow first read (15–47 s) and is fast after. The phone shows last night's numbers at once from 'settings/phaseHours' (written by 'phaseCostsNightly', 6.5 KB, hours only) and swaps in the live read; live results are cached 5 min per job; on any failure the nightly numbers stay. Both return **hours only, no dollar field** (a test asserts it), so crew phones never receive Job Costs' dollar data. A job with no split (a quote, no estimate) shows no badge, as before. Untagged 'other' hours (~4% company-wide) stay in the header total only. Test 'phasecosts-test' adds the hours doc and the live read (a used-hours change asks Simpro twice and reads no items; a changed estimate re-reads that one cost center). Guides 'rough.html' / 'finish.html' explain the badge. **Needs 'firebase deploy --only functions:getPhaseHours,functions:phaseCostsNightly,functions:sendTestPhaseCosts'** (before the app). **Why it won't lose data:** the app only reads (one getDoc, one callable); the functions add one new 'settings/' doc under the existing rule and re-save a job's server-only split cache in 'phaseCostsState' in the same shape the nightly pull writes; no job field, loader or rules change.
 - **Projects: add an existing job to a project** · 'shipped 2026-10-29' · 'SW v576' · 'JobProjectSection' · Koy: *"i have a battle creek project made already, i dont see an option to move it to that project."* Job Info → Project on a job that isn't in one now has **Or add it to an existing project**: pick a live project in the job's division, Add to project. The job keeps its own name, Simpro #, plans and everything on it (own-number building); if it carries the project's shared Simpro #, the section then asks for its Simpro folder. Leave project undoes it. **Why it won't lose data:** writes only the 'projectGroupId' / 'projectRole' / 'simproLead' / 'simproFolder' pointers through the job's 'u()' funnel; nothing renamed, moved or deleted. No rules or functions changes.
 - **Projects: several houses on one job become one project — each building its own job, grouped on the Job Board; add-only field milestones on every job; Plans & Links starts folded** · 'shipped 2026-10-29' · 'SW v575' · 'ProjectsCtx' · 'ProjectSheet' · 'AddBuildingForm' · 'SimproFolderPicker' · 'FieldMilestones' · 'FoldSection' · 'functions:listSimproJobFolders' · Meeting 2026-10-14 (Fratto Farms). **Projects:** a project is a '/projects' record grouping normal jobs via 'projectGroupId'; the Job Board shows one folded PROJECTS group (buildings leave the stage groups, nothing shown twice); project page with buildings first, + Add Building (Simpro folder picker reading Simpro's real folders through 'listSimproJobFolders', app-key gated, with a typed-name fallback and warning if Simpro can't be read; own-number option; Job Sections toggles), folded Project info; breadcrumb + labeled hops inside a building; Job Info → Project (Make this a project → the job becomes Site / Shared, nothing moved; not offered on quotes, temp peds or quick jobs). Subcontractors (contractor access) don't see the project page, breadcrumb or Project section — only their own buildings under the project row. A shared Simpro # joins only its lead building (client lookups, Scoreboard margin, Friday Packet, foreman prep, and the crew planner's scheduled crew/hours go to the lead building or Site / Shared). **Milestones:** add-only, starts empty, stamped who + date, Remove + Undo; commercial's 9 GC dates moved to a folded GC Schedule Dates section (same data, Forecast + Ufer reminders unchanged). **Plans & Links:** every block folded with a count. **Why it won't lose data:** new job fields live inside 'data' (loader passes them through); milestones are id'd items so the save transaction's three-way merge keeps two phones' adds; '/projects' is a new additive collection (create/update validated like '/needs', delete denied); buildings never get a top-level Drive folder ('_needsDriveFolder' guard); nothing is ever deleted. SOP guides: new Projects guide (HelpDot on the project page), plus Job Info, Plans & Links and Commercial Mode updated. Deploy: rules ('projects') + functions ('ensureJobDriveFolder', 'nightlyDriveSync', 'listSimproJobFolders', 'foremanMeetingPrep', 'sendTestForemanMeetingPrep', 'strategyPrep', 'sendTestStrategyPrep'; the retired Friday Packet's guarded 'buildModel' is no longer called by any function). Phase 2 (project Drive folders + plan routing) is separate.

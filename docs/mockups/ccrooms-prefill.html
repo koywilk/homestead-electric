@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FieldInk rooms — Mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9; --muted:#CDD3DB;
+    --text:#1B1F24; --dim:#5E6670; --faint:#666E79; --accent:#2F5BD9; --blue:#2F5BD9; --green:#1F7A3F; --red:#C62828; --purple:#6A3FB5;
+    --orange:#C2410C; --teal:#3E7D7A; --slate:#56657A; --slateBg:#E8ECF2; --slateLine:#C9D1DC; --steelBg:#EAF0FC; --steelLine:#C7D5F5;
+    --d-bg2:#1B2030; --d-bright:#E6EAF1;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.4}
+  header.page{max-width:1240px;margin:0 auto;padding:28px 16px 8px}
+  h1{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:.06em;margin:0}
+  .lede{color:var(--dim);max-width:800px;margin:6px 0 0}
+  .lede b{color:var(--text)}
+  .row{max-width:1240px;margin:0 auto;padding:16px;display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
+  .col{flex:1 1 360px;max-width:420px;min-width:0}
+  .cap{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:0 0 4px}
+  .capsub{font-size:13px;color:var(--dim);margin:0 0 10px}
+  .phone{background:var(--card);border:1px solid var(--border);border-radius:22px;padding:14px 14px 18px;box-shadow:0 2px 10px rgba(20,24,33,.06);position:relative;overflow:hidden;min-height:560px}
+  .tabs{display:flex;gap:6px;margin-bottom:10px;overflow:hidden}
+  .tab{font-size:12.5px;font-weight:700;padding:6px 10px;border-radius:8px;background:var(--surface);color:var(--dim);white-space:nowrap}
+  .tab.on{background:var(--blue);color:#fff}
+  .section{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #2F5BD944;padding-bottom:7px;margin:8px 0 12px}
+  .section .lbl{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:.08em;color:var(--blue)}
+  /* floor header — PunchFloor's real styling */
+  .floor{border:1px solid #2F5BD933;border-radius:10px;overflow:hidden;margin-bottom:14px}
+  .floor.purple{border-color:#6A3FB533}
+  .fh{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#2F5BD910;cursor:pointer;user-select:none}
+  .purple .fh{background:#6A3FB510}
+  .fh .dot{width:8px;height:8px;border-radius:50%;background:var(--blue);flex-shrink:0}
+  .purple .fh .dot{background:var(--purple)}
+  .fh .name{font-weight:700;font-size:14px;color:var(--blue);flex:1}
+  .purple .fh .name{color:var(--purple)}
+  .pill{font-size:11px;font-weight:700;border-radius:99px;padding:2px 8px;border:1px solid}
+  .pill.red{color:var(--red);border-color:#C6282855;background:#C6282812}
+  .chev{color:var(--blue);font-size:13px}
+  /* the new button: Btn variant="secondary" at the header's pill size */
+  .fibtn{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid #2F5BD955;color:var(--accent);font-weight:700;font-size:12px;padding:3px 9px;border-radius:8px;min-height:28px;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .fibtn:hover{opacity:.7}
+  .fibtn .n{background:var(--accent);color:#fff;border-radius:99px;padding:0 6px;font-size:11px;min-width:18px;text-align:center}
+  .fbody{padding:12px 14px}
+  .gen{font-size:12px;color:var(--dim);font-weight:700;letter-spacing:.08em;margin-bottom:6px}
+  .addrow{display:flex;gap:6px;margin-top:10px}
+  .addrow input{flex:1;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font:inherit;font-size:13px;background:var(--card)}
+  .addrow button{border:1px dashed #1F7A3F55;background:#1F7A3F15;color:var(--green);border-radius:8px;padding:0 12px;font:inherit;font-size:13px;cursor:pointer}
+  .room{margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-weight:700;font-size:13px;display:flex;justify-content:space-between}
+  .room .cnt{font-weight:600;color:var(--faint);font-size:12px}
+  .room.fresh{border-color:#2F5BD955;background:var(--steelBg)}
+  .room.fresh .cnt{color:var(--accent)}
+  /* modal — same scrim/sheet as the app's other sheets */
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;z-index:5;border-radius:22px}
+  .scrim.open{display:flex}
+  .sheet{background:var(--card);border-radius:16px 16px 22px 22px;width:100%;max-height:92%;display:flex;flex-direction:column;box-shadow:0 -10px 40px rgba(0,0,0,.25)}
+  .sh{padding:14px 16px 8px;border-bottom:1px solid var(--border)}
+  .sh .t{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:.06em;color:var(--blue);display:flex;align-items:center;justify-content:space-between}
+  .sh .t .x{font-family:Inter;font-size:16px;color:var(--dim);cursor:pointer;padding:4px 6px;min-width:32px;text-align:center}
+  .sh .from{font-size:12.5px;color:var(--dim);margin-top:2px}
+  .sh .from b{color:var(--text);font-weight:700}
+  .sh .hint{font-size:12.5px;color:var(--faint);margin-top:6px}
+  .list{overflow:auto;padding:4px 10px 6px;flex:1}
+  .r{display:flex;align-items:flex-start;gap:10px;padding:9px 6px;border-bottom:1px solid var(--border)}
+  .r:last-child{border-bottom:none}
+  .r input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--accent);flex-shrink:0}
+  .r .nm{font-weight:700;font-size:14px}
+  .r .meta{font-size:12px;color:var(--faint);margin-top:1px}
+  .r.weak .nm{color:var(--dim);font-weight:600}
+  .r .on{font-size:10.5px;font-weight:800;letter-spacing:.06em;color:var(--slateInk,#3F4B5C);background:var(--slateBg);border:1px solid var(--slateLine);border-radius:99px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .r .on.b{color:var(--green);background:#1F7A3F14;border-color:#1F7A3F44}
+  .r .grow{flex:1;min-width:0}
+  .hide{background:none;border:none;color:var(--faint);font:inherit;font-size:12px;cursor:pointer;padding:2px 6px;min-height:28px;text-decoration:underline}
+  .foot{padding:10px 14px 14px;border-top:1px solid var(--border);background:var(--surface);border-radius:0 0 22px 22px}
+  .note{font-size:12px;color:var(--faint);margin:0 0 10px}
+  .btns{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+  .btn{border-radius:8px;padding:8px 14px;min-height:40px;font-size:13px;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .btn.ghost{background:none;border:1px solid var(--border);color:var(--dim)}
+  .btn.primary{background:var(--accent);border:1px solid var(--accent);color:#fff;font-weight:700}
+  .btn.primary:disabled{opacity:.55;cursor:default}
+  .undo{position:absolute;left:16px;right:16px;bottom:18px;background:var(--d-bg2);color:var(--d-bright);border-radius:10px;padding:10px 12px;display:none;justify-content:space-between;align-items:center;font-size:14px;z-index:6;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+  .undo.open{display:flex}
+  .undo button{background:none;border:none;color:#66A8FF;font-weight:700;font:inherit;font-size:14px;cursor:pointer;padding:0 10px}
+  .toast{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;background:var(--d-bg2);color:var(--d-bright);border-radius:10px;padding:10px 14px;font-size:13.5px;display:none;z-index:6}
+  .toast.open{display:block}
+  .legend{max-width:1240px;margin:0 auto;padding:0 16px 28px;color:var(--dim);font-size:13px}
+  .legend li{margin:4px 0}
+</style>
+</head>
+<body>
+<header class="page">
+  <h1>FieldInk rooms → punch list</h1>
+  <p class="lede">Clickable. Rooms are the real names on <b>Miller Residence – Alpine #1438 · Miller Electrical.pdf</b> (114 named rooms in FieldInk today; the job has no punch rooms yet). Floors are my grouping — the read-only pull doesn't show per-room floors; FieldInk will. Tick, Hide and Add all work in the mockup.</p>
+</header>
+
+<div class="row">
+  <div class="col">
+    <p class="cap">1 · Rough tab, Punch List</p>
+    <p class="capsub">The floor header gets one button, only while FieldInk knows rooms this floor is missing. Same button on Finish. Nothing on commercial punch, QC walks or Legacy QC.</p>
+    <div class="phone" id="phoneA">
+      <div class="tabs"><span class="tab">Job Info</span><span class="tab on">Rough</span><span class="tab">Finish</span><span class="tab">QC</span></div>
+      <div class="section"><span class="lbl">PUNCH LIST</span><span style="color:var(--blue);font-weight:700">▾</span></div>
+
+      <div class="floor">
+        <div class="fh"><span class="dot"></span><span class="name">Upper Level</span><span class="chev">▸</span></div>
+      </div>
+
+      <div class="floor" id="mainFloor">
+        <div class="fh" onclick="toggleMain()"><span class="dot" style="background:#2F5BD9"></span><span class="name">Main Level</span>
+          <span class="pill red">1 open</span>
+          <button class="fibtn" id="fib" onclick="event.stopPropagation();openModal()"><span>FieldInk rooms</span><span class="n" id="fibN">12</span></button>
+          <span class="chev" id="mainChev">▸</span></div>
+        <div class="fbody" id="mainBody" style="display:none">
+          <div class="gen">GENERAL</div>
+          <div style="font-size:13px;color:var(--dim)">☐ Floor box locations per redline walk</div>
+          <div id="roomsHere"></div>
+          <div class="addrow"><input placeholder="Add room (e.g. Master Bath)…"><button>+ Room</button></div>
+        </div>
+      </div>
+
+      <div class="floor purple">
+        <div class="fh"><span class="dot"></span><span class="name">Basement</span>
+          <button class="fibtn" onclick="event.stopPropagation();alert('Same sheet, Basement rooms (Basement theater, Golf sim, Wood shop, Wellness area…)')"><span>FieldInk rooms</span><span class="n">31</span></button>
+          <span class="chev">▸</span></div>
+      </div>
+
+      <!-- the modal lives over this phone -->
+      <div class="scrim" id="scrim" onclick="if(event.target===this)closeModal()">
+        <div class="sheet">
+          <div class="sh">
+            <div class="t"><span>FIELDINK ROOMS · MAIN LEVEL</span><span class="x" onclick="closeModal()">✕</span></div>
+            <div class="from">From <b>Miller Electrical.pdf</b> · sent by <b>Keegan</b> · today 4:56 pm</div>
+            <div class="hint">Ticked rooms are added as empty rooms to Rough and Finish on this floor. Nothing already on a list is touched.</div>
+          </div>
+          <div class="list" id="list"></div>
+          <div class="foot">
+            <p class="note" id="hiddenLine" style="display:none"><span id="hiddenN">1 hidden</span> · <a href="#" id="hiddenToggle" onclick="toggleHidden();return false" style="color:var(--accent)">Show</a></p>
+            <p class="note" id="noteNoFloor">3 more rooms have no floor; set it on that sheet in FieldInk's Pages panel and Send again.</p>
+            <div class="btns">
+              <button class="btn ghost" onclick="closeModal()">Cancel</button>
+              <button class="btn primary" id="addBtn" onclick="doAdd()">Add 12 rooms to Main: Rough 12 · Finish 12</button>
+            </div>
+          </div>
+        </div>
+      </div>
+            <div class="toast" id="toast">Added 12 rooms to Main Level</div>
+    </div>
+  </div>
+
+  <div class="col">
+    <p class="cap">2 · After Add</p>
+    <p class="capsub">The rooms land as empty rooms under this floor in Rough <i>and</i> Finish (and in Legacy QC only if that section is showing). The button goes away because nothing is missing any more. Tap <b>Add</b> on the left to see it happen there too.</p>
+    <div class="phone" style="min-height:0">
+      <div class="tabs"><span class="tab">Job Info</span><span class="tab on">Rough</span><span class="tab">Finish</span><span class="tab">QC</span></div>
+      <div class="section"><span class="lbl">PUNCH LIST</span><span style="color:var(--blue);font-weight:700">▾</span></div>
+      <div class="floor">
+        <div class="fh"><span class="dot"></span><span class="name">Main Level</span><span class="pill red">1 open</span><span class="chev">▾</span></div>
+        <div class="fbody">
+          <div class="gen">GENERAL</div>
+          <div style="font-size:13px;color:var(--dim)">☐ Floor box locations per redline walk</div>
+          <div class="room fresh"><span>Entry Way</span><span class="cnt">0 items</span></div>
+          <div class="room fresh"><span>Great Room</span><span class="cnt">0 items</span></div>
+          <div class="room fresh"><span>Dining</span><span class="cnt">0 items</span></div>
+          <div class="room fresh"><span>Main Powder</span><span class="cnt">0 items</span></div>
+          <div class="room fresh"><span>Primary Closet</span><span class="cnt">0 items</span></div>
+          <div class="room fresh"><span>Primary Hall</span><span class="cnt">0 items</span></div>
+          <div class="room" style="opacity:.5"><span>… 6 more</span><span class="cnt"></span></div>
+          <div class="addrow"><input placeholder="Add room (e.g. Master Bath)…"><button>+ Room</button></div>
+        </div>
+      </div>
+    </div>
+
+    <p class="cap" style="margin-top:22px">3 · "+ Room" typed by hand</p>
+    <p class="capsub">Unchanged look. Typing <b>Mud Room</b> into Rough › Main also puts an empty <b>Mud Room</b> under Finish › Main (and vice-versa), skipped if that name is already there. Renaming or deleting a room still only affects the list you're on.</p>
+  </div>
+</div>
+
+<ul class="legend">
+  <li><b>Checked by default:</b> rooms with loads or a drawn zone on the plan. <b>Unchecked:</b> a name typed in FieldInk with no loads and no zone (usually an old spelling) — shown greyed so it's visible but not added unless you tick it.</li>
+  <li><b>on Rough / on Finish tags:</b> the name is already on that list for this floor; the counts in the Add button skip it.</li>
+  <li><b>Hide:</b> drops that room from this list (just a flag on the FieldInk doc; FieldInk is never told, nothing on the job changes). A "1 hidden · Show" line in the footer brings it back with Unhide, like the Dismissed chip on Incoming loads.</li>
+  <li><b>No floor:</b> a room FieldInk sent without a floor can't be offered here — the footnote says how many and where to fix it.</li>
+</ul>
+
+<script>
+  // Real Miller main-floor names from the FieldInk pull. basis: load (has loads) / zone (drawn zone) / name (name only).
+  const ROWS = [
+    {name:"Entry Way",            page:1, sheet:"E1", basis:"load", loads:4},
+    {name:"Great Room",           page:1, sheet:"E1", basis:"load", loads:11},
+    {name:"Dining",               page:1, sheet:"E1", basis:"load", loads:3},
+    {name:"Main Powder",          page:1, sheet:"E1", basis:"load", loads:2},
+    {name:"Primary Closet",       page:1, sheet:"E1", basis:"load", loads:3},
+    {name:"Primary Hall",         page:1, sheet:"E1", basis:"load", loads:2},
+    {name:"Primary Bath Hallway", page:1, sheet:"E1", basis:"load", loads:2},
+    {name:"Stairway",             page:1, sheet:"E1", basis:"zone", loads:0},
+    {name:"East Stair Case Main Level", page:1, sheet:"E1", basis:"load", loads:1},
+    {name:"Front porch",          page:1, sheet:"E1", basis:"load", loads:3},
+    {name:"Family room hall nook",page:1, sheet:"E1", basis:"load", loads:2},
+    {name:"Theatre Room",         page:1, sheet:"E1", basis:"zone", loads:0},
+    {name:"Primary Hallway",      page:1, sheet:"E1", basis:"name", loads:0},   // old spelling of Primary Hall → unchecked
+    {name:"Family hall nook",     page:1, sheet:"E1", basis:"name", loads:0},   // old spelling → unchecked
+  ].map(r => ({...r, checked: r.basis!=="name", hidden:false}));
+  const onRough = new Set(), onFinish = new Set();   // names already on each list (Miller has none today)
+  const key = s => s.replace(/\s+/g," ").trim().toLowerCase();
+  let showHidden = false;
+
+  function render(){
+    const list = document.getElementById("list"); list.innerHTML = "";
+    for (const r of ROWS){ if (r.hidden && !showHidden) continue;
+      const div = document.createElement("div"); div.className = "r" + (r.basis==="name" || r.hidden ? " weak":""); if (r.hidden) div.style.opacity=".6";
+      const meta = r.basis==="load" ? `${r.sheet} · ${r.loads} load${r.loads===1?"":"s"}` : r.basis==="zone" ? `${r.sheet} · zone on the plan` : `named in FieldInk, no loads or zone`;
+      const tags = (onRough.has(key(r.name)) ? '<span class="on b">on Rough</span>':'') + (onFinish.has(key(r.name)) ? '<span class="on b">on Finish</span>':'');
+      div.innerHTML = r.hidden ? `<span style="width:20px;flex-shrink:0"></span><div class="grow"><div class="nm">${r.name}<span class="on">hidden</span></div><div class="meta">${meta}</div></div><button class="hide">Unhide</button>` : `<input type="checkbox" ${r.checked?"checked":""}><div class="grow"><div class="nm">${r.name}${tags}</div><div class="meta">${meta}</div></div><button class="hide">Hide</button>`;
+      const cb = div.querySelector("input"); if (cb) cb.onchange = e => { r.checked = e.target.checked; refresh(); };
+      div.querySelector(".hide").onclick = () => { r.hidden = !r.hidden; render(); };
+      list.appendChild(div);
+    }
+    refresh();
+  }
+  function counts(){
+    const want = ROWS.filter(r=>!r.hidden && r.checked).map(r=>key(r.name));
+    return { rough: want.filter(k=>!onRough.has(k)).length, finish: want.filter(k=>!onFinish.has(k)).length, n: want.length };
+  }
+  function refresh(){
+    const c = counts(); const btn = document.getElementById("addBtn");
+    const total = Math.max(c.rough, c.finish);
+    btn.textContent = total ? `Add ${total} room${total===1?"":"s"} to Main: Rough ${c.rough} · Finish ${c.finish}` : "Nothing new to add";
+    btn.disabled = !total;
+    // the floor-header button shows only while a checked-by-default name is missing somewhere
+    const hid = ROWS.filter(r=>r.hidden).length; document.getElementById("hiddenLine").style.display = hid ? "" : "none"; document.getElementById("hiddenN").textContent = hid + " hidden"; document.getElementById("hiddenToggle").textContent = showHidden ? "Hide again" : "Show";
+    const pending = ROWS.filter(r=>!r.hidden && r.basis!=="name").some(r=>!onRough.has(key(r.name)) || !onFinish.has(key(r.name)));
+    document.getElementById("fib").style.display = pending ? "" : "none";
+    document.getElementById("fibN").textContent = ROWS.filter(r=>!r.hidden && r.basis!=="name" && (!onRough.has(key(r.name))||!onFinish.has(key(r.name)))).length;
+  }
+  function openModal(){ document.getElementById("scrim").classList.add("open"); render(); }
+  function closeModal(){ document.getElementById("scrim").classList.remove("open"); }
+  function toggleHidden(){ showHidden = !showHidden; render(); }
+  function toggleMain(){ const b = document.getElementById("mainBody"); const open = b.style.display==="none"; b.style.display = open ? "" : "none"; document.getElementById("mainChev").textContent = open ? "▾" : "▸"; }
+  function doAdd(){
+    const c = counts(); const added = ROWS.filter(r=>!r.hidden && r.checked);
+    const here = document.getElementById("roomsHere");
+    for (const r of added){ if (!onRough.has(key(r.name))) { const d=document.createElement("div"); d.className="room fresh"; d.innerHTML=`<span>${r.name}</span><span class="cnt">0 items</span>`; here.appendChild(d); } onRough.add(key(r.name)); onFinish.add(key(r.name)); }
+    closeModal();
+    const t = document.getElementById("toast"); t.textContent = `Added ${Math.max(c.rough,c.finish)} rooms to Main Level`; t.classList.add("open"); setTimeout(()=>t.classList.remove("open"), 3000);
+    if (document.getElementById("mainBody").style.display==="none") toggleMain();
+    refresh();
+  }
+  refresh();
+</script>
+</body>
+</html>
