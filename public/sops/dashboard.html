@@ -192,11 +192,19 @@
   <div class="step"><div class="num">5</div><div class="body">
     <h3>People</h3>
     <p>"On the app today" leaves out people on approved time off and people not seen in 30 days; tap it for who
-    isn't on. <b>Team pulse</b> lists quiet people first (a foreman or lead on an active job with nothing logged in 3+
-    days, shown red) with their title and jobs. "Last on a job" is when they last opened or logged on a job;
-    <b>app opened</b> in the device list is when their phone last opened the app. <b>On the app, no job touched</b>
-    is the call list: phones that opened the app today whose owner hasn't touched a job in 3+ days. Time-off requests
-    show what that person has dated in those days and who else is off; tap one to decide it on My Day.</p>
+    isn't on. <b>People by crew</b> lists everyone on Settings → Team once, grouped by crew (a foreman and the people
+    whose foreman he is on Settings → Team), the foreman on top, then jr foremen, leads and crew; <b>Office</b> and
+    <b>No crew</b> are their own groups at the end. Every group starts folded with its count; the header says how
+    many are on a job today and how many are quiet. Each row shows their title and jobs, <b>Today</b> (which job they
+    are on today from the Crew Planner, with the hours; "not scheduled" when the planner has nothing for them, "weekend"
+    on Saturday and Sunday), when they were last on a job, and the app version on their phone (red when behind, "no
+    phone seen" when no device of theirs has opened the app in 14 days). A red dot is a quiet person: a foreman or lead
+    on an active job with nothing logged in 3+ days; green is on the app today. Tap a row for their panel. "Last on a
+    job" is when they last opened or logged on a job; <b>app opened</b> in the device list is when their phone last
+    opened the app. <b>Devices behind</b> on the right is folded with its count; open it for the phones to update, or
+    <b>Show all</b>. Time-off requests show what that person has dated in those days and who else is off; tap one to
+    decide it on My Day. The activity heat map, the "On the app, no job touched" list and the My Day load card were
+    removed in the audit (SW v582); open tasks are still the tile at the top.</p>
   </div></div>
 
   <div class="step"><div class="num">6</div><div class="body">
@@ -212,9 +220,11 @@
     and the Tuesday 6 AM Lead Meeting Prep are gone. <b>Plan Intake</b>: a plan stays <b>Waiting</b> until it is filed,
     dismissed or matched, not just seen. Tap one to file it right there (best guess filled in, with a second guess from
     the sender's past files) or to say <b>Not ours</b>. A plan the Routine couldn't place gets another look once its new
-    job or quote shows up. <b>Appliance Loads</b>: "To check in Home Runs" (not in plus unconfirmed) and <b>Specs to
-    confirm</b> (amps assumed as typical). A line lists jobs in rough with no appliance package yet. Each job row names
-    the foreman; tap it for <b>Ask &lt;foreman&gt; to import</b>.</p>
+    job or quote shows up. <b>Appliance Loads</b>: the two tiles, "To check in Home Runs" (not in plus unconfirmed) and <b>Specs to
+    confirm</b> (amps assumed as typical), still open their item lists, and the card under them is one status line: when
+    the nightly pull was last scheduled to run and when the next one is, how many jobs and items are on the sheet, and
+    <b>Open sheet</b>; a line under it lists jobs in rough with no appliance package yet. The per-job table, the
+    "When they run" list and the plans-filed chart were removed in the audit (SW v582); the counts are still on the right.</p>
   </div></div>
 
   <div class="step"><div class="num">7</div><div class="body">
@@ -298,7 +308,7 @@
     and never opens a job or logs anything won't show as active. Their phone still shows under "app opened".</p></div>
   </div>
 
-  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status), updated 2026-10-15 (SW v543: opens for every admin), updated 2026-10-15 (SW v545: Meeting Prep folder — Monday / Wednesday / Friday cards, Friday Strategy prep replaces the Friday Packet), updated 2026-10-16 (SW v547: Friday Strategy prep laid out the way Koy edits it — job trees with Plan lines, Blocked = GC + office only, no Money / headline), updated 2026-10-17 (SW v551: left to bill and days ready from Simpro, Closed in Simpro, billed change orders, quote $ on old change orders), updated 2026-10-17 (SW v552: Reassign to the Simpro technician, Coordinator filter, Move / unconfirm on starts, one Needs a date), updated 2026-10-17 (SW v553: Ready to invoice retired, invoicing and closed-out jobs synced from Simpro)</div>
+  <div class="foot">Homestead Electric · guide for the /dashboard page · drafted 2026-10-10 (SW v530: standalone /dashboard page with the Command Center tab), updated 2026-10-13 (SW v531: tap-through panels, Jobs tab, Needs attention, filters, own Home Screen icon; SW v532: where-the-work-is stages, every number checked against live data; SW v533: Automations tab — Plan Intake and Appliance Loads results; SW v534: Automated docs links; SW v535: folder cards open the newest doc; SW v536: Weekly Lead Meeting doc), updated 2026-10-14 (SW v540: app colours, phone Filters button, two-line job names), updated 2026-10-15 (SW v542: light page, Needs you, money, one foreman list, return trips counted one way, failed inspections with their re-inspection, open questions, plans waiting until filed, doc run status), updated 2026-10-15 (SW v543: opens for every admin), updated 2026-10-15 (SW v545: Meeting Prep folder — Monday / Wednesday / Friday cards, Friday Strategy prep replaces the Friday Packet), updated 2026-10-16 (SW v547: Friday Strategy prep laid out the way Koy edits it — job trees with Plan lines, Blocked = GC + office only, no Money / headline), updated 2026-10-17 (SW v551: left to bill and days ready from Simpro, Closed in Simpro, billed change orders, quote $ on old change orders), updated 2026-10-17 (SW v552: Reassign to the Simpro technician, Coordinator filter, Move / unconfirm on starts, one Needs a date), updated 2026-10-17 (SW v553: Ready to invoice retired, invoicing and closed-out jobs synced from Simpro), updated 2026-10-30 (SW v582: People by crew with Today from the Crew Planner, device list folded; Automations trimmed to the docs, plans waiting and one Appliance Loads line)</div>
 </div>
 </body>
 </html>

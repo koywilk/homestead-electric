@@ -48640,7 +48640,6 @@ const OD_TABS_MONEY = new Set(["goals"]);   // v569: hidden in Foreman view (the
 // schedule changes, change it here too.
 const OD_RUNS = { plan: [[13, 0], [18, 0], [22, 0]], appl: [[6, 58]] };
 const odNextRun = (utc, now) => { let best = null; for (let k = 0; k < 2; k++) utc.forEach(([h, m]) => { const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k, h, m)); if (t > now && (!best || t < best)) best = t; }); return best; };
-const odRunTimes = (utc) => utc.map(([h, m]) => { const t = new Date(); t.setUTCHours(h, m, 0, 0); return t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }).join(", ");
 // Automated docs (v534): where each automation saves what it writes (IDs from
 // functions/index.js and the Routines). v535: a card with `latest` opens the
 // newest doc of its kind, found by the autoDocsLatest callable (functions/
@@ -50125,6 +50124,95 @@ function odDaysInStage(j, sec, now = new Date()) {
   return { days: Math.max(0, odDaysBetween(at, now)), at, src };
 }
 
+// ── Dashboard audit (People + Automations) helpers ───────────────────────────
+// v582 (dashboard audit, Koy 2026-10-30). The People tab lists the team BY CREW (Settings › Team
+// foremanId through odCrews — never settings/crewTeams, never the Job Board) and shows what each
+// person is on TODAY from the Crew Planner. The planner draws two sources on one grid: its own cells
+// (settings/schedule_<mondayYMD>.assignments["<jobId>_<dayIdx>"] = { lead, crew: [names], time })
+// and the Simpro schedule it overlays (the getSimproSchedule callable; entries { Date, Staff: { Name },
+// Project: { ProjectID }, Blocks: [{ StartTime, EndTime, Hrs }] }). A filled planner cell wins for a
+// person; otherwise their Simpro entries. Live check 2026-10-30: no week doc has ever had a filled
+// cell, so in practice this is Simpro's schedule — which is exactly what the planner shows.
+// Pure: no React, no Firestore, no Date.now() (now is passed in), so odash-model-test's sandbox runs them.
+function odPlannerDayIdx(now) { const di = new Date(now).getDay() - 1; return di >= 0 && di <= 4 ? di : -1; }   // Mon=0 … Fri=4, weekend -1
+// A planner / Simpro name → the team member, the planner's own way: exact, else a unique first name,
+// else first name + last initial. An ambiguous bare first name (two Jacobs) is never guessed.
+function odPlannerPerson(name, users) {
+  const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const rn = norm(name); if (!rn) return null;
+  const list = (users || []).filter(u => u && u.active !== false && String(u.name || "").trim());
+  const exact = list.find(u => norm(u.name) === rn); if (exact) return exact;
+  const parts = rn.split(" "), first = parts[0], li = parts[1] ? parts[1][0] : "";
+  const cands = list.filter(u => norm(u.name).split(" ")[0] === first);
+  if (cands.length === 1) return cands[0];
+  if (li) { const m = cands.find(u => { const lp = norm(u.name).split(" "); return lp.length > 1 && lp[lp.length - 1][0] === li; }); if (m) return m; }
+  return null;
+}
+const odClock = (hhmm) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || "")); if (!m) return ""; const h = +m[1]; return `${((h + 11) % 12) + 1}:${m[2]} ${h < 12 ? "AM" : "PM"}`; };
+function odBlockSpan(blocks) {
+  let start = "", end = "", hrs = 0;
+  (Array.isArray(blocks) ? blocks : []).forEach(b => { if (!b) return; if (b.StartTime && (!start || b.StartTime < start)) start = b.StartTime; if (b.EndTime && (!end || b.EndTime > end)) end = b.EndTime; hrs += Number(b.Hrs) || 0; });
+  return { start, end, hrs: Math.round(hrs * 10) / 10 };
+}
+// Today by person: { dayIdx, weekend, today, rows: { [lower name]: [ { jobId, no, jobName, role, time, start, end, hrs, from } ] }, offTeam }.
+// rows is keyed by the TEAM name when the planner / Simpro name resolves, so one person is one key however the name was typed.
+function odTodayByPerson({ cells = {}, simpro = [], now = new Date(), jobs = [], users = [] } = {}) {
+  const today = localYmd(now), dayIdx = odPlannerDayIdx(now);
+  const out = { dayIdx, weekend: dayIdx < 0, today, rows: {}, offTeam: [] };
+  if (out.weekend) return out;
+  const key = (n) => String(n || "").trim().toLowerCase();
+  const byId = {}; (jobs || []).forEach(j => { if (j && j.id) byId[j.id] = j; });
+  const byNo = (no) => { const k = String(no == null ? "" : no).trim(); if (!k) return null; const hits = (jobs || []).filter(j => j && String(j.simproNo || "").trim() === k); return hits.find(j => !j.isQuote && !j.archived) || hits[0] || null; };
+  const who = (name) => { const u = odPlannerPerson(name, users); if (!u && !out.offTeam.some(x => sameName(x, name))) out.offTeam.push(String(name).trim()); return key(u ? u.name : name); };
+  Object.keys(cells || {}).forEach(ck => {
+    const c = cells[ck], i = ck.lastIndexOf("_"); if (!c || i < 0 || +ck.slice(i + 1) !== dayIdx) return;
+    const jobId = ck.slice(0, i), j = byId[jobId];
+    const put = (name, role) => { const k = who(name); (out.rows[k] = out.rows[k] || []).push({ jobId, no: j ? String(j.simproNo || "") : "", jobName: j ? j.name : "a job not on the board", role, time: c.time || "", start: "", end: "", hrs: null, from: "planner" }); };
+    if (c.lead) put(c.lead, "lead");
+    (Array.isArray(c.crew) ? c.crew : []).forEach(n => { if (n && !sameName(n, c.lead)) put(n, "crew"); });
+  });
+  const planned = new Set(Object.keys(out.rows));
+  (simpro || []).forEach(s => {
+    if (!s || s.Date !== today || (s.Type && s.Type !== "job") || !s.Staff || !s.Staff.Name) return;
+    const k = who(s.Staff.Name); if (planned.has(k)) return;
+    const no = s.Project && s.Project.ProjectID != null ? String(s.Project.ProjectID) : "", span = odBlockSpan(s.Blocks);
+    const list = out.rows[k] = out.rows[k] || [];
+    const same = list.find(r => r.no === no);
+    if (same) { same.hrs = Math.round(((same.hrs || 0) + span.hrs) * 10) / 10; if (span.start && (!same.start || span.start < same.start)) same.start = span.start; if (span.end && (!same.end || span.end > same.end)) same.end = span.end; return; }
+    const j = byNo(no);
+    list.push({ jobId: j ? j.id : "", no, jobName: j ? j.name : (no ? `Simpro #${no}` : "a job"), role: "", time: "", start: span.start, end: span.end, hrs: span.hrs, from: "simpro" });
+  });
+  Object.keys(out.rows).forEach(k => out.rows[k].sort((a, b) => String(a.start || a.time).localeCompare(String(b.start || b.time))));
+  return out;
+}
+// One line for the Today column: "" when the planner has nothing for them.
+function odTodayText(list) {
+  const l = Array.isArray(list) ? list : []; if (!l.length) return "";
+  const one = (r) => `${r.jobName}${r.role === "lead" ? " (lead)" : ""}${r.start && r.end ? ` ${odClock(r.start)}–${odClock(r.end)}` : r.time ? ` ${r.time}` : ""}`;
+  return l.length === 1 ? one(l[0]) : l.map(one).join(", then ");
+}
+// Everyone on the team ONCE, grouped by crew: the crew's foreman on top, then jr foremen, leads, crew;
+// office (title admin) in its own group; people on no crew last. `people` are odModel's rows (one per
+// active non-contractor team member); `crews` is odCrews(users).crews. Every group starts folded.
+const OD_TIER = { foreman: 0, jrforeman: 1, lead: 2, crew: 3 };
+const OD_TIER_LABEL = { foreman: "Foreman", jrforeman: "Jr foreman", lead: "Lead", crew: "Crew", admin: "Office" };
+function odPeopleByCrew(people, crews) {
+  const groups = (crews || []).map(c => ({ key: c.key, label: c.label, kind: "crew", foreman: c.foreman, rows: [] }));
+  const office = { key: "__office", label: "Office", kind: "office", foreman: "", rows: [] };
+  const none = { key: "__nocrew", label: "No crew", kind: "nocrew", foreman: "", rows: [] };
+  const seen = new Set();
+  (people || []).forEach(p => {
+    const k = String(p && p.name || "").trim().toLowerCase(); if (!k || seen.has(k)) return; seen.add(k);
+    const c = (crews || []).find(x => x.people.some(n => sameName(n, p.name)));
+    const g = c ? groups.find(x => x.key === c.key) : p.title === "admin" ? office : none;
+    g.rows.push({ p, name: p.name, tier: c && sameName(c.foreman, p.name) ? -1 : (OD_TIER[p.title] ?? 3), tierLabel: OD_TIER_LABEL[p.title] || "Crew", isForeman: !!c && sameName(c.foreman, p.name) });
+  });
+  [...groups, office, none].forEach(g => g.rows.sort((a, b) => (a.tier - b.tier) || a.name.localeCompare(b.name)));
+  return [...groups.filter(g => g.rows.length), ...(office.rows.length ? [office] : []), ...(none.rows.length ? [none] : [])].map(g => ({ ...g, n: g.rows.length }));
+}
+// The Appliance Loads card is one status line (v582): the last scheduled pull, the next one, the row count.
+const odPrevRun = (utc, now) => { let best = null; for (let k = 0; k >= -1; k--) utc.forEach(([h, m]) => { const t = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k, h, m)); if (t <= now && (!best || t > best)) best = t; }); return best; };
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -50185,6 +50273,24 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       try { const snap = await getDoc(doc(db, "settings", "deviceVersions")); if (!dead) setDevices(snap.exists() ? (snap.data().devices || {}) : {}); }
       catch (e) { if (!dead) setDevices({}); }
       try { const res = await fetch(`/service-worker.js?t=${Date.now()}`, { cache: "no-store" }); const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/); if (!dead) setLatest(m ? m[1] : null); } catch (e) {}
+    })();
+    return () => { dead = true; };
+  }, [tab]);
+  // v582: the People tab's "today" — the Crew Planner's week doc (settings/schedule_<monday>, its own cells) and
+  // the Simpro schedule the planner overlays (getSimproSchedule, read-only), read once per visit. Which crew
+  // folds are open lives only on this page.
+  const [sched, setSched] = useState(null);           // null = loading, else { cells, simpro, err }
+  const [peopleOpen, setPeopleOpen] = useState(() => new Set());
+  useEffect(() => {
+    if (tab !== "people") return;
+    let dead = false;
+    (async () => {
+      const now = new Date(), monday = odPlannerMonday(now), m0 = new Date(now); m0.setDate(m0.getDate() - ((m0.getDay() + 6) % 7));
+      const friday = localYmd(odAddDays(m0, 4));
+      let cells = {}, simpro = [], err = false;
+      try { const snap = await getDoc(doc(db, "settings", "schedule_" + monday)); cells = (snap.exists() && (snap.data() || {}).assignments) || {}; } catch (e) { err = true; }
+      try { const r = await httpsCallable(functions, "getSimproSchedule")({ dateFrom: monday, dateTo: friday }); simpro = ((r && r.data) || []).filter(x => x && x.Type === "job"); } catch (e) { err = true; }
+      if (!dead) setSched({ cells, simpro, err });
     })();
     return () => { dead = true; };
   }, [tab]);
@@ -51036,12 +51142,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${OD_QC_BUCKET[r.st]}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
   } else if (tab === "people") {
-    const loadRows = Object.entries(d.load).map(([n, v]) => ({ name: n === "Unassigned" ? n : d.shortName(n) || n, note: `${v.n} open${v.urgent ? ` · ${v.urgent} urgent` : ""}`, v: v.n, color: v.urgent ? OD_R : OD_A, onClick: () => n === "Unassigned"
-      ? openList("Unassigned tasks", "", v.list.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: needPriority(t) === "urgent" ? OD_R : OD_A, onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) })))
-      : openPerson(n) })).sort((a, b) => b.v - a.v).slice(0, 10);
-    const heat = d.people.filter(p => p.days7.some(Boolean)).slice(0, 10);
-    const heatMax = Math.max(1, ...heat.flatMap(p => p.days7));
-    const dayDates = []; for (let i = 6; i >= 0; i--) dayDates.push(odAddDays(d.t0, -i));
+    // v582 (dashboard audit): the team by crew with what each person is on today, from the Crew Planner.
+    // Gone: the activity heat map, the "On the app, no job touched" list and the My Day load card; the
+    // device list is a fold. Kept: time off waiting, phones on the latest version, the quiet list.
     const latestBuild = parseAppBuild(latest);
     const devList = Object.entries(devices || {}).map(([id, v]) => ({ id, ...v, build: parseAppBuild(v && v.version), seen: odDate(v && v.lastSeenAt) }))
       .filter(v => v.seen && d.now - v.seen < 14*OD_DAY).sort((a, b) => b.seen - a.seen)
@@ -51050,11 +51153,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       .sort((a, b) => (a.build - b.build) || (b.seen - a.seen));
     const current = devList.filter(v => latestBuild && v.build >= latestBuild).length;
     const behind = devList.filter(v => !latestBuild || v.build < latestBuild);
-    const shownDevices = showAllDevices ? devList : behind.slice(0, 8);
-    // The two clocks (v542): a phone that opened the app today while its owner hasn't
-    // touched a job in 3+ days is the row to call.
-    const appOnly = devList.filter(v => v.name && localYmd(v.seen) === d.today).map(v => ({ v, p: d.people.find(p => sameName(p.name, v.name)) }))
-      .filter(x => x.p && ["quiet", "idle", "gone"].includes(x.p.status));
+    const shownDevices = showAllDevices ? devList : behind;
+    const devOf = (name) => devList.find(v => v.name && sameName(v.name, name)) || null;
+    const verOf = (v) => v.version ? String(v.version).replace(/^.*-v/i, "v") : "?";
     const quietP = d.people.filter(p => p.status === "quiet"), goneP = d.people.filter(p => p.status === "gone");
     const missing = d.people.filter(p => p.status !== "active");
     const missRank = { quiet: 0, earlier: 1, idle: 2, off: 3, gone: 4 };
@@ -51074,53 +51175,63 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       return [work.length ? `${odPlural(work.length, "dated item")} on their jobs then: ${work.slice(0, 2).map(s => `${s.label} ${s.name} ${odShort(s.at)}`).join(", ")}` : "nothing dated on their jobs then",
         others.length ? `also off: ${others.map(p => odFirst(p.name)).join(", ")}` : ""].filter(Boolean).join(" · ");
     };
+    // Today by person: the planner's week doc plus the Simpro schedule it overlays (sched, read when the tab opens).
+    const today = odTodayByPerson({ cells: sched ? sched.cells : {}, simpro: sched ? sched.simpro : [], now: d.now, jobs: d.allLive, users });
+    const todayOf = (name) => today.rows[String(name || "").trim().toLowerCase()] || null;
+    const groups = odPeopleByCrew(d.people, d.crews);
+    const scheduledN = d.people.filter(p => todayOf(p.name)).length;
+    const flipPeople = (k) => setPeopleOpen(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+    const DOT = { active: OD_G, earlier: OD_B, quiet: OD_R, off: OD_SLATE, idle: OD_GREY, gone: OD_GREY };
+    const groupSub = (g) => { const on = g.rows.filter(r => todayOf(r.name)).length, quiet = g.rows.filter(r => r.p.status === "quiet").length, off = g.rows.filter(r => r.p.status === "off").length;
+      return [sched && !today.weekend ? `${on} of ${g.n} on a job today` : "", quiet ? `${quiet} quiet` : "", off ? `${off} off` : ""].filter(Boolean).join(" · ") || (today.weekend ? "weekend" : sched ? "" : "loading today…"); };
+    const todayLine = (list) => list.map(x => x.start && x.end ? `${odClock(x.start)}–${odClock(x.end)}` : x.time || "").filter(Boolean).join(", then ") || (list[0].from === "planner" ? "Crew Planner" : "Simpro schedule");
+    const personRow = (r) => { const p = r.p, list = todayOf(p.name), dv = devOf(p.name);
+      return (
+        <button type="button" className="od-prow" key={p.u.id || p.name} onClick={() => openPerson(p.name)}
+          aria-label={`${p.name}, ${r.tierLabel}${list ? `, today ${odTodayText(list)}` : today.weekend ? "" : ", not scheduled today"}, ${pulseLine(p)}. Open their panel`}>
+          <i className="dot" style={{ background: DOT[p.status] || OD_GREY }}/>
+          <span className="nm"><b>{p.name}</b><small>{pulseTag(p)}</small></span>
+          <span className="td">{list ? <><b>{list.map(x => x.jobName + (x.role === "lead" ? " (lead)" : "")).join(", then ")}</b><small>{todayLine(list)}</small></> : <em>{!sched ? "…" : today.weekend ? "weekend" : "not scheduled"}</em>}</span>
+          <span className="ls"><small>{pulseLine(p)}</small></span>
+          <span className={"ver" + (dv ? (latestBuild && dv.build >= latestBuild ? " ok" : "") : " none")}>{dv ? verOf(dv) : "no phone seen"}</span>
+        </button>); };
+    const fold = (key, label, subText, n, body, extraClass) => { const open = peopleOpen.has(key); return (
+      <div className={"od-pfold" + (extraClass ? " " + extraClass : "")} key={key}>
+        <button type="button" className="hd" aria-expanded={open} onClick={() => flipPeople(key)}><span className={"cv" + (open ? " on" : "")}/><b>{label}</b><small>{subText}</small><span className="n">{n}</span></button>
+        {open ? body() : null}
+      </div>); };
+    const scheduleNote = today.weekend ? "weekend, nothing scheduled" : !sched ? "loading today's schedule…" : sched.err ? "today's schedule could not all be read" : `${scheduledN} on a job today (Crew Planner)`;
     main = (<>
-      <div className="od-head"><div><h1>People</h1><p>Who is on the app, what is on their plate, and which phones need an update · tap anyone</p></div></div>
+      <div className="od-head"><div><h1>People</h1><p>Who is on the app, where everyone is today, and which phones need an update · tap anyone</p></div></div>
       <div className="od-minis">
         <OdMini title="On the app today" color={OD_G} icon="users" value={onApp} sub={`of ${d.teamN}`} hint={goneP.length || d.people.some(p => p.status === "off") ? `not counting ${[d.people.filter(p => p.status === "off").length && `${d.people.filter(p => p.status === "off").length} off`, goneP.length && `${goneP.length} not seen 30+ d`].filter(Boolean).join(" or ")}` : ""}
           onClick={() => openList("Not on the app today", `${odPlural(missing.length, "person")} · quiet ones first`, missing.slice().sort((a, b) => (missRank[a.status] ?? 9) - (missRank[b.status] ?? 9)).map(p => ({ title: p.name, sub: `${pulseLine(p)} · ${pulseTag(p)}`, color: p.status === "quiet" ? OD_R : OD_GREY, onClick: () => openPerson(p.name) })))}>
           <OdRing pct={d.teamN ? onApp/d.teamN : 0} color={OD_G} label={`${onApp} of ${d.teamN} on the app today`}/></OdMini>
         <OdMini title="Open My Day tasks" color={OD_B} icon="myday" value={d.openNeeds.length} sub={`${urgentN} urgent`} onClick={() => openList("Open My Day tasks", `${urgentN} urgent · tap one to open it on My Day`, d.openNeeds.slice().sort((a, b) => (needPriority(a) === "urgent" ? 0 : 1) - (needPriority(b) === "urgent" ? 0 : 1)).map(t => ({ title: odText(t.text) || "Task", sub: [needAssignee(t) && "On " + odFirst(needAssignee(t)), t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), tag: needPriority(t) === "urgent" ? "Urgent" : "", color: needPriority(t) === "urgent" ? OD_R : OD_B, onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) })))}><OdRing pct={d.openNeeds.length ? urgentN/d.openNeeds.length : 0} color={OD_R} label="Share of open tasks that are urgent"/></OdMini>
         <OdMini title="Time off waiting" color={OD_A} icon="calendar" value={d.timeOff.length} sub="requests" onClick={d.timeOff.length ? () => openList("Time off waiting", "Tap one to decide it on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: [n.requestedBy, toContext(n)].filter(Boolean).join(" · "), right: n.dueDate || "", color: OD_O, icon: "calendar", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(n.id)}`) }))) : undefined}><OdBars vals={[d.timeOff.length]} color={OD_O} hi={0} max={Math.max(3, d.timeOff.length)} label={`${d.timeOff.length} time-off requests waiting`}/></OdMini>
-        <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => setShowAllDevices(true)}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
+        <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => { setShowAllDevices(true); setPeopleOpen(prev => new Set([...prev, "__devices"])); }}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
       </div>
-      <div className="od-row2">
-        <div className="od-white od-pad">
-          <div className="od-ct">Activity by person<small>things logged, last 7 days · tap a square</small></div>
-          {heat.length ? (
-            <div className="od-heat" style={{ gridTemplateColumns: `86px repeat(7, minmax(0,1fr))` }}>
-              <div/>{dayDates.map((dd, i) => <div className="h" key={i}>{odDow(dd)}</div>)}
-              {heat.map(p => [<button type="button" className="n" key={p.name} onClick={() => openPerson(p.name)}>{d.shortName(p.name)}</button>, ...p.days7.map((v, i) => { const a = v/heatMax, k = localYmd(dayDates[i]);
-                return <button type="button" className="c" key={p.name + i} disabled={!v} title={`${p.name}, ${odDow(dayDates[i])}: ${odPlural(v, "thing")} logged`}
-                  onClick={() => openList(`${d.shortName(p.name)} on ${odDow(dayDates[i])} ${odShort(dayDates[i])}`, `${odPlural(v, "thing")} logged`, p.mine.filter(e => localYmd(e.at) === k).map(eventRow))}
-                  style={{ background: v ? `rgba(142,99,54,${(0.1 + a*0.5).toFixed(2)})` : "rgba(41,33,25,.04)", color: v ? (a > 0.55 ? "#fff" : C.text) : OD_GREY, boxShadow: v && a > 0.75 ? `inset 0 0 0 1.5px ${OD_A}` : "none" }}>{v || "–"}</button>; })])}
-            </div>
-          ) : <div className="od-empty">Nothing logged this week.</div>}
-        </div>
-        <div className="od-white od-pad">
-          <div className="od-ct">My Day load<small>open tasks · tap a name</small></div>
-          <OdHBars rows={loadRows} empty="No open My Day tasks."/>
-        </div>
+      <div className="od-white od-pad">
+        <div className="od-ct">People by crew<small>Settings › Team · {d.people.length} people · {scheduleNote} · red = quiet 3+ days, green = on the app today</small></div>
+        {groups.map(g => fold(g.key, g.label, groupSub(g), g.n, () => <div className="rows">{g.rows.map(personRow)}</div>))}
+        {today.offTeam.length > 0 && <p className="od-note">Also on today's schedule but not on Settings › Team: {today.offTeam.join(", ")}</p>}
       </div>
-      <Sec right="red = quiet 3+ days · green = today · blue = last 3 days">Team pulse</Sec>
-      <Pulse list={foreman && foreman !== OD_NOFM ? d.people.filter(p => sameName(p.name, foreman) || d.live.some(j => (d.evById[j.id] || []).some(e => e.who && sameName(e.who, p.name)))) : d.people}/>
     </>);
     right = (<>
       <Me sub="Team"/>
       <Stats items={[[d.teamN, "Team"], [d.roster.length, "Foremen", () => openList("Foremen", "Titled foreman or jr foreman, or foreman on an active job · fix a title in Settings → Team", d.roster.map(n => { const p = d.people.find(x => sameName(x.name, n)); const jn = d.allActive.filter(j => sameName(j.foreman, n)).length; return { title: n, sub: `${p ? pulseTag(p) : "Foreman"} · ${odPlural(jn, "active job")}`, color: OD_A, onClick: () => openPerson(n) }; }))], [quietP.length, "Quiet 3+ days", () => openList("Quiet for 3+ days", "Foreman or lead on an active job, nothing logged and no job opened (approved time off left out)", quietRows())]]}/>
-      {appOnly.length > 0 && <><Sec right={`${appOnly.length}`}>On the app, no job touched</Sec>
-        <div className="od-list">{appOnly.map(({ v, p }, i) => <OdItem key={i} color={OD_R} icon="phone" tag={`App opened ${odAgo(v.seen, d.now)}`} tagColor={OD_R} title={p.name} sub={p.last ? `no job touched since ${odShort(p.last)}` : "no job touched in 30 days"} onClick={() => openPerson(p.name)}/>)}</div></>}
       {d.ptoWeek.length > 0 && <><Sec right={`${d.ptoWeek.length}`}>Out today / this week</Sec>
         <div className="od-list">{d.ptoWeek.map((p, i) => <OdItem key={i} color={OD_SLATE} icon="calendar" tag={p.start <= d.today ? "Out today" : "Out"} title={p.name} sub={p.note || "Time off"} when={`${odShort(odDate(p.start) || d.now)}${p.end && p.end !== p.start ? "–" + odShort(odDate(p.end) || d.now) : ""}`}/>)}</div></>}
       <Sec right={`${d.timeOff.length}`}>Time off waiting</Sec>
       <div className="od-list">{d.timeOff.slice(0, 5).map((n, i) => { const at = odDate(n.dueDate); return <OdItem key={i} color={OD_A} icon="calendar" tag={n.requestedBy ? odFirst(n.requestedBy) : "Request"} title={odText(n.text).replace(/^Time off\s*[—-]\s*/i, "")} sub={toContext(n) || "Tap to decide it on My Day"} when={at ? `${odDow(at)} ${odShort(at)}` : ""} onClick={() => openApp(`/?view=myday&need=${encodeURIComponent(n.id)}`)}/>; })}{!d.timeOff.length && <div className="od-empty dark">No requests waiting.</div>}</div>
-      <Sec right={showAllDevices ? "behind only" : "show all"} onRight={() => setShowAllDevices(s => !s)}>{showAllDevices ? "All devices" : "Devices behind"}</Sec>
-      <div className="od-box">
-        {devices == null ? <div className="od-empty dark">Loading devices…</div> : shownDevices.map(v => (
-          <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">app opened {odAgo(v.seen, d.now)}</span><em className={latestBuild && v.build >= latestBuild ? "ok" : ""}>{v.version ? String(v.version).replace(/^.*-v/i, "v") : "?"}</em></div>
-        ))}
-        {devices != null && !shownDevices.length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
-      </div>
+      {fold("__devices", showAllDevices ? "All devices" : "Devices behind", devices == null ? "loading" : `of ${devList.length} seen in 14 d`, devices == null ? "…" : shownDevices.length, () => (
+        <div className="od-box">
+          {devices == null ? <div className="od-empty dark">Loading devices…</div> : shownDevices.map(v => (
+            <div className="od-dev" key={v.id}><span className="nm">{v.name || "Unknown"}</span><span className="sn">app opened {odAgo(v.seen, d.now)}</span><em className={latestBuild && v.build >= latestBuild ? "ok" : ""}>{verOf(v)}</em></div>
+          ))}
+          {devices != null && !shownDevices.length && <div className="od-empty dark">Every device seen in 14 days is current.</div>}
+          {devices != null && devList.length > 0 && <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setShowAllDevices(s => !s)}>{showAllDevices ? "Behind only" : `Show all ${devList.length}`}</button></div>}
+        </div>), "rail")}
     </>);
   } else if (tab === "cc") {
     // ── Automations: Plan Intake + Appliance Loads ──
@@ -51161,30 +51272,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       right: isTbd(r) ? "TBD" : r.load ? `${r.load} A` : "", color: r.inCC.startsWith("not") ? OD_R : r.inCC === "likely" ? OD_WARN : isTbd(r) ? OD_R : OD_G, icon: "zap", onClick: r.link ? () => go(r.link) : undefined });
     // "Ask <foreman> to import" (v542): one My Day task on the job, through the same
     // stamped needs write My Day uses. Asks first.
-    const askImport = async (g) => {
-      const j = g.job; if (!j) return;
-      const fm = j.foreman && !SBV2_EXCLUDE_NAME(j.foreman) ? j.foreman : "";
-      const nowIso = new Date().toISOString(), meName = (identity && identity.name) || "";
-      const need = { id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), kind: "need",
-        text: `Import the appliances into Home Runs: ${g.notIn} not in yet${g.likely ? `, ${g.likely} to confirm` : ""} (Home Runs tab → Import appliances)`,
-        dueBucket: "week", dueDate: "", snoozedUntil: "", priority: "", assignedTo: fm, assignedBy: meName, assignedAt: nowIso,
-        foreman: j.foreman || "", jobId: j.id, jobName: j.name || "", status: "open", createdBy: meName, createdAt: nowIso, doneAt: "", doneBy: "" };
-      if (!window.confirm(`Add a My Day task on ${j.name} for ${fm || "nobody yet (unassigned)"}?\n\n"${need.text}"`)) return;
-      try { await setDoc(doc(db, "needs", need.id), stampWrite({ data: need, updated_at: nowIso, saved_by: meName })); toast.success(fm ? `Added to ${odFirst(fm)}'s day` : "Added — unassigned"); }
-      catch (e) { toast.error(`Couldn't add the task: ${(e && e.message) || e}`); }
-    };
-    const applOpen = (g) => openList(g.label, `${odPlural(g.rows.length, "item")} · ${Math.round(g.amps)} A connected${g.typical ? ` (${g.typical} assumed typical)` : ""} · tap an item for its source file`, [
-      ...(g.job ? [{ title: `Open ${g.job.name}`, sub: `Job panel · foreman ${g.job.foreman || "not set"}`, color: OD_A, icon: "hardHat", job: g.job }] : [{ title: "No app job has this number", sub: `Simpro # ${g.no}`, color: OD_WARN, icon: "info" }]),
-      ...(g.job && (g.notIn || g.likely) ? [{ title: `Ask ${g.job.foreman && !SBV2_EXCLUDE_NAME(g.job.foreman) ? odFirst(g.job.foreman) : "someone"} to import`, sub: "Adds a My Day task on this job: Home Runs tab → Import appliances", color: OD_O, icon: "myday", onClick: () => askImport(g) }] : []),
-      ...g.rows.filter(r => r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r)).map(applItem),
-      ...g.rows.filter(r => !(r.inCC.startsWith("not") || r.inCC === "likely" || isTbd(r))).map(applItem),
-    ]);
     const applList = (title, pred) => openList(title, "tap an item for its source file", ajobs.flatMap(g => g.rows.filter(pred).map(r => ({ ...applItem(r), title: `${g.label} · ${r.item}` }))));
     // Active jobs in rough (or starting rough within 14 days) with no appliance package in the pull.
     const inSheet = new Set(ajobs.map(g => String(g.no)));
     const roughSoon = new Set(next14.filter(s => s.type === "start" && /Rough/.test(s.label) && s.job).map(s => s.job.id));
     const noPackage = appl && appl.rows ? d.allActive.filter(j => j.simproNo && !inSheet.has(String(j.simproNo).trim()) && ((d.secOf(j) && ["rough", "roughDue"].includes(d.secOf(j).key)) || roughSoon.has(j.id))) : [];
-    const nPlan = odNextRun(OD_RUNS.plan, d.now), nAppl = odNextRun(OD_RUNS.appl, d.now);
+    const nPlan = odNextRun(OD_RUNS.plan, d.now), nAppl = odNextRun(OD_RUNS.appl, d.now), pAppl = odPrevRun(OD_RUNS.appl, d.now);
     const chips = [["all", `All ${fl.length}`], ["needs", `Waiting ${needs.length}`], ["filed", `Filed ${filed.length}`], ["folders", `Folders & walks ${folders.length + walks.length}`]];
     // Run now (v542) — only the app functions, through their existing test triggers.
     // v544: the Friday Strategy run reads Simpro, Drive and the calendar and can take
@@ -51210,7 +51303,6 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     main = (<>
       <div className="od-head"><div><h1>Automations</h1><p>Your automated docs, plus what Plan Intake and the Appliance Loads pull produced · live</p></div></div>
       <div className="od-minis">
-        <OdMini title="Plans filed, 14 days" color={OD_G} icon="fileText" value={findings === undefined ? "…" : filesN} sub={`${filed.length} ${filed.length === 1 ? "batch" : "batches"}`} onClick={() => setPlanShow("filed")}><OdBars vals={[13,12,11,10,9,8,7,6,5,4,3,2,1,0].map(i => filed.filter(f => localYmd(f._at) === localYmd(odAddDays(d.t0, -i))).length)} color={OD_G} hi={13} label="Plan filings per day, last 14 days"/></OdMini>
         <OdMini title="Plans waiting" color={OD_R} icon="alertTriangle" value={findings === undefined ? "…" : needs.length} sub={plan.oldest ? `oldest ${planAge(plan.oldest)} d` : "none"} hint={plan.oldest ? `${plan.oldest.filename || pNum(plan.oldest.number)}` : ""} onClick={() => setPlanShow("needs")}><OdRing pct={fl.length ? needs.length/fl.length : 0} color={OD_R} label="Share of plan findings still waiting"/></OdMini>
         <OdMini title="To check in Home Runs" color={OD_O} icon="zap" value={appl === undefined ? "…" : toCheck} sub={`${aSum("notIn")} not in · ${aSum("likely")} unconfirmed`} hint={arows.length ? `of ${arows.length} appliances` : ""} onClick={() => applList("Appliances to check in Home Runs", r => r.inCC.startsWith("not") || r.inCC === "likely")}><OdRing pct={arows.length ? toCheck/arows.length : 0} color={OD_O} label="Share of appliances to check in Home Runs"/></OdMini>
         <OdMini title="Specs to confirm" color={OD_WARN} icon="help" value={appl === undefined ? "…" : aSum("typical")} sub={`of ${arows.length} · amps assumed`} hint={[aSum("tbd") ? `${aSum("tbd")} with no amps at all` : "none missing amps", worstTypical && worstTypical.typical > aSum("typical") / 2 ? `${worstTypical.label} ${worstTypical.typical}` : ""].filter(Boolean).join(" · ")} onClick={() => applList("Appliances on assumed (typical) amps", r => isTypical(r) || isTbd(r))}><OdRing pct={arows.length ? aSum("typical")/arows.length : 0} color={OD_WARN} label="Share of appliances on assumed amps"/></OdMini>
@@ -51246,25 +51338,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {findings !== null && findings !== undefined && !planList.length && <div className="od-empty">{planShow === "needs" ? "Nothing waiting on you." : "Nothing in the last 14 days."}</div>}
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">Appliance Loads<small>{appl && appl.rows ? `${odPlural(ajobs.length, "job")} · ${arows.length} items · ${Math.round(aSum("amps")).toLocaleString()} A connected${aSum("typical") ? ` (${aSum("typical")} on assumed amps)` : ""}` : appl === undefined ? "loading…" : ""}{nAppl ? ` · next pull ${at2(nAppl)}` : ""}</small>
+        <div className="od-ct">Appliance Loads<small>nightly pull of appliance packages into the master sheet (Claude routine)</small>
           <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => setApplTick(t => t + 1)}>Refresh</button><button type="button" className="od-mini-btn" onClick={() => go(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`)}>Open sheet</button></div></div>
+        {/* v582: one status line instead of the per-job table (the two tiles above still open the item lists). */}
+        {appl && appl.err ? <div className="od-status"><span className="bad">{appl.err}</span></div> : (
+          <div className="od-status">
+            <span>Last scheduled run {pAppl ? <b>{odDow(pAppl)} {odTime(pAppl)}</b> : "—"}</span>
+            <span>next {nAppl ? at2(nAppl) : "—"}</span>
+            <span>{appl === undefined ? "reading the sheet…" : `${odPlural(ajobs.length, "job")} · ${odPlural(arows.length, "item")} · ${Math.round(aSum("amps")).toLocaleString()} A connected${aSum("typical") ? ` (${aSum("typical")} on assumed amps)` : ""}`}</span>
+          </div>)}
         {noPackage.length > 0 && <div className="od-warn wide">No appliance package yet (in rough or starting rough within 14 days): {noPackage.map((j, i) => <Fragment key={j.id}>{i ? ", " : ""}<button type="button" className="od-inlink" onClick={() => openJob(j)}>{j.name}</button></Fragment>)}</div>}
-        {appl && appl.err ? <div className="od-empty">{appl.err}</div> : (
-          <div className="od-tablewrap"><div className="od-table appl">
-            <div className="tr hd"><span className="c">Job</span><span className="c">Items</span><span className="c">Amps</span><span className="c">Not in CC</span><span className="c">Likely</span><span className="c">No amps</span><span className="c">Typical</span></div>
-            {ajobs.map(g => (
-              <button type="button" className="tr" key={g.no} onClick={() => applOpen(g)}>
-                <span className="c nm"><b>{g.label}</b><small>{g.job ? `${g.job.name} · ${g.job.foreman ? odFirst(g.job.foreman) : "no foreman"}` : "no app job with this number"}</small></span>
-                <span className="c num">{g.rows.length}</span><span className="c num">{Math.round(g.amps * 10) / 10}</span>
-                <span className="c num" style={g.notIn ? { color: OD_R, fontWeight: 700 } : null}>{g.notIn || "—"}</span>
-                <span className="c num" style={g.likely ? { color: OD_WARN, fontWeight: 700 } : null}>{g.likely || "—"}</span>
-                <span className="c num" style={g.tbd ? { color: OD_R, fontWeight: 700 } : null}>{g.tbd || "—"}</span>
-                <span className="c num" style={g.typical ? { color: OD_WARN, fontWeight: 700 } : null}>{g.typical || "—"}</span>
-              </button>
-            ))}
-            {appl === undefined && <div className="od-empty">Loading the sheet…</div>}
-          </div></div>
-        )}
       </div>
     </>);
     right = (<>
@@ -51274,11 +51357,6 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-list">
         {needs.slice(0, 8).map(f => <OdItem key={f.id} color={OD_R} icon={planIcon(f)} tag={`${PLAN_LABEL[f.type] || f.type} · ${planAge(f)} d`} title={f.filename || pNum(f.number)} sub={odText(f.summary)} when={odAgo(f._at, d.now)} onClick={() => planOpen(f)}/>)}
         {!needs.length && <div className="od-empty dark">{findings === undefined ? "Loading…" : "Nothing from Plan Intake is waiting on you."}</div>}
-      </div>
-      <Sec>When they run</Sec>
-      <div className="od-list">
-        <OdItem color={OD_B} icon="refresh" tag="Plan Intake" title={`Daily ${odRunTimes(OD_RUNS.plan)}`} sub={nPlan ? `Next ${at2(nPlan)} · files emailed plans, matches site walks` : ""}/>
-        <OdItem color={OD_B} icon="refresh" tag="Appliance Loads" title={`Nightly ${odRunTimes(OD_RUNS.appl)}`} sub={nAppl ? `Next ${at2(nAppl)} · reads new appliance packages, checks Home Runs` : ""}/>
       </div>
     </>);
   } else if (tab === "costs") {
@@ -52011,6 +52089,30 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-dev .sn{color:var(--dim);font-size:11.5px;white-space:nowrap}
         .odash .od-dev em{margin-left:auto;font-style:normal;font-weight:800;font-size:11.5px;color:${OD_R};background:rgba(196,59,59,.1);border-radius:999px;padding:2px 8px}
         .odash .od-dev em.ok{color:${OD_G};background:rgba(24,128,74,.1)}
+        .odash .od-pfold + .od-pfold{border-top:1px solid var(--line)}
+        .odash .od-pfold .hd{display:flex;align-items:center;gap:10px;width:100%;padding:11px 0;background:none;border:0;text-align:left;cursor:pointer;color:inherit;font:inherit}
+        .odash .od-pfold .hd .cv{width:0;height:0;border:5px solid transparent;border-left:7px solid ${OD_A};flex:none;transition:transform .15s}
+        .odash .od-pfold .hd .cv.on{transform:rotate(90deg)}
+        .odash .od-pfold .hd b{font-size:13.5px;white-space:nowrap}
+        .odash .od-pfold .hd small{color:var(--dim);font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .odash .od-pfold .hd .n{background:rgba(142,99,54,.12);color:${OD_A};font-weight:800;font-size:12px;border-radius:999px;padding:2px 9px;flex:none}
+        .odash .od-pfold .rows{display:flex;flex-direction:column;gap:6px;padding:0 0 10px 20px}
+        .odash .od-pfold.rail{margin-top:12px}
+        .odash .od-pfold.rail .hd{padding:8px 0}
+        .odash .od-prow{display:grid;grid-template-columns:10px minmax(130px,1.1fr) minmax(0,1.6fr) minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;background:var(--inset);border:1px solid var(--line);border-radius:12px;padding:8px 10px;text-align:left;font:inherit;color:inherit;cursor:pointer;min-width:0}
+        .odash .od-prow:hover{background:var(--hov)}
+        .odash .od-prow .dot{width:10px;height:10px;border-radius:50%;display:block}
+        .odash .od-prow b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .odash .od-prow small{display:block;color:var(--dim);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .odash .od-prow .td em{font-style:normal;color:var(--dim);font-size:12px}
+        .odash .od-prow .ver{font-weight:800;font-size:11.5px;border-radius:999px;padding:2px 8px;color:${OD_R};background:rgba(196,59,59,.1);white-space:nowrap}
+        .odash .od-prow .ver.ok{color:${OD_G};background:rgba(24,128,74,.1)}
+        .odash .od-prow .ver.none{color:var(--dim);background:rgba(41,33,25,.06)}
+        .odash .od-note{margin:8px 0 0;font-size:12px;color:var(--dim)}
+        .odash .od-status{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;margin-top:8px;color:var(--dim)}
+        .odash .od-status b{color:${OD_G}}
+        .odash .od-status .bad{color:${OD_R};font-weight:700}
+        @media (max-width:720px){.odash .od-prow{grid-template-columns:10px minmax(0,1fr) auto}.odash .od-prow .td,.odash .od-prow .ls{grid-column:2/4}}
         .odash .od-tablewrap{overflow-x:auto}
         .odash .od-table{min-width:760px;display:flex;flex-direction:column}
         .odash .od-table .tr{display:grid;grid-template-columns:minmax(180px,2fr) 1fr 1.2fr 64px 56px 1.1fr 1fr;gap:8px;align-items:center;padding:9px 4px;border:0;border-bottom:1px solid var(--cline);background:transparent;text-align:left;width:100%;color:var(--cink);font-size:12.5px}
@@ -60927,10 +61029,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v580
+**Last manifest update:** 2026-10-30 · App SW version: v582
 
 ---
 
+- **Dashboard audit, People + Automations: everyone by crew with where they are today; Automations trimmed to the docs, the plans waiting and one Appliance Loads line** · 'shipped 2026-10-30' · 'SW v582' · 'OfficeDash' · 'odPeopleByCrew' · 'odTodayByPerson' · 'odPlannerPerson' · 'odTodayText' · 'odPrevRun' · 'getSimproSchedule' · Koy approved the tab-by-tab dashboard audit 2026-10-30 ("Let's build them"). **People:** the people list is now **People by crew** — every active team member once, grouped by crew (Settings › Team 'foremanId' through 'odCrews', never 'settings/crewTeams'), the crew's foreman on top, then jr foremen, leads, crew; **Office** (title admin) and **No crew** are their own groups, last. Every group starts folded with its count; the header says how many are on a job today and how many are quiet. Each row: name + title/jobs, a **Today** column (the job they are on today from the Crew Planner, with the hours, or a quiet "not scheduled"; "weekend" on Sat/Sun), the last-on-a-job line, and their phone's app version (red when behind, "no phone seen" after 14 days). "Today" reads the planner the way the planner itself does: its own week doc 'settings/schedule_<monday>.assignments["<jobId>_<dayIdx>"]' (a filled cell wins) and the Simpro schedule it overlays ('getSimproSchedule', this week, read-only); names resolve the planner's own way (exact, unique first name, first + last initial, an ambiguous bare first name never guessed). Live check 2026-10-30: no planner week doc has ever had a filled cell, so in practice Today is Simpro's schedule, which is what the planner shows. Kept: On the app today, Open My Day tasks, Time off waiting (with its collision context), Phones on latest, Quiet 3+ days, Out today / this week. Trimmed: the activity heat map, the "On the app, no job touched" list, the My Day load card and the Team pulse card grid (its people are the crew rows now); the device list is a folded **Devices behind** with a count and a Show all button (the Phones on latest tile opens it). **Automations:** keeps the automated document cards with Run now, Plan Intake with its chips and the Waiting on you rail with File it / Not ours; the Appliance Loads card is one status line (last scheduled run, next run, jobs · items · amps, Refresh, Open sheet, and the no-appliance-package line); the Plans filed chart tile, the per-job appliance table and the "When they run" list are gone (the counts stay in the rail). Nothing about what the automations do changes. Pure helpers sit under '// ── Dashboard audit (People + Automations) helpers' above 'OfficeDash'; test 'scripts/people-autos-audit-test.js' (in prebuild) proves every name once, the tier order, the name resolution, planner-over-Simpro, block merging, weekends, and the status-line run time. Mockup from a live read-only pull: 'docs/mockups/dashboard-audit/people.html' (+ 'people-thursday.html', a full work day). Guide 'dashboard.html' People and Automations updated. **Why it won't lose data:** read-only everywhere — one new 'getDoc' on the planner's week doc and one call to the existing 'getSimproSchedule' callable when the People tab opens; no 'setDoc' / 'updateDoc' / 'saveJob'; the Ask-to-import My Day task that lived on the removed appliance rows is gone with them (nothing else wrote); no loader, rules or function change.
 - **Dashboard audit, Jobs + Activity: Waiting on and Days in stage columns; Open questions split into Waiting on me / Waiting on others** · 'shipped 2026-10-30' · 'SW v580' · 'odJobWaiting' · 'odDaysInStage' · 'odSplitQuestions' · 'odQuestionSide' · 'odOpenQuestions' · 'OD_WAIT_LABEL' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 ("Let's build them"); this is the Jobs / Activity pair, built on 'dash-audit-jobs-activity' and merged by the coordinator. **Jobs tab.** Kept: the job table, the crew folds, the stage chips, By crew / By person. Trimmed: the right-rail *Where the work is* bars (the chips already say it) and the *Punch* column. Added, both sortable: **Days in stage** — days since the date the job records for entering its current stage: the confirmed start once it has passed (Rough / Finish in progress), the rough inspection pass (Rough done, finish next), the last fail (Rough inspection failed), the start date that passed (start-date-passed stages); the small line under the number says which date it is (*start 9/7*, *rough passed 5/4*, *failed 10/13*). Holds, prep, no status, quick jobs and commercial stages record no entry date, so the cell is blank rather than guessed (24 of 50 active jobs had one on 2026-10-30). **Waiting on** — *GC* (an open question out to the GC, a designer or the homeowner: shared by link, or "for" someone not on the team), *Inspection* (a target date with no result, booked or passed and not logged, or a fail with no re-inspection booked), *Us* (a question the office owes, or an open My Day task on the job); blank when nothing waits; ranked GC, Inspection, Us with the first reason under the label; a crew fold's header says how many of its jobs are waiting. **Activity tab.** Kept: Open questions, Failed inspections, the recent-activity list with its type chips, search and *Done by* filter. Trimmed: the *Everything logged* and *Punch closed* cards, the right-rail *What kind* bars and *Most active jobs* list. Added: an **Open questions** card with two folded groups (closed until tapped, count on the header): **Waiting on me** (asked of nobody or of an admin, so the office answers) and **Waiting on others** (out to the GC / designer / homeowner, or to a foreman or crew member named on it), each oldest first, undated last, older than 2 days flagged red with its age; the card's own caption says *N on me · M on others*. Pure helpers sit in the '// ── Dashboard audit (Jobs, Activity) helpers' block above 'OfficeDash', exported through 'odash-model-test.js''s sandbox; gate 'scripts/jobs-activity-audit-test.js' (prebuild, 38 checks: Ashcraft / Koplin / Pierce / Bukhshtaber / Forth shapes as of 2026-10-30, needs filtering, ranking, the split adding up to the card). Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/jobs.html' and 'activity.html' ('pull-readonly.js' + 'render-readonly.js'). Guide 'dashboard.html' (Jobs, Activity). Crew brief 'docs/crew-briefs/v580.md'. **Why it won't lose data:** read-only — the dashboard draws two columns and two folds from fields the job already holds ('roughProjectedStart', 'finishProjectedStart', inspection attempts and targets, 'roughQuestions' / 'finishQuestions', 'questionShares') and the needs list; nothing is written, no field, loader, rule or function changed.
 - **Dashboard Overview audit: Today strip from the Crew Planner, starts this week not confirmed, money at risk; the punch / activity / CO-tile / inspections minis moved off the landing view** · 'shipped 2026-10-30' · 'SW v579' · 'OfficeDash' · 'odTodayByCrew' · 'odStartsUnconfirmedWeek' · 'odMoneyAtRisk' · 'odWeekBounds' · 'odPlannerMonday' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 (*"Let's build them"*); this is the Overview tab's share. **Rule for the landing view:** the first screen is **Needs you + Today**; foreman-level counts (punch, activity volume) sit a level down on the Foremen cards, nothing above the fold is a per-foreman stat. **Trimmed** (the data stays on its home tab): the Open punch items mini (Quality), the Activity-per-day chart (Activity), the Open change orders total tile (Jobs; the *Change orders waiting on the GC 60+ days* line stays) and the Inspections-30-days mini (Quality). **Kept as they were:** Needs you, Needs attention, Active jobs, Next 14 days, Out this week, the per-foreman cards. **Added:** **(1) Today** right under Needs you: who is on which job today from the **Crew Planner's** week doc ('settings/schedule_<monday>' → 'assignments["<jobId>_<dayIdx>"] = { lead, crew[] }', the same cells 'crewOnSiteToday' reads; not 'settings/crewTeams' ride-along pairs, not the Team hierarchy), grouped by the Settings › Team crews ('odCrews', foremanId) with the lead highlighted; a job with people from two crews sits under each with that crew's names; a cell with a first name only ("Trever") resolves to the one team member it can mean, otherwise it shows as written under *Others*; a folded **Active jobs with nobody scheduled today** list with a count; on a weekend, with no week doc, or with no cell for today it is one quiet line (*The Crew Planner has nothing for today*), nothing else. Live while the Overview is open (one 'onSnapshot', read-only). **(2) Starts this week not confirmed**: a folded list (count on the header) of the starts whose date falls in the current Mon–Sun week and whose start is not confirmed — the same 'confirmed' the Job Board, Up Next and the Schedule tab already read ('roughStartConfirmed' / 'finishStartConfirmed' / an Upcoming entry's 'startConfirmed', or a scheduled / date_confirmed status); each live-job row carries the v552 **Move / confirm** action. **(3) Money at risk** at the top of Needs attention: the count and summed dollars of the change orders waiting on the GC 60+ days (the list the tab already built), each Simpro quote counted once (Thayne: 14 COs on one quote), rows with no quote $ counted apart; tap it for the same list. Dollars are allowed on the office dashboard; the Foreman view mask (v569) still hides them. **Live check 2026-10-30:** 50 active jobs; 26 COs on 11 jobs, $14k across 12 quotes; one unconfirmed start this week (Peterson, Upcoming). Every one of the 9 planner week docs in Firestore has **zero assignment cells** (the last week with people on it was Apr 27 2026), so the strip shows its quiet line until the planner is used again; Simpro's schedule is not read here (follow-up). Mockup from a read-only live pull: 'docs/mockups/dashboard-audit/overview.html' (+ 'overview-pull-readonly.js', 'overview-mockup-build.js'). Gate: 'scripts/overview-audit-test.js' in prebuild (today-by-crew grouping and name resolution, the week window across a Sunday, the dollar sum with a shared quote, and a static check that the four trimmed tiles are gone and the strip sits under Needs you). Guide 'dashboard.html' Overview step updated. **Why it won't lose data:** read-only — one new Firestore listener on a settings doc the planner already writes; no job field, loader, function or rules change; the Move / confirm action is the unchanged v552 patch.
 - **Punch rooms from FieldInk: one tap fills a floor's rooms on Rough + Finish; a room typed on one list also lands on the other** · 'shipped 2026-10-29' · 'SW v578' · 'ccRoomOffers' · 'adoptRooms' · 'ccRoomsAdoptPatch' · 'fanOutAddedRooms' · 'CcRoomsSheet' · 'PunchFloor ccRooms' · 'publishCcRoomsOffice' · Koy 2026-10-07: *"option to push rooms to command center to prefill"* — the plan already labels every room and FieldInk already holds those labels, yet the office retyped them per job, per floor, per punch phase. The office half of the FieldInk v757 bridge (spec 'homestead-pdf-markup/docs/superpowers/specs/2026-10-07-rooms-to-command-center-design.md'). **How it works:** FieldInk sends the plan's room names on an explicit *Send rooms to Command Center* tap to 'ccrooms/<ccJobId>' on the field-ink project (a map keyed by a FieldInk-owned string the office never parses; it folds records by floor + name, case- and whitespace-insensitive, because the same room can sit under two plan tokens). The job listens (same self-healing attach as the 'ccloads' listener) and each residential **Rough / Finish › Punch List floor header** gets a **FieldInk rooms (N)** button, shown only while a room FieldInk knows is still missing from that floor on at least one target list. It opens a sheet listing that floor's rooms: rooms with loads or a drawn zone start ticked; a name typed in FieldInk with no loads and no zone (usually an orphaned old spelling) shows greyed and unticked; rooms already on a list carry an *on Rough* / *on Finish* tag and are skipped by the counts. The Add button reads *Add N* with *Rough n · Finish n* above the list, plus *Legacy QC n* only while the Legacy QC Items section is on screen (the QC walks read the Rough/Finish trees, so they get the rooms for free; a hidden tree is never written). **Hide** drops a row (writes ONLY 'rooms.<key>.office.{dismissed, officeUpdatedAt}' on the FieldInk doc by merge-set — FieldInk is never told, no job data); *N hidden · Show* brings it back with **Unhide**. Rooms FieldInk sent without a floor are never offered; a footnote counts the ones with no floored twin and says where to set it, and when NOTHING can be offered because no room carries a floor (Miller #1438 on 2026-10-30: all 113 rooms came through floor-less because no sheet had a floor set in FieldInk’s Pages panel) the residential Punch List shows one note saying so instead of nothing. Questions needs no code: its room picker ('roomSuggestions') reads punch rooms. **Decision 5 fan-out:** a room typed by hand in Rough's or Finish's *+ Room* (or a QC walk's *+ New Room…*) is appended, empty, to the other phase on that floor in the same patch, skipped when that name is already there; renames and deletes stay on the list you are on; items never travel; extras floors never fan out; Legacy QC *+ Room* does not fan out; commercial punch never reaches the funnel. Nothing is automatic — the Miller incidents (2026-09-30 / 10-01, wrong room names flowing into the office on their own) are why a wrong name must pass Send (FieldInk), a tick and Add. Gate: 'scripts/ccrooms-test.js' in prebuild (90 checks on the helpers extracted verbatim from App.js: folding, hidden rows, floor-less footnote, per-phase counts, append-only adopt, fail-closed fan-out, the exact Hide payload). Mockup 'docs/mockups/ccrooms-prefill.html' (Miller #1438's real room names), approved 2026-10-29. Two adversarial reviews. No Firestore rules change in either project (the field-ink 'ccrooms' block is deployed; this repo's rules untouched). Guides 'rough.html' / 'finish.html' updated. **Why it won't lose data:** append-only — every write builds from 'jobRef.current' and replaces only the target floor with '{ ...normFloor(floor), rooms: [...existing, ...fresh] }', fresh = '{ id: uid(), name, items: [] }' (exactly 'addRoom''s shape, a new id per tree); every existing room object, item, photo, general / hotcheck list, other floor and extras entry is the same object; nothing is renamed, deleted or reordered; a tree nothing was added to is left out of the patch. The patch goes through the normal 'u()' → 'saveJob' funnel: '_mergePatchAgainstServer' three-way-merges each tree independently and '_threeWayMerge' unions 'rooms' by 'id', keeping a client-added room absent from the baseline and every server-side room. The fan-out fails closed (no usable previous tree → nothing copied). The only write to the FieldInk project names the office-owned 'office' sub-object of listed records on a map doc with 'merge:true' (the SDK treats nested map keys literally; verified in @firebase/firestore 10.14.1). No new job field, no loader change, no rules change.
