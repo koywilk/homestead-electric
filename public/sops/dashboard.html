@@ -249,11 +249,20 @@
     <p>The <b>Team Goals 2026–2027</b> sheet (Koy's copy of Josh's), read when the tab opens, with today's number beside each goal.
     <b>Our goal</b> is the mission line as typed. <b>2027 scoreboard</b>: one card per measure with <b>Sheet says</b>, <b>Simpro today</b>
     (or <b>App today</b>), the <b>2027 goal</b>, a bar and a pill: <b>At goal</b>, <b>Moving</b>, <b>Off track</b>, <b>Not tracked yet</b>
-    (needs a cost-center read from Simpro or a hand count) or <b>No Simpro pull yet</b>. Open <b>How it is counted</b> on a card for
+    (a hand count), <b>No Simpro pull yet</b> or <b>No Phase 2 pull yet</b>. Open <b>How it is counted</b> on a card for
     the rule. Simpro numbers follow Josh's Builder Scorecard rule: every job with an invoice dated this year that is fully invoiced with
     costs posted; margin is total net profit over total contract (not a per-job average), hours are total used over total estimated,
     each foreman is Simpro's technician on the job, days to collect is issue-to-paid on this year's paid invoices with the open book
     beside it. That is on purpose a different rule from the Scoreboard tab, so the two pages do not show the same margin.
+    Since v583 the same nightly pull also fills the four cards that used to be grey (<b>Phase 2</b>): <b>Warranty hours</b> is the labor
+    hours on Residential (Warranty) cost centers on those same jobs, as a share of every hour on them (goal under 2%); <b>Change orders
+    with hours booked to their own cost center</b> is, of the change-order cost centers sold with hours, how many have any hours booked
+    (a change order put on the Rough In cost center does not count, which is the habit the goal is about); <b>Home Depot / ACE runs</b> is
+    Simpro purchase orders to Home Depot or ACE Hardware, headlined as a per-week rate over the last 8 full weeks (goal 2.8 a week, 30% under
+    the sheet's "about 4"; a run started from the app's Get a PO number makes one of these too, so the app count is a sub-line, not added);
+    <b>Hours tracked weekly</b> is, of the last 8 Monday–Sunday weeks, how many had every active crew member with job hours on their Simpro
+    timesheet, with who missed which week and anyone with no hours at all named rather than counted. Those four say <b>No Phase 2 pull yet</b>
+    until the updated function has run once.
     <b>Rest of 2026</b>: the sheet's AREA · GOAL · WHO · BY rows; the pill is what is typed in the sheet's column <b>F STATUS</b>
     (Not started / On track / At risk / Done), and the app adds a due flag from BY ("Due in 8 d", "Overdue"). Tap a row to open the
     sheet on it; edit there, then <b>Refresh</b> here. <b>2027 by quarter</b> marks the next quarter. <b>Measured by the app, not on
@@ -284,10 +293,16 @@
     <b>Where every job stands</b> charts each job's rough (red dot) and finish (blue dot) on one scale, biggest overrun first (on Margin,
     most dollars lost first): the light line is 100% of the estimate (on Margin, the dashed orange line is the 15% goal) and the number
     turns orange when it is over (or under the goal); tap a job to open its cost centers.
+    <b>Open jobs already past rough hours</b> (v583, the folded strip at the top, count on the header) lists the open jobs whose rough hours
+    used are past the rough estimate from every cost center, the five furthest over first with <b>Show all</b> behind them, each naming the job's
+    foreman and lead from the Job Board; tap a job to jump to its cost centers.
     <b>Every job</b> lists rough and finish side by side, worst first; <b>est</b> is the estimate from every cost center, not just the base one.
+    On <b>Hours</b>, once the Goals pull has run, <b>CO hrs, own CC</b> is the hours booked to that job's own change-order cost centers
+    (0 = it has change-order cost centers with nothing booked yet, – = it has none). The old <b>Untagged est</b> column is gone from this table;
+    the cost-center detail still shows what is untagged.
     Tap a job to see its cost centers and how each splits; <b>Open job</b> opens it in the app. Flip the <b>Count</b> switch off to leave a job out: a
-    <b>What-if</b> bar names what is off and the boxes and the foreman list leave it out (<b>Turn all back on</b> to undo; nothing in Simpro or
-    the app changes, and it resets when you leave).
+    <b>What-if</b> fold (count on its header; open it for the names and <b>Turn all back on</b>) shows what is off, and the boxes and the
+    people list leave it out (nothing in Simpro or the app changes, and it resets when you leave).
     <b>By foreman</b> / <b>By lead</b> (above the chart) adds up each person's jobs; tap a name and the boxes become theirs, with the company
     number under each. A job credited to the wrong person is fixed on the job's <b>technician in Simpro</b> (it shows here after the next
     night's pull); <b>By lead</b> uses the lead on the app's Job Info.

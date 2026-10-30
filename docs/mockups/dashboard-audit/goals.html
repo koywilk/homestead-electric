@@ -1,0 +1,90 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Goals tab mockup</title>
+<style>
+:root{--page:#F7F4EE;--ink:#292119;--dim:#6B6259;--line:#E4DDD2;--card:#FFFFFF;--a:#8E6336}
+body{margin:0;background:var(--page);color:var(--ink);font:15px/1.45 "DM Sans",system-ui,sans-serif;padding:24px}
+h1{font-size:26px;margin:0 0 4px}h1+p{margin:0 0 18px;color:var(--dim)}
+.ct{font-weight:700;font-size:14px;margin:18px 0 8px}.ct small{font-weight:500;color:var(--dim);margin-left:8px;font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.goal{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:var(--card);display:flex;flex-direction:column;gap:8px;min-width:0}
+.goal.new{outline:2px solid var(--a);outline-offset:-2px}
+.goal .h{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.goal .h b{font-size:13.5px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--c);white-space:nowrap}.pill i{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.n{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.n small{display:block;color:var(--dim);font-size:11px}.n b{font-size:18px}.n b.s{color:var(--ink);font-weight:600;font-size:14px}
+.bar{display:block;height:6px;border-radius:3px;background:#EEE8DF;overflow:hidden}.bar i{display:block;height:100%;background:var(--c)}
+.sub{color:var(--dim);font-size:12px}details.rule summary{cursor:pointer;font-weight:700;color:var(--a);font-size:12.5px;list-style:none}details.rule p{font-size:12.5px;color:var(--dim);margin:6px 0 0}
+.note{background:#fff;border:1px solid var(--line);border-left:4px solid var(--a);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px}
+/* Job Costs (the tab's own look: steel panel, hi-vis tags) */
+.jc{--jc-ink:#14181C;--jc-dim:#4A535C;--jc-steel2:#C9CFD6;--jc-cover:#F2F4F6;--jc-char:#2B3137;--jc-hv:#FFB000;--jc-red:#C0392B;--jc-blue:#2457C5;--jc-cond:"Barlow Condensed","Bebas Neue","DM Sans",sans-serif}
+.fold{background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px;margin-bottom:12px}
+.fold>summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;cursor:pointer;list-style:none;font:800 18px var(--jc-cond);letter-spacing:.02em;color:var(--jc-ink)}
+.fold>summary::before{content:"";border:6px solid transparent;border-left:8px solid var(--jc-dim)}.fold[open]>summary::before{transform:rotate(90deg)}
+.fold>summary small{font:500 13px "DM Sans",sans-serif;color:var(--jc-dim);letter-spacing:0}.fold.warn{border-left:6px solid var(--jc-hv)}.fold.wi{border:2px solid var(--jc-hv)}.fold.inner{margin:8px 0 0;background:transparent}
+.cnt{font:800 14px var(--jc-cond);background:var(--jc-char);color:#F2F4F6;padding:1px 8px;border-radius:999px}.fold.warn .cnt{background:var(--jc-hv);color:var(--jc-ink)}
+.fb{padding:0 14px 12px}table{border-collapse:collapse;width:100%;font-size:13.5px;background:#fff}th,td{padding:7px 8px;border-bottom:1px solid var(--jc-steel2);text-align:left;vertical-align:top}th{font:700 12px var(--jc-cond);letter-spacing:.04em;text-transform:uppercase;color:var(--jc-dim)}
+td.r,th.r{text-align:right;white-space:nowrap}td.job b{display:block}td.job small{color:var(--jc-dim);font-size:11.5px}.dim{color:var(--jc-dim)}
+.tag{font:800 14px var(--jc-cond);padding:1px 7px;border-radius:4px;background:var(--jc-hv);color:var(--jc-ink)}.pct.over{color:#8A4B00;font-weight:800}
+.hdr{display:flex;align-items:center;gap:18px;background:var(--jc-char);color:#F2F4F6;padding:16px 22px;border-bottom:4px solid var(--jc-hv);border-radius:8px 8px 0 0;margin-bottom:14px}.hdr h1{font:800 34px/1 var(--jc-cond);margin:0;letter-spacing:.02em}.hdr p{margin:4px 0 0;color:#C9CFD6;font-size:13px}
+.hero{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}.lbl{background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px;padding:12px 16px 12px 22px;position:relative}.lbl::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:6px;border-radius:0 3px 3px 0;background:var(--jc-char)}.lbl.r::before{background:var(--jc-red)}.lbl.f::before{background:var(--jc-blue)}.lbl.g::before{background:#1E8F4E}
+.lbl h4{margin:0 0 2px;font:700 16px var(--jc-cond);color:var(--jc-dim)}.big{font:800 34px/1 var(--jc-cond)}.big small{font:600 13px "DM Sans",sans-serif;color:var(--jc-dim);margin-left:6px}
+@media(max-width:700px){.grid,.hero,.n{grid-template-columns:1fr}body{padding:16px}}
+</style></head><body><h1>Goals</h1><p>Team Goals 2026–2027 · from the Goals sheet · Simpro numbers use Josh's rule, jobs invoiced this year · pulled Fri 5:40 AM · Phase 2 read Fri 1:49 PM (local, read-only)</p>
+<div class="note">Mockup from a LIVE read-only pull, 2026-10-30: Phase 1 is the real settings/goalsSimpro doc; Phase 2 is the new pull run locally with the same code (functions/goalsPull.js pullPhase2, no errors). The four outlined cards are the ones this ship fills. Sheet rows are the 10/23 copy of the sheet.</div>
+<div class="ct">2027 scoreboard<small>the sheet's number and today's beside it · open "How it is counted" on any card</small></div><div class="grid"><div class="goal" style="--c:#C43B3B"><div class="h"><b>Job margin (completed jobs, after labor and material)</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">About 11.7%</b></div><div><small>Simpro today</small><b style="color:#C43B3B">11.2%</b></div><div><small>2027 goal</small><b class="s">15% or better on every job</b></div></div>
+  <span class="bar"><i style="width:75%"></i></span>
+  <small class="sub">152 jobs invoiced in 2026, fully invoiced, costs posted · 80 of them at 15% or better</small>
+  <details class="rule"><summary>How it is counted</summary><p>Σ net profit ÷ Σ contract (ex tax) at Simpro's cost rates over every job with an invoice dated this year that is 100% invoiced with costs posted (Josh's Builder Scorecard rule). Weighted, not a plain per-job average, so a big job counts for what it is. The Scoreboard tab uses a different rule on purpose (per-job average, completed this year, app foreman credit).</p></details></div><div class="goal" style="--c:#C43B3B"><div class="h"><b>Commercial projects (share of our work)</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">Battle Creek, Wise Flooring, ProSteel and Riverton Retail &amp; Laundromat underway</b></div><div><small>Simpro today</small><b style="color:#C43B3B">6.3%</b></div><div><small>2027 goal</small><b class="s">About a quarter of our work</b></div></div>
+  <span class="bar"><i style="width:25%"></i></span>
+  <small class="sub">$244k of $3.88M invoiced in 2026</small>
+  <details class="rule"><summary>How it is counted</summary><p>Invoice dollars (ex tax, credits out) on jobs whose Simpro Business Group is Commercial, divided by all invoice dollars this year. A job with no Business Group counts as residential, same as the Scoreboard page. The second line is the pipeline: commercial contract value among the jobs Simpro has in progress.</p></details></div><div class="goal" style="--c:#C43B3B"><div class="h"><b>Hours vs estimate, company</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">140% (old estimates)</b></div><div><small>Simpro today</small><b style="color:#C43B3B">136%</b></div><div><small>2027 goal</small><b class="s">110% or better</b></div></div>
+  <span class="bar"><i style="width:81%"></i></span>
+  <small class="sub">152 jobs invoiced in 2026 · hours used ÷ hours estimated</small>
+  <details class="rule"><summary>How it is counted</summary><p>Σ actual labor hours ÷ Σ estimated labor hours from each job's Totals, over the same counted jobs as the margin card. Old estimates stay in the mix until those jobs are invoiced.</p></details></div><div class="goal" style="--c:#C43B3B"><div class="h"><b>Hours vs estimate, every foreman</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">131–166%</b></div><div><small>Simpro today</small><b style="color:#C43B3B">83–156%</b></div><div><small>2027 goal</small><b class="s">115% or better</b></div></div>
+  
+  <small class="sub">1 of 13 at 115% or better · credit = Simpro's technician on the job, 3+ counted jobs</small>
+  <details class="rule"><summary>How it is counted</summary><p>Per technician: Σ hours used ÷ Σ hours estimated across the counted jobs Simpro names them on. The Scoreboard credits by the app's foreman or lead instead, which moves people; this tab follows Simpro so it matches the sheet.</p></details></div><div class="goal new" style="--c:#B4531A"><div class="h"><b>Warranty hours (share of all job hours)</b><span class="pill"><i></i>Moving</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">3.3%</b></div><div><small>Simpro today</small><b style="color:#B4531A">2.2%</b></div><div><small>2027 goal</small><b class="s">Under 2%</b></div></div>
+  <span class="bar"><i style="width:91%"></i></span>
+  <small class="sub">1205.8 h on warranty cost centers of 53811.2 h on jobs invoiced in 2026 · 72 of 81 warranty cost centers have hours, 51 jobs</small>
+  <details class="rule"><summary>How it is counted</summary><p>Simpro labor hours on cost centers whose company cost center is Residential (Warranty), on the same jobs as the margin card (a customer invoice dated this year), divided by every actual hour on those jobs. Goal under 2%. Read nightly at 5:40 AM; the sheet's number was a hand count.</p></details></div><div class="goal new" style="--c:#C43B3B"><div class="h"><b>Change orders with hours booked to their own cost center</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">Almost none</b></div><div><small>Simpro today</small><b style="color:#C43B3B">33 of 393</b></div><div><small>2027 goal</small><b class="s">Every approved change order</b></div></div>
+  <span class="bar"><i style="width:8%"></i></span>
+  <small class="sub">change-order cost centers sold with hours that have hours booked · 697.5 h booked of 2068.5 h sold across 436 CO cost centers on 65 jobs</small>
+  <details class="rule"><summary>How it is counted</summary><p>A change order counts as booked when its own cost center (company cost center &quot;… - Change Order (Rough In / Finish)&quot;) shows actual labor hours. Of the CO cost centers sold with estimated hours on this year's invoiced jobs, how many have any hours. A CO whose section was put on the Rough In cost center is not booked to its own, so it does not count here — that is the habit the goal is about. Material-only COs (no hours sold) are left out of the test.</p></details></div><div class="goal new" style="--c:#C43B3B"><div class="h"><b>Home Depot / ACE runs</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">About 4 a week</b></div><div><small>Simpro today</small><b style="color:#C43B3B">4.1 a week</b></div><div><small>2027 goal</small><b class="s">30% fewer</b></div></div>
+  <span class="bar"><i style="width:68%"></i></span>
+  <small class="sub">last 8 weeks · 171 Home Depot / ACE purchase orders in 2026 (135 Home Depot, 36 ACE), 4 a week for the year · 1 raised from the app</small>
+  <details class="rule"><summary>How it is counted</summary><p>Simpro purchase orders whose vendor is Home Depot or ACE Hardware (not Ace Rentals), by date issued. A store run from the app's Get a PO number makes one of these too, so the app's count is a sub-line, never added on top. The headline is the last 8 full weeks; the goal is 30% under the sheet's &quot;about 4 a week&quot;, 2.8.</p></details></div><div class="goal" style="--c:#18804A"><div class="h"><b>Days to collect on our invoices</b><span class="pill"><i></i>At goal</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">About 55</b></div><div><small>Simpro today</small><b style="color:#18804A">40 d</b></div><div><small>2027 goal</small><b class="s">Under 45</b></div></div>
+  <span class="bar"><i style="width:100%"></i></span>
+  <small class="sub">275 invoices paid in 2026, issue to paid (median 35) · open $633k on 66 · past due $257k · over 60 d $44k</small>
+  <details class="rule"><summary>How it is counted</summary><p>Average of DatePaid minus DateIssued over customer invoices paid this year (credits out, a paid date before the issue date left out). The open book beside it is what is unpaid today: the whole balance, the part past its due date, and the part issued more than 60 days ago. Josh's &quot;about 55&quot; is an A/R estimate (what is owed ÷ daily sales), which runs higher while a big draw sits unpaid.</p></details></div><div class="goal new" style="--c:#C43B3B"><div class="h"><b>Jobs with hours tracked weekly</b><span class="pill"><i></i>Off track</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">Some</b></div><div><small>Simpro today</small><b style="color:#C43B3B">0 of 8 weeks</b></div><div><small>2027 goal</small><b class="s">Every job</b></div></div>
+  
+  <small class="sub">every crew member logged job hours · 14 of 18 people logged all 8 · weeks missed: James 6, Colby 2, Zane 1 · no Simpro hours at all: Jeromy, Justin, Joel</small>
+  <details class="rule"><summary>How it is counted</summary><p>For each of the last 8 full Monday–Sunday weeks: did every active crew member (Settings › Team: foreman, jr. foreman, lead or crew, not a contractor) have job hours on their Simpro timesheet that week? Shop and activity time does not count. Someone with no job hours in any of the 8 weeks is named instead of counted, so one stale Team row does not zero the card. The sheet's measure is per job; this is the same habit read per person, which is what Simpro's timesheets can tell.</p></details></div><div class="goal" style="--c:#6B7487"><div class="h"><b>Shop and inventory</b><span class="pill"><i></i>Not tracked yet</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">Stock reset to zero in SimPro Oct 19</b></div><div><small>App today</small><b style="color:#6B7487">—</b></div><div><small>2027 goal</small><b class="s">Clean, organized shop</b></div></div>
+  
+  <small class="sub">Not measured by the app or by the Simpro pull yet; a hand count. The sheet's words show as typed.</small>
+  </div></div>
+<div class="ct">Before the function is deployed<small>the same four cards with the Phase 1 doc only: pending in their own words, never a number</small></div><div class="grid"><div class="goal new" style="--c:#6B7487"><div class="h"><b>Warranty hours (share of all job hours)</b><span class="pill"><i></i>No Phase 2 pull yet</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">3.3%</b></div><div><small>Simpro today</small><b style="color:#6B7487">—</b></div><div><small>2027 goal</small><b class="s">Under 2%</b></div></div>
+  
+  <small class="sub">Needs tonight's Simpro pull (goalsNightly Phase 2) or Pull from Simpro now.</small>
+  </div><div class="goal new" style="--c:#6B7487"><div class="h"><b>Change orders with hours booked to their own cost center</b><span class="pill"><i></i>No Phase 2 pull yet</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">Almost none</b></div><div><small>Simpro today</small><b style="color:#6B7487">—</b></div><div><small>2027 goal</small><b class="s">Every approved change order</b></div></div>
+  
+  <small class="sub">Needs tonight's Simpro pull (goalsNightly Phase 2) or Pull from Simpro now.</small>
+  </div><div class="goal new" style="--c:#6B7487"><div class="h"><b>Home Depot / ACE runs</b><span class="pill"><i></i>No Phase 2 pull yet</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">About 4 a week</b></div><div><small>Simpro today</small><b style="color:#6B7487">—</b></div><div><small>2027 goal</small><b class="s">30% fewer</b></div></div>
+  
+  <small class="sub">Needs tonight's Simpro pull (goalsNightly Phase 2) or Pull from Simpro now.</small>
+  </div><div class="goal new" style="--c:#6B7487"><div class="h"><b>Jobs with hours tracked weekly</b><span class="pill"><i></i>No Phase 2 pull yet</span></div>
+  <div class="n"><div><small>Sheet says</small><b class="s">Some</b></div><div><small>Simpro today</small><b style="color:#6B7487">—</b></div><div><small>2027 goal</small><b class="s">Every job</b></div></div>
+  
+  <small class="sub">Needs tonight's Simpro pull (goalsNightly Phase 2) or Pull from Simpro now.</small>
+  </div></div>
+</body></html>

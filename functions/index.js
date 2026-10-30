@@ -8371,11 +8371,30 @@ async function runGoalsPull({ reason = "nightly" } = {}) {
     counts: { invoices: invoices.length, jobs: jobs.rows.length, jobsFailed: jobs.failed, listedJobs: ids.length, counted: jobs.rows.filter(j => j.counts).length },
     seconds: Math.round((Date.now() - startedAt) / 1000),
   };
+  // Phase 2 (SW v583): warranty hours, CO hours in their own cost center, Home Depot / ACE runs,
+  // hours tracked weekly — one extra key, `phase2`, so Phase 1 above stays byte-identical. It
+  // never fails the run: a thrown Phase 2 carries the previous doc's phase2 forward (marked) or
+  // leaves the key off, and the Phase 1 numbers still land.
+  try {
+    const getJson = async (path) => { const r = await simproReqWithRetry("GET", path); if (!r.ok) { functions.logger.warn("[goals] phase2 simpro miss", { path, status: r.status }); return null; } return r.data; };
+    const [usersSnap, poSnap] = await Promise.all([db.collection("settings").doc("users").get(), db.collection("material_po_log").where("kind", "==", "number").get()]);
+    const users = (usersSnap.exists && Array.isArray((usersSnap.data() || {}).list)) ? usersSnap.data().list : [];
+    const appLog = poSnap.docs.map(d => { const x = d.data() || {}; return { kind: x.kind, supplierName: x.supplierName, at: x.doneAt || x.createdAt || x.startedAt || "" }; });
+    payload.phase2 = await _goals.pullPhase2({ get: getJson, year, todayYmd, slim: jobs.rows, users, appLog, concurrency: 4, log: (m, o) => functions.logger.info(`[goals] ${m}`, o) });
+    payload.phase2.seconds = Math.round((Date.now() - startedAt) / 1000) - payload.seconds;
+    payload.seconds = Math.round((Date.now() - startedAt) / 1000);
+  } catch (e) {
+    functions.logger.error("[goals] phase2 failed", { error: e.message });
+    try { const prev = await db.collection("settings").doc(GOALS_DOC).get(); const p2 = prev.exists && (prev.data() || {}).phase2; if (p2) payload.phase2 = { ...p2, carried: true, carriedReason: e.message, carriedAt: now.toISOString() }; } catch (_) { /* no previous doc */ }
+  }
   const bytes = Buffer.byteLength(JSON.stringify(payload));
   if (bytes > 900000) throw new Error(`[goals] doc would be ${bytes} bytes — over the document limit, not written`);
   await db.collection("settings").doc(GOALS_DOC).set(payload);
-  functions.logger.info("[goals] doc written", { ...payload.counts, bytes, seconds: payload.seconds, reason, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct });
-  return { ok: true, ...payload.counts, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct, bytes, seconds: payload.seconds, generated_at: payload.generated_at };
+  const p2 = payload.phase2 || {};
+  functions.logger.info("[goals] doc written", { ...payload.counts, bytes, seconds: payload.seconds, reason, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct,
+    phase2: payload.phase2 ? { warrantyPct: p2.hours && p2.hours.warranty.sharePct, coHours: p2.hours && p2.hours.co.hours, storeRuns: p2.storeRuns && p2.storeRuns.total, weeksAll: p2.weekly && p2.weekly.weeksAll, errors: p2.errors, carried: !!p2.carried } : null });
+  return { ok: true, ...payload.counts, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct, bytes, seconds: payload.seconds, generated_at: payload.generated_at,
+    phase2: payload.phase2 ? { warrantyPct: p2.hours && p2.hours.warranty.sharePct, coHours: p2.hours && p2.hours.co.hours, storeRuns: p2.storeRuns && p2.storeRuns.total, weeksAll: p2.weekly && p2.weekly.weeksAll, errors: p2.errors || [], carried: !!p2.carried } : null };
 }
 // 5:40 AM Mountain, every day — after scoreboardNightly (5:20), before anyone opens the tab.
 exports.goalsNightly = functions

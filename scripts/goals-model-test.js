@@ -104,7 +104,8 @@ const noSim = X.odGoalsModel({ sheet, sim: null, sb: null, d, plans: { waiting: 
 const simCards = noSim.measures.filter(x => ["margin", "commercial", "hoursCompany", "hoursForeman", "collect"].includes(x.key));
 eq(simCards.length, 5, "five sheet measures map to Simpro cards");
 eq(simCards.map(x => x.live.sub), Array(5).fill("No Simpro pull yet"), "no doc → every Simpro card says so, the tab still renders");
-eq(noSim.measures.filter(x => !x.key).map(x => x.name.slice(0, 8)), ["Warranty", "Change o", "Home Dep", "Jobs wit", "Shop and"], "the five hand / Phase 2 measures have no live card");
+eq(noSim.measures.filter(x => !x.key).map(x => x.name.slice(0, 8)), ["Shop and"], "only the hand-counted measure has no live card (v583: the four Phase 2 cards are live)");
+eq(noSim.measures.filter(x => ["warranty", "coHours", "storeRuns", "hoursWeekly"].includes(x.key)).map(x => x.live.sub), Array(4).fill("No Simpro pull yet"), "no doc → the Phase 2 cards pend like the other Simpro cards");
 eq(noSim.extra.map(e => e.key), ["firstPass", "coOld", "quiet", "questions", "returnTrips", "rebook", "plans"], "app-measured goals the sheet does not name");
 eq(noSim.extra[0].value, "75%");
 eq(noSim.extra[3].sub, "open crew questions · 1 older than 2 days");
@@ -123,6 +124,7 @@ eq(card("hoursForeman").value, "—", "nobody has 3 counted jobs in this fixture
 eq([card("commercial").value, card("commercial").sub], ["18%", "$2k of $11k invoiced in 2026 · in progress: 25% of $4.00M contract value is commercial"]);
 eq([card("collect").value, card("collect").tone], ["40 d", "good"]);
 eq(withSim.counts.tracked, 5); eq(withSim.counts.atGoal, 1);
+eq(withSim.measures.filter(x => ["warranty", "coHours", "storeRuns", "hoursWeekly"].includes(x.key)).map(x => x.live.pendingText), Array(4).fill("No Phase 2 pull yet"), "a Phase 1 doc without phase2 → the four cards pend in their own words (scripts/goals-costs-audit-test.js covers them lit)");
 assert.ok(withSim.measures.find(x => x.key === "margin").rule.includes("Builder Scorecard"), "the rule travels with the card");
 // A sheet row that names an app-measured goal lights it up and leaves `extra`.
 const sheet2 = X.odGoalsParse([...grid.slice(0, 24), ["", "✅  First-pass inspection rate", "72%", "90% or better", "", ""], ...grid.slice(24)]);

@@ -49818,6 +49818,11 @@ const OD_GOAL_LIVE = [
   { key: "collect", label: "Days to collect on our invoices", test: /collect|days to pa|receivable/i, sim: true,
     live: ({ sim }) => { const inv = sim.invoices || {}, p = inv.paid || {}, o = inv.open || {}; return { value: p.avgDays == null ? "—" : `${p.avgDays} d`, sub: `${p.n || 0} invoices paid in ${sim.year}, issue to paid (median ${p.medianDays == null ? "—" : p.medianDays}) · open ${odGoalsK(o.owed || 0)} on ${o.n || 0} · past due ${odGoalsK(o.pastDue || 0)} · over 60 d ${odGoalsK(o.over60 || 0)}`, tone: p.avgDays == null ? "grey" : p.avgDays < 45 ? "good" : p.avgDays < 55 ? "warn" : "bad", bar: p.avgDays == null ? 0 : Math.max(0.04, Math.min(1, 45 / p.avgDays)),
       rule: "Average of DatePaid minus DateIssued over customer invoices paid this year (credits out, a paid date before the issue date left out). The open book beside it is what is unpaid today: the whole balance, the part past its due date, and the part issued more than 60 days ago. Josh's \"about 55\" is an A/R estimate (what is owed ÷ daily sales), which runs higher while a big draw sits unpaid." }; } },
+  // v583 Phase 2: the four cards v562 left grey, read from settings/goalsSimpro.phase2 (helpers above OfficeDash).
+  { key: "warranty", label: "Warranty hours, share of all job hours", test: /warranty/i, sim: true, live: ({ sim }) => odGoalWarranty(sim) },
+  { key: "coHours", label: "Change orders with hours booked to their own cost center", test: /change orders?.*(cost cent|booked)|own cost cent/i, sim: true, live: ({ sim }) => odGoalCoHours(sim) },
+  { key: "storeRuns", label: "Home Depot / ACE runs a week", test: /home depot|\bace\b|supply run|store run/i, sim: true, live: ({ sim }) => odGoalStoreRuns(sim) },
+  { key: "hoursWeekly", label: "Weeks with every crew member's hours tracked", test: /tracked weekly|hours tracked|logged weekly/i, sim: true, live: ({ sim }) => odGoalHoursWeekly(sim) },
   { key: "firstPass", label: "First-pass inspection rate, 90 days", test: /first.?pass|pass(ed)? (the )?first|inspection/i,
     live: ({ d }) => { const f = (d && d.firsts) || []; const pass = f.filter(x => x.pass === true).length; const pct = f.length ? Math.round(100 * pass / f.length) : null; return { value: pct == null ? "—" : `${pct}%`, sub: `${pass} of ${f.length} first inspections passed, last 90 days`, tone: pct == null ? "grey" : pct >= 90 ? "good" : pct >= 75 ? "warn" : "bad", bar: pct == null ? 0 : pct / 100 }; } },
   { key: "coOld", label: "Change orders waiting on a GC 60+ days", test: /change orders?.*(wait|gc|past|older|days)|(wait|gc).*change order/i,
@@ -50314,6 +50319,77 @@ function odReinspByDate(failGroups, t0) {
   const list = (failGroups || []).filter(g => g && !g.passAfter && g.rebook).map(g => ({ g, at: g.rebook, k: localYmd(g.rebook), late: g.rebook < t0 ? odDaysBetween(g.rebook, t0) : 0 })).sort((a, b) => a.at - b.at);
   const days = []; list.forEach(x => { let dd = days[days.length - 1]; if (!dd || dd.k !== x.k) { dd = { k: x.k, at: x.at, items: [] }; days.push(dd); } dd.items.push(x); });
   return { list, days, late: list.filter(x => x.late).length };
+}
+
+// ── Dashboard audit (Goals + Job Costs) helpers — SW v583, 2026-10-30 ──────────────────────
+// Goals Phase 2: the four cards v562 left grey read settings/goalsSimpro.phase2 (goalsNightly,
+// functions/goalsPull.js pullPhase2). Each helper gets the whole Simpro doc and returns the card
+// shape OD_GOAL_LIVE uses; without `phase2` it is pending with its own words, so the tab works
+// before the function is deployed. Job Costs: the early-warning list (open jobs already past
+// their rough hours), owners by d.owns, and the per-job CO-hours column fed by the same pull.
+// Pure: scripts/goals-costs-audit-test.js through odash-model-test's sandbox.
+const OD_P2_PENDING = { pending: true, pendingText: "No Phase 2 pull yet", value: "—", sub: "Needs tonight's Simpro pull (goalsNightly Phase 2) or Pull from Simpro now.", tone: "grey", bar: 0 };
+const odP2Of = (sim) => (sim && sim.phase2 && typeof sim.phase2 === "object") ? sim.phase2 : null;
+const odP2H = (n) => n == null ? "—" : `${Math.round(n * 10) / 10} h`;
+const odP2Names = (a, max = 3) => { const names = (a || []).map(odFirst).filter(Boolean); return names.length <= max ? names.join(", ") : `${names.slice(0, max).join(", ")} + ${names.length - max} more`; };
+function odGoalWarranty(sim) {
+  const p2 = odP2Of(sim), h = p2 && p2.hours && p2.hours.warranty;
+  if (!h) return OD_P2_PENDING;
+  const share = h.sharePct;
+  return { value: share == null ? "—" : `${share}%`, sub: `${odP2H(h.hours)} on warranty cost centers of ${odP2H(p2.hours.allHours)} on ${sim.year ? `jobs invoiced in ${sim.year}` : "this year's jobs"} · ${h.withHours} of ${h.ccs} warranty cost centers have hours, ${h.jobs} jobs${p2.carried ? " · carried from an earlier pull" : ""}`,
+    tone: share == null ? "grey" : share < 2 ? "good" : share < 3 ? "warn" : "bad", bar: share == null ? 0 : Math.max(0.04, Math.min(1, 2 / share)),
+    rule: "Simpro labor hours on cost centers whose company cost center is Residential (Warranty), on the same jobs as the margin card (a customer invoice dated this year), divided by every actual hour on those jobs. Goal under 2%. Read nightly at 5:40 AM; the sheet's number was a hand count." };
+}
+function odGoalCoHours(sim) {
+  const p2 = odP2Of(sim), c = p2 && p2.hours && p2.hours.co;
+  if (!c) return OD_P2_PENDING;
+  const exp = c.expected || 0, got = c.expectedWith || 0, pct = exp > 0 ? Math.round(100 * got / exp) : null;
+  return { value: exp > 0 ? `${got} of ${exp}` : (c.ccs ? `${c.withHours} of ${c.ccs}` : "0"), sub: `change-order cost centers sold with hours that have hours booked · ${odP2H(c.hours)} booked of ${odP2H(c.estHours)} sold across ${c.ccs} CO cost centers on ${c.jobs} jobs${p2.carried ? " · carried from an earlier pull" : ""}`,
+    tone: exp === 0 ? "grey" : pct >= 90 ? "good" : pct >= 50 ? "warn" : "bad", bar: pct == null ? 0 : pct / 100,
+    rule: "A change order counts as booked when its own cost center (company cost center \"… - Change Order (Rough In / Finish)\") shows actual labor hours. Of the CO cost centers sold with estimated hours on this year's invoiced jobs, how many have any hours. A CO whose section was put on the Rough In cost center is not booked to its own, so it does not count here — that is the habit the goal is about. Material-only COs (no hours sold) are left out of the test." };
+}
+function odGoalStoreRuns(sim) {
+  const p2 = odP2Of(sim), r = p2 && p2.storeRuns;
+  if (!r) return OD_P2_PENDING;
+  const rate = r.last8PerWeek, goal = 2.8;   // "About 4 a week" on the sheet, 30% fewer
+  return { value: rate == null ? "—" : `${rate} a week`, sub: `last 8 weeks · ${r.total} Home Depot / ACE purchase orders in ${r.year} (${r.homeDepot} Home Depot, ${r.ace} ACE), ${r.perWeek} a week for the year · ${r.app} raised from the app${p2.carried ? " · carried from an earlier pull" : ""}`,
+    tone: rate == null ? "grey" : rate <= goal ? "good" : rate <= 4 ? "warn" : "bad", bar: rate == null ? 0 : Math.max(0.04, Math.min(1, goal / Math.max(rate, 0.1))),
+    rule: "Simpro purchase orders whose vendor is Home Depot or ACE Hardware (not Ace Rentals), by date issued. A store run from the app's Get a PO number makes one of these too, so the app's count is a sub-line, never added on top. The headline is the last 8 full weeks; the goal is 30% under the sheet's \"about 4 a week\", 2.8." };
+}
+function odGoalHoursWeekly(sim) {
+  const p2 = odP2Of(sim), w = p2 && p2.weekly;
+  if (!w) return OD_P2_PENDING;
+  const miss = {}; (w.weeks || []).forEach(x => (x.missed || []).forEach(n => { miss[n] = (miss[n] || 0) + 1; }));
+  const worst = Object.keys(miss).sort((a, b) => miss[b] - miss[a]).slice(0, 3).map(n => `${odFirst(n)} ${miss[n]}`);
+  return { value: w.sharePct == null ? "—" : `${w.weeksAll} of ${w.of} weeks`, sub: `every crew member logged job hours · ${w.peopleAll} of ${(w.people || []).length} people logged all ${w.of}${worst.length ? ` · weeks missed: ${worst.join(", ")}` : ""}${w.idle && w.idle.length ? ` · no Simpro hours at all: ${odP2Names(w.idle)}` : ""}${w.unmatched && w.unmatched.length ? ` · not found in Simpro: ${odP2Names(w.unmatched)}` : ""}${p2.carried ? " · carried from an earlier pull" : ""}`,
+    tone: w.sharePct == null ? "grey" : w.sharePct >= 100 ? "good" : w.sharePct >= 50 ? "warn" : "bad", bar: w.sharePct == null ? 0 : w.sharePct / 100,
+    rule: "For each of the last 8 full Monday–Sunday weeks: did every active crew member (Settings › Team: foreman, jr. foreman, lead or crew, not a contractor) have job hours on their Simpro timesheet that week? Shop and activity time does not count. Someone with no job hours in any of the 8 weeks is named instead of counted, so one stale Team row does not zero the card. The sheet's measure is per job; this is the same habit read per person, which is what Simpro's timesheets can tell." };
+}
+// Job Costs early warning: open jobs (not Invoiced, not yet counted by Josh's rule) whose actual rough
+// hours are past the rough estimate from every cost center, most hours over first. `limit` rows go in
+// the fold's top list; the rest behind Show all.
+function odCostsRoughOverruns(rows, limit = 5) {
+  const open = (rows || []).filter(j => j && j.status !== "Invoiced" && !(j.josh && j.josh.counts) && (j.rough_hrsEst || 0) > 0 && (j.rough_hrsUsed || 0) > j.rough_hrsEst);
+  const all = open.map(j => ({ no: j.no, name: j.name, jobId: j.jobId || null, status: j.status, used: j.rough_hrsUsed, est: j.rough_hrsEst, over: Math.round((j.rough_hrsUsed - j.rough_hrsEst) * 10) / 10, pct: j.rough_hrsUsed / j.rough_hrsEst, foreman: j.boardForeman || j.foreman || "", lead: j.lead || "" }))
+    .sort((a, b) => b.over - a.over || a.name.localeCompare(b.name));
+  return { all, top: all.slice(0, limit), rest: all.slice(limit) };
+}
+// Who a job belongs to, by the dashboard's own rule (d.owns: a job is a person's as its foreman OR its
+// lead): the active team names d.owns says yes to, foreman first. Falls back to the names on the row.
+function odCostsOwners(row, people, owns) {
+  const j = { foreman: row && row.foreman, lead: row && row.lead };
+  const names = (people || []).map(p => String((p && p.name) || p || "").trim()).filter(Boolean);
+  const mine = typeof owns === "function" ? names.filter(n => owns(j, n)) : [];
+  const ordered = [j.foreman, j.lead].map(x => String(x || "").trim()).filter(Boolean).filter((x, i, a) => a.indexOf(x) === i);
+  const out = ordered.filter(n => mine.some(m => sameName(m, n)));
+  return out.length ? out : ordered;
+}
+// CO hours in their own cost center per Simpro job number, from the Phase 2 pull; null when the pull
+// has not run (the column hides).
+function odCostsCoHours(goalsDoc) {
+  const p2 = odP2Of(goalsDoc), by = p2 && p2.hours && p2.hours.co && p2.hours.co.byJob;
+  if (!by) return null;
+  const m = new Map(); Object.keys(by).forEach(k => m.set(String(k), Number(by[k]) || 0)); return m;
 }
 
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
@@ -51596,7 +51672,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       : [phaseBox("rough"), phaseBox("finish"), wholeBox];
     // The job table: the picked person's jobs in this stage; every job stays listed so it can be switched back on.
     const q = cQ.trim().toLowerCase();
-    const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q));
+    const coHrs = cm === "hrs" ? odCostsCoHours(costsGoals) : null;
+    const fh1 = (x) => x == null ? "—" : (Math.round(x * 10) / 10).toLocaleString();
+    const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q))
+      .map(j => coHrs ? { ...j, co_hrs: coHrs.has(String(j.no)) ? coHrs.get(String(j.no)) : null } : j);
     const cols = (isM ? [
       ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)],
       ["rough_mAct", "Rough margin so far", "r", "mEst", "Rough sell less what has been spent and committed on rough, every cost center. Under it: the margin the estimate expected."],
@@ -51608,8 +51687,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       [`rough_${cm}_pct`, "Rough %", "r", "bar"],
       [`finish_${uKey(cm)}`, `Finish ${USED[cm]} / est`, "f", (j) => <>{fv(cm, j[`finish_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`finish_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on finish / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
       [`finish_${cm}_pct`, "Finish %", "f", "bar"],
-      [`other_${cm}Est`, "Untagged est", "n", (j) => j[`other_${cm}Est`] ? fv(cm, j[`other_${cm}Est`]) : "–"],
-    ]).filter(c => !moneyCol(c[0]));
+    ]).filter(c => !moneyCol(c[0]))
+      // v583: hours booked to the job's own change-order cost centers, from the Goals pull's Phase 2; the column
+      // is not there until that pull has run. (The "Untagged est" column came off in the same audit.)
+      .concat(coHrs ? [["co_hrs", "CO hrs, own CC", "n", (j) => j.co_hrs == null ? "–" : <>{fh1(j.co_hrs)}<span className="dim"> h</span></>, "Hours booked to this job's own change-order cost centers (Simpro company cost center \"… - Change Order\"), from the nightly Goals pull. 0 means the job has change-order cost centers with no hours booked yet; – means it has none."]] : []);
     const valOf = (j, k) => (k in j ? j[k] : (v.pct.get(j.no) || {})[k]);
     const sort = cSort || (isM ? { k: "rough_profit", dir: 1 } : { k: `rough_${cm}_overBy`, dir: -1 });   // worst first
     list.sort((a, b) => { const x = valOf(a, sort.k), y = valOf(b, sort.k); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir; });
@@ -51698,11 +51779,36 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", noM ? "Labor" : "Labor $"], ["margin", "Margin"]], "What to compare")}
           {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["josh", `Invoiced ${joshYear} (Josh)`]], "Which jobs")}
         </div>
+        {(() => {   // v583 early warning: open jobs already past their rough hours, most hours over first (folded, count on the header)
+          const ov = odCostsRoughOverruns(v.rows), team = (users || []).filter(u => u && u.active !== false);
+          if (!ov.all.length) return null;
+          const who = (r) => odCostsOwners(r, team, d.owns).map(odFirst).join(" · ") || "No one on the board";
+          const ovRow = (r) => (
+            <tr key={r.no} className="jc-ovr" onClick={() => { setCm("hrs"); openFromChart(r.no); }}>
+              <td className="l job"><b>{r.name}</b><small>#{r.no} · {r.status || "—"}</small></td>
+              <td className="l n">{who(r)}</td>
+              <td className="r">{fh(r.used)}<span className="dim"> / {fh(r.est)} h</span></td>
+              <td className="r"><span className="jc-tag over">{fh(r.over)} h over</span></td>
+              <td className="r"><span className="jc-pct over">{fp(r.pct)}</span></td>
+            </tr>);
+          const ovTable = (rows) => (<div className="jc-scroll"><table className="jc-tbl jc-ov"><thead><tr><th className="l">Job</th><th className="l n">Foreman · lead</th><th className="r">Rough used / est</th><th className="r">Over by</th><th className="r">Of estimate</th></tr></thead><tbody>{rows.map(ovRow)}</tbody></table></div>);
+          return (
+            <details className="jc-fold warn">
+              <summary><b>Open jobs already past rough hours</b><span className="jc-cnt">{ov.all.length}</span><small>top five by hours over · rough hours from every cost center · tap a job for its cost centers</small></summary>
+              <div className="jc-fold-b">
+                {ovTable(ov.top)}
+                {ov.rest.length ? <details className="jc-fold inner"><summary><b>Show all</b><span className="jc-cnt">{ov.all.length}</span><small>{ov.rest.length} more</small></summary><div className="jc-fold-b">{ovTable(ov.rest)}</div></details> : null}
+              </div>
+            </details>);
+        })()}
         {cWho ? <div className="jc-spot"><div><small>{cWho.role === "crew" ? "Crew, every job its people are credited with" : cWho.role === "person" ? "On the crew, their credited jobs" : "Credited jobs, Simpro technician"}</small><b>{cWho.person}</b></div>
           <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
           <button type="button" className="jc-btn hv" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
-        {cOff.size ? <div className="jc-wi"><b>What-if</b><span>{cOff.size} {cOff.size === 1 ? "job" : "jobs"} switched off: {v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}. The boxes and the foreman list leave {cOff.size === 1 ? "it" : "them"} out. Nothing in Simpro or the app changes.</span>
-          <button type="button" className="jc-btn dark" onClick={() => setCOff(new Set())}>Turn all back on</button></div> : null}
+        {cOff.size ? <details className="jc-fold wi">   {/* v583: the what-if panel folds; the Count switches in the table still drive it */}
+          <summary><b>What-if</b><span className="jc-cnt">{cOff.size}</span><small>{cOff.size === 1 ? "job" : "jobs"} switched off · the boxes and the people list leave {cOff.size === 1 ? "it" : "them"} out · nothing in Simpro or the app changes</small></summary>
+          <div className="jc-fold-b jc-wi"><span>{v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}</span>
+            <button type="button" className="jc-btn dark" onClick={() => setCOff(new Set())}>Turn all back on</button></div>
+        </details> : null}
         <div className="jc-hero">{tiles.map(x => (
           <div key={x.key} className={`jc-lbl w-${x.wire}`}>
             <h4>{x.title}</h4>
@@ -51776,6 +51882,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             <li>Margins are weighted (big jobs count more); the plain average of each job's margin is beside it.</li>
             <li>Josh's rule, the same as the Goals tab: a job is credited to its Simpro technician (the first one listed). A finished job counts when it has a customer invoice dated this year, is invoiced in full and has costs posted; its whole-job margin is Simpro's net profit ÷ contract, summed over those jobs. Rough and finish margins are the item split on those same jobs; on Active, they are open jobs past that phase, so far.</li>
             <li>Jobs: Simpro's in progress and complete, the invoiced jobs still on the Job Board, and every job Josh's rule counts this year. Pulled nightly; read-only.</li>
+            <li>Open jobs already past rough hours (the fold at the top): open jobs whose rough hours used are past the rough estimate from every cost center, most hours over first; the names are the job's foreman and lead on the Job Board.</li>
+            <li>CO hrs, own CC (Hours, once the Goals pull's Phase 2 has run): hours booked to the job's own change-order cost centers in Simpro. 0 means the job has change-order cost centers with nothing booked; – means it has none.</li>
           </ul>
         </section>
       </>}
@@ -51806,7 +51914,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         else setGoalsPull(`Pull failed: ${(x && x.error) || "unknown"}`);
       } catch (e) { setGoalsPull(`Pull failed: ${(e && e.message) || e}`); }
     };
-    const pillText = (x) => { const l = x.live; if (!x.key) return "Not tracked yet"; if (!l) return "—"; if (l.pending) return "No Simpro pull yet"; return l.tone === "good" ? "At goal" : l.tone === "warn" ? "Moving" : l.tone === "bad" ? "Off track" : "—"; };
+    const pillText = (x) => { const l = x.live; if (!x.key) return "Not tracked yet"; if (!l) return "—"; if (l.pending) return l.pendingText || "No Simpro pull yet"; return l.tone === "good" ? "At goal" : l.tone === "warn" ? "Moving" : l.tone === "bad" ? "Off track" : "—"; };
     const isSim = (x) => { const e = x.key && OD_GOAL_LIVE.find(y => y.key === x.key); return !!(e && e.sim); };
     const card = (x, extra) => { const l = x.live, c = pillC(l ? l.tone : "grey");
       return (
@@ -51817,7 +51925,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
             : <div className="n"><div><small>Sheet says</small><b className="s">{x.today || "—"}</b></div><div><small>{isSim(x) ? "Simpro today" : "App today"}</small><b style={{ color: c }}>{l ? l.value : "—"}</b></div><div><small>2027 goal</small><b className="s">{x.goal || "—"}</b></div></div>}
           {l && !l.pending && l.people && l.people.length ? <div className="od-goal-ppl">{l.people.map(p => <div key={p.full} title={`${p.full} · ${p.n} jobs`}><span>{p.name} · {p.n}</span><b>{p.pct}%</b><span className="od-goal-bar"><i style={{ width: `${Math.round(p.bar * 100)}%` }}/></span></div>)}</div> : null}
           {l && !l.pending && !l.people && l.bar > 0 ? <span className="od-goal-bar"><i style={{ width: `${Math.round(l.bar * 100)}%` }}/></span> : null}
-          <small className="sub">{l ? l.sub : (x.key ? "" : "Needs a per-job cost-center read from Simpro (next phase) or a hand count. The sheet's words show as typed.")}</small>
+          <small className="sub">{l ? l.sub : (x.key ? "" : "Not measured by the app or by the Simpro pull yet; a hand count. The sheet's words show as typed.")}</small>
           {x.rule ? <details className="od-goal-rule"><summary>How it is counted</summary><p>{x.rule}</p></details> : null}
         </div>
       ); };
@@ -52431,6 +52539,20 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .jc-wi{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--jc-cover);border:2px solid var(--jc-hv);border-radius:8px;padding:10px 14px;font-size:13.5px}
         .odash .jc-wi>b{font:800 20px var(--jc-cond);letter-spacing:.03em;color:var(--jc-ink);background:var(--jc-hv);padding:1px 8px;border-radius:4px}
         .odash .jc-wi>span{flex:1;min-width:0;color:var(--jc-dim)}
+        .odash .jc-fold{background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px}
+        .odash .jc-fold>summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;cursor:pointer;list-style:none;font:800 18px var(--jc-cond);letter-spacing:.02em;color:var(--jc-ink)}
+        .odash .jc-fold>summary::-webkit-details-marker{display:none}
+        .odash .jc-fold>summary::before{content:"";width:0;height:0;border:6px solid transparent;border-left:8px solid var(--jc-dim);margin-right:-2px;transition:transform .15s}
+        .odash .jc-fold[open]>summary::before{transform:rotate(90deg)}
+        .odash .jc-fold>summary small{font:500 13px var(--jc-body);color:var(--jc-dim);letter-spacing:0}
+        .odash .jc-fold.warn{border-left:6px solid var(--jc-hv)}
+        .odash .jc-fold.wi{border:2px solid var(--jc-hv)}
+        .odash .jc-fold.inner{margin-top:8px;background:transparent}
+        .odash .jc-fold-b{padding:0 14px 12px}
+        .odash .jc-cnt{font:800 14px var(--jc-cond);background:var(--jc-char);color:#F2F4F6;padding:1px 8px;border-radius:999px}
+        .odash .jc-fold.warn .jc-cnt{background:var(--jc-hv);color:var(--jc-ink)}
+        .odash .jc-ov tr.jc-ovr{cursor:pointer}
+        .odash .jc-ov td.r,.odash .jc-ov th.r{text-align:right;white-space:nowrap}
         .odash .jc-hero{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
         .odash .jc-lbl{position:relative;background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px;padding:12px 16px 12px 22px;box-shadow:0 1px 0 #fff inset,0 2px 0 rgba(20,24,28,.06)}
         .odash .jc-lbl::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:6px;border-radius:0 3px 3px 0;background:var(--jc-char)}
@@ -61223,10 +61345,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v582
+**Last manifest update:** 2026-10-30 · App SW version: v583
 
 ---
 
+
+- **Goals Phase 2 + Job Costs early warning (dashboard audit, Goals and Job Costs tabs)** · 'shipped 2026-10-30' · 'SW v583' · 'goalsNightly' · 'sendTestGoalsPull' · 'functions/goalsPull.js pullPhase2' · 'odGoalWarranty' · 'odGoalCoHours' · 'odGoalStoreRuns' · 'odGoalHoursWeekly' · 'odCostsRoughOverruns' · 'odCostsOwners' · 'odCostsCoHours' · Koy approved the tab-by-tab audit 2026-10-30 ("Let's build them"). **Goals:** the four 2027-scoreboard cards v562 left grey get real numbers from the nightly Simpro pull, written under ONE new key 'settings/goalsSimpro.phase2' so the Phase 1 numbers stay byte-identical: **Warranty hours** = labor hours on cost centers whose company cost center is Residential (Warranty), on the same jobs as the margin card, ÷ every actual hour on those jobs (live 10/30: 2.2%, 1,206 h of 53,811 h, 51 jobs; goal under 2%); **Change orders with hours booked to their own cost center** = of the CO cost centers sold with hours ("… - Change Order (Rough In / Finish)"), how many have hours booked (live: 33 of 393, 698 h of 2,069 h sold — a CO section put on the Rough In cost center does not count, that is the habit); **Home Depot / ACE runs** = Simpro purchase orders to Home Depot or ACE Hardware by date issued, headline the last 8 full weeks (live 4.1 a week; 171 this year; the app's Get-a-PO-number runs make one of these, so the app count is a sub-line, never added); **Hours tracked weekly** = of the last 8 Mon–Sun weeks, how many had every active crew member (Settings › Team, not contractors) with job hours on their Simpro timesheet (live 0 of 8: 14 of 18 logged all 8, a new hire missed 6; people with no job hours in any week are named, not counted). Probed read-only first: the company-wide '/jobCostCenters/' list (no totals, no cost-center filter) is read once and only warranty / CO sections on this year's jobs are read for totals; '/employees/{id}/timesheets/?StartDate&EndDate' comes back unpaged; '/vendorOrders/?Vendor.ID=' filters. The whole Phase 2 is ~300 calls / 80 s on top of Phase 1's 23 s; it never fails the run (a thrown Phase 2 carries the previous doc's phase2 forward, marked, or leaves the key off). Each card's pill says **No Phase 2 pull yet** until the function is deployed; **How it is counted** on each. The 8 proposed goals are NOT added (Koy: leave off for now). **Job Costs:** a folded early-warning section at the top, **Open jobs already past rough hours** (count on the header): open jobs whose rough hours used are past the rough estimate from every cost center, top five by hours over with **Show all** behind, each naming the foreman and lead by the dashboard's own rule (d.owns), tap for the cost centers; the **Untagged est** column is gone from the job table; the **What-if** bar is a folded section (the Count switches still drive it); on Hours, a **CO hrs, own CC** column per job from the same pull (0 = CO cost centers with nothing booked, – = none), hidden until the pull has run. Hero numbers, People | Crew grouping and the chart unchanged. Tests: 'scripts/goals-pull-test.js' (+Phase 2: cost-center kinds, hours, week ranges, crew matching, weekly, store runs, the whole injected-I/O pull against a fake Simpro) and new 'scripts/goals-costs-audit-test.js' (pending cards, bands, sheet-name matching, overruns, owners, CO column), both in prebuild. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/goals.html', 'costs.html'. Guide 'dashboard.html' Goals + Job Costs. Crew brief 'docs/crew-briefs/v583.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull --project homestead-electric'** (Koy); the first real Phase 2 numbers land on that deploy's next 5:40 AM run or a Pull from Simpro now. **Why it won't lose data:** read-only against Simpro, the jobs and 'material_po_log'; the only write is the function's own 'settings/goalsSimpro' doc, which gains one key; no job write, no loader or rules change; the dashboard only reads.
 - **Dashboard audit, Schedule and Quality: who the Crew Planner has on each start, the called-in flag, time off under each day, scans folded into Next 30 days; first-pass by foreman, return-trip causes, re-inspections by date, the three punch cards folded into one** · 'shipped 2026-10-30' · 'SW v581' · 'odStartCoverage' · 'odSimproStaffByDay' · 'odInspCalled' · 'odInspToCall' · 'odTimeOffByDay' · 'odFirstPassByForeman' · 'odRtCauses' · 'odReinspByDate' · 'OfficeDash' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 (*"Let's build them"*); this is the Schedule / Quality pair. **Schedule (everything kept):** every **start** now says who the Crew Planner has on that job that day — the manual cell on 'settings/schedule_<monday>' ('assignments["<jobId>_<dayIdx>"]', lead first, then crew) plus Simpro's scheduled staff for that Simpro # and day ('getSimproSchedule', the overlay the planner itself draws), one name per first name like the huddle's crewToday merge — and reads **red ink** ('readableInk', no fill) with *Nobody assigned on the planner* when nobody is; a weekend start, an Upcoming-tab start and a week not read yet never read as nobody. The Starts mini counts them (*N with nobody on the planner*). Every **inspection** row carries the **called-in flag**: the app records no separate field — the office books an inspection by typing its target date (4-WAY TARGET / FINAL TARGET), and the Jobs tab already reads a missing date as *Rough insp. not called* — so a dated row reads *Called in · 11/4*, and the Inspections mini adds *N still to call in*: jobs 85%+ into rough or finish with no target and no result (the list opens under the week's inspections). ('fourWaySetAt' / 'fourWaySetBy' are read by the activity feed but nothing writes them.) **Time off** from 'settings/crewPTO' draws as a quiet grey *Out: Abraham, James* line under each day column (both ends inclusive, one name once; the Schedule tab now loads the PTO doc like Overview / People do). **Matterport scans** left the right rail and sit inside Next 30 days as a folded *Matterport scans due (N)* group with *not booked · urgent* on its header; the rail's Scans due count opens the same list. **Quality (kept: first-pass, failed-not-re-booked, return trips past date, QC walks open, inspections next 7 days without a walk):** the three punch cards (by age, by foreman, near final) are now ONE folded **Punch** section, total open on the header with *over 30 days · serious · on jobs near final*, the three views inside. Added, each folded with a count: **First-pass by foreman** (the tab's own first-inspection rule, last 90 days, credited to every roster name who owns the job as foreman OR lead via 'd.owns', pass / of N beside the rate, green ≥ 90 · pink 75–89 · red below; names with fewer than 3 inspected jobs behind a *Fewer than 3* fold); **Return-trip causes** (open return trips grouped by the marker the app stamps when it makes one: change order 'fromCOId', QC walk 'fromQCFail', failed inspection 'fromFailedRough' / 'fromFailedFinal', GC request 'fromGC', job note 'createdFromJobNoteId', else *Added by hand* when a scope was typed, else *No reason*, its own bucket; live on 2026-10-30: 1 · 1 · 7 by hand); **Re-inspection booked** (failed inspections that HAVE a re-inspection date, soonest first, grouped by day, *N d past* in red when the date passed). Pure logic lives above 'OfficeDash' under the *Dashboard audit (Schedule, Quality) helpers* banner and is gated by **'scripts/schedule-quality-audit-test.js'** (prebuild): coverage states, Simpro folding, called-in and the to-call list, time off by day (M/D/YYYY and ISO, inclusive, de-duplicated), first-pass by owner with the fold split, cause buckets in order, re-inspection grouping, and a run through 'odModel'. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/schedule.html' and 'quality.html' ('pull-readonly.js' + 'build-mockups.js'). Guide 'dashboard.html' Schedule and Quality sections rewritten. **Why it won't lose data:** read-only — two more one-shot reads (the planner week docs and the Simpro schedule callable the planner already calls) and regrouping of what the dashboard already loads; no Firestore write, no job field, loader, function or rule change; the Scoreboard tab and the Koy-only tiles are untouched.
 - **Dashboard audit, People + Automations: everyone by crew with where they are today; Automations trimmed to the docs, the plans waiting and one Appliance Loads line** · 'shipped 2026-10-30' · 'SW v582' · 'OfficeDash' · 'odPeopleByCrew' · 'odTodayByPerson' · 'odPlannerPerson' · 'odTodayText' · 'odPrevRun' · 'getSimproSchedule' · Koy approved the tab-by-tab dashboard audit 2026-10-30 ("Let's build them"). **People:** the people list is now **People by crew** — every active team member once, grouped by crew (Settings › Team 'foremanId' through 'odCrews', never 'settings/crewTeams'), the crew's foreman on top, then jr foremen, leads, crew; **Office** (title admin) and **No crew** are their own groups, last. Every group starts folded with its count; the header says how many are on a job today and how many are quiet. Each row: name + title/jobs, a **Today** column (the job they are on today from the Crew Planner, with the hours, or a quiet "not scheduled"; "weekend" on Sat/Sun), the last-on-a-job line, and their phone's app version (red when behind, "no phone seen" after 14 days). "Today" reads the planner the way the planner itself does: its own week doc 'settings/schedule_<monday>.assignments["<jobId>_<dayIdx>"]' (a filled cell wins) and the Simpro schedule it overlays ('getSimproSchedule', this week, read-only); names resolve the planner's own way (exact, unique first name, first + last initial, an ambiguous bare first name never guessed). Live check 2026-10-30: no planner week doc has ever had a filled cell, so in practice Today is Simpro's schedule, which is what the planner shows. Kept: On the app today, Open My Day tasks, Time off waiting (with its collision context), Phones on latest, Quiet 3+ days, Out today / this week. Trimmed: the activity heat map, the "On the app, no job touched" list, the My Day load card and the Team pulse card grid (its people are the crew rows now); the device list is a folded **Devices behind** with a count and a Show all button (the Phones on latest tile opens it). **Automations:** keeps the automated document cards with Run now, Plan Intake with its chips and the Waiting on you rail with File it / Not ours; the Appliance Loads card is one status line (last scheduled run, next run, jobs · items · amps, Refresh, Open sheet, and the no-appliance-package line); the Plans filed chart tile, the per-job appliance table and the "When they run" list are gone (the counts stay in the rail). Nothing about what the automations do changes. Pure helpers sit under '// ── Dashboard audit (People + Automations) helpers' above 'OfficeDash'; test 'scripts/people-autos-audit-test.js' (in prebuild) proves every name once, the tier order, the name resolution, planner-over-Simpro, block merging, weekends, and the status-line run time. Mockup from a live read-only pull: 'docs/mockups/dashboard-audit/people.html' (+ 'people-thursday.html', a full work day). Guide 'dashboard.html' People and Automations updated. **Why it won't lose data:** read-only everywhere — one new 'getDoc' on the planner's week doc and one call to the existing 'getSimproSchedule' callable when the People tab opens; no 'setDoc' / 'updateDoc' / 'saveJob'; the Ask-to-import My Day task that lived on the removed appliance rows is gone with them (nothing else wrote); no loader, rules or function change.
 - **Dashboard audit, Jobs + Activity: Waiting on and Days in stage columns; Open questions split into Waiting on me / Waiting on others** · 'shipped 2026-10-30' · 'SW v580' · 'odJobWaiting' · 'odDaysInStage' · 'odSplitQuestions' · 'odQuestionSide' · 'odOpenQuestions' · 'OD_WAIT_LABEL' · Koy approved the tab-by-tab dashboard audit on 2026-10-30 ("Let's build them"); this is the Jobs / Activity pair, built on 'dash-audit-jobs-activity' and merged by the coordinator. **Jobs tab.** Kept: the job table, the crew folds, the stage chips, By crew / By person. Trimmed: the right-rail *Where the work is* bars (the chips already say it) and the *Punch* column. Added, both sortable: **Days in stage** — days since the date the job records for entering its current stage: the confirmed start once it has passed (Rough / Finish in progress), the rough inspection pass (Rough done, finish next), the last fail (Rough inspection failed), the start date that passed (start-date-passed stages); the small line under the number says which date it is (*start 9/7*, *rough passed 5/4*, *failed 10/13*). Holds, prep, no status, quick jobs and commercial stages record no entry date, so the cell is blank rather than guessed (24 of 50 active jobs had one on 2026-10-30). **Waiting on** — *GC* (an open question out to the GC, a designer or the homeowner: shared by link, or "for" someone not on the team), *Inspection* (a target date with no result, booked or passed and not logged, or a fail with no re-inspection booked), *Us* (a question the office owes, or an open My Day task on the job); blank when nothing waits; ranked GC, Inspection, Us with the first reason under the label; a crew fold's header says how many of its jobs are waiting. **Activity tab.** Kept: Open questions, Failed inspections, the recent-activity list with its type chips, search and *Done by* filter. Trimmed: the *Everything logged* and *Punch closed* cards, the right-rail *What kind* bars and *Most active jobs* list. Added: an **Open questions** card with two folded groups (closed until tapped, count on the header): **Waiting on me** (asked of nobody or of an admin, so the office answers) and **Waiting on others** (out to the GC / designer / homeowner, or to a foreman or crew member named on it), each oldest first, undated last, older than 2 days flagged red with its age; the card's own caption says *N on me · M on others*. Pure helpers sit in the '// ── Dashboard audit (Jobs, Activity) helpers' block above 'OfficeDash', exported through 'odash-model-test.js''s sandbox; gate 'scripts/jobs-activity-audit-test.js' (prebuild, 38 checks: Ashcraft / Koplin / Pierce / Bukhshtaber / Forth shapes as of 2026-10-30, needs filtering, ranking, the split adding up to the card). Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/jobs.html' and 'activity.html' ('pull-readonly.js' + 'render-readonly.js'). Guide 'dashboard.html' (Jobs, Activity). Crew brief 'docs/crew-briefs/v580.md'. **Why it won't lose data:** read-only — the dashboard draws two columns and two folds from fields the job already holds ('roughProjectedStart', 'finishProjectedStart', inspection attempts and targets, 'roughQuestions' / 'finishQuestions', 'questionShares') and the needs list; nothing is written, no field, loader, rule or function changed.
