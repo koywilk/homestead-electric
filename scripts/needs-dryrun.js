@@ -69,7 +69,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
-  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter",
+  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter","pipelineTiles","schedHourBar",
   "homeRunsPanelRows","homeRunsPanelList","homeRunsCsv","homeRunsText",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronRejects","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -655,6 +655,42 @@ eq(H.homeBoardFilter(hbJobs, "").length, 2, "no search → every job on the boar
 eq(H.homeBoardFilter(hbJobs, "keeg").map(j => j.name), ["Wise Flooring"], "search matches foreman");
 eq(H.homeBoardFilter(hbJobs, "55012").map(j => j.name), ["Miller"], "search matches a CO quote #");
 eq(H.homeBoardFilter(hbJobs, "zzz"), [], "no match → []");
+
+// v585 Pipeline tiles count with the list's own section tests.
+const pSecs = [
+  { key:"quickNew", label:"Quick Jobs — Needs to Be Scheduled", color:"#111111", test:j=>j.s==="qn" },
+  { key:"quickScheduled", label:"Quick Jobs — Scheduled", color:"#222222", test:j=>j.s==="qs" },
+  { key:"quickInProgress", label:"Quick Jobs — In Progress", color:"#333333", test:j=>j.s==="qi" },
+  { key:"tempPedReady", label:"Temp Peds — Ready", color:"#444444", test:j=>j.s==="tr" },
+  { key:"tempPedScheduled", label:"Temp Peds — Scheduled", color:"#555555", test:j=>j.s==="ts" },
+  { key:"prep", label:"Pre Job Prep", color:"#666666", test:j=>j.s==="p" },
+  { key:"roughNotStarted", label:"Rough — Not Started", color:"#777777", test:j=>j.s==="ns" },
+  { key:"roughHold", label:"Rough — On Hold", color:"#888888", test:j=>j.s==="rh" },
+  { key:"rough", label:"Rough In Progress", color:"#2F5BD9", test:j=>j.s==="r"||j.also==="r" },
+  { key:"between", label:"In Between", color:"#999999", test:j=>j.s==="b" },
+  { key:"finishHold", label:"Finish — On Hold", color:"#aaaaaa", test:j=>j.s==="fh" },
+  { key:"finish", label:"Finish In Progress", color:"#bbbbbb", test:j=>j.s==="f" },
+  { key:"complete", label:"Completed", color:"#cccccc", test:j=>j.s==="c" },
+];
+const pJobs = ["qn","qs","p","ns","rh","r","r","b","fh","f","c","c","c"].map((s,i)=>({id:i,s}));
+const pT = H.pipelineTiles(pJobs, pSecs);
+const pBy = Object.fromEntries(pT.map(t=>[t.key,t]));
+eq(pT.map(t=>t.label), ["Quick Jobs","Pre Job Prep","Not Started","Rough","In Between","Finish","Completed"], "tiles in pipeline order, empty Temp Peds hidden");
+eq(pT.reduce((a,t)=>a+t.n,0), pJobs.length, "tiles add up to the total when no job sits in two sections");
+eq([pBy.quickNew.n, pBy.quickNew.sub], [2,"1 to schedule"], "Quick Jobs folds its sub-sections and names the ones to schedule");
+eq([pBy.rough.n, pBy.rough.sub, pBy.rough.color], [3,"1 on hold","#2F5BD9"], "Rough includes On Hold, keeps Rough's color");
+eq([pBy.finish.n, pBy.finish.sub], [2,"1 on hold"], "Finish includes On Hold");
+eq([pBy.complete.n, pBy.complete.done, pBy.prep.done], [3,true,false], "Completed is the done tile");
+eq(pBy.rough.jobs.map(j=>j.id), [4,5,6], "a tile opens the jobs it counted");
+eq(H.pipelineTiles([{id:1,s:"rh",also:"r"}], pSecs).find(t=>t.key==="rough").n, 1, "a job in both Rough and On Hold counts once in the Rough tile");
+eq(H.pipelineTiles([], pSecs).map(t=>t.n), [0,0,0,0,0,0], "empty board: zero tiles, no quick or temp tile");
+eq(H.pipelineTiles([{id:1,s:"x"}], [{key:"commPrecon",label:"Pre-Con",color:"#123456",test:j=>j.s==="x"},{key:"completed",label:"Complete",color:"#654321",test:()=>false}]).map(t=>[t.label,t.n,t.done]), [["Pre-Con",1,false],["Complete",0,true]], "commercial sections keep their own labels");
+// v585 schedule hour bar
+eq(H.schedHourBar("05:00","21:00"), {left:0,width:100}, "full axis");
+eq(H.schedHourBar("13:00","13:01").width, 1.5, "a very short stop stays visible");
+eq(H.schedHourBar("04:00","06:00"), {left:0,width:6.25}, "clips to 5a");
+eq(H.schedHourBar("", "17:00"), null, "no start time, no bar");
+eq(H.schedHourBar("17:00","08:00"), null, "end before start, no bar");
 
 // ── v561 — Home Runs export by panel (Gary: "home runs in each panel") ──
 const hrFix = {

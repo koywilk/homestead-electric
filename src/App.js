@@ -38599,6 +38599,75 @@ const COMM_STAGE_SECTIONS = [
 // Quick jobs / temp peds keep their residential sections in front so an imported commercial temp ped still has a home.
 const COMM_BOARD_SECTIONS = [...STAGE_SECTIONS.filter(sec => sec.key.startsWith("quick") || sec.key.startsWith("tempPed")), ...COMM_STAGE_SECTIONS];
 
+// ── Pipeline tiles (v585) ─────────────────────────────────────
+// One count for the Pipeline row and the ALL JOBS list below it: a tile's jobs
+// are whatever that list's own section.test matches. The row used to read the
+// percent fields while the list read status, so the same screen said Completed
+// 37 and Completed 89 (Koy, 2026-10-30). Quick Jobs, Temp Peds, Rough and Finish
+// fold their sub-sections into one tile, counting a job once per tile. A job that
+// sits in two stages of the list (prep open, rough started) counts in both tiles.
+function pipelineTiles(jobs, sections) {
+  const MERGE = { quickScheduled:"quickNew", quickInProgress:"quickNew", tempPedScheduled:"tempPedReady", roughHold:"rough", finishHold:"finish" };
+  const LABEL = { quickNew:"Quick Jobs", tempPedReady:"Temp Peds", roughNotStarted:"Not Started", rough:"Rough", finish:"Finish" };
+  const HIDE_EMPTY = { quickNew:true, tempPedReady:true };
+  const SUB = { quickNew:["quickNew","to schedule"], rough:["roughHold","on hold"], finish:["finishHold","on hold"] };
+  const byKey = {};
+  sections.forEach(s => { byKey[s.key] = (jobs || []).filter(s.test); });
+  const tiles = [];
+  const seen = {};
+  sections.forEach(s => {
+    const key = MERGE[s.key] || s.key;
+    if (seen[key]) return;
+    seen[key] = true;
+    const head = sections.find(x => x.key === key) || s;
+    const members = sections.filter(x => (MERGE[x.key] || x.key) === key);
+    const list = [...new Set(members.flatMap(x => byKey[x.key]))];
+    if (HIDE_EMPTY[key] && list.length === 0) return;
+    const subDef = SUB[key];
+    const subN = subDef ? (byKey[subDef[0]] || []).length : 0;
+    tiles.push({ key, label: LABEL[key] || head.label, color: head.color, jobs: list, n: list.length,
+      sub: subN ? `${subN} ${subDef[1]}` : "", done: key === "complete" || key === "completed" });
+  });
+  return tiles;
+}
+
+const PIPE_NUM = {display:"block",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,fontSize:44,lineHeight:1};
+const CARD_SHADOW = "0 1px 2px rgba(27,31,36,.05),0 4px 12px rgba(27,31,36,.05)";
+
+// onPick is optional: the foreman page shows the same counts without opening a list.
+function PipelineStrip({ jobs, sections, onPick }) {
+  const tiles = pipelineTiles(jobs, sections);
+  const flow = tiles.filter(t => !t.done);
+  const done = tiles.filter(t => t.done);
+  const bump = (e) => { const t = e.currentTarget; t.classList.remove("he-bump"); void t.offsetWidth; t.classList.add("he-bump"); };
+  const renderTile = ({ key, label, n, list, color, sub, style }) => {
+    const live = !!onPick && list.length > 0;
+    const Tag = live ? "button" : "div";
+    return (
+      <Tag key={key} className={[live ? "he-tile" : "", style.className || ""].join(" ").trim() || undefined} {...(live ? { type:"button", onClick:(e)=>{ bump(e); onPick({ label, color, jobs:list }); } } : {})}
+        style={{textAlign:"left",fontFamily:"inherit",cursor:live?"pointer":"default",padding:"12px 16px",...style.css}}>
+        <span style={{...PIPE_NUM,color:n>0?color:C.faint}}>{n}</span>
+        <span style={{display:"block",fontSize:13,fontWeight:600,color:C.text,marginTop:2}}>{label}</span>
+        {sub !== undefined && <span style={{display:"block",fontSize:12,color:C.dim,minHeight:16}}>{sub}</span>}
+      </Tag>
+    );
+  };
+  return (
+    <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
+      <div className="he-pipe-end" style={{flex:"1 1 130px",background:D.bg1,borderRadius:12,padding:"12px 18px",boxShadow:"0 4px 14px rgba(20,24,33,.22)"}}>
+        <div style={{...PIPE_NUM,color:D.textBright}}>{(jobs||[]).length}</div>
+        <div style={{fontSize:13,color:D.text,marginTop:2}}>Total jobs</div>
+      </div>
+      <div style={{flex:"999 1 560px",minWidth:0,display:"flex",flexWrap:"wrap",gap:2,borderRadius:12,overflow:"hidden",boxShadow:CARD_SHADOW}}>
+        {flow.map(t => renderTile({ key:t.key, label:t.label, n:t.n, list:t.jobs, color:t.color, sub:t.sub,
+          style:{ css:{flex:"1 1 110px",border:0,background:`linear-gradient(${t.color}14,${t.color}14),${C.card}`} } }))}
+      </div>
+      {done.map(t => renderTile({ key:t.key, label:t.label, n:t.n, list:t.jobs, color:t.color,
+        style:{ className:"he-tile-done", css:{flex:"1 1 130px",border:`1px solid ${C.border}`,background:C.card,borderRadius:12,paddingLeft:18,paddingRight:18} } }))}
+    </div>
+  );
+}
+
 
 // ── Projects UI (spec 2026-10-15 §6.2) ───────────────────────────────────────
 const buildingStage = (b) => { const f = effFS(b), r = effRS(b); const active = ["scheduled","date_confirmed","inprogress"]; if (active.includes(f)) return "finish"; if (active.includes(r)) return "rough"; return "other"; };
@@ -41722,6 +41791,17 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
 
 // ── Simpro Crew Schedule ──────────────────────────────────────
 
+// Where a person's time sits on a 5a to 9p day, as percents, for the hour bar on a
+// schedule card. Null when Simpro gave no usable times, so the row shows text only.
+function schedHourBar(start, end) {
+  const toMin = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ""); return m ? (+m[1]) * 60 + (+m[2]) : null; };
+  const s = toMin(start), e = toMin(end);
+  if (s === null || e === null || e <= s) return null;
+  const A = 300, Z = 1260, a = Math.max(s, A), b = Math.min(e, Z);
+  if (b <= a) return null;
+  return { left: +(((a - A) / (Z - A)) * 100).toFixed(2), width: +Math.max(((b - a) / (Z - A)) * 100, 1.5).toFixed(2) };
+}
+
 function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSelectJob, strictDivision = false }) {
   const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro (every division)
   // Commercial mode (strictDivision): only the Simpro entries of this division's
@@ -41967,27 +42047,50 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     return out;
   }, [scheduleV, weekDates]);
 
-  const todayYMD = toYMD(new Date());
+  // Local midnight, same as weekDates: toYMD reads UTC, so a bare new Date() moved
+  // the "today" column to tomorrow after 6 PM Mountain.
+  const _now = new Date();
+  const todayYMD = toYMD(new Date(_now.getFullYear(), _now.getMonth(), _now.getDate()));
 
-  const fmtWeekday = d => d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
+  const fmtWeekday = d => d.toLocaleDateString("en-US", { weekday:"short" });
   const fmtDate    = d => d.toLocaleDateString("en-US", { month:"short", day:"numeric" });
   const fmtTime    = t => { if (!t) return ""; const [h,m] = t.split(":"); const hr=parseInt(h); return `${hr>12?hr-12:hr||12}:${m}${hr>=12?"p":"a"}`; };
 
   const hasAnyThisWeek = weekDates.some(d => (crewByDateAndJob[toYMD(d)]||[]).length > 0);
 
+  // Weekdays share the width; an empty Sat or Sun shrinks to a sliver so the week
+  // fills the screen and job names fit (the old fixed 160px columns cut them off).
+  const activeCrew = personFilter.startsWith("crew_")
+    ? (foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter)?.staffNames || [])
+    : [];
+  const dayViews = weekDates.map((d, i) => {
+    const ymd = toYMD(d);
+    const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
+      personFilter === "all" ? true
+      : g.entries.some(e => activeCrew.includes(e.Staff?.Name))
+    );
+    const people = new Set();
+    dayJobs.forEach(g => g.entries.forEach(e => {
+      if (personFilter === "all" || activeCrew.includes(e.Staff?.Name)) people.add(e.Staff?.Name);
+    }));
+    return { d, ymd, dayJobs, people: people.size, narrow: i >= 5 && dayJobs.length === 0 };
+  });
+  const dayCols = dayViews.map(v => v.narrow ? "64px" : "minmax(236px,1fr)").join(" ");
+  const dayMinWidth = dayViews.reduce((a, v) => a + (v.narrow ? 64 : 236), 0) + 8 * 6;
+
   return (
-    <div style={{borderBottom:`1px solid ${C.border}`,background:C.card}}>
+    <div style={{borderBottom:`1px solid ${C.border}`,background:C.bg}}>
       {/* Header row */}
       <div onClick={()=>setCollapsed(v=>!v)}
-        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 24px",cursor:"pointer",
+        style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:10,padding:"14px 22px 10px",cursor:"pointer",
           userSelect:"none"}}>
-        <div style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.12em",color:C.accent,textTransform:"uppercase"}}>
+        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:26,lineHeight:1,color:C.text}}>
           Crew Schedule
         </div>
         {loading && <span style={{fontSize:12,color:C.dim}}>Loading…</span>}
         {!loading && !hasAnyThisWeek && !error &&
           <span style={{fontSize:12,color:C.dim}}>No jobs scheduled this week</span>}
-        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+        <div style={{marginLeft:"auto",display:"flex",flexWrap:"wrap",alignItems:"center",gap:8}}>
           {/* Crew filter */}
           {!collapsed && foremanCrews.length > 0 && (
             <select value={personFilter} onChange={e=>setPersonFilter(e.target.value)}
@@ -42026,91 +42129,97 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
       {/* Schedule content */}
       {!collapsed && (
-        <div style={{padding:"0 24px 16px",overflowX:"auto"}}>
-          {error && <div style={{color:"#C62828",fontSize:13,padding:"8px 0"}}>{error}</div>}
+        <div style={{padding:"0 16px 18px",overflowX:"auto"}}>
+          {error && <div style={{color:C.red,fontSize:13,padding:"8px 8px"}}>{error}</div>}
           {!error && (
-            <div style={{display:"flex",gap:8,minWidth:"max-content"}}>
-              {weekDates.map(d => {
-                const ymd    = toYMD(d);
+            <div style={{display:"grid",gridTemplateColumns:dayCols,gap:8,minWidth:dayMinWidth}}>
+              {dayViews.map(({ d, ymd, dayJobs, people, narrow }) => {
                 const isToday = ymd === todayYMD;
-                const activeCrew = personFilter.startsWith("crew_")
-                  ? (foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter)?.staffNames || [])
-                  : [];
-                const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
-                  personFilter === "all" ? true
-                  : g.entries.some(e => activeCrew.includes(e.Staff?.Name))
-                );
+                const summary = narrow ? "" : dayJobs.length === 0 ? "Nothing scheduled"
+                  : `${dayJobs.length} ${dayJobs.length === 1 ? "job" : "jobs"}, ${people} ${people === 1 ? "person" : "people"}`;
                 return (
-                  <div key={ymd} style={{width:160,flexShrink:0}}>
+                  <div key={ymd} style={{minWidth:0,background:isToday?C.steelBg:"transparent",borderRadius:12,padding:6}}>
                     {/* Day header */}
-                    <div style={{marginBottom:6,padding:"4px 8px",borderRadius:6,
-                      background:isToday?C.accent:"transparent",
-                      textAlign:"center"}}>
-                      <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.08em",
-                        color:isToday?"#fff":C.dim}}>{fmtWeekday(d)}</div>
-                      <div style={{fontSize:12.5,fontWeight:600,color:isToday?"#fff":C.text}}>
-                        {fmtDate(d)}
-                      </div>
+                    <div style={{display:"flex",flexWrap:"wrap",alignItems:"baseline",gap:"2px 7px",padding:"7px 10px",marginBottom:7,borderRadius:8,
+                      background:isToday?C.accent:"transparent",color:isToday?"#fff":C.text}}>
+                      <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:21,lineHeight:1.05}}>{fmtWeekday(d)}</span>
+                      <span style={{fontSize:12,fontWeight:600}}>{fmtDate(d)}</span>
+                      {summary && <span style={{marginLeft:"auto",fontSize:12,color:isToday?"#fff":C.dim}}>{summary}</span>}
                     </div>
                     {/* Job blocks */}
-                    {dayJobs.length === 0
-                      ? <div style={{fontSize:12,color:C.faint,textAlign:"center",padding:"8px 0",
-                          fontStyle:"italic"}}>—</div>
-                      : dayJobs.map(g => {
-                          const appJob   = jobBySimproNo[g.projectId];
-                          const jobName  = (appJob ? jobLabel(appJob) : "") || g.ref || `Job #${g.projectId}`;
-                          // Filter entries to only the active crew when filtered
-                          const visibleEntries = personFilter === "all"
-                            ? g.entries
-                            : g.entries.filter(e => activeCrew.includes(e.Staff?.Name));
-                          // Sort entries by start time
-                          const sortedEntries = [...visibleEntries].sort((a,b) =>
-                            (a.Blocks?.[0]?.StartTime||"").localeCompare(b.Blocks?.[0]?.StartTime||""));
-                          // Block color from first visible entry
-                          const jobFmColor = appJob?.foreman ? (foremanColors[appJob.foreman] || foremanColors[(appJob.foreman||"").split(" ")[0]]) : null;
-                          const blockColor = (() => {
-                            for (const e of sortedEntries) {
-                              const c = staffColorMap[e.Staff?.Name];
-                              if (c) return c;
-                            }
-                            return jobFmColor || C.muted;
-                          })();
-                          return (
-                            <div key={g.projectId} data-hekey={"crew_"+g.projectId} data-heflash={"crew_"+g.projectId}
-                              onClick={()=>{ if(appJob) onSelectJob(appJob); }}
-                              style={{background:isToday?`${C.accent}0d`:C.surface,border:`1px solid ${C.border}`,
-                                borderLeft:`3px solid ${isToday?C.accent:C.text}`,borderRadius:7,
-                                padding:"7px 10px",marginBottom:6,
-                                cursor:appJob?"pointer":"default",
-                                transition:"background 0.15s"}}
-                              onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${C.accent}14`;}}
-                              onMouseLeave={e=>{e.currentTarget.style.background=isToday?`${C.accent}0d`:C.surface;}}>
-                              <div style={{fontSize:12.5,fontWeight:700,color:C.text,
-                                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
-                                marginBottom:3}}>{jobName}</div>
-                              {sortedEntries.map(e => {
-                                const fullName  = e.Staff?.Name || "";
-                                const parts     = fullName.split(" ");
-                                const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                                const nameColor = staffColorMap[fullName] || jobFmColor || C.text;
-                                const eStart    = fmtTime(e.Blocks?.[0]?.StartTime);
-                                const eEnd      = fmtTime(e.Blocks?.[e.Blocks?.length-1]?.EndTime);
-                                return shortName ? (
-                                  <div key={fullName} style={{display:"flex",justifyContent:"space-between",
-                                    alignItems:"center",marginBottom:1}}>
-                                    <span style={{fontSize:12,fontWeight:700,color:nameColor}}>{shortName}</span>
-                                    {(eStart||eEnd) && (
-                                      <span style={{fontSize:11,color:C.dim,fontWeight:500}}>
-                                        {eStart}{eEnd?`–${eEnd}`:""}
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {dayJobs.map(g => {
+                        const appJob   = jobBySimproNo[g.projectId];
+                        const jobNo    = appJob?.simproNo ? `#${appJob.simproNo}` : "";
+                        const jobName  = appJob?.name || g.ref || `Job #${g.projectId}`;
+                        // Filter entries to only the active crew when filtered
+                        const visibleEntries = personFilter === "all"
+                          ? g.entries
+                          : g.entries.filter(e => activeCrew.includes(e.Staff?.Name));
+                        // Sort entries by start time
+                        const sortedEntries = [...visibleEntries].sort((a,b) =>
+                          (a.Blocks?.[0]?.StartTime||"").localeCompare(b.Blocks?.[0]?.StartTime||""));
+                        const jobFmColor = appJob?.foreman ? (foremanColors[appJob.foreman] || foremanColors[(appJob.foreman||"").split(" ")[0]]) : null;
+                        // Top strip: one band per crew on the job, sized by headcount.
+                        const crewCounts = {};
+                        sortedEntries.forEach(e => {
+                          const c = staffColorMap[e.Staff?.Name] || jobFmColor || C.muted;
+                          crewCounts[c] = (crewCounts[c] || 0) + 1;
+                        });
+                        return (
+                          <button key={g.projectId} type="button" className="he-lift" disabled={!appJob}
+                            data-hekey={"crew_"+g.projectId} data-heflash={"crew_"+g.projectId}
+                            onClick={()=>{ if(appJob) onSelectJob(appJob); }}
+                            style={{display:"block",width:"100%",padding:0,textAlign:"left",fontFamily:"inherit",color:C.text,
+                              background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",
+                              cursor:appJob?"pointer":"default",boxShadow:CARD_SHADOW}}>
+                            <span style={{display:"flex",height:5,gap:1}}>
+                              {Object.entries(crewCounts).map(([c,n]) => <span key={c} style={{flex:`${n} 1 0`,background:c}}/>)}
+                            </span>
+                            <span style={{display:"block",padding:"9px 11px 11px"}}>
+                              <span style={{display:"flex",alignItems:"flex-start",gap:7,marginBottom:appJob?8:4}}>
+                                {jobNo && <span style={{flex:"none",background:C.slateBg,color:C.slateInk,borderRadius:5,padding:"1px 6px",
+                                  fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:14.5,lineHeight:1.35}}>{jobNo}</span>}
+                                <span style={{minWidth:0,fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:18.5,lineHeight:1.16}}>{jobName}</span>
+                              </span>
+                              {!appJob && <span style={{display:"block",marginBottom:8,fontSize:12,color:C.faint}}>No job card on this board</span>}
+                              <span style={{display:"flex",flexDirection:"column",gap:7}}>
+                                {sortedEntries.map(e => {
+                                  const fullName  = e.Staff?.Name || "";
+                                  const parts     = fullName.split(" ");
+                                  const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
+                                  const nameColor = staffColorMap[fullName] || jobFmColor || C.text;
+                                  const rawStart  = e.Blocks?.[0]?.StartTime;
+                                  const rawEnd    = e.Blocks?.[e.Blocks?.length-1]?.EndTime;
+                                  const eStart    = fmtTime(rawStart);
+                                  const eEnd      = fmtTime(rawEnd);
+                                  const bar       = schedHourBar(rawStart, rawEnd);
+                                  return shortName ? (
+                                    <span key={fullName} style={{display:"block"}}>
+                                      <span style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                                        <span style={{fontSize:13,fontWeight:700,color:nameColor,whiteSpace:"nowrap"}}>{shortName}</span>
+                                        {(eStart||eEnd) && (
+                                          <span style={{fontSize:12,color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
+                                            {eStart}{eEnd?`–${eEnd}`:""}
+                                          </span>
+                                        )}
                                       </span>
-                                    )}
-                                  </div>
-                                ) : null;
-                              })}
-                            </div>
-                          );
-                        })
-                    }
+                                      {bar && (
+                                        <span style={{display:"block",position:"relative",height:5,marginTop:3,background:C.bg,borderRadius:3,overflow:"hidden"}}>
+                                          {/* noon */}
+                                          <span style={{position:"absolute",top:0,bottom:0,left:"43.75%",width:1,background:C.muted}}/>
+                                          <span style={{position:"absolute",top:0,bottom:0,left:`${bar.left}%`,width:`${bar.width}%`,background:nameColor,borderRadius:3}}/>
+                                        </span>
+                                      )}
+                                    </span>
+                                  ) : null;
+                                })}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })}
@@ -61540,10 +61649,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v584
+**Last manifest update:** 2026-10-30 · App SW version: v585
 
 ---
 
+- **Job Board boxes redesigned; the Pipeline row now counts the same way as the job list** · 'shipped 2026-10-30' · 'SW v585' · 'PipelineStrip' · 'pipelineTiles' · 'schedHourBar' · 'SimproCrewSchedule' · Koy: *"im really starting to hate how these boxes look."* Approved from a clickable mockup (artifact 75SiytEiomLZSQACFxvGMb). **Crew Schedule:** the fixed 160px day columns are gone, so the weekdays share the screen width and an empty Sat or Sun shrinks to a sliver; on a phone the week still scrolls sideways. Each job card shows the full name beside a # chip, a strip across the top with one color band per crew on the job (sized by headcount), and a small hour bar (5a to 9p, with a noon tick) under each person's times. Each day header adds "N jobs, N people". A Simpro entry with no matching job card says "No job card on this board" and cannot be tapped. The Today column no longer moves to tomorrow after 6 PM Mountain. **Pipeline:** Total, one connected strip of stages, and Completed, with big condensed numbers. **The numbers changed on purpose:** the row read the percent fields while ALL JOBS read status, so the same screen disagreed (Completed 37 vs 89, Pre Job Prep 45 vs 6, and the stages added to 137 of 134). 'pipelineTiles' now runs ALL JOBS' own section tests, so the two match; Quick Jobs and Temp Peds each fold into one tile and hide at zero, and Rough and Finish include their On Hold jobs. The foreman page's row uses the same component, and Commercial mode uses its own stages the same way. Jobs inside a Project count in their stage tile though the list files them under Projects. **Crews:** every card, Unassigned included, has the same shape: tinted header, big job count, two progress bars, and a footer action. Rough and Finish percents are unchanged. Gate: 'scripts/needs-dryrun.js' (+15 checks). No guide change: the Job Board has no "?" guide. **Why it won't lose data:** display only. The row, cards and schedule read jobs already loaded and the same Simpro list; no Firestore write, loader, rules or function changed.
 - **Quick jobs redesigned: "Needs to be scheduled" replaces "New," the card shows the scope and one next-step button, and the opened job reads like a page** · 'shipped 2026-10-30' · 'SW v584' · 'QuickJobCard' · 'QuickJobDetail' · 'QuickJobBand' · 'QuickJobSchedulePanel' · 'QuickJobCompletePanel' · 'QuickJobMenu' · 'qjStage' · 'qjBand' · 'qjSchedulePatch' · 'scripts/quickjob-test.js' · Koy: *"there's no option for needs to be scheduled... the whole card needs a redesign so it's more usable."* Then, of the opened job: *"what about the actual card itself when its opened."* Approved off the clickable mockup (artifact KJCxcV3kxLeKZbEGNMecfd), built from the 20 live quick jobs. **The label:** status 'new' now reads "Needs to be scheduled" on the card, the Job Board section, Forecast, Today and the dashboard. The saved value stays 'new', so no job changes and phones on an older version keep working. **The card:** a colored band says where the job is (orange Needs to be scheduled with days waiting, Scheduled date, solid blue Today, red when late, In progress with due date, Ready to invoice). It shows the scope, address and customer, who's on it (a foreman of "Unassigned" no longer leads; "No one assigned" when nobody is), the access note, Call and Directions, and one button for the next step. Delete and the status note move into a ⋯ menu, and the double delete confirm is gone. Finished, invoiced jobs shrink to one line, which also ends the "Ready to Invoice" + "Invoice Sent" contradiction on 12 jobs. Needs to be scheduled sorts oldest first, Scheduled and In Progress soonest first. **The opened job:** read first, with Edit per section, in the order stage, when and who, scope, getting there. Material, Notes, Photos and Job details start folded with previews and counts. The next-step button is pinned to the bottom. A stage track replaces the five status buttons, which removes the path that marked a job Complete with no sign-off. Completed by starts with whoever is signed in. Photos are larger and Delete moves into the full-size view. **Skipping ahead stays:** the ⋯ menu has "Start now without a date" and "Already done: mark complete," because #1399, #1388 and #1370 were finished without ever getting a date. **Data:** existing fields only; stage changes write the same fields as the old buttons, every one can be undone from the Undo bar, and the contractor's view stays look-only.
 - **Goals Phase 2 + Job Costs early warning (dashboard audit, Goals and Job Costs tabs)** · 'shipped 2026-10-30' · 'SW v583' · 'goalsNightly' · 'sendTestGoalsPull' · 'functions/goalsPull.js pullPhase2' · 'odGoalWarranty' · 'odGoalCoHours' · 'odGoalStoreRuns' · 'odGoalHoursWeekly' · 'odCostsRoughOverruns' · 'odCostsOwners' · 'odCostsCoHours' · Koy approved the tab-by-tab audit 2026-10-30 ("Let's build them"). **Goals:** the four 2027-scoreboard cards v562 left grey get real numbers from the nightly Simpro pull, written under ONE new key 'settings/goalsSimpro.phase2' so the Phase 1 numbers stay byte-identical: **Warranty hours** = labor hours on cost centers whose company cost center is Residential (Warranty), on the same jobs as the margin card, ÷ every actual hour on those jobs (live 10/30: 2.2%, 1,206 h of 53,811 h, 51 jobs; goal under 2%); **Change orders with hours booked to their own cost center** = of the CO cost centers sold with hours ("… - Change Order (Rough In / Finish)"), how many have hours booked (live: 33 of 393, 698 h of 2,069 h sold — a CO section put on the Rough In cost center does not count, that is the habit); **Home Depot / ACE runs** = Simpro purchase orders to Home Depot or ACE Hardware by date issued, headline the last 8 full weeks (live 4.1 a week; 171 this year; the app's Get-a-PO-number runs make one of these, so the app count is a sub-line, never added); **Hours tracked weekly** = of the last 8 Mon–Sun weeks, how many had every active crew member (Settings › Team, not contractors) with job hours on their Simpro timesheet (live 0 of 8: 14 of 18 logged all 8, a new hire missed 6; people with no job hours in any week are named, not counted). Probed read-only first: the company-wide '/jobCostCenters/' list (no totals, no cost-center filter) is read once and only warranty / CO sections on this year's jobs are read for totals; '/employees/{id}/timesheets/?StartDate&EndDate' comes back unpaged; '/vendorOrders/?Vendor.ID=' filters. The whole Phase 2 is ~300 calls / 80 s on top of Phase 1's 23 s; it never fails the run (a thrown Phase 2 carries the previous doc's phase2 forward, marked, or leaves the key off). Each card's pill says **No Phase 2 pull yet** until the function is deployed; **How it is counted** on each. The 8 proposed goals are NOT added (Koy: leave off for now). **Job Costs:** a folded early-warning section at the top, **Open jobs already past rough hours** (count on the header): open jobs whose rough hours used are past the rough estimate from every cost center, top five by hours over with **Show all** behind, each naming the foreman and lead by the dashboard's own rule (d.owns), tap for the cost centers; the **Untagged est** column is gone from the job table; the **What-if** bar is a folded section (the Count switches still drive it); on Hours, a **CO hrs, own CC** column per job from the same pull (0 = CO cost centers with nothing booked, – = none), hidden until the pull has run. Hero numbers, People | Crew grouping and the chart unchanged. Tests: 'scripts/goals-pull-test.js' (+Phase 2: cost-center kinds, hours, week ranges, crew matching, weekly, store runs, the whole injected-I/O pull against a fake Simpro) and new 'scripts/goals-costs-audit-test.js' (pending cards, bands, sheet-name matching, overruns, owners, CO column), both in prebuild. Mockups from a live read-only pull: 'docs/mockups/dashboard-audit/goals.html', 'costs.html'. Guide 'dashboard.html' Goals + Job Costs. Crew brief 'docs/crew-briefs/v583.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull --project homestead-electric'** (Koy); the first real Phase 2 numbers land on that deploy's next 5:40 AM run or a Pull from Simpro now. **Why it won't lose data:** read-only against Simpro, the jobs and 'material_po_log'; the only write is the function's own 'settings/goalsSimpro' doc, which gains one key; no job write, no loader or rules change; the dashboard only reads.
 - **Dashboard audit, People + Automations: everyone by crew with where they are today; Automations trimmed to the docs, the plans waiting and one Appliance Loads line** · 'shipped 2026-10-30' · 'SW v582' · 'OfficeDash' · 'odPeopleByCrew' · 'odTodayByPerson' · 'odPlannerPerson' · 'odTodayText' · 'odPrevRun' · 'getSimproSchedule' · Koy approved the tab-by-tab dashboard audit 2026-10-30 ("Let's build them"). **People:** the people list is now **People by crew** — every active team member once, grouped by crew (Settings › Team 'foremanId' through 'odCrews', never 'settings/crewTeams'), the crew's foreman on top, then jr foremen, leads, crew; **Office** (title admin) and **No crew** are their own groups, last. Every group starts folded with its count; the header says how many are on a job today and how many are quiet. Each row: name + title/jobs, a **Today** column (the job they are on today from the Crew Planner, with the hours, or a quiet "not scheduled"; "weekend" on Sat/Sun), the last-on-a-job line, and their phone's app version (red when behind, "no phone seen" after 14 days). "Today" reads the planner the way the planner itself does: its own week doc 'settings/schedule_<monday>.assignments["<jobId>_<dayIdx>"]' (a filled cell wins) and the Simpro schedule it overlays ('getSimproSchedule', this week, read-only); names resolve the planner's own way (exact, unique first name, first + last initial, an ambiguous bare first name never guessed). Live check 2026-10-30: no planner week doc has ever had a filled cell, so in practice Today is Simpro's schedule, which is what the planner shows. Kept: On the app today, Open My Day tasks, Time off waiting (with its collision context), Phones on latest, Quiet 3+ days, Out today / this week. Trimmed: the activity heat map, the "On the app, no job touched" list, the My Day load card and the Team pulse card grid (its people are the crew rows now); the device list is a folded **Devices behind** with a count and a Show all button (the Phones on latest tile opens it). **Automations:** keeps the automated document cards with Run now, Plan Intake with its chips and the Waiting on you rail with File it / Not ours; the Appliance Loads card is one status line (last scheduled run, next run, jobs · items · amps, Refresh, Open sheet, and the no-appliance-package line); the Plans filed chart tile, the per-job appliance table and the "When they run" list are gone (the counts stay in the rail). Nothing about what the automations do changes. Pure helpers sit under '// ── Dashboard audit (People + Automations) helpers' above 'OfficeDash'; test 'scripts/people-autos-audit-test.js' (in prebuild) proves every name once, the tier order, the name resolution, planner-over-Simpro, block merging, weekends, and the status-line run time. Mockup from a live read-only pull: 'docs/mockups/dashboard-audit/people.html' (+ 'people-thursday.html', a full work day). Guide 'dashboard.html' People and Automations updated. **Why it won't lose data:** read-only everywhere — one new 'getDoc' on the planner's week doc and one call to the existing 'getSimproSchedule' callable when the People tab opens; no 'setDoc' / 'updateDoc' / 'saveJob'; the Ask-to-import My Day task that lived on the removed appliance rows is gone with them (nothing else wrote); no loader, rules or function change.
@@ -75999,7 +76109,17 @@ function App() {
 
         .foreman-card{transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;}
 
-        .foreman-card:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(0,0,0,0.4);}
+        .foreman-card:hover,.he-lift:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(27,31,36,.08),0 10px 24px rgba(27,31,36,.1)!important;}
+
+        .he-lift{transition:transform 0.12s,box-shadow 0.12s;}
+
+        .he-tile:hover{filter:brightness(.97);}
+
+        .he-pipe-end,.he-tile-done{max-width:190px;}
+
+        @media (max-width:700px){.he-pipe-end,.he-tile-done{max-width:none;}}
+
+        @media (prefers-reduced-motion:reduce){.he-lift,.foreman-card{transition:none;}.he-lift:hover,.foreman-card:hover{transform:none;}}
 
       `}</style>
 
@@ -76208,7 +76328,7 @@ function App() {
           <div style={{padding:"28px 26px"}}>
 
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14}}>
-              <div style={{fontSize:12,color:C.dim,fontWeight:800,letterSpacing:"0.14em",textTransform:"uppercase"}}>Pipeline Overview</div>
+              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:26,lineHeight:1,color:C.text}}>Pipeline</div>
               {/* v544 — Josh: one-button job list export. Every job on this board (this division). Koy: "put it next to pipeline overview". */}
               <button onClick={()=>downloadJobListCsv({ jobs, division: mode })}
                 disabled={jobs.length===0}
@@ -76221,67 +76341,9 @@ function App() {
               </button>
             </div>
 
-            {(()=>{
-
-              const prepJobs = jobs.filter(j=>{const r=parseStage(j.roughStage);return r===0;});
-
-              const nsJobs   = jobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0&&!prepJobs.includes(j);});
-
-              const roJobs   = jobs.filter(j=>{const r=parseStage(j.roughStage);const f=parseStage(j.finishStage);return r>0&&r<100&&f===0;});
-
-              const btwJobs  = jobs.filter(j=>{const r=parseStage(j.roughStage);const f=parseStage(j.finishStage);return r===100&&f===0;});
-
-              const finJobs  = jobs.filter(j=>{const f=parseStage(j.finishStage);return f>0&&f<100;});
-
-              const donJobs  = jobs.filter(j=>(parseStage(j.finishStage))===100);
-
-              return (
-
-                <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
-
-                  {(mode==="commercial" ? [[jobs.length,"Total",C.text,jobs], ...COMM_STAGE_SECTIONS.map(sec=>{ const f=jobs.filter(sec.test); return [f.length,sec.label,sec.color,f]; })] : [
-
-                    [jobs.length,"Total",C.text,jobs],
-
-                    [prepJobs.length,"Pre Job Prep",C.teal,prepJobs],
-
-                    [nsJobs.length,"Not Started","#5a6480",nsJobs],
-
-                    [roJobs.length,"Rough",C.rough,roJobs],
-
-                    [btwJobs.length,"In Between",C.orange,btwJobs],
-
-                    [finJobs.length,"Finish",C.finish,finJobs],
-
-                    [donJobs.length,"Completed",C.green,donJobs],
-
-                  ]).map(([v,l,c,filt])=>(
-
-                    <div key={l} onClick={(e)=>{const _t=e.currentTarget; _t.classList.remove("he-bump"); void _t.offsetWidth; _t.classList.add("he-bump"); if(filt&&filt.length>0) setStageModal({label:l,color:c,jobs:filt});}}
-
-                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
-
-                        padding:"10px 18px",display:"flex",gap:10,alignItems:"center",flex:"1 1 120px",
-
-                        cursor:filt&&filt.length>0?"pointer":"default",transition:"transform 0.1s,box-shadow 0.1s,border-color 0.15s"}}
-
-                      onMouseEnter={e=>{if(filt&&filt.length>0){e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 6px 20px rgba(0,0,0,0.06)";e.currentTarget.style.borderColor=`${c}66`;}}}
-
-                      onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.borderColor=C.border;}}>
-
-                      <span style={{fontFamily:"'Bebas Neue'",fontSize:28,color:c,lineHeight:1}}>{v}</span>
-
-                      <span style={{fontSize:12.5,color:C.dim,lineHeight:1.3}}>{l}</span>
-
-                    </div>
-
-                  ))}
-
-                </div>
-
-              );
-
-            })()}
+            <div style={{marginBottom:28}}>
+              <PipelineStrip jobs={jobs} sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS} onPick={setStageModal}/>
+            </div>
 
             {stageModal&&(
 
@@ -76331,113 +76393,95 @@ function App() {
 
             )}
 
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
-
-              {(()=>{
-                // One company, no books (2026-09): a single "Crews" band, then every
-                // foreman card flat. Sort = most jobs first (the head's "where's the
-                // load" read) or A–Z. The coordinator field is not read here anymore.
-                const _count = {}; _foremen.forEach(f=>{ _count[f] = jobs.filter(j=>matchesForeman(j,f)).length; });
-                const sortedForemen = [..._foremen].sort(crewSort==="az" ? (a,b)=>a.localeCompare(b) : (a,b)=>((_count[b]||0)-(_count[a]||0))||a.localeCompare(b));
-                const _totalSites = jobs.filter(j=>!j.tempPed&&!j.quickJob).length;
-                return sortedForemen.map((f,_i)=>{
-                const fc    = getPersonColor(f);
-                const fJobs = jobs.filter(j=>matchesForeman(j,f));
-                const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
-                const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
-                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
-                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
-                return (
-                  <Fragment key={f}>
-                    {_i===0 && (
-                      <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
-                        marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${C.accent}33`}}>
-                        <span style={{width:9,height:9,borderRadius:"50%",background:C.accent,flexShrink:0}}/>
-                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.accent,lineHeight:1}}>Crews</span>
-                        <span style={{fontSize:12.5,color:C.dim}}>{_foremen.length} foremen · {_totalSites} job sites</span>
-                        <span style={{marginLeft:"auto",display:"inline-flex",gap:6}}>
-                          {[["jobs","Most jobs"],["az","A–Z"]].map(([k,l])=>(
-                            <button key={k} onClick={(e)=>{e.stopPropagation();setCrewSort(k);}}
-                              style={{fontSize:12.5,fontWeight:crewSort===k?700:500,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
-                                border:`1px solid ${crewSort===k?C.accent:C.border}`,background:crewSort===k?C.accent:C.card,color:crewSort===k?"#fff":C.dim}}>{l}</button>
-                          ))}
-                        </span>
-                      </div>
-                    )}
-                  <div>
-                    {/* Main card */}
-                    <div className="foreman-card" onClick={()=>openForeman(f)}
-                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
-                        padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
-                      {/* Name + count */}
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>{f}</div>
-                        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:99,
-                          padding:"2px 9px",fontSize:12,color:C.dim,fontWeight:700}}>
-                          {fJobs.length}
-                        </div>
-                      </div>
-                      {/* Rough / Finish progress bars (compact) */}
-                      <div style={{display:"flex",gap:10}}>
-                        {[["Rough",rAvg],["Finish",fnAvg]].map(([lbl,pct])=>(
-                          <div key={lbl} style={{flex:1}}>
-                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                              <span style={{fontSize:11,color:C.dim}}>{lbl}</span>
-                              <span style={{fontSize:11,fontWeight:600,color:C.text}}>{pct}%</span>
-                            </div>
-                            <div style={{height:4,background:"#EAECEF",borderRadius:4,overflow:"hidden"}}>
-                              <div style={{height:"100%",width:`${pct}%`,background:fc,borderRadius:4,transition:"width 0.3s"}}/>
-                            </div>
-                          </div>
+            {(()=>{
+              // One company, no books (2026-09): a single "Crews" band, then every
+              // foreman card flat. Sort = most jobs first (the head's "where's the
+              // load" read) or A–Z. The coordinator field is not read here anymore.
+              const _count = {}; _foremen.forEach(f=>{ _count[f] = jobs.filter(j=>matchesForeman(j,f)).length; });
+              const sortedForemen = [..._foremen].sort(crewSort==="az" ? (a,b)=>a.localeCompare(b) : (a,b)=>((_count[b]||0)-(_count[a]||0))||a.localeCompare(b));
+              const _totalSites = jobs.filter(j=>!j.tempPed&&!j.quickJob).length;
+              const cardBox = {background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:CARD_SHADOW};
+              const cardHead = (name, n, fc, tint) => (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"12px 14px",background:tint}}>
+                  <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:23,lineHeight:1.05,color:fc}}>{name}</div>
+                  <div style={{flex:"none",textAlign:"right"}}>
+                    <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:800,fontSize:34,lineHeight:.95,color:fc}}>{n}</div>
+                    <div style={{fontSize:12,color:C.dim}}>{n===1?"job":"jobs"}</div>
+                  </div>
+                </div>
+              );
+              const cardFoot = {display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",borderTop:`1px solid ${C.border}`,fontSize:12.5,fontWeight:600,color:C.dim,cursor:"pointer"};
+              const hasCrews = sortedForemen.length > 0;
+              return (
+                <Fragment>
+                  {hasCrews && (
+                    <div style={{display:"flex",alignItems:"center",gap:"8px 14px",flexWrap:"wrap",marginBottom:12}}>
+                      <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:26,color:C.text,lineHeight:1}}>Crews</span>
+                      <span style={{fontSize:12.5,color:C.dim}}>{_foremen.length} foremen · {_totalSites} job sites</span>
+                      <span style={{marginLeft:"auto",display:"inline-flex",gap:6}}>
+                        {[["jobs","Most jobs"],["az","A–Z"]].map(([k,l])=>(
+                          <button key={k} onClick={(e)=>{e.stopPropagation();setCrewSort(k);}}
+                            style={{fontSize:12.5,fontWeight:crewSort===k?700:500,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                              border:`1px solid ${crewSort===k?C.accent:C.border}`,background:crewSort===k?C.accent:C.card,color:crewSort===k?"#fff":C.dim}}>{l}</button>
                         ))}
-                      </div>
-                      {/* slim crew access */}
-                      <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
-                        style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
-                        <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.faint}}>Crew Access</span>
-                        <span style={{fontSize:12,color:C.dim}}>→</span>
-                      </div>
+                      </span>
                     </div>
-                  </div>
-                  </Fragment>
-                );
-                });
-              })()}
-
-              {/* Unassigned (no foreman) */}
-              {(()=>{
-                const fc    = "#6E7682";
-                const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
-                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
-                return (
-                  <Fragment>
-                  <div>
-                    <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
-                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
-                        padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>Unassigned</div>
-                        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:99,
-                          padding:"2px 9px",fontSize:12,color:C.dim,fontWeight:700}}>
-                          {uJobs.length}
+                  )}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(226px,1fr))",gap:12,marginBottom:40}}>
+                    {sortedForemen.map(f=>{
+                      const fc    = getPersonColor(f);
+                      const fJobs = jobs.filter(j=>matchesForeman(j,f));
+                      const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
+                      const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
+                      return (
+                        <div key={f} className="foreman-card" onClick={()=>openForeman(f)} style={cardBox}>
+                          {cardHead(f, fJobs.length, fc, `${fc}14`)}
+                          {/* Rough / Finish progress */}
+                          <div style={{display:"flex",flexDirection:"column",gap:9,flex:"1 1 auto",padding:"12px 14px 13px"}}>
+                            {[["Rough",rAvg],["Finish",fnAvg]].map(([lbl,pct])=>(
+                              <div key={lbl}>
+                                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12}}>
+                                  <span style={{color:C.dim}}>{lbl}</span>
+                                  <span style={{fontWeight:700,color:C.text,fontVariantNumeric:"tabular-nums"}}>{pct}%</span>
+                                </div>
+                                <div style={{height:6,background:C.bg,borderRadius:3,overflow:"hidden"}}>
+                                  <div style={{height:"100%",width:`${pct}%`,background:fc,borderRadius:3,transition:"width 0.3s"}}/>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* slim crew access */}
+                          <div onClick={e=>{e.stopPropagation();setCrewView(f);}} style={cardFoot}>
+                            <span>Crew Access</span>
+                            <span>→</span>
+                          </div>
                         </div>
-                      </div>
-                      <div style={{display:"flex",gap:6,marginBottom:10}}>
-                        <div style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1}}>
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.faint,lineHeight:1}}>{uCOs}</div>
-                          <div style={{fontSize:11,color:C.dim,marginTop:1}}>COs</div>
+                      );
+                    })}
+
+                    {/* Unassigned (no foreman) */}
+                    {(()=>{
+                      const fc    = C.faint;
+                      const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
+                      const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
+                      return (
+                        <div className="foreman-card" onClick={()=>openForeman("Unassigned")} style={cardBox}>
+                          {cardHead("Unassigned", uJobs.length, fc, C.slateBg)}
+                          <div style={{flex:"1 1 auto",padding:"12px 14px 13px"}}>
+                            <span style={{display:"inline-block",background:uCOs>0?C.steelBg:C.surface,color:uCOs>0?C.blue:C.faint,border:`1px solid ${uCOs>0?C.steelLine:C.border}`,
+                              borderRadius:99,padding:"3px 11px",fontSize:12.5,fontWeight:700}}>{uCOs} open {uCOs===1?"CO":"COs"}</span>
+                          </div>
+                          <div style={cardFoot}>
+                            <span>View jobs</span>
+                            <span>→</span>
+                          </div>
                         </div>
-                      </div>
-                      <div style={{fontSize:12,color:C.dim,fontWeight:600,textAlign:"right"}}>View →</div>
-                    </div>
+                      );
+                    })()}
                   </div>
-                  </Fragment>
-
-                );
-
-              })()}
-
-            </div>
+                </Fragment>
+              );
+            })()}
 
 
             {/* ── CREW VIEW MODAL ── */}
@@ -76616,52 +76660,8 @@ function App() {
             </div>
 
 
-            <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-
-              {(()=>{
-
-                const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman));
-
-                const fDone = fJobs.filter(j=>parseStage(j.finishStage)===100).length;
-
-                const fPrep    = fJobs.filter(j=>{const r=parseStage(j.roughStage);return r===0;}).length;
-
-                const fRough   = fJobs.filter(j=>parseInt(j.roughStage)>0&&parseInt(j.roughStage)<100&&parseInt(j.finishStage)===0).length;
-
-                const fBetween = fJobs.filter(j=>parseInt(j.roughStage)===100&&parseInt(j.finishStage)===0).length;
-
-                const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
-
-                const fNotStarted = fJobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0;}).length - fPrep;
-
-                return (mode==="commercial" ? [[fJobs.length,"Total Jobs",C.blue], ...COMM_STAGE_SECTIONS.map(sec=>[fJobs.filter(sec.test).length,sec.label,sec.color])] : [[fJobs.length,"Total Jobs",C.blue],
-
-                  [fPrep,"Pre Job Prep",C.teal],
-
-                  [fNotStarted,"Not Started",C.dim],
-
-                  [fRough,"Rough",C.rough],
-
-                  [fBetween,"In Between",C.orange],
-
-                  [fFinish,"Finish",C.finish],
-
-                  [fDone,"Completed",C.green]]).map(([v,l,c])=>(
-
-                  <div key={l} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
-
-                    padding:"8px 16px",display:"flex",gap:10,alignItems:"center"}}>
-
-                    <span style={{fontFamily:"'Bebas Neue'",fontSize:24,color:c,lineHeight:1}}>{v}</span>
-
-                    <span style={{fontSize:12.5,color:C.dim}}>{l}</span>
-
-                  </div>
-
-                ));
-
-              })()}
-
+            <div style={{marginBottom:16}}>
+              <PipelineStrip jobs={jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman))} sections={mode==="commercial"?COMM_BOARD_SECTIONS:STAGE_SECTIONS}/>
             </div>
 
             {/* ── Jobs | Tasks tab bar ── */}
