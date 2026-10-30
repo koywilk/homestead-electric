@@ -7073,17 +7073,42 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
 );
 
 
+// Job page redesign (v588): a tab wrapped in JobCardCtx draws its fold sections as cards.
+// Same controls, same open and closed defaults; tabs not yet moved over look as they did.
+const JobCardCtx = createContext(false);
+const JC_BOX = {background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:7,boxShadow:"0 1px 2px rgba(27,31,36,.05),0 3px 8px rgba(27,31,36,.04)"};
+const JC_HEAD = (open) => ({display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,minHeight:36,padding:"3px 11px",cursor:"pointer",userSelect:"none",
+  borderBottom:open?`1px solid ${C.border}`:"none"});
+const JC_TITLE = (ink) => ({fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:18,lineHeight:1.1,color:ink,whiteSpace:"nowrap"});
+const JC_BODY = {padding:"9px 11px 10px"};
+// An always-open card for the fields that were never folded.
+const JobCard = ({children}) => <div style={{...JC_BOX,padding:"9px 11px 10px"}}>{children}</div>;
+const JC_LABEL = {fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:17,lineHeight:1.1,color:C.text};
+
 // Collapsible section wrapper — collapsed by default
 
 function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, openSignal=0, badge=null, children}) {
-
+  const asCard = useContext(JobCardCtx);
   const [open, setOpen] = useState(defaultOpen);
   // v549: a parent can open the section and scroll to it (the stage summary's
   // "Show open punch" button) by bumping openSignal.
   useEffect(() => { if (openSignal) setOpen(true); }, [openSignal]);
-
+  if (asCard) return (
+    <div id={anchorId} style={JC_BOX}>
+      <div onClick={()=>setOpen(o=>!o)} style={JC_HEAD(open)}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",minWidth:0}}>
+          <div style={JC_TITLE(readableInk(color, C.card))}>{label}</div>
+          {badge&&<span style={{fontSize:11.5,fontWeight:800,background:C.teal,color:"#fff",borderRadius:99,padding:"3px 9px",whiteSpace:"nowrap"}}>{badge}</span>}
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {action&&<div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:6}}>{action}</div>}
+          <span style={{color:readableInk(color, C.card),fontSize:14,fontWeight:700,marginLeft:4}}>{open?"▾":"▸"}</span>
+        </div>
+      </div>
+      {open&&<div style={JC_BODY}>{children}</div>}
+    </div>
+  );
   return (
-
     <div id={anchorId} style={{marginBottom:4}}>
 
       <div onClick={()=>setOpen(o=>!o)}
@@ -7124,10 +7149,23 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, 
 // it). keepMounted renders children hidden while folded so they still load and
 // report counts (the Drive listing).
 function FoldSection({label, color=C.dim, meta=null, badge=null, action=null, open: openProp, onToggle, defaultOpen=false, keepMounted=false, children}) {
+  const asCard = useContext(JobCardCtx);
   const [openState, setOpenState] = useState(defaultOpen);
   const open = openProp !== undefined ? openProp : openState;
   const toggle = () => { if (onToggle) onToggle(!open); else setOpenState(o => !o); };
   const ink = readableInk(color, C.bg);
+  if (asCard) return (
+    <div style={JC_BOX}>
+      <div onClick={toggle} role="button" aria-expanded={open} style={JC_HEAD(open)}>
+        <div style={JC_TITLE(ink)}>{label}</div>
+        {badge && <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:"#fff",background:badge.color,borderRadius:4,padding:"1px 5px"}}>{badge.text}</span>}
+        <div style={{flex:1,minWidth:0,textAlign:"right",fontSize:13,fontWeight:600,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{meta}</div>
+        {action && <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:6}}>{action}</div>}
+        <span style={{color:ink,fontSize:15,fontWeight:700}}>{open?"▾":"▸"}</span>
+      </div>
+      {keepMounted ? <div style={{display:open?"block":"none",...JC_BODY}}>{children}</div> : (open && <div style={JC_BODY}>{children}</div>)}
+    </div>
+  );
   return (
     <div style={{marginBottom:4}}>
       <div onClick={toggle} role="button" aria-expanded={open}
@@ -30137,6 +30175,7 @@ function HiddenSectionBanner({ job, sectionKey, u, identity }) {
 // without opening. Turning a section OFF that already has data asks first;
 // turning one ON never asks.
 function JobSectionsPanel({ job, u, identity }) {
+  const asCard = useContext(JobCardCtx);
   const [open, setOpen] = useState(false);
   const [busyKey, setBusyKey] = useState("");
   const boxRef = useRef(null);
@@ -30193,18 +30232,18 @@ function JobSectionsPanel({ job, u, identity }) {
   };
 
   return (
-    <div ref={boxRef} style={{marginBottom:4}}>
+    <div ref={boxRef} style={asCard?JC_BOX:{marginBottom:4}}>
       <div onClick={()=>setOpen(o=>!o)}
-        style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+        style={asCard?JC_HEAD(open):{display:"flex",alignItems:"center",justifyContent:"space-between",
           borderBottom:`2px solid ${C.dim}44`,paddingBottom:7,marginBottom:open?14:0,marginTop:8,
           cursor:"pointer",userSelect:"none"}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color:C.dim}}>
+        <div style={asCard?JC_TITLE(C.dim):{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color:C.dim}}>
           Job Sections{hiddenCount>0 ? ` · ${hiddenCount} hidden` : ""}
         </div>
         <span style={{color:C.dim,fontSize:14,fontWeight:700,marginLeft:4}}>{open?"▾":"▸"}</span>
       </div>
       {open && (
-        <div>
+        <div style={asCard?JC_BODY:undefined}>
           <div style={{fontSize:12.5,color:C.faint,marginBottom:10,lineHeight:1.5}}>
             Turn off anything this job doesn&apos;t have. It disappears everywhere — the job card, share links,
             the GC portal, reminders. Nothing is deleted — turn it back on any time (say a generator gets added
@@ -33742,7 +33781,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         {/* v512: no touchAction:"pan-y" here — on iPhone it also blocked sideways
             scrolling of every wide table inside the job (appliance loads, panel
             schedules, …). useHeTabSwipe now steps aside on its own instead. */}
-        <div ref={_bodyRef} style={{flex:1,minWidth:0,minHeight:0,overflowY:"auto",padding:"14px 22px 20px"}}>
+        <div ref={_bodyRef} style={{flex:1,minWidth:0,minHeight:0,overflowY:"auto",padding:tab==="Job Info"?"14px 8px 20px":"14px 22px 20px"}}>
 
           <div className="he-jd-strip-body" style={{marginBottom:12}}>
             <JobProgressStrip job={job} tabs={tabsForJob(job, tab)} onPick={setTab} className="he-jd-strip-row"/>
@@ -36477,7 +36516,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tab==="Job Info"&&(
 
-            <div>
+            <JobCardCtx.Provider value={true}>
               {pctx && <JobProjectSection job={job} ctx={pctx} onPatch={u}/>}
               {pedLinkSuggest.length>0&&onUpdateOtherJob&&!isSectionHidden(job,"tempPed")&&pedLinkSuggest.map(s=>(
                 <div key={s.inst.id} style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:14,background:`${C.blue}0D`,
@@ -36495,7 +36534,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               ))}
 
 
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+              <JobCard>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
 
                 {[["name","Job Name"],["address","Address"],["gc","General Contractor"],
 
@@ -36706,14 +36746,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
 
               </div>
+              </JobCard>
 
               {/* Status Update — irregular/ephemeral status that should jump out
                   from any view. Shows on every job card too (Board, Forecast,
                   Upcoming) so a "needs a lift" type note is impossible to miss. */}
-              <div style={{marginTop:16}}>
-                <div style={{fontSize:12,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",gap:6,
-                  letterSpacing:"0.06em",fontWeight:600}}>
-                  STATUS UPDATE
+              <JobCard>
+              <div>
+                <div style={{fontSize:12,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={JC_LABEL}>Status update</span>
                   <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>
                     shows on job cards
                   </span>
@@ -36773,8 +36814,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               {/* Access note — gate code, keybox, etc. */}
               <div style={{marginTop:12}}>
-                <div style={{fontSize:12,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
-                  ACCESS NOTE <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
+                <div style={{fontSize:12,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={JC_LABEL}>Access note</span> <span style={{color:C.faint,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
                 </div>
                 <textarea
                   value={job.accessNote||""} onChange={e=>u({accessNote:e.target.value})}
@@ -36786,12 +36827,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     color:C.text,resize:"vertical",outline:"none",lineHeight:1.5,
                     transition:"border-color 0.15s"}}/>
               </div>
+              </JobCard>
 
               {/* Matterport — hidden via Job Sections (v439) */}
               {!isSectionHidden(job,"matterport")&&(
-              <div style={{marginTop:12}}>
+              <JobCard>
                 <div style={{fontSize:12,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <span>MATTERPORT</span>
+                  <span style={JC_LABEL}>Matterport</span>
                   <span onClick={()=>{
                     const links = [...(job.matterportLinks||[])];
                     if(!links.length && job.matterportLink) links.push({label:"Main",url:job.matterportLink});
@@ -36830,7 +36872,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 {/* Scan status */}
                 {(()=>{const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");return(
                   <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:8}}>
-                    <span style={{fontSize:12,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>SCAN STATUS</span>
+                    <span style={{fontSize:13,color:C.dim,fontWeight:700}}>Scan status</span>
                     <select value={job.matterportStatus||""} onChange={e=>{const v=e.target.value;const def=getStatusDef(MATTERPORT_STATUSES,v);u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});}}
                       style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color?readableInk(mpDef.color,"#E6ECEA"):C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12.5,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
                       {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
@@ -36838,7 +36880,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {mpDef.hasDate&&<DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})} style={{width:120,fontSize:12.5,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>}
                   </div>
                 );})()}
-              </div>
+              </JobCard>
               )}
 
               {!isCommercial(job) && (<>
@@ -36961,8 +37003,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </>);
               })()}
               {can(identity,"job.division") && (
-                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",margin:"6px 0 12px"}}>
-                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>DIVISION</span>
+                <div style={{...JC_BOX,padding:"5px 11px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <span style={JC_LABEL}>Division</span>
                   <div style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
                     {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => {
                       const on = jobDivision(job) === k;
@@ -37034,7 +37076,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {/* Job Sections — deliberately LAST and collapsed (v439). */}
               <JobSectionsPanel job={job} u={u} identity={identity}/>
 
-            </div>
+            </JobCardCtx.Provider>
 
           )}
 
@@ -61784,10 +61826,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v587
-
+**Last manifest update:** 2026-10-30 · App SW version: v588
 ---
 
+- **Job page, step two: Job Info in cards** · 'shipped 2026-10-30' · 'SW v588' · 'JobCardCtx' · 'JobCard' · 'Section' · 'FoldSection' · 'JobSectionsPanel' · Koy: *"Yes, start step two"* under his rule *"i dont want anything removed or harder to do."* Job Info now sits in cards that match the Job Board and quick job page: job details, status update and access note, Matterport, Pre-Job Prep, Milestones, Division, Admin, Job Sections, Project, and the Commercial sections. Same fields in the same order, still typed in directly with no Edit button, and each section folds exactly as it did. Labels read in sentence case (Status update, Access note, Matterport, Scan status, Division). 'JobCardCtx' turns the card look on per tab, so 'Section' and 'FoldSection' look as they did everywhere else until that tab's step. The tab body's side padding drops from 22 to 8 on this tab, so no field is narrower inside its card. Guide 'jobinfo.html' updated for the new label names. **Why it won't lose data:** styling only. Every input, checkbox and button keeps its same handler and the same 'u()' patch; no field, loader, rules or function changed.
 - **Job page, step one: new top of the page and a side list of tabs; everything inside the tabs is unchanged** · 'shipped 2026-10-30' · 'SW v587' · 'JobDetail' · 'jobStageBand' · 'jobProgressTiles' · 'JobProgressStrip' · 'stageBarColor' · 'JOB_SHELL_CSS' · Koy: *"inside of the job cards needs a redesign because we've redesigned the boxes on the homepage and the quick jobs card, so it doesn't really match."* Then, on the first mockup: *"i dont want anything removed or harder to do."* Approved from mockup artifact Eee8C6D9ZkQjLR6JEJLMEc. **Top of the page:** a colored band names the job's stage (same order the Job Board files a job; quotes, temp peds and Commercial read their own), with presence, + Need, Offline, Refresh and Close on it. Below it the title, margin and labor pills, address and GC, schedule pill, status update and access note, and the same action pills and Convert or Back to Upcoming buttons beside them, all the same controls. **Progress strip:** Pre-Job Prep, Rough with its bar, Rough inspection, Finish with its bar, Final inspection, QC; each tile opens the tab that holds it. It reads only, and the Rough and Finish stage dropdowns stay in their tabs. Fixed at the top only when the window is at least 1180 by 1000; otherwise it sits at the top of the tab body and scrolls away, as a slim sideways row on a phone, so the tab body keeps its room. Hidden on quotes, temp peds and Commercial jobs, which don't have those stages. **Tabs:** all of them in today's order. From 1180px wide they become a side list with small counts; that width is chosen so the tab body is never narrower than the old 940px page. Below it they stay the top row they have always been, with no added width. Up Next stays off: it was retired from the job page on 2026-06-05, and the mockup's Up Next box was my mistake. 'StageBar' and the strip share one color formula. Gate: 'scripts/needs-dryrun.js' (+14 checks). No guide change: no guide describes the header or tab row. **Why it won't lose data:** layout only. Every write in the header still runs through the same handlers ('u', 'onQuickAdd', 'onConvertQuote', 'onMoveBackToUpcoming', 'refreshJob'), the strip writes nothing, and no tab body, loader, rules or function changed.
 - **Crew Schedule cards made compact** · 'shipped 2026-10-30' · 'SW v587' · 'SimproCrewSchedule' · Koy, on v585: *"the schedule cards under crew schedule are very big can we shrink thos so they dont take as much room,"* then *"Make them smaller."* Each person is now one line: name, hour bar, times, instead of a line of text with the bar under it. On a wide monitor a day column fits two cards across instead of stretching one. Smaller job names, tighter padding, a thinner crew strip, smaller gaps between cards and a slimmer day header. Nothing was removed: full job names (they still wrap when the column is narrow), crew strip, times and hour bars all stay. Measured with this week's schedule: 1,466 to 424 px tall at 3440 wide, 1,658 to 785 px at 1440. Built as v586 and shipped inside v587. **Why it won't lose data:** styling only; the component has no write path and reads the same Simpro list.
 - **Job Board boxes redesigned; the Pipeline row now counts the same way as the job list** · 'shipped 2026-10-30' · 'SW v585' · 'PipelineStrip' · 'pipelineTiles' · 'schedHourBar' · 'SimproCrewSchedule' · Koy: *"im really starting to hate how these boxes look."* Approved from a clickable mockup (artifact 75SiytEiomLZSQACFxvGMb). **Crew Schedule:** the fixed 160px day columns are gone, so the weekdays share the screen width and an empty Sat or Sun shrinks to a sliver; on a phone the week still scrolls sideways. Each job card shows the full name beside a # chip, a strip across the top with one color band per crew on the job (sized by headcount), and a small hour bar (5a to 9p, with a noon tick) under each person's times. Each day header adds "N jobs, N people". A Simpro entry with no matching job card says "No job card on this board" and cannot be tapped. The Today column no longer moves to tomorrow after 6 PM Mountain. **Pipeline:** Total, one connected strip of stages, and Completed, with big condensed numbers. **The numbers changed on purpose:** the row read the percent fields while ALL JOBS read status, so the same screen disagreed (Completed 37 vs 89, Pre Job Prep 45 vs 6, and the stages added to 137 of 134). 'pipelineTiles' now runs ALL JOBS' own section tests, so the two match; Quick Jobs and Temp Peds each fold into one tile and hide at zero, and Rough and Finish include their On Hold jobs. The foreman page's row uses the same component, and Commercial mode uses its own stages the same way. Jobs inside a Project count in their stage tile though the list files them under Projects. **Crews:** every card, Unassigned included, has the same shape: tinted header, big job count, two progress bars, and a footer action. Rough and Finish percents are unchanged. Gate: 'scripts/needs-dryrun.js' (+15 checks). No guide change: the Job Board has no "?" guide. **Why it won't lose data:** display only. The row, cards and schedule read jobs already loaded and the same Simpro list; no Firestore write, loader, rules or function changed.
