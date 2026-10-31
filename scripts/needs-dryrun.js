@@ -69,7 +69,7 @@ const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBu
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
   "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
-  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter","pipelineTiles","schedHourBar","jobStageBand","jobProgressTiles","stageBarColor",
+  "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter","pipelineTiles","schedHourBar","jobStageBand","jobProgressTiles","stageBarColor","hdrCompactNext",
   "homeRunsPanelRows","homeRunsPanelList","homeRunsCsv","homeRunsText",
   "lutronNormalizeType","lutronModType","lutronZoneCap","lutronLoadKind","lutronKindFits","lutronRejects","lutronOpenZones","lutronOverWatt","lutronAssignLabel","lutronPanelOf","lutronStats","lutronMigrate","lutronView","lutronSuggestLayout","lutronLegacyModules"];
 const combined = [
@@ -709,6 +709,10 @@ eq([tA.prep.big, tA.rough.big, tA.rough.pct, tA.rough.hasBar, tA.roughInsp.big, 
 eq([jt({}, false).prep.big, jt({ prepOverride:{ on:true } }, false).prep.big], ["Open","Override"], "open prep and the override read differently");
 eq(jt({ roughInspectionResult:"fail", roughInspectionAttempts:[1] }, true).roughInsp.sub, "1 attempt", "one attempt reads singular");
 eq(jt({ qcStatus:"someNewValue" }, true).qc.big, "Items called", "a QC status the strip doesn't know still shows, not Not yet");
+// v590 big header logo shrinks on scroll
+eq([H.hdrCompactNext(false, 121, 800), H.hdrCompactNext(false, 120, 800), H.hdrCompactNext(false, 500, 199)], [true,false,false], "shrinks past 120px, only on a page with room to scroll");
+eq([H.hdrCompactNext(true, 60, 800), H.hdrCompactNext(true, 20, 800), H.hdrCompactNext(true, 19, 800)], [true,true,false], "stays small until back near the top, so it can't flicker");
+eq(H.hdrCompactNext(true, 60, 100), true, "a short page that just shrank doesn't bounce back");
 // v587 one formula for every progress bar, same numbers StageBar always drew
 eq([H.stageBarColor(0), H.stageBarColor(50), H.stageBarColor(100)], ["rgb(220,40,40)","rgb(220,215,40)","rgb(34,215,40)"], "red to green scale unchanged");
 

@@ -2474,6 +2474,9 @@ const C = {
   steelBg:"#EAF0FC", steelLine:"#C7D5F5", // light steel-blue tint (highlight rows)
 };
 // ── Dark command-header tokens (Slate + Flag redesign) ──
+// Homestead brand: the brown of the logo itself, and its slab lettering.
+const B = { ink:"#2B1F18", mid:"#6B5240", line:"#CDC4BA", navFg:"#3F322A", sub:"#CDBFB3" };
+const BRAND_SLAB = "'Rokkitt',Georgia,serif";
 const D = {
   bg1:"#141821", bg2:"#1B2030", hair:"#2A2F3A",
   text:"#9AA3B2", textBright:"#E6EAF1",
@@ -5898,15 +5901,11 @@ function UserPicker({ users, onSelect, onSavePin, loadState = "ok", onRetry = nu
   };
 
   return (
-    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
+    <div style={{minHeight:"100vh",background:C.card,fontFamily:"'DM Sans',sans-serif",
       display:"flex",alignItems:"center",justifyContent:"center",padding:32}}>
       <div style={{width:"100%",maxWidth:340,textAlign:"center"}}>
-        <img src="/icon-192.png" alt="Homestead Electric"
-          style={{width:90,height:90,marginBottom:16,opacity:0.95,borderRadius:18,
-            boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}/>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.1em",
-          color:C.text,lineHeight:1,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
-        <div style={{fontSize:13,color:C.dim,letterSpacing:"0.04em",marginBottom:32}}>
+        <img src="/hs-logo-dark.png" alt="Homestead Electric" style={{display:"block",width:"100%",maxWidth:300,height:"auto",margin:"0 auto 14px"}}/>
+        <div style={{fontFamily:BRAND_SLAB,fontWeight:700,fontSize:16,letterSpacing:"0.14em",color:B.mid,marginBottom:28}}>
           COMMAND CENTER
         </div>
 
@@ -6916,20 +6915,22 @@ function wxCondition(c){
   if(c<=99) return "Storm";
   return "";
 }
-// The header's flag mark: 3 · 2 · 3 white stars, drawn as SVG (design pass
-// 2026-10-14) so it scales with the mark instead of being 7px text glyphs.
-const _heStar = (cx, cy, r) => {
-  const pts = [];
-  for (let k = 0; k < 10; k++) {
-    const a = -Math.PI / 2 + k * Math.PI / 5, rr = k % 2 ? r * 0.45 : r;
-    pts.push((cx + rr * Math.cos(a)).toFixed(2) + "," + (cy + rr * Math.sin(a)).toFixed(2));
-  }
-  return "M" + pts.join("L") + "Z";
-};
-const HE_FLAG_STARS_D = [[11,8],[20,8],[29,8],[15.5,17],[24.5,17],[11,26],[20,26],[29,26]].map(([x,y]) => _heStar(x, y, 3.6)).join("");
-function HeFlagStars() {
-  return <svg viewBox="0 0 40 34" width="100%" height="100%" aria-hidden="true" style={{display:"block"}}><path d={HE_FLAG_STARS_D} fill="#fff"/></svg>;
+// The big logo shrinks once you scroll, so the pinned header takes no more room than
+// the old one. The two thresholds are far apart, and a page with too little to scroll
+// stays big, because shrinking the header shortens the page and could bounce it back.
+function hdrCompactNext(prev, scrollY, room) {
+  if (prev) return scrollY >= 20;
+  return room >= 200 && scrollY > 120;
 }
+
+// A section heading with the thin rules from the logo's ELECTRIC line.
+const BrandTitle = ({ children, size = 23 }) => (
+  <div style={{flex:"1 1 auto",minWidth:0,display:"flex",alignItems:"center",gap:12}}>
+    <span aria-hidden="true" style={{flex:"1 1 0",minWidth:8,height:1,background:B.line}}/>
+    <span style={{fontFamily:BRAND_SLAB,fontWeight:800,fontSize:size,lineHeight:1.05,color:B.ink,whiteSpace:"nowrap"}}>{children}</span>
+    <span aria-hidden="true" style={{flex:"1 1 0",minWidth:8,height:1,background:B.line}}/>
+  </div>
+);
 
 function HeaderDateWeather(){
   const [wx,setWx]=useState(null);
@@ -6949,9 +6950,9 @@ function HeaderDateWeather(){
   const md=now.toLocaleDateString("en-US",{month:"short",day:"numeric"}).toUpperCase();
   return (
     <div style={{textAlign:"right",lineHeight:1}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:".07em",color:"#F4F1EA",lineHeight:1,whiteSpace:"nowrap"}}>{wd} · {md}</div>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:".07em",color:B.ink,lineHeight:1,whiteSpace:"nowrap"}}>{wd} · {md}</div>
       {wx && (wx.hi!=null || wx.cond) && (
-        <div style={{font:"600 11px system-ui",letterSpacing:".08em",textTransform:"uppercase",color:D.text,marginTop:3,whiteSpace:"nowrap"}}>
+        <div style={{font:"600 11px system-ui",letterSpacing:".08em",textTransform:"uppercase",color:C.dim,marginTop:3,whiteSpace:"nowrap"}}>
           {wx.hi!=null?`${wx.hi}° / ${wx.lo}°`:""}{wx.cond?`${wx.hi!=null?" · ":""}${wx.cond}`:""}
         </div>
       )}
@@ -7081,11 +7082,11 @@ const JOB_CARD_TABS = ["Job Info","Rough","Finish"];
 const JC_BOX = {background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:7,boxShadow:"0 1px 2px rgba(27,31,36,.05),0 3px 8px rgba(27,31,36,.04)"};
 const JC_HEAD = (open) => ({display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,minHeight:36,padding:"3px 11px",cursor:"pointer",userSelect:"none",
   borderBottom:open?`1px solid ${C.border}`:"none"});
-const JC_TITLE = (ink) => ({fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:18,lineHeight:1.1,color:ink,whiteSpace:"nowrap"});
+const JC_TITLE = () => ({fontFamily:BRAND_SLAB,fontWeight:800,fontSize:18,lineHeight:1.1,color:B.ink,whiteSpace:"nowrap"});
 const JC_BODY = {padding:"9px 11px 10px"};
 // An always-open card for the fields that were never folded.
 const JobCard = ({children}) => <div style={{...JC_BOX,padding:"9px 11px 10px"}}>{children}</div>;
-const JC_LABEL = {fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:17,lineHeight:1.1,color:C.text};
+const JC_LABEL = {fontFamily:BRAND_SLAB,fontWeight:800,fontSize:17,lineHeight:1.1,color:B.ink};
 
 // Collapsible section wrapper — collapsed by default
 
@@ -33514,7 +33515,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           <div>
 
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <div className="he-jd-title" style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,color:C.text,lineHeight:1.05}}>
+              <div className="he-jd-title" style={{fontFamily:BRAND_SLAB,fontWeight:800,color:B.ink,lineHeight:1.05}}>
 
                 {job.type==="quote"&&<span style={{fontSize:13,color:"#fff",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
 
@@ -38835,9 +38836,9 @@ function PipelineStrip({ jobs, sections, onPick }) {
   };
   return (
     <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
-      <div className="he-pipe-end" style={{flex:"1 1 130px",background:D.bg1,borderRadius:12,padding:"12px 18px",boxShadow:"0 4px 14px rgba(20,24,33,.22)"}}>
-        <div style={{...PIPE_NUM,color:D.textBright}}>{(jobs||[]).length}</div>
-        <div style={{fontSize:13,color:D.text,marginTop:2}}>Total jobs</div>
+      <div className="he-pipe-end" style={{flex:"1 1 130px",background:B.ink,borderRadius:12,padding:"12px 18px",boxShadow:"0 4px 14px rgba(43,31,24,.22)"}}>
+        <div style={{...PIPE_NUM,color:"#fff"}}>{(jobs||[]).length}</div>
+        <div style={{fontSize:13,color:B.sub,marginTop:2}}>Total jobs</div>
       </div>
       <div style={{flex:"999 1 560px",minWidth:0,display:"flex",flexWrap:"wrap",gap:2,borderRadius:12,overflow:"hidden",boxShadow:CARD_SHADOW}}>
         {flow.map(t => renderTile({ key:t.key, label:t.label, n:t.n, list:t.jobs, color:t.color, sub:t.sub,
@@ -42260,18 +42261,16 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   const dayMinWidth = dayViews.reduce((a, v) => a + (v.narrow ? 64 : 236), 0) + 8 * 6;
 
   return (
-    <div style={{borderBottom:`1px solid ${C.border}`,background:C.bg}}>
+    <div style={{borderBottom:`1px solid ${B.line}`}}>
       {/* Header row */}
       <div onClick={()=>setCollapsed(v=>!v)}
         style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:10,padding:"14px 22px 10px",cursor:"pointer",
           userSelect:"none"}}>
-        <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:26,lineHeight:1,color:C.text}}>
-          Crew Schedule
-        </div>
+        <BrandTitle>Crew Schedule</BrandTitle>
         {loading && <span style={{fontSize:12,color:C.dim}}>Loading…</span>}
         {!loading && !hasAnyThisWeek && !error &&
           <span style={{fontSize:12,color:C.dim}}>No jobs scheduled this week</span>}
-        <div style={{marginLeft:"auto",display:"flex",flexWrap:"wrap",alignItems:"center",gap:8}}>
+        <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:8}}>
           {/* Crew filter */}
           {!collapsed && foremanCrews.length > 0 && (
             <select value={personFilter} onChange={e=>setPersonFilter(e.target.value)}
@@ -61828,9 +61827,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v589
+**Last manifest update:** 2026-10-30 · App SW version: v590
 ---
 
+- **Homestead branding: the flag is gone, the real logo is in** · 'shipped 2026-10-30' · 'SW v590' · 'BrandTitle' · 'hdrCompactNext' · 'B' · 'BRAND_SLAB' · Koy: *"We need a lot more Homestead branding throughout, and then we need to make it not the American flag anymore at the top,"* then, off mockups (artifact CR9PE8zZpYmUgrWfNmPQtS): *"2 on white with the big homestead logo behind the job board."* **Header:** white, with the real longhorn logo large and centered ('public/hs-logo-dark.png'), Live status and job count on the left, Resi/Commercial and date and weather on the right. Past 120px of scrolling the logo shrinks from 104px to 46px, so the pinned header takes about the room the old one did; it grows back near the top, and stays small on a short window. On a phone it's the horns only ('public/hs-horns-dark.png') in one short row. Tabs keep their order, with the active one solid brown; Commercial keeps its teal. **Page:** white, with the big logo faintly behind every page's content. **Headings:** the logo's slab lettering (Rokkitt) in the logo's brown, with its thin rules, on Job Board, Crew Schedule, Pipeline, Crews and All Jobs, plus the job page title and card titles. **Sign-in** shows the full logo. The phone's status bar and app background are white. The backup warning banner now sits above the header instead of over it, so it no longer covers the logo. Main buttons stay blue. Other pages get the header and logo now; their own page titles aren't restyled yet. Gate: 'scripts/needs-dryrun.js' (+3 checks). **Why it won't lose data:** display only. Every control keeps its same handler; no field, loader, rules or function changed.
 - **Job page, step three begins: Rough and Finish in cards** · 'shipped 2026-10-30' · 'SW v589' · 'JobCardCtx' · 'JOB_CARD_TABS' · Koy: *"Yes, start step three."* Rough and Finish now use the same cards as Job Info: the stage section, Punch List, Material Tracking, Material Count List, Daily Job Updates, Questions and Notes. Same controls in the same order, and each section opens and closes as it did. A section inside a section, like outside punch under Punch List, keeps its old look so cards never stack inside cards. The other tabs look as they did until their turn. No guide change: section names are unchanged. **Why it won't lose data:** styling only. Every control keeps its same handler; no field, loader, rules or function changed.
 - **Job page, step two: Job Info in cards** · 'shipped 2026-10-30' · 'SW v588' · 'JobCardCtx' · 'JobCard' · 'Section' · 'FoldSection' · 'JobSectionsPanel' · Koy: *"Yes, start step two"* under his rule *"i dont want anything removed or harder to do."* Job Info now sits in cards that match the Job Board and quick job page: job details, status update and access note, Matterport, Pre-Job Prep, Milestones, Division, Admin, Job Sections, Project, and the Commercial sections. Same fields in the same order, still typed in directly with no Edit button, and each section folds exactly as it did. Labels read in sentence case (Status update, Access note, Matterport, Scan status, Division). 'JobCardCtx' turns the card look on per tab, so 'Section' and 'FoldSection' look as they did everywhere else until that tab's step. The tab body's side padding drops from 22 to 8 on this tab, so no field is narrower inside its card. Guide 'jobinfo.html' updated for the new label names. **Why it won't lose data:** styling only. Every input, checkbox and button keeps its same handler and the same 'u()' patch; no field, loader, rules or function changed.
 - **Job page, step one: new top of the page and a side list of tabs; everything inside the tabs is unchanged** · 'shipped 2026-10-30' · 'SW v587' · 'JobDetail' · 'jobStageBand' · 'jobProgressTiles' · 'JobProgressStrip' · 'stageBarColor' · 'JOB_SHELL_CSS' · Koy: *"inside of the job cards needs a redesign because we've redesigned the boxes on the homepage and the quick jobs card, so it doesn't really match."* Then, on the first mockup: *"i dont want anything removed or harder to do."* Approved from mockup artifact Eee8C6D9ZkQjLR6JEJLMEc. **Top of the page:** a colored band names the job's stage (same order the Job Board files a job; quotes, temp peds and Commercial read their own), with presence, + Need, Offline, Refresh and Close on it. Below it the title, margin and labor pills, address and GC, schedule pill, status update and access note, and the same action pills and Convert or Back to Upcoming buttons beside them, all the same controls. **Progress strip:** Pre-Job Prep, Rough with its bar, Rough inspection, Finish with its bar, Final inspection, QC; each tile opens the tab that holds it. It reads only, and the Rough and Finish stage dropdowns stay in their tabs. Fixed at the top only when the window is at least 1180 by 1000; otherwise it sits at the top of the tab body and scrolls away, as a slim sideways row on a phone, so the tab body keeps its room. Hidden on quotes, temp peds and Commercial jobs, which don't have those stages. **Tabs:** all of them in today's order. From 1180px wide they become a side list with small counts; that width is chosen so the tab body is never narrower than the old 940px page. Below it they stay the top row they have always been, with no added width. Up Next stays off: it was retired from the job page on 2026-06-05, and the mockup's Up Next box was my mistake. 'StageBar' and the strip share one color formula. Gate: 'scripts/needs-dryrun.js' (+14 checks). No guide change: no guide describes the header or tab row. **Why it won't lose data:** layout only. Every write in the header still runs through the same handlers ('u', 'onQuickAdd', 'onConvertQuote', 'onMoveBackToUpcoming', 'refreshJob'), the strip writes nothing, and no tab body, loader, rules or function changed.
@@ -75282,6 +75282,18 @@ function App() {
   const inboxKey = identity ? (identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_")) : null;
   const [inboxItems, setInboxItems] = useState([]);
   const [inboxOpen, setInboxOpen] = useState(false);
+  // The bell's panel opens just under the header, which is taller at the top of a page.
+  const hdrBottom = inboxOpen ? ((document.querySelector("[data-he-nav]")?.getBoundingClientRect().bottom) || 52) : 52;
+  const [hdrSmall, setHdrSmall] = useState(false);
+  useEffect(() => {
+    let raf = 0;
+    const on = () => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; const el = document.documentElement;
+      setHdrSmall(p => hdrCompactNext(p, window.scrollY || el.scrollTop, el.scrollHeight - window.innerHeight)); }); };
+    window.addEventListener("scroll", on, { passive: true });
+    window.addEventListener("resize", on);
+    on();
+    return () => { window.removeEventListener("scroll", on); window.removeEventListener("resize", on); if (raf) cancelAnimationFrame(raf); };
+  }, []);
   const [broadcastOpen, setBroadcastOpen] = useState(false);   // bell → Send (notify.broadcast)
   const [announceOpen, setAnnounceOpen] = useState(null);       // broadcast id of the office message being read
   // Every office message copy in MY bell (announcements, v513 → grouped v514):
@@ -75431,7 +75443,7 @@ function App() {
           the same layer so the watermark is not hidden behind an opaque root
           background; the 85% C.bg wash over the logo is the old 0.15 opacity. */}
       <div aria-hidden="true" style={{position:"fixed",inset:0,zIndex:-1,pointerEvents:"none",
-        background:`linear-gradient(rgba(238,240,243,.85),rgba(238,240,243,.85)), url(/icon-192.png) center center / 320px 320px no-repeat, ${C.bg}`}}/>
+        background:"linear-gradient(rgba(255,255,255,.92),rgba(255,255,255,.92)), url(/icon-512.png) center center / min(1100px, 100vw) auto no-repeat, #FFFFFF"}}/>
       <HEConfirmHost/>
       <HEUndoHost/>
       <HEPhotoLightboxHost/>
@@ -75449,7 +75461,7 @@ function App() {
         const staleOrMissing = !backupStatus || backupStatus.ok===false || (Date.now() - lastRun > 48*60*60*1000);
         if (!staleOrMissing) return null;
         return (
-          <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9500,background:"#C62828",color:"#fff",
+          <div style={{position:"sticky",top:0,zIndex:9500,background:"#C62828",color:"#fff",
             padding:"8px 16px",paddingTop:"calc(8px + env(safe-area-inset-top, 0px))",
             display:"flex",alignItems:"center",gap:10,fontSize:13,fontWeight:700}}>
             <Icon name="alertTriangle" size={14}/>
@@ -75794,36 +75806,39 @@ function App() {
           The card ("A new version is ready" · Update now / Later) is the only
           prompt; the 2-minute version check raises it. */}
       {/* ── COMMAND NAV (dark console) ── */}
-      <div data-he-nav="1" className="he-hdr" style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `1px solid ${D.hair}`}}>
-        {/* ROW 1 — flag wordmark + live status */}
-        <div className="he-hdr-row1" style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
-          <div className="he-hdr-mark" onClick={goHome} title="Homestead Electric — Job Board" style={{cursor:"pointer",width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
-            <HeFlagStars/>
+      <div data-he-nav="1" className={hdrSmall?"he-hdr he-hdr-small":"he-hdr"} style={{position:"sticky",top:0,zIndex:90,background:C.card,borderBottom: mode==="commercial" ? `2px solid ${C.teal}` : `2px solid ${B.ink}`}}>
+        {/* ROW 1 — live status, big centered logo, division + date */}
+        <div className="he-hdr-row1">
+          <div onClick={goHome} className="he-hdr-mark" title="Homestead Electric — Job Board" style={{cursor:"pointer",justifySelf:"center",gridColumn:2,gridRow:1}}>
+            <img className="he-hdr-logo" src="/hs-logo-dark.png" alt="Homestead Electric"/>
+            <img className="he-hdr-horns" src="/hs-horns-dark.png" alt="Homestead Electric"/>
           </div>
-          <div onClick={goHome} className="flagtext flag-stripes he-hdr-word" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
-            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#66A8FF";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 11px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{hudStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#66A8FF",border:"1px solid #66A8FF66",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{hudStatus==="error"&&<span style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#F08A8A",border:"1px solid #F08A8A66",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
-            <span className="he-hdr-jobs" style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
-            <span className="he-hdr-jobs" style={{font:"500 11px system-ui",color:D.text}}>{jobs.length} active jobs</span>
+          <div className="he-hdr-left" style={{gridColumn:1,gridRow:1,minWidth:0,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?C.green:C.accent;const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 11px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}{hudStatus==="saving"&&<span className="he-bump" style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:C.accent,border:"1px solid #2F5BD966",borderRadius:99,padding:"1px 6px"}}>SAVING</span>}{hudStatus==="error"&&<span style={{marginLeft:4,font:"700 11px system-ui",letterSpacing:".06em",color:"#C62828",border:"1px solid #C6282866",borderRadius:99,padding:"1px 6px"}}>NOT SAVED</span>}</span>;})()}
+            <span className="he-hdr-jobs" style={{width:3,height:3,borderRadius:"50%",background:B.line}}/>
+            <span className="he-hdr-jobs" style={{font:"500 11px system-ui",color:C.dim}}>{jobs.length} active jobs</span>
           </div>
+          <div className="he-hdr-right" style={{gridColumn:3,gridRow:1,minWidth:0,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:14,flexWrap:"wrap"}}>
           {can(identity,"commercial.view") && (
             <div className="he-hdr-mode" style={{display:"flex",alignItems:"center",gap:6}} title="Residential / Commercial — only changes what you see on this device">
-              <div style={{display:"flex",border:`1px solid ${D.chipLine}`,borderRadius:99,overflow:"hidden",background:D.chipBg}}>
+              <div style={{display:"flex",border:`1px solid ${B.line}`,borderRadius:99,overflow:"hidden",background:C.card}}>
                 {[["resi","RESI"],["commercial","COMMERCIAL"]].map(([k,l]) => (
                   <button key={k} onClick={()=>{ if (mode!==k) { setMode(k); toast.success(k==="commercial" ? "Commercial — only commercial jobs everywhere" : "Residential"); } }}
-                    style={{border:"none",background: mode===k ? (k==="commercial" ? C.teal : C.accent) : "transparent", color: mode===k ? "#fff" : D.text,
+                    style={{border:"none",background: mode===k ? (k==="commercial" ? C.teal : B.ink) : "transparent", color: mode===k ? "#fff" : C.dim,
                       fontSize:12,fontWeight:700,letterSpacing:"0.1em",padding:"5px 11px",cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
                 ))}
               </div>
               <HelpDot section="commercialmode"/>
             </div>
           )}
-          <div className="he-hdr-wx" style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
+          <div className="he-hdr-wx" style={{display:"flex",alignItems:"center",gap:14}}>
             <HeaderDateWeather/>
+          </div>
           </div>
         </div>
         {/* ROW 2 — nav tabs */}
-        <div className="he-hdr-tabs" style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
+        <div className="he-hdr-tabs" style={{display:"flex",gap:6,padding:"3px 12px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center",borderTop:`2px solid ${B.ink}`}}>
+        <span aria-hidden="true" style={{flex:"1 1 0",minWidth:0}}/>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
           : NAV_MAIN_TABS.filter(t=>navTabVisible(t,myLiveRec,mode))
@@ -75837,11 +75852,10 @@ function App() {
               style={{
                 padding:"7px 16px",minHeight:44,fontSize:13,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
-                background: active ? (mode==="commercial" ? C.teal : C.accent) : "transparent",
-                color: active ? "#fff" : "#9AA3B2",
+                background: active ? (mode==="commercial" ? C.teal : B.ink) : "transparent",
+                color: active ? "#fff" : B.navFg,
                 transition:"all 0.15s",letterSpacing:"0.02em",
-                boxShadow: active ? `0 6px 18px ${mode==="commercial" ? "rgba(62,125,122,.5)" : D.accentGlow}` : "none",
-                display:"inline-flex",alignItems:"center",gap:5,
+                                display:"inline-flex",alignItems:"center",gap:5,
               }}>
               {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
               {badge ? <span title={badgeTitle||""} style={{minWidth:16,height:16,padding:"0 5px",borderRadius:99,background:active?"rgba(255,255,255,.28)":"#C62828",color:"#fff",font:"700 11px/16px system-ui",textAlign:"center"}} key={badge} className="he-bump"><HeCount value={badge} ms={500}/></span> : null}
@@ -75862,7 +75876,7 @@ function App() {
               <button onClick={(e)=>{const r=e.currentTarget.getBoundingClientRect();setMorePos({top:r.bottom+6,right:Math.max(8,window.innerWidth-r.right)});setMoreOpen(o=>!o);}}
                 style={{padding:"7px 14px",minHeight:44,fontSize:13,fontWeight:moreActive?700:500,fontFamily:"inherit",
                   cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
-                  background:moreActive?C.accent:"transparent",color:moreActive?"#fff":"#9AA3B2",
+                  background:moreActive?B.ink:"transparent",color:moreActive?"#fff":B.navFg,
                   letterSpacing:"0.02em",display:"inline-flex",alignItems:"center",gap:5}}>
                 <Icon name="moreHoriz" size={13} stroke={2.25}/>More
               </button>
@@ -75903,18 +75917,17 @@ function App() {
           <button onClick={openSettings}
             style={{padding:"7px 16px",fontSize:13,fontWeight:view==="settings"?700:500,fontFamily:"inherit",
               cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,flexShrink:0,
-              background:view==="settings"?C.accent:"transparent",color:view==="settings"?"#fff":"#9AA3B2",
+              background:view==="settings"?B.ink:"transparent",color:view==="settings"?"#fff":B.navFg,
               transition:"all 0.15s",letterSpacing:"0.02em",
-              boxShadow:view==="settings"?`0 6px 18px ${D.accentGlow}`:"none",
-              display:"inline-flex",alignItems:"center",gap:5}}>
+                            display:"inline-flex",alignItems:"center",gap:5}}>
             <Icon name="settings" size={11} stroke={2.25}/>{NAV_SETTINGS_TAB.label}
           </button>
         )}
-        <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+        <div style={{flex:"1 0 auto",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:8}}>
           {/* ── Notification inbox bell ── */}
           <button onClick={()=>setInboxOpen(o=>!o)} title="Notifications"
-            style={{position:"relative",padding:"6px 9px",border:`1px solid ${D.hair}`,borderRadius:99,
-              background:inboxOpen?`${C.accent}33`:"none",color:inboxUnread>0?D.textBright:D.text,cursor:"pointer",
+            style={{position:"relative",padding:"6px 9px",border:`1px solid ${B.line}`,borderRadius:99,
+              background:inboxOpen?`${C.accent}33`:"none",color:inboxUnread>0?C.text:C.dim,cursor:"pointer",
               display:"inline-flex",alignItems:"center",flexShrink:0,fontFamily:"inherit"}}>
             <Icon name="bell" size={14} stroke={2.25}/>
             {inboxUnread>0 && (
@@ -75937,8 +75950,8 @@ function App() {
           {inboxOpen && (
             <>
               <div onClick={()=>setInboxOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
-              <div style={{position:"fixed",top:52,right:8,zIndex:9999,width:"min(380px, calc(100vw - 16px))",
-                maxHeight:"min(480px, calc(100vh - 70px))",overflowY:"auto",background:C.card,
+              <div style={{position:"fixed",top:hdrBottom+6,right:8,zIndex:9999,width:"min(380px, calc(100vw - 16px))",
+                maxHeight:`min(480px, calc(100vh - ${hdrBottom+18}px))`,overflowY:"auto",background:C.card,
                 border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,0.18)",padding:8}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 8px 8px"}}>
                   <span style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.06em",color:C.text,
@@ -76067,13 +76080,13 @@ function App() {
               </div>
             </>
           )}
-          <span style={{fontSize:12.5,color:"#C7CDD8",background:D.chipBg,border:`1px solid ${D.chipLine}`,
+          <span style={{fontSize:12.5,color:C.text,background:C.card,border:`1px solid ${B.line}`,
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
             {identity.name} · {ACCESS_LABELS[getAccess(identity)]||getAccess(identity)}
           </span>
 
           <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
-            style={{fontSize:12.5,color:D.text,background:"none",border:`1px solid ${D.chipLine}`,
+            style={{fontSize:12.5,color:C.dim,background:"none",border:`1px solid ${B.line}`,
               borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",
               display:"inline-flex",alignItems:"center",gap:5}}
             title="Switch user">
@@ -76235,9 +76248,19 @@ function App() {
           0%,100% { box-shadow: 0 0 12px rgba(178,58,58,0.13), 0 2px 8px rgba(178,58,58,0.08); }
           50%      { box-shadow: 0 0 22px rgba(178,58,58,0.30), 0 2px 14px rgba(178,58,58,0.18); }
         }
-        /* ── Slate + Flag redesign: command header / flag wordmark ── */
-        .flagtext{font-family:'Bebas Neue',Impact,sans-serif;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent}
-        .flag-stripes{background:repeating-linear-gradient(180deg,#B31942 0,#B31942 14.28%,#FAF6EC 14.28%,#FAF6EC 28.57%);-webkit-background-clip:text;background-clip:text}
+        /* ── Homestead header: big centered logo that shrinks on scroll ── */
+        .he-hdr-row1{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:13px;padding:8px 16px 6px;transition:padding .18s}
+        .he-hdr-logo{display:block;height:104px;width:auto;transition:height .18s}
+        .he-hdr-horns{display:none;height:28px;width:auto}
+        .he-hdr-small .he-hdr-row1{padding:3px 16px 2px}
+        .he-hdr-small .he-hdr-logo{height:46px}
+        @media (max-height:760px){.he-hdr-logo{height:46px}.he-hdr-row1{padding:3px 16px 2px}}
+        @media (prefers-reduced-motion:reduce){.he-hdr-logo,.he-hdr-row1{transition:none}}
+        .he-home-head{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:12px}
+        @media (max-width:760px){
+          .he-home-head{grid-template-columns:minmax(0,1fr);justify-items:center}
+          .he-home-title{grid-row:1}
+        }
         .cmd-tab{transition:background .15s,color .15s;cursor:pointer}
         .cmd-tab:hover{background:#232936;color:#E6EAF1}
         .cmd-cta{transition:transform .15s,box-shadow .15s;cursor:pointer}
@@ -76248,13 +76271,17 @@ function App() {
            live status, Resi/Commercial switch; date/weather and the wordmark
            drop out, the guide hint becomes just the "?"; tabs stay scrollable. ── */
         @media (max-width: 599px){
-          .he-hdr .he-hdr-row1{padding:8px 12px 4px !important;gap:10px !important;flex-wrap:nowrap !important}
-          .he-hdr .he-hdr-word,.he-hdr .he-hdr-jobs,.he-hdr .he-hdr-wx{display:none !important}
-          .he-hdr .he-hdr-mark{width:32px !important;height:27px !important}
+          .he-hdr .he-hdr-row1{display:flex !important;align-items:center;padding:6px 12px 4px !important;gap:10px !important;flex-wrap:nowrap !important}
+          .he-hdr .he-hdr-jobs,.he-hdr .he-hdr-wx{display:none !important}
+          .he-hdr .he-hdr-mark{order:-1}
+          .he-hdr .he-hdr-logo{display:none !important}
+          .he-hdr .he-hdr-horns{display:block !important}
+          .he-hdr .he-hdr-left{flex:none}
+          .he-hdr .he-hdr-right{margin-left:auto}
           .he-hdr .he-hdr-mode{margin-left:auto}
           .he-hdr .he-hdr-mode button{padding:5px 9px !important;font-size:11px !important;letter-spacing:.06em !important}
           .he-hdr .he-helpdot-hint{display:none !important}
-          .he-hdr .he-hdr-tabs{padding:0 8px 6px !important}
+          .he-hdr .he-hdr-tabs{padding:2px 8px !important}
         }
         /* Notification problem banner: the full banner everywhere on wide screens
            and on My Day; on phones, other tabs get one tappable line that opens
@@ -76322,23 +76349,21 @@ function App() {
         <div ref={_homeRoot}>
 
           {/* ── HOME HEADER ── */}
-          <div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
-
-              {/* Title block */}
-              <div>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:"0.06em",color:C.text,lineHeight:1,display:"flex",alignItems:"center",gap:10}}>
-                  JOB BOARD
-                </div>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
-                  <span style={{fontSize:12.5,color:C.dim}}>{jobs.length} job sites</span>
-                  <span style={{width:3,height:3,borderRadius:"50%",background:C.border,display:"inline-block"}}/>
-                  <HeSyncChip status={hudStatus} label={syncLabel} color={syncColor} onRetry={retrySaves} style={{fontSize:12.5,fontWeight:500}}/>
-                </div>
+          <div style={{padding:"14px 24px 12px",borderBottom:`1px solid ${B.line}`}}>
+            <div className="he-home-head">
+              {/* Job count + sync */}
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",minWidth:0}}>
+                <span style={{fontSize:12.5,color:C.dim}}>{jobs.length} job sites</span>
+                <span style={{width:3,height:3,borderRadius:"50%",background:B.line,display:"inline-block"}}/>
+                <HeSyncChip status={hudStatus} label={syncLabel} color={syncColor} onRetry={retrySaves} style={{fontSize:12.5,fontWeight:500}}/>
               </div>
-
+              <div className="he-home-title" style={{display:"flex",alignItems:"center",gap:12,justifyContent:"center"}}>
+                <span aria-hidden="true" style={{width:40,height:1,background:B.ink}}/>
+                <span style={{fontFamily:BRAND_SLAB,fontWeight:800,fontSize:34,lineHeight:1,color:B.ink,whiteSpace:"nowrap"}}>Job Board</span>
+                <span aria-hidden="true" style={{width:40,height:1,background:B.ink}}/>
+              </div>
               {/* Action buttons */}
-              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              <div style={{display:"flex",gap:6,alignItems:"center",justifyContent:"flex-end",flexWrap:"wrap"}}>
 
                 {/* ⋯ utility menu */}
                 <div style={{position:"relative"}}>
@@ -76510,7 +76535,7 @@ function App() {
           <div style={{padding:"28px 26px"}}>
 
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14}}>
-              <div style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:26,lineHeight:1,color:C.text}}>Pipeline</div>
+              <BrandTitle>Pipeline</BrandTitle>
               {/* v544 — Josh: one-button job list export. Every job on this board (this division). Koy: "put it next to pipeline overview". */}
               <button onClick={()=>downloadJobListCsv({ jobs, division: mode })}
                 disabled={jobs.length===0}
@@ -76598,7 +76623,7 @@ function App() {
                 <Fragment>
                   {hasCrews && (
                     <div style={{display:"flex",alignItems:"center",gap:"8px 14px",flexWrap:"wrap",marginBottom:12}}>
-                      <span style={{fontFamily:"'Barlow Condensed',sans-serif",fontWeight:700,fontSize:26,color:C.text,lineHeight:1}}>Crews</span>
+                      <BrandTitle>Crews</BrandTitle>
                       <span style={{fontSize:12.5,color:C.dim}}>{_foremen.length} foremen · {_totalSites} job sites</span>
                       <span style={{marginLeft:"auto",display:"inline-flex",gap:6}}>
                         {[["jobs","Most jobs"],["az","A–Z"]].map(([k,l])=>(
@@ -76769,10 +76794,7 @@ function App() {
 
             {/* ── ALL JOBS BY SECTION ── */}
             <div style={{padding:"0 26px 32px"}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.08em",
-                color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
-                ALL JOBS
-              </div>
+              <div style={{display:"flex",marginBottom:16,marginTop:32}}><BrandTitle>All Jobs</BrandTitle></div>
               <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
                 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
                   style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
