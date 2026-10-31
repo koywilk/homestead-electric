@@ -108,3 +108,10 @@ export function heTrack(event, props) {
   if (!booted) return;
   try { posthog.capture(event, sanitize({ ...(props || {}) })); } catch (e) { /* see above */ }
 }
+
+// v591: capture_exceptions only sees errors that reach the window. One that an
+// error boundary catches stops there, so the boundary reports it through this.
+export function heCaptureError(err, props) {
+  if (!booted) return;
+  try { posthog.captureException(err, sanitize({ ...(props || {}) })); } catch (e) { /* see above */ }
+}
