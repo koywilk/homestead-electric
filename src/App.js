@@ -7076,6 +7076,8 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
 // Job page redesign (v588): a tab wrapped in JobCardCtx draws its fold sections as cards.
 // Same controls, same open and closed defaults; tabs not yet moved over look as they did.
 const JobCardCtx = createContext(false);
+// The tabs moved over so far. Their body padding drops so no field is narrower inside its card.
+const JOB_CARD_TABS = ["Job Info","Rough","Finish"];
 const JC_BOX = {background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:7,boxShadow:"0 1px 2px rgba(27,31,36,.05),0 3px 8px rgba(27,31,36,.04)"};
 const JC_HEAD = (open) => ({display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,minHeight:36,padding:"3px 11px",cursor:"pointer",userSelect:"none",
   borderBottom:open?`1px solid ${C.border}`:"none"});
@@ -7105,7 +7107,7 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, anchorId, 
           <span style={{color:readableInk(color, C.card),fontSize:14,fontWeight:700,marginLeft:4}}>{open?"▾":"▸"}</span>
         </div>
       </div>
-      {open&&<div style={JC_BODY}>{children}</div>}
+      {open&&<div style={JC_BODY}><JobCardCtx.Provider value={false}>{children}</JobCardCtx.Provider></div>}
     </div>
   );
   return (
@@ -7163,7 +7165,7 @@ function FoldSection({label, color=C.dim, meta=null, badge=null, action=null, op
         {action && <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:6}}>{action}</div>}
         <span style={{color:ink,fontSize:15,fontWeight:700}}>{open?"▾":"▸"}</span>
       </div>
-      {keepMounted ? <div style={{display:open?"block":"none",...JC_BODY}}>{children}</div> : (open && <div style={JC_BODY}>{children}</div>)}
+      {keepMounted ? <div style={{display:open?"block":"none",...JC_BODY}}><JobCardCtx.Provider value={false}>{children}</JobCardCtx.Provider></div> : (open && <div style={JC_BODY}><JobCardCtx.Provider value={false}>{children}</JobCardCtx.Provider></div>)}
     </div>
   );
   return (
@@ -33781,7 +33783,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         {/* v512: no touchAction:"pan-y" here — on iPhone it also blocked sideways
             scrolling of every wide table inside the job (appliance loads, panel
             schedules, …). useHeTabSwipe now steps aside on its own instead. */}
-        <div ref={_bodyRef} style={{flex:1,minWidth:0,minHeight:0,overflowY:"auto",padding:tab==="Job Info"?"14px 8px 20px":"14px 22px 20px"}}>
+        <div ref={_bodyRef} style={{flex:1,minWidth:0,minHeight:0,overflowY:"auto",padding:JOB_CARD_TABS.includes(tab)?"14px 8px 20px":"14px 22px 20px"}}>
 
           <div className="he-jd-strip-body" style={{marginBottom:12}}>
             <JobProgressStrip job={job} tabs={tabsForJob(job, tab)} onPick={setTab} className="he-jd-strip-row"/>
@@ -33816,7 +33818,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tab==="Rough"&&(
 
-            <div>
+            <JobCardCtx.Provider value={true}>
 
               <Section label="Rough Stage" color={C.rough} defaultOpen={true}>
                 {(()=>{
@@ -34209,14 +34211,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </div>
 
-            </div>
+            </JobCardCtx.Provider>
 
           )}
 
 
           {tab==="Finish"&&(
 
-            <div>
+            <JobCardCtx.Provider value={true}>
 
               <Section label="Finish Stage" color={C.finish} defaultOpen={true}>
                 {(()=>{
@@ -34541,7 +34543,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </div>
 
-            </div>
+            </JobCardCtx.Provider>
 
           )}
 
@@ -61826,9 +61828,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v588
+**Last manifest update:** 2026-10-30 · App SW version: v589
 ---
 
+- **Job page, step three begins: Rough and Finish in cards** · 'shipped 2026-10-30' · 'SW v589' · 'JobCardCtx' · 'JOB_CARD_TABS' · Koy: *"Yes, start step three."* Rough and Finish now use the same cards as Job Info: the stage section, Punch List, Material Tracking, Material Count List, Daily Job Updates, Questions and Notes. Same controls in the same order, and each section opens and closes as it did. A section inside a section, like outside punch under Punch List, keeps its old look so cards never stack inside cards. The other tabs look as they did until their turn. No guide change: section names are unchanged. **Why it won't lose data:** styling only. Every control keeps its same handler; no field, loader, rules or function changed.
 - **Job page, step two: Job Info in cards** · 'shipped 2026-10-30' · 'SW v588' · 'JobCardCtx' · 'JobCard' · 'Section' · 'FoldSection' · 'JobSectionsPanel' · Koy: *"Yes, start step two"* under his rule *"i dont want anything removed or harder to do."* Job Info now sits in cards that match the Job Board and quick job page: job details, status update and access note, Matterport, Pre-Job Prep, Milestones, Division, Admin, Job Sections, Project, and the Commercial sections. Same fields in the same order, still typed in directly with no Edit button, and each section folds exactly as it did. Labels read in sentence case (Status update, Access note, Matterport, Scan status, Division). 'JobCardCtx' turns the card look on per tab, so 'Section' and 'FoldSection' look as they did everywhere else until that tab's step. The tab body's side padding drops from 22 to 8 on this tab, so no field is narrower inside its card. Guide 'jobinfo.html' updated for the new label names. **Why it won't lose data:** styling only. Every input, checkbox and button keeps its same handler and the same 'u()' patch; no field, loader, rules or function changed.
 - **Job page, step one: new top of the page and a side list of tabs; everything inside the tabs is unchanged** · 'shipped 2026-10-30' · 'SW v587' · 'JobDetail' · 'jobStageBand' · 'jobProgressTiles' · 'JobProgressStrip' · 'stageBarColor' · 'JOB_SHELL_CSS' · Koy: *"inside of the job cards needs a redesign because we've redesigned the boxes on the homepage and the quick jobs card, so it doesn't really match."* Then, on the first mockup: *"i dont want anything removed or harder to do."* Approved from mockup artifact Eee8C6D9ZkQjLR6JEJLMEc. **Top of the page:** a colored band names the job's stage (same order the Job Board files a job; quotes, temp peds and Commercial read their own), with presence, + Need, Offline, Refresh and Close on it. Below it the title, margin and labor pills, address and GC, schedule pill, status update and access note, and the same action pills and Convert or Back to Upcoming buttons beside them, all the same controls. **Progress strip:** Pre-Job Prep, Rough with its bar, Rough inspection, Finish with its bar, Final inspection, QC; each tile opens the tab that holds it. It reads only, and the Rough and Finish stage dropdowns stay in their tabs. Fixed at the top only when the window is at least 1180 by 1000; otherwise it sits at the top of the tab body and scrolls away, as a slim sideways row on a phone, so the tab body keeps its room. Hidden on quotes, temp peds and Commercial jobs, which don't have those stages. **Tabs:** all of them in today's order. From 1180px wide they become a side list with small counts; that width is chosen so the tab body is never narrower than the old 940px page. Below it they stay the top row they have always been, with no added width. Up Next stays off: it was retired from the job page on 2026-06-05, and the mockup's Up Next box was my mistake. 'StageBar' and the strip share one color formula. Gate: 'scripts/needs-dryrun.js' (+14 checks). No guide change: no guide describes the header or tab row. **Why it won't lose data:** layout only. Every write in the header still runs through the same handlers ('u', 'onQuickAdd', 'onConvertQuote', 'onMoveBackToUpcoming', 'refreshJob'), the strip writes nothing, and no tab body, loader, rules or function changed.
 - **Crew Schedule cards made compact** · 'shipped 2026-10-30' · 'SW v587' · 'SimproCrewSchedule' · Koy, on v585: *"the schedule cards under crew schedule are very big can we shrink thos so they dont take as much room,"* then *"Make them smaller."* Each person is now one line: name, hour bar, times, instead of a line of text with the bar under it. On a wide monitor a day column fits two cards across instead of stretching one. Smaller job names, tighter padding, a thinner crew strip, smaller gaps between cards and a slimmer day header. Nothing was removed: full job names (they still wrap when the column is narrow), crew strip, times and hour bars all stay. Measured with this week's schedule: 1,466 to 424 px tall at 3440 wide, 1,658 to 785 px at 1440. Built as v586 and shipped inside v587. **Why it won't lose data:** styling only; the component has no write path and reads the same Simpro list.
