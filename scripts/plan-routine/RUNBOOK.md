@@ -24,6 +24,15 @@ it goes. **You hold no Google, Firebase or Simpro access. Your only tool is
    `candidates.jobs` (`number`, `name`, `address`, `gc`), `candidates.appQuotes`,
    `candidates.quotes` (Simpro open quotes: `number`, `name`, `site`, `address`), `categories`.
 2. For each item, oldest first. Stop after about 25 items. The next run picks up the rest.
+   An item with `reopenWhy` is back for a reason: a new job or quote looks related, or Koy
+   filed a plan from what may be the same project. Check that lead first. It is a hint, not
+   an answer: the rule for "sure" below still applies.
+
+## Lessons from Koy
+Corrections Koy approved after the weekly review (WEEKLY_REVIEW.md). They outrank your own
+reading of a name, but a title block that clearly contradicts one still wins: decide `unmatched`
+and say why. Add a line here only with Koy's approval.
+- None yet.
 
 ### `email_pdf` with an `inboxFileId`
 1. `node scripts/plan-routine/api.mjs file <id> /tmp/<id>.pdf`, then read the PDF: the cover

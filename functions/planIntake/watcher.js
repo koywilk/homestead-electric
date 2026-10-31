@@ -20,6 +20,7 @@ const crypto = require("crypto");
 const W = require("./walks.js");
 const { cleanName } = require("../docPull.js");
 const MAIL = require("./mail.js");
+const REVIEW = require("./review.js");
 
 const STATE = "planIntakeState", QUEUE = "agentQueue", FINDINGS = "agentFindings";
 const QUOTES_FOLDER = "_Quotes";
@@ -88,25 +89,37 @@ module.exports = function makePlanIntake(deps) {
     catch (e) { /* no such finding (or a dry run): nothing to resolve */ }
   }
   // v542: a plan the Routine could not place because its job or quote didn't exist
-  // yet gets another look once a new job / quote / quote folder appears. Only
-  // emailed PDFs marked unmatched in the last 14 days, at most 3 times each.
-  async function reopenUnmatched(mode, why) {
+  // yet gets another look once a new job / quote / quote folder appears.
+  // Koy 2026-10-30: only when the new job looks related (review.js). Any new job used
+  // to spend one of three retries, so Rivers would never have refiled onto its own quote.
+  async function reopenUnmatchedWhere(mode, pick) {
     let n = 0;
     try {
       const p = prefixOf(mode);
       const snap = await db.collection(QUEUE).where("status", "==", "unmatched").get();
-      const cutoff = Date.now() - 14 * 86400e3;
       for (const d of snap.docs) {
         if (p ? !d.id.startsWith(p) : /^(dry|test)_/.test(d.id)) continue;
         const it = d.data() || {};
-        if (it.type !== "email_pdf" || !it.inboxFileId) continue;
-        if (Date.parse(it.decidedAt || it.createdAt || "") < cutoff || (it.reopenCount || 0) >= 3) continue;
-        await d.ref.update({ status: "open", reopenedAt: nowIso(), reopenWhy: String(why || "").slice(0, 120), reopenCount: (it.reopenCount || 0) + 1 });
+        if (!REVIEW.mayReopen(it, Date.now())) continue;
+        const why = pick(it, d.id);
+        if (!why) continue;
+        await d.ref.update({ status: "open", reopenedAt: nowIso(), reopenWhy: String(why).slice(0, 160),
+          reopenCount: (it.reopenCount || 0) + 1, relatedReopenCount: (it.relatedReopenCount || 0) + 1 });
         n++;
       }
     } catch (e) { log.warn("planIntake: reopen unmatched failed", { error: e.message }); }
     return n;
   }
+  const reopenUnmatched = (mode, why, fresh) => reopenUnmatchedWhere(mode, (it) => {
+    const hits = REVIEW.relatedCandidates(it, fresh);
+    return hits.length ? `${why}, looks related: ${hits.slice(0, 3).map(c => `${c.key} ${c.name || c.site || ""}`.trim()).join(", ")}` : "";
+  });
+  // When Koy files a plan by hand, the plans still waiting from that project get another
+  // look, with his filing as the hint.
+  const reopenSiblings = (mode, filed, label, by) => reopenUnmatchedWhere(mode, (it, id) => (
+    id !== filed.id && REVIEW.sameProject(it, { filename: filed.filename, subject: filed.subject })
+      ? `${by} filed "${String(filed.filename || "").slice(0, 60)}" to ${label} by hand; this may be the same project` : ""
+  ));
   async function enqueue(mode, id, item) {
     try { await db.collection(QUEUE).doc(`${prefixOf(mode)}${id}`).create({ ...item, status: "open", mode, createdAt: nowIso() }); }
     catch (e) { if (e.code !== 6) log.warn("planIntake: queue write failed", { id, error: e.message }); }
@@ -373,7 +386,8 @@ module.exports = function makePlanIntake(deps) {
       walkEventIds: why.eventId ? [why.eventId] : [], tracking: true, jobNo: "", ledger: {}, createdAt: nowIso(), updatedAt: nowIso(),
     };
     await ref.set(st, { merge: true });
-    if (folderId && cfg.mode !== "dry") await reopenUnmatched(cfg.mode, `new folder for Quote #${quoteNo}`);
+    if (folderId && cfg.mode !== "dry") await reopenUnmatched(cfg.mode, `new folder for Quote #${quoteNo}`,
+      [{ key: `Q${quoteNo}`, number: String(quoteNo), name: why.quoteName || "", site: why.siteName || "" }]);
     const verb = cfg.mode === "dry" ? "Would create" : adoptedFrom ? "Using the app's folder for" : made ? "Created" : "Found";
     await finding(cfg.mode, `folder_${quoteNo}`, {
       number: `Q${quoteNo}`, type: adoptedFrom ? "folder_adopted" : "folder_created",
@@ -733,9 +747,67 @@ module.exports = function makePlanIntake(deps) {
     // v542: anything new since yesterday's list → unmatched plans get another look.
     if (prev.at) {
       const had = new Set([...(prev.jobs || []).map(x => "#" + x.number), ...(prev.quotes || []).map(x => "Q" + x.number), ...(prev.appQuotes || []).map(x => "Q" + x.number)]);
-      const fresh = [...jobs.map(x => "#" + x.number), ...quotes.map(x => "Q" + x.number), ...appQuotes.map(x => "Q" + x.number)].filter(k => !had.has(k));
-      if (fresh.length && ctx.cfg.mode !== "dry") counts.reopened = await reopenUnmatched(ctx.cfg.mode, `new in the candidate list: ${fresh.slice(0, 5).join(", ")}`);
+      const fresh = [...jobs.map(x => ({ ...x, key: "#" + x.number })), ...quotes.map(x => ({ ...x, key: "Q" + x.number })), ...appQuotes.map(x => ({ ...x, key: "Q" + x.number }))].filter(c => !had.has(c.key));
+      if (fresh.length && ctx.cfg.mode !== "dry") counts.reopened = await reopenUnmatched(ctx.cfg.mode, "new in the candidate list", fresh);
     }
+  }
+
+  // ══ Weekly review (Koy 2026-10-30) ══════════════════════════════════════
+  // Read-only over the queue and Drive. Its one write is today's score, so the trend
+  // survives. The weekly Routine reads this through GET /review and proposes lessons;
+  // nothing here moves a file or changes a decision.
+  async function reviewReport(cfg, daysIn) {
+    const started = Date.now();
+    const p = prefixOf(cfg.mode);
+    const days = Math.min(90, Math.max(7, daysIn));
+    const since = Date.now() - days * 86400e3;
+    const snap = await db.collection(QUEUE).get();
+    const items = snap.docs.filter(d => p ? d.id.startsWith(p) : !/^(dry|test)_/.test(d.id)).map(d => ({ id: d.id, ...d.data() }));
+    const recent = (it) => Date.parse(it.decidedAt || it.createdAt || "") >= since;
+    const { drive } = driveFullClient();
+    const names = {}, parentsOf = {};
+    const folderChain = async (id) => {
+      const out = [];
+      for (let cur = id, i = 0; cur && i < 4; i++) {
+        if (!(cur in names)) {
+          const f = (await drive.files.get({ fileId: cur, fields: "name,parents", supportsAllDrives: true })).data;
+          names[cur] = f.name; parentsOf[cur] = (f.parents || [])[0];
+        }
+        out.push(names[cur]); cur = parentsOf[cur];
+      }
+      return out;
+    };
+    const filedStates = {}, moved = [];
+    let partial = false;
+    for (const it of items.filter(x => x.status === "done" && x.inboxFileId && recent(x))) {
+      if (Date.now() - started > 200 * 1000) { partial = true; break; }
+      const d = it.decision || {};
+      let state = "gone", folders = [];
+      try {
+        const file = (await drive.files.get({ fileId: it.inboxFileId, fields: "name,parents,trashed", supportsAllDrives: true })).data;
+        folders = await folderChain((file.parents || [])[0]);
+        const st = d.kind === "quote" ? (await db.collection(STATE).doc(`${p}quote_${String(d.number || "").replace(/\D/g, "")}`).get()).data() : null;
+        state = REVIEW.filedState({ number: String(d.number || "").replace(/\D/g, ""), note: d.note }, file, folders, st && st.jobNo ? [st.jobNo] : []);
+      } catch (e) { if (e.code !== 404) { partial = true; continue; } }
+      filedStates[it.id] = state;
+      if (state !== "ok") moved.push({ filename: it.filename, number: d.number, state, folders: folders.slice(0, 3) });
+    }
+    const guesses = {};
+    for (const it of items.filter(x => x.decision && x.decision.by && recent(x))) {
+      const f = (await db.collection(FINDINGS).doc(`${p}unmatched_${it.id}`).get()).data();
+      if (f && f.bestGuess) guesses[it.id] = f.bestGuess;
+    }
+    const score = REVIEW.scoreQueue(items, { days, filedStates, guesses });
+    const date = today();
+    await db.collection(STATE).doc(`${p}review_${date}`).set({ type: "review", date, score, partial, at: nowIso() });
+    const past = (await db.collection(STATE).where("type", "==", "review").get()).docs.map(d => d.data())
+      .sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(1, 9).map(x => ({ date: x.date, score: x.score }));
+    const row = (it) => ({ id: it.id, filename: it.filename || it.title || "", from: it.from || "", createdAt: it.createdAt, decidedAt: it.decidedAt,
+      reason: String((it.decision || {}).reason || "").slice(0, 200), bestGuess: (it.decision || {}).bestGuess || guesses[it.id] || "" });
+    return { today: date, partial, score, past, moved,
+      corrections: items.filter(x => x.decision && x.decision.by && recent(x)).map(it => ({ ...row(it), by: it.decision.by, action: it.decision.action, number: it.decision.number || "", category: it.decision.category || "" })),
+      waiting: items.filter(x => x.status === "unmatched").map(it => ({ ...row(it), relatedLooks: it.relatedReopenCount || 0, lastLookWhy: it.reopenWhy || "" })),
+      decided: items.filter(x => x.status === "dismissed" && !(x.decision || {}).by && Date.parse(x.decidedAt || "") >= since && x.inboxFileId).map(it => ({ ...row(it), opened: !!it.fileFetchedAt })) };
   }
 
   // ══ Routine API (Phase 2) ═══════════════════════════════════════════════
@@ -873,6 +945,10 @@ module.exports = function makePlanIntake(deps) {
           res.json({ mode: cfg.mode, today: today(), categories: CATS, items, candidates: { at: cand.at, jobs: cand.jobs || [], appQuotes: cand.appQuotes || [], quotes: cand.quotes || [] } });
           return;
         }
+        if (req.method === "GET" && route === "/review") {
+          res.json(await reviewReport(cfg, parseInt(req.query && req.query.days, 10) || 30));
+          return;
+        }
         const itemId = String((req.query && req.query.item) || (req.body && req.body.item) || "");
         if (!itemId || !itemId.startsWith(p) || (!p && /^(dry|test)_/.test(itemId))) { res.status(404).json({ error: "no such item" }); return; }
         const iref = db.collection(QUEUE).doc(itemId);
@@ -882,6 +958,7 @@ module.exports = function makePlanIntake(deps) {
           if (!item.inboxFileId) { res.status(404).json({ error: "this item has no fetched file", link: item.link || "" }); return; }
           const { drive } = driveFullClient();
           const r = await drive.files.get({ fileId: item.inboxFileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+          await iref.update({ fileFetchedAt: nowIso() }).catch(() => {});   // the weekly score counts decisions made without opening the PDF
           res.set("Content-Type", "application/pdf").send(Buffer.from(r.data));
           return;
         }
@@ -965,6 +1042,7 @@ module.exports = function makePlanIntake(deps) {
       }
       await iref.update({ status: out.status, decision: { action: "file", number: String(data.number || ""), category: String(data.category || ""), by: user.name, note: out.note, at: nowIso() }, decidedAt: nowIso() });
       await db.collection(FINDINGS).doc(`unmatched_${itemId}`).set({ seen: true, seenAt: nowIso(), seenBy: user.name }, { merge: true }).catch(() => {});
+      await reopenSiblings(cfg.mode, item, `${data.kind === "quote" ? "Q" : "#"}${String(data.number || "").replace(/\D/g, "")}`, user.name);
       return { ok: true, name: out.note };
     });
 
@@ -1104,5 +1182,5 @@ module.exports = function makePlanIntake(deps) {
       return { linked: true, folderId: st.folderId, folderName };
     });
 
-  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, planDismissByHand, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide, _reopenUnmatched: reopenUnmatched };
+  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, planDismissByHand, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide, _reopenUnmatched: reopenUnmatched, _reopenSiblings: reopenSiblings };
 };

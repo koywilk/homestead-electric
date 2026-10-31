@@ -51,17 +51,27 @@ const P = makePlanIntake({ functions, db, google: {}, TZ: "America/Denver", Fiel
   await P._decide(ctx, { ...item, id: "email_zzz" }, { action: "dismiss" });
   assert.strictEqual(get("agentFindings/unmatched_email_zzz"), undefined, "resolving never creates a stub finding");
 
-  // Re-open: recent unmatched PDFs only, capped at 3.
+  // Re-open: related, recent, unplaced PDFs only, capped at 3 related looks.
   const iso = (days) => new Date(Date.now() - days * 86400e3).toISOString();
-  await db.collection("agentQueue").doc("email_1").set({ type: "email_pdf", inboxFileId: "f1", status: "unmatched", decidedAt: iso(2) });
-  await db.collection("agentQueue").doc("email_2").set({ type: "email_pdf", inboxFileId: "f2", status: "unmatched", decidedAt: iso(30) });   // too old
-  await db.collection("agentQueue").doc("email_3").set({ type: "email_pdf", inboxFileId: "f3", status: "unmatched", decidedAt: iso(1), reopenCount: 3 }); // capped
+  const pdf = (fid, extra) => ({ type: "email_pdf", inboxFileId: fid, status: "unmatched", filename: "Walton Residence.pdf", decidedAt: iso(1), ...extra });
+  await db.collection("agentQueue").doc("email_1").set(pdf("f1", { reopenCount: 3 }));   // used up by unrelated jobs: still gets a look
+  await db.collection("agentQueue").doc("email_2").set(pdf("f2", { decidedAt: iso(70) }));   // too old
+  await db.collection("agentQueue").doc("email_3").set(pdf("f3", { relatedReopenCount: 3 })); // capped
+  await db.collection("agentQueue").doc("email_5").set(pdf("f5", { filename: "Sunnata Colors.pdf" }));   // unrelated
   await db.collection("agentQueue").doc("walk_unmatched_x").set({ type: "walk_unmatched", status: "unmatched", decidedAt: iso(1) });            // a walk
-  await db.collection("agentQueue").doc("test_email_4").set({ type: "email_pdf", inboxFileId: "f4", status: "unmatched", decidedAt: iso(1) });     // test mode
-  const n = await P._reopenUnmatched("live", "new in the candidate list: Q3330");
+  await db.collection("agentQueue").doc("test_email_4").set(pdf("f4"));     // test mode
+  const n = await P._reopenUnmatched("live", "new in the candidate list", [{ key: "Q3330", number: "3330", name: "Walton Residence" }, { key: "#1469", number: "1469", name: "Orem cabinetry outlet" }]);
   assert.strictEqual(n, 1);
   const e1 = get("agentQueue/email_1");
-  assert.strictEqual(e1.status, "open"); assert.strictEqual(e1.reopenCount, 1); assert.ok(/Q3330/.test(e1.reopenWhy));
-  ["email_2", "email_3", "walk_unmatched_x", "test_email_4"].forEach(id => assert.strictEqual(get(`agentQueue/${id}`).status, "unmatched", id));
+  assert.strictEqual(e1.status, "open"); assert.strictEqual(e1.reopenCount, 4); assert.strictEqual(e1.relatedReopenCount, 1);
+  assert.ok(/Q3330/.test(e1.reopenWhy)); assert.ok(!/1469/.test(e1.reopenWhy), "only the related job is named");
+  ["email_2", "email_3", "email_5", "walk_unmatched_x", "test_email_4"].forEach(id => assert.strictEqual(get(`agentQueue/${id}`).status, "unmatched", id));
+
+  // Koy files one by hand: the plan still waiting from that project gets another look, and the filed one doesn't.
+  await db.collection("agentQueue").doc("email_6").set(pdf("f6", { filename: "Brown_Panel_Layout - Panel Layout.pdf" }));
+  await db.collection("agentQueue").doc("email_7").set(pdf("f7", { filename: "Brown_Panel_Layout_10-21 - Panel Layout (1).pdf" }));
+  assert.strictEqual(await P._reopenSiblings("live", { id: "email_7", filename: "Brown_Panel_Layout_10-21 - Panel Layout (1).pdf" }, "#1454", "Koy Wilkinson"), 1);
+  assert.strictEqual(get("agentQueue/email_6").status, "open"); assert.ok(/Koy Wilkinson filed .* to #1454/.test(get("agentQueue/email_6").reopenWhy));
+  assert.strictEqual(get("agentQueue/email_7").status, "unmatched");
   console.log("planintake-resolve-test: all checks passed");
 })().catch(e => { console.error(e); process.exit(1); });

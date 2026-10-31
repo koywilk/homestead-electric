@@ -2,6 +2,7 @@
 //   node scripts/plan-routine/api.mjs work                     → queue + candidates (JSON on stdout)
 //   node scripts/plan-routine/api.mjs file <item> <out.pdf>    → download a queued PDF
 //   node scripts/plan-routine/api.mjs decide '<json>'          → post one decision
+//   node scripts/plan-routine/api.mjs review [days]            → weekly score + corrections (JSON on stdout)
 // Auth: the Routine environment's API credential is attached by the sandbox's
 // web proxy. Node's built-in fetch ignores proxy settings (first run,
 // 2026-10-04: fetch → 401, curl → 200), so every call goes through curl, which
@@ -40,4 +41,8 @@ if (cmd === "work") {
   const r = call("/decide", { method: "POST", json: body });
   if (r.status !== 200) fail(`decide ${r.status}: ${r.body.toString().slice(0, 300)}`);
   console.log(r.body.toString());
-} else fail("commands: work | file <item> <out.pdf> | decide '<json>'");
+} else if (cmd === "review") {
+  const r = call(`/review?days=${encodeURIComponent(a || "30")}`);
+  if (r.status !== 200) fail(`review ${r.status}: ${r.body.toString().slice(0, 300)}`);
+  process.stdout.write(JSON.stringify(JSON.parse(r.body.toString()), null, 1));
+} else fail("commands: work | file <item> <out.pdf> | decide '<json>' | review [days]");
