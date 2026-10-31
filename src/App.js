@@ -2477,6 +2477,8 @@ const C = {
 // Homestead brand: the brown of the logo itself, and its slab lettering.
 const B = { ink:"#2B1F18", mid:"#6B5240", line:"#CDC4BA", navFg:"#3F322A", sub:"#CDBFB3" };
 const BRAND_SLAB = "'Rokkitt',Georgia,serif";
+const PAGE_TITLE = { fontFamily:BRAND_SLAB, fontWeight:800, fontSize:26, lineHeight:1.05, color:B.ink };
+const GROUP_TITLE = { fontFamily:BRAND_SLAB, fontWeight:800, fontSize:18, lineHeight:1.05 };
 const D = {
   bg1:"#141821", bg2:"#1B2030", hair:"#2A2F3A",
   text:"#9AA3B2", textBright:"#E6EAF1",
@@ -6163,8 +6165,8 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
           either way. */}
       <div style={{display:"flex",alignItems:"center",justifyContent:embedded?"flex-end":"space-between",marginBottom:20}}>
         {!embedded && (
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>
-            TEAM MEMBERS
+          <div style={{...PAGE_TITLE,fontSize:22}}>
+            Team Members
           </div>
         )}
         <button onClick={newUser}
@@ -8214,15 +8216,15 @@ const Btn = ({onClick,children,variant="ghost",style={},title,disabled,type,"ari
 };
 
 // One page header for every tab (design pass 2026-10-14). Same look as MY DAY:
-// Bebas caps title with the section's "?" guide beside it, an optional one-line
+// Homestead slab title with the section's "?" guide beside it, an optional one-line
 // summary under it, and a right-hand slot for actions (use <Btn>). Sits inside
 // the tab's own padded container.
 function PageHeader({ title, subtitle, help, actions, badge, style }) {
   return (
     <div style={{marginBottom:12,...style}}>
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-        <h2 style={{fontFamily:"'Bebas Neue',sans-serif",fontWeight:400,fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1,margin:0}}>
-          {String(title||"").toUpperCase()}
+        <h2 style={{...PAGE_TITLE,margin:0}}>
+          {String(title||"")}
         </h2>
         {help && <HelpDot section={help}/>}
         {badge}
@@ -23500,7 +23502,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
     <div style={{maxWidth:760,margin:"0 auto",padding:"20px 16px"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
         <div>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text}}>
+          <div style={PAGE_TITLE}>
             Changes From Original Plan
           </div>
           <div style={{fontSize:12.5,color:C.dim,marginTop:2}}>
@@ -38873,7 +38875,7 @@ function ProjectsBoardSection({ byProject, ctx, JobRow, TempPedCard, onSelectJob
       <div onClick={() => setCollapsed(c => !c)} role="button" aria-expanded={open}
         style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,paddingBottom:8,borderBottom:`2px solid ${PROJECT_COLOR}33`,cursor:"pointer",userSelect:"none",minHeight:40}}>
         <div style={{width:8,height:8,borderRadius:"50%",background:PROJECT_COLOR,flexShrink:0}}/>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:ink}}>PROJECTS</div>
+        <div style={{...GROUP_TITLE,color:ink}}>Projects</div>
         <div style={{background:`${PROJECT_COLOR}18`,border:`1px solid ${PROJECT_COLOR}33`,borderRadius:99,padding:"2px 10px",fontSize:12.5,color:ink,fontWeight:700}}>{list.length}</div>
         <div style={{marginLeft:"auto",color:ink,fontSize:14,fontWeight:700}}>{open ? "▾" : "▸"}</div>
       </div>
@@ -39273,9 +39275,9 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 
               <div style={{width:8,height:8,borderRadius:"50%",background:sec.color,flexShrink:0}}/>
 
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
+              <div style={{...GROUP_TITLE,
 
-                letterSpacing:"0.08em",color:readableInk(sec.color,"#EEF0F3")}}>{sec.label}</div>
+                color:readableInk(sec.color,"#EEF0F3")}}>{sec.label}</div>
 
               <div style={{background:sec.loud?sec.color:`${sec.color}18`,border:`1px solid ${sec.loud?sec.color:`${sec.color}33`}`,
 
@@ -39632,7 +39634,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
       <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
           <div>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>UPCOMING JOBS</div>
+            <div style={PAGE_TITLE}>Upcoming Jobs</div>
             <div style={{fontSize:12.5,color:C.dim,marginTop:3}}>
               {upcoming.length} job{upcoming.length!==1?"s":""} in pipeline
               {signedCount>0&&<span style={{marginLeft:8,color:C.green,fontWeight:700}}>· {signedCount} signed</span>}
@@ -41505,7 +41507,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
   return (
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,borderBottom:"2px solid #2F5BD922"}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2F5BD9"}}>PRE JOB PREP TRACKER</div>
+        <div style={{...GROUP_TITLE,color:"#2F5BD9"}}>Pre Job Prep Tracker</div>
         <div style={{background:"#2F5BD918",border:"1px solid #2F5BD933",borderRadius:99,padding:"2px 10px",fontSize:12.5,color:"#2F5BD9",fontWeight:700}}>{prepJobs.length} not complete</div>
         {completeJobs.length>0&&<div style={{background:"#1F7A3F18",border:"1px solid #1F7A3F33",borderRadius:99,padding:"2px 10px",fontSize:12.5,color:"#1F7A3F",fontWeight:700}}>✓ {completeJobs.length} complete</div>}
       </div>
@@ -41798,8 +41800,8 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
           style={{display:"flex",alignItems:"center",gap:8,marginBottom:invoiceCollapsed?0:12,
             paddingBottom:8,borderBottom:"2px solid #C2410C33",cursor:"pointer",userSelect:"none"}}>
           <div style={{width:9,height:9,borderRadius:"50%",background:"#C2410C"}}/>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#C2410C"}}>
-            READY TO INVOICE
+          <div style={{...GROUP_TITLE,color:"#C2410C"}}>
+            Ready to Invoice
           </div>
           <div style={{background:"#C2410C18",border:"1px solid #C2410C33",borderRadius:99,
             padding:"1px 8px",fontSize:12.5,color:"#C2410C",fontWeight:700}}>{count}</div>
@@ -41860,7 +41862,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
         <div style={{padding:"24px 26px 16px",borderBottom:"1px solid var(--border)"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
             <div>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>TASKS</div>
+              <div style={PAGE_TITLE}>Tasks</div>
               <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontSize:12.5,color:"var(--dim)"}}>{totalOther} task{totalOther!==1?"s":""}</span>
                 {totalInvoice>0&&<span style={{fontSize:12.5,fontWeight:700,color:"#C2410C",background:"#C2410C12",borderRadius:99,padding:"1px 8px",border:"1px solid #C2410C33",display:"inline-flex",alignItems:"center",gap:4}}><Icon name="dollarSign" size={11}/> {totalInvoice} invoice</span>}
@@ -41894,8 +41896,8 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
                 style={{display:"flex",alignItems:"center",gap:8,marginBottom:prepOpen?12:0,
                   paddingBottom:8,borderBottom:"2px solid #3E7D7A33",cursor:"pointer",userSelect:"none"}}>
                 <div style={{width:9,height:9,borderRadius:"50%",background:"#3E7D7A"}}/>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#3E7D7A"}}>
-                  PRE JOB PREP
+                <div style={{...GROUP_TITLE,color:"#3E7D7A"}}>
+                  Pre Job Prep
                 </div>
                 <div style={{background:"#3E7D7A18",border:"1px solid #3E7D7A33",borderRadius:99,
                   padding:"1px 8px",fontSize:12.5,color:"#3E7D7A",fontWeight:700}}>{prepJobs.length}</div>
@@ -41951,7 +41953,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
                       style={{display:"flex",alignItems:"center",gap:8,marginBottom:isCollapsed?0:12,
                         paddingBottom:8,borderBottom:`2px solid ${gc}33`,cursor:"pointer",userSelect:"none"}}>
                       <span style={{display:"inline-flex",alignItems:"center",color:gc}}><Icon name={group.icon} size={15} stroke={2.25}/></span>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:gc}}>{group.label}</div>
+                      <div style={{...GROUP_TITLE,color:gc}}>{group.label}</div>
                       <div style={{background:`${gc}18`,border:`1px solid ${gc}33`,borderRadius:99,padding:"1px 8px",fontSize:12.5,color:gc,fontWeight:700}}>{groupTasks.length}</div>
                       {overdue>0&&<div style={{background:"#C6282818",border:"1px solid #C6282833",borderRadius:99,padding:"1px 8px",fontSize:12.5,color:"#C62828",fontWeight:700,display:"inline-flex",alignItems:"center",gap:4}}><Icon name="alertTriangle" size={11}/> {overdue} overdue</div>}
                       <div style={{marginLeft:"auto",fontSize:13,color:gc,opacity:0.7,paddingRight:4}}>{isCollapsed?"▸":"▾"}</div>
@@ -42539,7 +42541,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob, embedded = false }) {
             {schedCount>0 && <span style={{fontSize:12,fontWeight:700,color:"#2F5BD9",background:"#2F5BD918",borderRadius:5,padding:"1px 6px"}}>{schedCount} scheduled</span>}
           </span>
         ) : (<>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
+        <div style={PAGE_TITLE}>QC Walks</div>
         <div style={{fontSize:13,color:C.dim}}>{rows.length} QC walks (rough + finish)</div>
         </>)}
         <span style={{flex:1}}/>
@@ -44496,8 +44498,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
           <button onClick={prevMonth} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
             color:"var(--dim)",padding:"6px 14px",cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>‹</button>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:"0.06em",
-            color:"var(--text)",flex:1,textAlign:"center"}}>{monthLabel.toUpperCase()}</div>
+          <div style={{...PAGE_TITLE,fontSize:22,flex:1,textAlign:"center"}}>{monthLabel}</div>
           <button onClick={()=>setCalMonth(new Date(today.getFullYear(),today.getMonth(),1))}
             style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:8,
             color:C.accent,padding:"6px 14px",cursor:"pointer",fontSize:12.5,fontFamily:"inherit",fontWeight:700}}>TODAY</button>
@@ -44592,7 +44593,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
       {/* ── Header ── */}
       <div style={{padding:"20px 26px 0",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
+          <div style={PAGE_TITLE}>Scheduling Forecast</div>
           <div style={{fontSize:12.5,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
             {[{k:"kanban",l:"Kanban",icon:null},{k:"week",l:"Week",icon:"clipboard"},{k:"attention",l:"Attention",icon:"alertTriangle"},{k:"calendar",l:"Calendar",icon:"calendar"},{k:"starts",l:"Starts",icon:"clock"},{k:"crew",l:"Crew",icon:"users"}].map(({k,l,icon})=>(
@@ -45159,8 +45160,8 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
             <div style={{padding:"20px 20px 8px"}}>
               {/* Header: title + week nav + mode toggle */}
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
-                  CREW PLANNER
+                <div style={{...PAGE_TITLE,fontSize:20}}>
+                  Crew Planner
                 </div>
                 <span style={{fontSize:12,fontWeight:700,letterSpacing:"0.08em",color:C.accent,
                   background:C.accent+"15",border:`1px solid ${C.accent}40`,borderRadius:99,padding:"2px 8px"}}>MATCHER</span>
@@ -45416,8 +45417,8 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
           <div style={{padding:"20px 20px 8px"}}>
             {/* Title + action buttons (week nav moved down to directly above the schedule grid) */}
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
-                CREW PLANNER
+              <div style={{...PAGE_TITLE,fontSize:20}}>
+                Crew Planner
               </div>
               <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button onClick={()=>setPlannerMode("matcher")}
@@ -55630,7 +55631,7 @@ function ActivityLog({ jobs, embedded = false }) {
     <div style={{padding: embedded ? 0 : "20px 26px"}}>
       {!embedded && (
         <>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:4}}>Activity Log</div>
+          <div style={{...PAGE_TITLE,marginBottom:4}}>Activity Log</div>
           <div style={{fontSize:13,color:C.faint,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
         </>
       )}
@@ -61827,9 +61828,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v591
+**Last manifest update:** 2026-10-30 · App SW version: v592
 ---
 
+- **Homestead lettering on the other pages** · 'shipped 2026-10-30' · 'SW v592' · 'PAGE_TITLE' · 'GROUP_TITLE' · 'PageHeader' · 'BRAND_SLAB' · Koy: *"Brand the other pages."* Page titles now use the same slab lettering as the logo, in logo brown, in normal capitals instead of all caps: Today, My Day, Needs, Huddle, Tasks, QC Walks, Scheduling Forecast and Crew Planner, Upcoming Jobs, Job Start, Job Prep, Change Orders, Time Off, Activity Log, Quotes, Contractors, Team Members, Settings, App Map, Plan Changes, plus the crew and contractor pages. Group headings on All Jobs, Tasks, Job Prep and Crew Board, and the Simpro Inbox heading, get the lettering too. Crew and contractor names and group headings keep their own colors, because those colors mean something. Nothing moved: only the lettering changed, and no title got taller. Left alone: the office dashboard, Scoreboard, FieldInk, share links, printouts, pop-up titles and the insides of job tabs. **Why it won't lose data:** only text styling on titles and the shared page header changed, with no new saves, no changed saves and no change to what any title button or link does.
 - **Screen usage and dashboard crash reports (PostHog)** · 'shipped 2026-10-30' · 'SW v591' · 'heTrack' · 'heCaptureError' · 'OdBoundary' · Koy asked for a crash counter and a count of which screens get opened. The crash side already existed: PostHog has reported uncaught errors by person and build since v529. This adds the two missing pieces. A 'screen_opened' event sends the screen's fixed key for signed-in staff, one second after the screen settles, because the app changes screens without changing the address and page views can't tell them apart. The dashboard's error boundary now reports what it catches, since a caught error never reaches PostHog's automatic capture. Both stay silent until 'REACT_APP_POSTHOG_KEY' is set at build time; the live bundle had no key on 2026-10-30, so none of the PostHog events have reached PostHog yet. No Firestore read or write, no app localStorage key, nothing on a save path, and every call is wrapped so a PostHog failure can't reach the app.
 - **Homestead branding: the flag is gone, the real logo is in** · 'shipped 2026-10-30' · 'SW v590' · 'BrandTitle' · 'hdrCompactNext' · 'B' · 'BRAND_SLAB' · Koy: *"We need a lot more Homestead branding throughout, and then we need to make it not the American flag anymore at the top,"* then, off mockups (artifact CR9PE8zZpYmUgrWfNmPQtS): *"2 on white with the big homestead logo behind the job board."* **Header:** white, with the real longhorn logo large and centered ('public/hs-logo-dark.png'), Live status and job count on the left, Resi/Commercial and date and weather on the right. Past 120px of scrolling the logo shrinks from 104px to 46px, so the pinned header takes about the room the old one did; it grows back near the top, and stays small on a short window. On a phone it's the horns only ('public/hs-horns-dark.png') in one short row. Tabs keep their order, with the active one solid brown; Commercial keeps its teal. **Page:** white, with the big logo faintly behind every page's content. **Headings:** the logo's slab lettering (Rokkitt) in the logo's brown, with its thin rules, on Job Board, Crew Schedule, Pipeline, Crews and All Jobs, plus the job page title and card titles. **Sign-in** shows the full logo. The phone's status bar and app background are white. The backup warning banner now sits above the header instead of over it, so it no longer covers the logo. Main buttons stay blue. Other pages get the header and logo now; their own page titles aren't restyled yet. Gate: 'scripts/needs-dryrun.js' (+3 checks). **Why it won't lose data:** display only. Every control keeps its same handler; no field, loader, rules or function changed.
 - **Job page, step three begins: Rough and Finish in cards** · 'shipped 2026-10-30' · 'SW v589' · 'JobCardCtx' · 'JOB_CARD_TABS' · Koy: *"Yes, start step three."* Rough and Finish now use the same cards as Job Info: the stage section, Punch List, Material Tracking, Material Count List, Daily Job Updates, Questions and Notes. Same controls in the same order, and each section opens and closes as it did. A section inside a section, like outside punch under Punch List, keeps its old look so cards never stack inside cards. The other tabs look as they did until their turn. No guide change: section names are unchanged. **Why it won't lose data:** styling only. Every control keeps its same handler; no field, loader, rules or function changed.
@@ -62785,7 +62787,7 @@ function TimeOffPage({ identity = null, users = [] }) {
 
   return (
     <div style={{padding:"18px 26px 60px", maxWidth:760, margin:"0 auto"}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:30, letterSpacing:"0.05em", color:C.text, marginBottom:4}}>TIME OFF</div>
+      <div style={{...PAGE_TITLE, marginBottom:4}}>Time Off</div>
       <div style={{fontSize:13, color:C.dim, marginBottom:18}}>Request days off. The office approves, you get a notification with the answer, and approved days show on the crew schedule.</div>
 
       {/* Request form */}
@@ -65102,7 +65104,7 @@ function TempPedsLane({ groups, suggest, filterFn, filtered, open, onToggle, ide
       <div onClick={onToggle}
         style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, paddingBottom: 10,
           borderBottom: `2px solid ${C.purple}22`, flexWrap: "wrap", cursor: "pointer", userSelect: "none" }}>
-        <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.08em", color: C.purple }}>TEMP PEDS OUT</div>
+        <div style={{ ...GROUP_TITLE, color: C.purple }}>Temp Peds Out</div>
         {pill(C.purple, `${outAll.length} out`)}
         {nLook > 0 && pill(C.red, `${nLook} need${nLook === 1 ? "s" : ""} a look`)}
         {nLong > 0 && pill(C.red, `${nLong} out 90+ days`)}
@@ -65681,7 +65683,7 @@ function JobStartBoard({ jobs = [], identity, users = [], onSelectJob, onUpdateJ
       <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12, marginBottom:14 }}>
         <div>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:28, letterSpacing:"0.06em", color:C.text, lineHeight:1 }}>JOB START</div>
+            <div style={PAGE_TITLE}>Job Start</div>
             <HelpDot section="jobstart"/>
           </div>
           <div style={{ fontSize:13, color:C.dim, marginTop:4 }}><b>{live.length}</b> active · <b style={{ color:C.slate }}>{owedTotal}</b> items owed in earlier phases · <b style={{ color:C.green }}>{past.length}</b> ready to start / on site</div>
@@ -65888,7 +65890,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:14}}>
         <div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>JOB PREP</div>
+            <div style={PAGE_TITLE}>Job Prep</div>
             <HelpDot section="jobprep"/>
           </div>
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
@@ -65923,7 +65925,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
         <div onClick={()=>setLaneOpen(o=>({...o,admin:!o.admin}))}
           style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
           borderBottom:"2px solid #2F5BD922",flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.blue}}>OFFICE ADMIN</div>
+          <div style={{...GROUP_TITLE,color:C.blue}}>Office Admin</div>
           <span style={{borderRadius:99,padding:"2px 10px",fontSize:12.5,fontWeight:700,whiteSpace:"nowrap",
             background:"#C6282814",border:"1px solid #C6282833",color:"#C62828"}}>
             {vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[0])==="todo").length} no account
@@ -65957,7 +65959,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
         <div onClick={()=>setLaneOpen(o=>({...o,prep:!o.prep}))}
           style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
           borderBottom:"2px solid #3E7D7A22",flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:C.teal}}>PRE-JOB PREP</div>
+          <div style={{...GROUP_TITLE,color:C.teal}}>Pre-Job Prep</div>
           <span style={{borderRadius:99,padding:"2px 10px",fontSize:12.5,fontWeight:700,whiteSpace:"nowrap",
             background:"#3E7D7A14",border:"1px solid #3E7D7A33",color:"#3E7D7A"}}>
             {pOpen.length} not complete{pOpen.filter(j=>j.prepOverride&&j.prepOverride.on).length>0
@@ -66349,9 +66351,8 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
         flexWrap:"wrap",gap:12,marginBottom:14}}>
         <div>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
-            letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
-            CHANGE ORDERS
+          <div style={PAGE_TITLE}>
+            Change Orders
           </div>
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
             {totalCount} total
@@ -67037,7 +67038,7 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6E7682" }) {
 
   const sectionTitle = (label, count) => (
     <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
-      <span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: "0.06em", color: C.dim }}>{label}</span>
+      <span style={{ ...GROUP_TITLE, color: C.dim }}>{label}</span>
       <span style={{ fontSize: 12.5, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 99, padding: "1px 8px", color: C.dim }}>{count}</span>
     </div>
   );
@@ -70397,7 +70398,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 0 10px" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 24, fontWeight: 700, color: C.text, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>My Day</span><HelpDot section="myday" />
+            <span style={{ ...PAGE_TITLE, whiteSpace: "nowrap" }}>My Day</span><HelpDot section="myday" />
           </div>
           <div style={{ fontSize: 13, color: C.faint, display: "flex", gap: 10, flexWrap: "wrap", marginTop: 2 }}>
             <span>{new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}</span>
@@ -75650,8 +75651,8 @@ function App() {
                   <div style={{padding:"16px 20px 12px",borderBottom:`1px solid ${C.border}`,
                     background:C.surface,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
                     <div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2A406F"}}>
-                        SIMPRO INBOX
+                      <div style={{...GROUP_TITLE,color:"#2A406F"}}>
+                        Simpro Inbox
                       </div>
                       <div style={{fontSize:12.5,color:C.dim,marginTop:2}}>
                         {pendingCount} pending · {ignoredCount} ignored
@@ -76845,9 +76846,9 @@ function App() {
 
               <div style={{width:10,height:10,borderRadius:"50%",background:_foremanColors[activeForeman]||"#6E7682",flexShrink:0}}/>
 
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
+              <div style={{...PAGE_TITLE,
 
-                color:_foremanColors[activeForeman]||C.faint,lineHeight:1}}>{activeForeman}</div>
+                color:_foremanColors[activeForeman]||C.faint}}>{activeForeman}</div>
 
               <div style={{fontSize:12.5,color:C.dim}}>
 
@@ -77246,8 +77247,8 @@ function App() {
                   <div style={{padding:"18px 26px 0",borderBottom:`1px solid ${C.border}`}}>
                     <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16,flexWrap:"wrap"}}>
                       <div style={{width:10,height:10,borderRadius:"50%",background:cColor,flexShrink:0}}/>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
-                        color:cColor,lineHeight:1}}>{contractor.name}</div>
+                      <div style={{...PAGE_TITLE,
+                        color:cColor}}>{contractor.name}</div>
                       <div style={{fontSize:12.5,color:C.dim}}>{cJobs.length} job{cJobs.length!==1?"s":""}</div>
                       {!isContractor&&(
                         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
@@ -77316,7 +77317,7 @@ function App() {
       {view==="quotes"&&can(identity,"quotes.view")&&(
         <div style={{padding:"18px 16px"}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.accent,lineHeight:1}}>Quotes</div>
+            <div style={PAGE_TITLE}>Quotes</div>
             <div style={{fontSize:12.5,color:C.dim}}>{jobs.filter(j=>j.type==="quote").length} quote{jobs.filter(j=>j.type==="quote").length!==1?"s":""}</div>
             {can(identity,"quotes.view")&&(
               <button onClick={()=>{
