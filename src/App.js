@@ -2328,6 +2328,16 @@ if (messaging) {
 // Captured at module load, before the pendingNav / pendingView initializers
 // strip the query string, so App can mark that inbox record read once the
 // identity loads.
+// v594 (One Place): "Job pushes open the dashboard", per device. localStorage for this page, IndexedDB for
+// firebase-messaging-sw.js, which can't read localStorage. Never throws; no setting means the app, as before.
+function hePushPrefWrite(on) {
+  try { localStorage.setItem("he_push_opens_dash", on ? "1" : "0"); } catch (e) {}
+  try {
+    const r = indexedDB.open("he_sw_prefs", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => { const idb = r.result, tx = idb.transaction("kv", "readwrite"); tx.objectStore("kv").put(!!on, "pushOpensDash"); tx.oncomplete = () => idb.close(); };
+  } catch (e) {}
+}
 const LAUNCH_NOTIF_ID = (() => {
   try { return new URLSearchParams(window.location.search).get("nid") || null; } catch { return null; }
 })();
@@ -34558,9 +34568,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Questions"&&(
 
             <div>
-              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions"/>
+              <PhaseQuestionsSection job={job} u={u} phase="rough" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Rough Questions" defaultOpen={IS_DASH_PAGE && initialTab==="Questions" && phaseHasOpenQuestion(job.roughQuestions)}/>
               <div style={{marginTop:20}}>
-                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions"/>
+                <PhaseQuestionsSection job={job} u={u} phase="finish" gcAnswers={gcAnswers} fiQLinks={fiQLinks} questionThreads={questionThreads} label="Finish Questions" defaultOpen={IS_DASH_PAGE && initialTab==="Questions" && phaseHasOpenQuestion(job.finishQuestions)}/>
               </div>
             </div>
 
@@ -37378,6 +37388,8 @@ const gcAnswerRejected = (q, a) => {
 // and the dedicated Questions tab — so the mounts can never drift. Only
 // label/defaultOpen differ per mount; the m/nmap/late builders are the same
 // logic the two phase tabs carried inline before this refactor.
+// v594: a question tapped on the Dashboard opens the job on Questions with the fold that has something waiting.
+const phaseHasOpenQuestion = (qs) => ['upper','main','basement'].some(f => (qs?.[f]||[]).some(q => q && !q.done));
 function PhaseQuestionsSection({job, u, phase, gcAnswers, fiQLinks, questionThreads, label="Questions", defaultOpen=false}) {
   const rough = phase === "rough";
   const color = rough ? C.rough : C.finish;
@@ -49964,7 +49976,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
         // Several COs can sit on one Simpro quote (Thayne: 14 on one): say so, and count that quote once.
         const perQ = {}; old.forEach(x => { const q = quoteNo(x.co); if (q) perQ[q] = (perQ[q] || 0) + 1; });
         return old.map(x => { const q = quoteOf(x.co), qn = quoteNo(x.co), shared = qn && perQ[qn] > 1 ? `, one quote for ${perQ[qn]} COs` : "";
-          return { title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}${q != null ? ` · quote ${odMoney(q)}${shared}` : qn ? ` · Quote ${qn}, no $ yet` : " · no Simpro quote #"}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, money: q, quote: qn, age: now - x.at, job: x.job, color: OD_B }; })
+          return { title: x.job.name, sub: `${odText(x.co.desc) || "Change order"} · sent ${odShort(x.at)}/${String(x.at.getFullYear()).slice(2)}${q != null ? ` · quote ${odMoney(q)}${shared}` : qn ? ` · Quote ${qn}, no $ yet` : " · no Simpro quote #"}`, right: `${Math.floor((now - x.at) / OD_DAY)} d`, money: q, quote: qn, age: now - x.at, job: x.job, section: "Change Orders", color: OD_B }; })
           .sort((a, b) => ((b.money || 0) - (a.money || 0)) || (b.age - a.age));
       })() },
     { k: "inspOld", label: "Inspection target 30+ days ago, result never logged", color: OD_WARN, icon: "checkCircle",
@@ -49980,17 +49992,17 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
     { k: "startsPast", label: "Start date passed, phase not started", color: OD_O, icon: "flag",
       rows: startsPast.map(s => ({ title: s.name, sub: `${s.label} was ${s.confirmed ? "set" : "projected"} for ${odShort(s.at)}`, job: s.job, color: OD_O })) },
     { k: "rtLate", label: "Return trips past their date", color: OD_R, icon: "returntrips",
-      rows: openRTs.filter(x => x.ri.k === "late").map(x => ({ title: x.job.name, sub: `${x.ri.text}${odText(x.rt.scope) ? " · " + odText(x.rt.scope) : ""}`, right: `${x.ri.late} d`, job: x.job, color: OD_R })) },
+      rows: openRTs.filter(x => x.ri.k === "late").map(x => ({ title: x.job.name, sub: `${x.ri.text}${odText(x.rt.scope) ? " · " + odText(x.rt.scope) : ""}`, right: `${x.ri.late} d`, job: x.job, section: "Return Trips", color: OD_R })) },
     { k: "failOpen", label: "Failed inspection items not fixed", color: OD_R, icon: "x",
       rows: active.filter(j => info[j.id].failOpen.length).map(j => ({ title: j.name, sub: `${odPlural(info[j.id].failOpen.length, "item")}: ${info[j.id].failOpen.slice(0, 2).map(x => x.text).join(" · ")}`, job: j, color: OD_R })) },
     { k: "unconfirmed", label: "Starts in the next 3 days, not confirmed", color: OD_O, icon: "flag",
       rows: sched.filter(s => s.type === "start" && !s.confirmed && s.at >= t0 && s.at < odAddDays(t0, 3)).map(s => ({ title: s.name, sub: `${s.label} · ${odDow(s.at)} ${odShort(s.at)}`, job: s.job, color: OD_O })) },
     { k: "coBilled", label: "Approved change orders Simpro has billed — mark done?", color: OD_B, icon: "changeorders",
-      rows: coBilled.map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""} · Billed: job ${Math.round(billedPct(x.job))}% invoiced in Simpro · mark the CO done`, job: x.job, color: OD_B })) },
+      rows: coBilled.map(x => ({ title: x.job.name, sub: `${odText(x.co.desc) || "Change order"}${x.co.quoteNumber ? " · Quote " + x.co.quoteNumber : ""} · Billed: job ${Math.round(billedPct(x.job))}% invoiced in Simpro · mark the CO done`, job: x.job, section: "Change Orders", color: OD_B })) },
     { k: "coSend", label: "Change orders still to send", color: OD_B, icon: "changeorders",
-      rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, color: OD_B })) },
+      rows: openCOs.filter(x => x.co.coStatus === "needs_sending").map(x => ({ title: x.job.name, sub: odText(x.co.desc) || "Change order", job: x.job, section: "Change Orders", color: OD_B })) },
     { k: "rtNoDate", label: "Return trips with no date", color: OD_WARN, icon: "returntrips",
-      rows: openRTs.filter(x => x.ri.k === "none").map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, color: OD_WARN })) },
+      rows: openRTs.filter(x => x.ri.k === "none").map(x => ({ title: x.job.name, sub: [odText(x.rt.scope), x.rt.assignedTo].filter(Boolean).join(" · "), job: x.job, section: "Return Trips", color: OD_WARN })) },
     { k: "needsDate", label: "Needs a date", color: OD_WARN, icon: "calendar",
       rows: needsDate.map(n => ({ title: n.job.name, sub: [n.what, n.job.foreman || "No foreman", n.last ? `last work ${odAgo(n.last, now)}` : "no work logged", n.by].filter(Boolean).join(" · "), job: n.job, color: OD_WARN })) },
     { k: "quiet", label: "In progress, no update in 5+ days", color: OD_WARN, icon: "clock",
@@ -50886,7 +50898,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [tabPicked, setTab] = useState(() => read("he_odash_tab", v => OD_TABS.some(x => x[0] === v), "overview"));
   const tab = fview && OD_TABS_MONEY.has(tabPicked) ? "overview" : tabPicked;
   const odRoot = useRef(null);
-  useOdMoneyMask(odRoot, fview);
+  // v594: the whole page, so a job card opened here is masked too.
+  const odPage = useRef(document.body);
+  useOdMoneyMask(odPage, fview);
   // v552 (item 9): dash_open / dash_tab / dash_tap go to PostHog (no autocapture), tied
   // to the signed-in name by syncPostHogIdentity like every other app event.
   const pickTab = (t) => { setTab(t); keep("he_odash_tab", t); if (t !== tab) trackDash("dash_tab", { tab: t }); };
@@ -51145,7 +51159,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   };
   const moveAct = (s) => canWrite && s && s.type === "start" && s.job && /^(Rough|Finish) start$/.test(s.label)
     ? { label: s.confirmed ? "Move / unconfirm" : "Move", onClick: () => setSheet({ kind: "move", s }) } : null;
-  const goApp = (job) => { if (job && onSelectJob) onSelectJob(job); };
+  const goApp = (job, section) => { if (job && onSelectJob) onSelectJob(job, section); };
   // A deep link into the app (My Day on a task, a view): /?view=myday&need=<id>.
   const openApp = (url) => { if (onOpenApp) onOpenApp(url); else { try { window.location.href = url; } catch (e) {} } };
   const ahead = (days) => d.sched.filter(s => s.at >= d.t0 && s.at < odAddDays(d.t0, days));
@@ -51221,7 +51235,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     <div className="od-rows">
       {rows.map((r, i) => { if (r.divider) return <div className="od-dayh sub" key={i}>{r.divider}</div>;
         const row = (
-        <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : openJob(r.job)}>
+        <button type="button" className="od-row" key={i} disabled={!r.job && !r.onClick} onClick={() => r.onClick ? r.onClick() : r.section && onSelectJob ? goApp(r.job, r.section) : openJob(r.job)}>
           <span className="k" style={{ "--c": r.color || OD_A }}><Icon name={r.icon || "activity"} size={15}/></span>
           <span className="m" style={r.ink ? { color: r.ink } : null}><b>{r.title}</b>{r.tag ? <em style={r.tagColor ? { color: r.tagColor } : null}>{r.tag}</em> : null}<small style={r.ink ? { color: r.ink } : null}>{r.sub}</small></span>
           <span className="t" style={r.rightColor ? { color: r.rightColor, fontWeight: 700 } : null}>{r.right || ""}</span>
@@ -51281,7 +51295,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     { k: "urgent", label: "Your urgent My Day tasks", icon: "myday", color: OD_R, n: myUrgent.length, extra: "",
       open: () => openList("Your urgent tasks", "Tap one to open it on My Day", myUrgent.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: OD_R, icon: "myday", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) }))) },
     { k: "questions", label: "Crew questions not answered", icon: "help", color: OD_O, n: d.openQs.length, extra: [`${d.openQs.filter(x => x.age != null && x.age < 7).length} this week`, d.openQs[0] && d.openQs[0].age != null && `oldest ${d.openQs[0].age} d`].filter(Boolean).join(" · "),
-      open: () => openList("Open questions", "Oldest first, by job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job }))) },
+      open: () => openList("Open questions", "Oldest first, by job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job, section: "Questions" }))) },
     { k: "nofm", label: "Jobs with no active foreman", icon: "hardHat", color: OD_O, n: d.noForemanJobs.length, extra: d.noFmText,
       open: () => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => { const sug = d.suggestFm(j), techs = d.techsOf(j);
         return { title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `${String(j.foreman).trim()} (${d.whyNoFm(j.foreman).replace(" on the team list", "")})` : "No foreman set",
@@ -51618,7 +51632,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const qsplit = odSplitQuestions(d.active, users, d.now);
     const flipQ = (k) => setActQOpen(prev => { const nx = new Set(prev); if (nx.has(k)) nx.delete(k); else nx.add(k); return nx; });
     const qRow = (x) => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.to ? " · out to " + x.to : ""}`, right: x.at ? when(x.at) : "no date",
-      tag: x.old ? `${x.age} d old` : x.age != null ? `${x.age} d` : "", tagColor: x.old ? OD_R : undefined, color: x.old ? OD_R : OD_O, icon: "help", job: x.job });
+      tag: x.old ? `${x.age} d old` : x.age != null ? `${x.age} d` : "", tagColor: x.old ? OD_R : undefined, color: x.old ? OD_R : OD_O, icon: "help", job: x.job, section: "Questions" });
     const QFold = ({ k, title, sub, list }) => { const open = actQOpen.has(k), old = list.filter(x => x.old).length; return (<>
       <button type="button" className="od-qfold" aria-expanded={open} onClick={() => flipQ(k)}><span>{title}<small>{sub}{old ? ` · ${old} older than 2 days` : ""}</small></span><span className="n">{list.length}</span></button>
       {open ? <Rows rows={list.map(qRow)} empty="Nothing waiting."/> : null}
@@ -51631,7 +51645,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {actDay && <button type="button" className="od-clear" onClick={() => setActDay("")}>Show all {range} days</button>}</div>
       <div className="od-minis">
         <OdMini title="Open questions" color={OD_O} icon="help" value={d.openQs.length} sub={d.openQs.length ? `${qsplit.mine.length} on me · ${qsplit.others.length} on others` : "none waiting"}
-          onClick={() => openList("Open questions", "By job, oldest first · tap one for the job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.at ? when(x.at) : "", color: OD_O, icon: "help", job: x.job })))}>
+          onClick={() => openList("Open questions", "By job, oldest first · tap one for the job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.at ? when(x.at) : "", color: OD_O, icon: "help", job: x.job, section: "Questions" })))}>
           <OdRing pct={d.openQs.length ? Math.min(1, d.openQs.filter(x => (x.age || 0) > 2).length / d.openQs.length) : 0} color={OD_O} label="Share of open questions older than 2 days"/></OdMini>
         <OdMini title="Failed inspections" color={OD_R} icon="alertTriangle" value={inspFailed} sub={`failed of ${inspLogged} logged`} onClick={() => setActFilter("insp")}><OdBars vals={d.perDay.slice(-7).map(p => d.fails.filter(f => localYmd(f._at) === p.k).length)} color={OD_R} hi={6} max={2} label="Failed inspections per day"/></OdMini>
       </div>
@@ -52514,7 +52528,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       const fact = (l, v) => <div><small>{l}</small><b>{v || "—"}</b></div>;
       sheetEl = (
         <OdSheet title={j.name} sub={[j.simproNo && "#" + j.simproNo, j.address, j.gc].filter(Boolean).join(" · ")} onClose={() => setSheet(null)}
-          actions={onSelectJob ? <button type="button" className="go" onClick={() => goApp(j)}>Open in app</button> : null}>
+          actions={onSelectJob ? <button type="button" className="go" onClick={() => goApp(j)}>Open job</button> : null}>
           <div className="od-facts">
             {fact("Where it is", s ? s.label + (s.note ? " · " + s.note : "") : "")}{fact("Job prep", d.prepOpen(j) ? "Not finished" : (j.quickJob || j.tempPed || j.division === "commercial") ? "" : "Complete")}{fact("Foreman", j.foreman)}{fact("Lead", j.lead)}
             {fact("Rough", `${odStatusLabel(effRS(j))}${parseStage(j.roughStage) ? " · " + parseStage(j.roughStage) + "%" : ""}`)}
@@ -52542,7 +52556,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           {j.statusUpdate ? <div className="od-note"><small>Status update{j.statusUpdateBy ? " · " + j.statusUpdateBy : ""}</small>{odText(j.statusUpdate)}</div> : null}
           {(j.roughWaitingOn || j.finishWaitingOn) ? <div className="od-note"><small>Waiting on</small>{[j.roughWaitingOn && `Rough: ${odText(j.roughWaitingOn)}`, j.finishWaitingOn && `Finish: ${odText(j.finishWaitingOn)}`].filter(Boolean).join(" · ")}</div> : null}
           {planWaitingOn(j).length > 0 && <><div className="od-sh">Plans waiting to be filed <span>{planWaitingOn(j).length}</span></div><Rows rows={planWaitingOn(j).map(f => ({ title: f.filename || PLAN_LABEL[f.type] || "Plan", sub: odText(f.summary), right: `${planAge(f)} d`, color: OD_R, icon: "fileText", onClick: () => setSheet({ kind: "plan", id: f.id }) }))}/></>}
-          {inf.questions.length > 0 && <><div className="od-sh">Open questions <span>{inf.questions.length}</span></div><Rows rows={inf.questions.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(x => ({ title: x.text, sub: `${x.ph}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help" }))}/></>}
+          {inf.questions.length > 0 && <><div className="od-sh">Open questions <span>{inf.questions.length}</span></div><Rows rows={inf.questions.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).map(x => ({ title: x.text, sub: `${x.ph}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: j, section: "Questions" }))}/></>}
           {inf.failOpen.length > 0 && <><div className="od-sh">Failed inspection items to fix <span>{inf.failOpen.length}</span></div><Rows rows={inf.failOpen.map(x => ({ title: x.text, sub: x.ph + " inspection", color: OD_R, icon: "x" }))}/></>}
           {(j.simproSync && (j.simproSync.log || []).length > 0) && <><div className="od-sh">Simpro sync <span>{j.simproSync.log.length}</span></div>
             <Rows rows={j.simproSync.log.slice().reverse().map(e => { const at = odDate(e.at); const canUndo = canWrite && !e.undoneAt && (e.changes || []).some(c => c.undo !== false);
@@ -52554,9 +52568,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <div className="od-sh">Open punch <span>{inf.punch.length}</span></div>
           <Rows rows={inf.punch.slice().sort((a, b) => (b.age || 0) - (a.age || 0)).slice(0, 25).map(p => ({ title: p.text, sub: `${p.phase}${p.room ? " · " + p.room : ""}${p.who ? " · on " + odFirst(p.who) : ""}`, tag: [p.serious && "Serious", p.waiting && "Waiting"].filter(Boolean).join(" · "), right: p.age != null ? `${p.age} d` : "", color: p.serious ? OD_R : OD_O, icon: "openitems" }))} empty="No open punch."/>
           <div className="od-sh">Change orders <span>{inf.cos.length}</span></div>
-          <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [d.coBilledOf({ co, job: j }) ? OD_CO_BILLED : OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders" }))} empty="No change orders."/>
+          <Rows rows={inf.cos.map(co => ({ title: odText(co.desc) || "Change order", sub: [d.coBilledOf({ co, job: j }) ? OD_CO_BILLED : OD_CO_LABEL[co.coStatus] || "no status", co.quoteNumber && "Quote " + co.quoteNumber, co.createdBy].filter(Boolean).join(" · "), right: co.coStatusDate || co.createdAt || "", color: ["completed","converted"].includes(co.coStatus) ? OD_G : co.coStatus === "denied" ? "#8C847D" : co.coStatus === "needs_sending" ? OD_R : OD_B, icon: "changeorders", job: j, section: "Change Orders" }))} empty="No change orders."/>
           <div className="od-sh">Return trips <span>{inf.rts.length}</span></div>
-          <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOff ? (rt.signedOffDate || "") : odRtLabel(rt), color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips" }))} empty="No return trips."/>
+          <Rows rows={inf.rts.map(rt => ({ title: odText(rt.scope) || "Return trip", sub: [rt.signedOff ? "Signed off" + (rt.signedOffBy ? " by " + rt.signedOffBy : "") : (rt.rtStatus || "open"), rt.assignedTo && "on " + odFirst(rt.assignedTo)].filter(Boolean).join(" · "), right: rt.signedOff ? (rt.signedOffDate || "") : odRtLabel(rt), color: rt.signedOff || rt.rtStatus === "complete" ? OD_G : OD_R, icon: "returntrips", job: j, section: "Return Trips" }))} empty="No return trips."/>
           <div className="od-sh">Inspections <span>{inf.atts.length}</span></div>
           <Rows rows={inf.atts.map(a => ({ title: `${a.ph} inspection ${a.result === "fail" ? "failed" : "passed"}`, sub: [(a.items || []).length && odPlural(a.items.length, "item"), a.by].filter(Boolean).join(" · "), right: a.date || "", color: a.result === "fail" ? OD_R : OD_G, icon: a.result === "fail" ? "x" : "checkCircle" }))} empty="No inspection results logged."/>
           <div className="od-sh">Recent activity <span>{ev.length}</span></div>
@@ -52929,7 +52943,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-sess .t{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--cdim);white-space:nowrap}
         .odash .od-empty{color:var(--cdim);font-size:12.5px;padding:10px 2px}
         .odash .od-empty.dark{color:var(--dim)}
-        .od-sheet-wrap{position:fixed;inset:0;z-index:1000;background:rgba(27,33,45,.34);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+        .od-sheet-wrap{position:fixed;inset:0;z-index:300;background:rgba(27,33,45,.34);display:flex;justify-content:flex-end;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
         .od-sheet{width:min(560px,100%);height:100%;background:#FBF9F5;color:#292119;border-left:1px solid #E6DFD3;display:flex;flex-direction:column;box-shadow:-20px 0 50px -20px rgba(41,33,25,.35);animation:odIn .22s cubic-bezier(.2,.8,.2,1)}
         @keyframes odIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
         .od-sheet-h{display:flex;align-items:flex-start;gap:10px;padding:calc(16px + env(safe-area-inset-top,0px)) 18px 14px;border-bottom:1px solid ${C.border};background:${C.card}}
@@ -53257,9 +53271,10 @@ if (IS_DASH_PAGE) {
     if (th) th.setAttribute("content", "#F7F4EE");
   } catch (e) {}
 }
-function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial, onUpdateJob }) {
+function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial, onUpdateJob, onOpenJob, actions }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
-  const openJob = (job) => { if (job && job.id) window.location.href = "/?jobId=" + encodeURIComponent(job.id); };
+  // v594: a job opens right here on the real job card, on the tab asked for; no reload, Close comes back.
+  const openJob = (job, section) => { if (onOpenJob) onOpenJob(job, section); };
   const openApp = (url) => { if (url) window.location.href = url; };
   return (
     <div className="od-page">
@@ -53277,6 +53292,9 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
         .od-app{color:${C.text};background:${C.card};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(41,33,25,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
         .od-app:hover{border-color:rgba(142,99,54,.45)}
         .od-app .s{display:none}
+        .od-add{display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-family:inherit;line-height:1.2}
+        .od-add:hover{border-color:rgba(142,99,54,.45)}
+        .od-bell{display:inline-flex}.od-bell button{background:${C.card}!important;min-width:32px;min-height:32px;justify-content:center}
         .od-page-h button:focus-visible,.od-page-h a:focus-visible{outline:2px solid ${OD_A};outline-offset:2px}
         .od-private{max-width:520px;margin:40px auto;background:${C.card};border:1px solid ${C.border};color:${C.text};border-radius:16px;padding:20px}
         .od-private div{font-size:14px;color:${C.dim};margin-top:6px}
@@ -53295,6 +53313,7 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
               <button type="button" aria-pressed={mode === "commercial"} onClick={() => setMode("commercial")}>Commercial</button>
             </span>
           )}
+          {actions}
           <a href="/" className="od-app" aria-label="Open the app"><span className="l">Open the app</span><span className="s">App</span></a>
         </span>
       </div>
@@ -57059,6 +57078,7 @@ function UsageReportCard() {
 
   const viewLabels = {};
   [...NAV_MAIN_TABS, ...NAV_MORE_TABS, NAV_SETTINGS_TAB, NAV_SUBS_TAB].forEach(t => { viewLabels[t.key] = t.label; });
+  viewLabels.dash = "Dashboard";
   const roll = usageRollup((days || []).map(d => d.data));
   const viewRows = usageWithZeros(roll.views, Object.keys(viewLabels));
   const tabRows = usageWithZeros(roll.tabs, TABS);
@@ -61831,6 +61851,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 **Last manifest update:** 2026-10-30 · App SW version: v592
 ---
 
+- **Dashboard, one place, ship 1: the real job card opens on the Dashboard with no reload, on the right tab; bell, pushes and Add task work there; dashboard visits get their own usage count** · 'shipped 2026-11-01' · 'SW v594' · 'DashPage' · 'jobDrawer' · 'inboxBellBtn' · 'hePushPrefWrite' · 'notifClickPlan' · Koy: *"one place to handle all my work"*. '/dashboard' now mounts the app's own 'JobDetail', 'NeedQuickAdd', bell, push toast, version popups and save status (moved above the dashboard return, one copy each; the crew app still mounts them). A job panel's **Open job** opens the card in place; a question, change order or return trip row opens it on that tab; Close returns to where you were. A task or other-screen notification still opens the app on it until My Day moves here (ship 2). New per-device switch in the Dashboard's bell, **Job pushes on this device open the dashboard** (localStorage plus IndexedDB 'he_sw_prefs' for 'firebase-messaging-sw.js'), off by default; only job pushes move. Foreman view's dollar mask now covers the whole page. Usage: a dashboard visit logs as 'views/dash', no longer 'views/myday'. Gate: 'scripts/dash-oneplace-test.js'. Guide 'dashboard.html'. **Why it won't lose data:** the same job card saving through the same 'updateJob' funnel, version lock and stale-copy checks; no new job field, no rule change, no function change; the push switch is stored only on the device.
 - **Homestead lettering on the other pages** · 'shipped 2026-10-30' · 'SW v592' · 'PAGE_TITLE' · 'GROUP_TITLE' · 'PageHeader' · 'BRAND_SLAB' · Koy: *"Brand the other pages."* Page titles now use the same slab lettering as the logo, in logo brown, in normal capitals instead of all caps: Today, My Day, Needs, Huddle, Tasks, QC Walks, Scheduling Forecast and Crew Planner, Upcoming Jobs, Job Start, Job Prep, Change Orders, Time Off, Activity Log, Quotes, Contractors, Team Members, Settings, App Map, Plan Changes, plus the crew and contractor pages. Group headings on All Jobs, Tasks, Job Prep and Crew Board, and the Simpro Inbox heading, get the lettering too. Crew and contractor names and group headings keep their own colors, because those colors mean something. Nothing moved: only the lettering changed, and no title got taller. Left alone: the office dashboard, Scoreboard, FieldInk, share links, printouts, pop-up titles and the insides of job tabs. **Why it won't lose data:** only text styling on titles and the shared page header changed, with no new saves, no changed saves and no change to what any title button or link does.
 - **Screen usage and dashboard crash reports (PostHog)** · 'shipped 2026-10-30' · 'SW v591' · 'heTrack' · 'heCaptureError' · 'OdBoundary' · Koy asked for a crash counter and a count of which screens get opened. The crash side already existed: PostHog has reported uncaught errors by person and build since v529. This adds the two missing pieces. A 'screen_opened' event sends the screen's fixed key for signed-in staff, one second after the screen settles, because the app changes screens without changing the address and page views can't tell them apart. The dashboard's error boundary now reports what it catches, since a caught error never reaches PostHog's automatic capture. Both stay silent until 'REACT_APP_POSTHOG_KEY' is set at build time; the live bundle had no key on 2026-10-30, so none of the PostHog events have reached PostHog yet. No Firestore read or write, no app localStorage key, nothing on a save path, and every call is wrapped so a PostHog failure can't reach the app.
 - **Homestead branding: the flag is gone, the real logo is in** · 'shipped 2026-10-30' · 'SW v590' · 'BrandTitle' · 'hdrCompactNext' · 'B' · 'BRAND_SLAB' · Koy: *"We need a lot more Homestead branding throughout, and then we need to make it not the American flag anymore at the top,"* then, off mockups (artifact CR9PE8zZpYmUgrWfNmPQtS): *"2 on white with the big homestead logo behind the job board."* **Header:** white, with the real longhorn logo large and centered ('public/hs-logo-dark.png'), Live status and job count on the left, Resi/Commercial and date and weather on the right. Past 120px of scrolling the logo shrinks from 104px to 46px, so the pinned header takes about the room the old one did; it grows back near the top, and stays small on a short window. On a phone it's the horns only ('public/hs-horns-dark.png') in one short row. Tabs keep their order, with the active one solid brown; Commercial keeps its teal. **Page:** white, with the big logo faintly behind every page's content. **Headings:** the logo's slab lettering (Rokkitt) in the logo's brown, with its thin rules, on Job Board, Crew Schedule, Pipeline, Crews and All Jobs, plus the job page title and card titles. **Sign-in** shows the full logo. The phone's status bar and app background are white. The backup warning banner now sits above the header instead of over it, so it no longer covers the logo. Main buttons stay blue. Other pages get the header and logo now; their own page titles aren't restyled yet. Gate: 'scripts/needs-dryrun.js' (+3 checks). **Why it won't lose data:** display only. Every control keeps its same handler; no field, loader, rules or function changed.
@@ -74720,7 +74741,7 @@ function App() {
   // (online or not), so the study can see failures it could only guess at.
   const mydaySrcRef = useRef(null);
   useEffect(() => {
-    if (view !== "myday") return;
+    if (view !== "myday" || IS_DASH_PAGE) return;
     heTrack("myday_opened", { source: mydaySrcRef.current || "tab" });
     mydaySrcRef.current = null;
   }, [view]);
@@ -74795,7 +74816,7 @@ function App() {
   // a Job Board visit.
   useEffect(() => {
     if (!landingApplied || !identity?.id) return;
-    logUsage("views", view);
+    logUsage("views", IS_DASH_PAGE ? "dash" : view);   // v594: a dashboard visit used to count as My Day
   }, [view, identity, landingApplied]);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
@@ -75294,7 +75315,10 @@ function App() {
   const [inboxItems, setInboxItems] = useState([]);
   const [inboxOpen, setInboxOpen] = useState(false);
   // The bell's panel opens just under the header, which is taller at the top of a page.
-  const hdrBottom = inboxOpen ? ((document.querySelector("[data-he-nav]")?.getBoundingClientRect().bottom) || 52) : 52;
+  const hdrBottom = inboxOpen ? Math.max(52, (document.querySelector("[data-he-nav], .od-page-h")?.getBoundingClientRect().bottom) || 52) : 52;
+  // v594: this device's choice for where a job push opens; kept where the push worker can read it.
+  const [pushOpensDash, setPushOpensDash] = useState(() => { try { return localStorage.getItem("he_push_opens_dash") === "1"; } catch (e) { return false; } });
+  useEffect(() => { if (pushOpensDash) hePushPrefWrite(true); }, []); // eslint-disable-line
   const [hdrSmall, setHdrSmall] = useState(false);
   useEffect(() => {
     let raf = 0;
@@ -75378,6 +75402,11 @@ function App() {
     setInboxOpen(false);
     if (item.jobId) { openJobById(item.jobId, item.section); return; }
     if (item.view === "announce" && item.needId) { setAnnounceOpen(item.needId); return; }   // office message
+    // v594: these screens aren't on /dashboard yet, so the app opens on them. The nid marks it read there too.
+    if (IS_DASH_PAGE) {
+      if (item.view) window.location.href = `/?view=${encodeURIComponent(item.view)}${item.needId ? `&need=${encodeURIComponent(item.needId)}` : ""}${item.id ? `&nid=${encodeURIComponent(item.id)}` : ""}`;
+      return;
+    }
     if (item.view === "huddle" && can(identity, "settings.view")) setView("huddle");
     else if (item.view === "cos" && can(identity, "cos.view")) setView("cos");
     // Task-loop items carry `view`, never jobId (so they land on the list, not a job).
@@ -75439,79 +75468,105 @@ function App() {
   }
 
   // ── Standalone dashboard (v530): /dashboard, after the PIN gate and every hook ──
-  if (IS_DASH_PAGE) {
-    return <DashPage ok={canOpenDash(myLiveRec)} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
-      identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}
-      onUpdateJob={(job, patch) => { const cur = (jobs || []).find(x => x.id === job.id) || job; updateJob({ ...cur, ...patch }, patch); }}/>;
-  }
-
-  return (
-    <ProjectsCtx.Provider value={projectsCtx}>
-    <div style={{minHeight:"100vh",background:"transparent",fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
-      {/* Page backdrop + longhorn watermark (design pass 2026-10-14). It used to be a
-          z-index 0 layer that painted OVER every non-positioned card. Now it is one
-          fixed layer at z-index -1, under all content. The page colour (C.bg) lives in
-          the same layer so the watermark is not hidden behind an opaque root
-          background; the 85% C.bg wash over the logo is the old 0.15 opacity. */}
-      <div aria-hidden="true" style={{position:"fixed",inset:0,zIndex:-1,pointerEvents:"none",
-        background:"linear-gradient(rgba(255,255,255,.92),rgba(255,255,255,.92)), url(/icon-512.png) center center / min(1100px, 100vw) auto no-repeat, #FFFFFF"}}/>
-      <HEConfirmHost/>
-      <HEUndoHost/>
-      <HEPhotoLightboxHost/>
-      <HEToastHost/>
-      <HeSaveHud status={hudStatus} offlineLabel={offlineLabel} onRetry={retrySaves}/>
-
-      {/* Backup observability banner (Kweller hardening Layer 5). Red strip
-          for admin/manager when the nightly Firestore backup has never run or
-          hasn't stamped settings/backupStatus in 48h — a silent safety-net
-          failure cost us the Kweller designer replies once; never again.
-          backupStatus===null means still loading (no banner yet);
-          false means the doc is confirmed missing. Dismiss is per-session. */}
-      {can(identity,"settings.view") && !backupBannerDismissed && backupStatus!==null && (() => {
-        const lastRun = backupStatus && backupStatus.lastRunAt ? new Date(backupStatus.lastRunAt).getTime() : 0;
-        const staleOrMissing = !backupStatus || backupStatus.ok===false || (Date.now() - lastRun > 48*60*60*1000);
-        if (!staleOrMissing) return null;
-        return (
-          <div style={{position:"sticky",top:0,zIndex:9500,background:"#C62828",color:"#fff",
-            padding:"8px 16px",paddingTop:"calc(8px + env(safe-area-inset-top, 0px))",
-            display:"flex",alignItems:"center",gap:10,fontSize:13,fontWeight:700}}>
-            <Icon name="alertTriangle" size={14}/>
-            <span style={{flex:1,minWidth:0}}>
-              Nightly Firestore backups {backupStatus ? "haven't run in over 48 hours" : "have never run"} — if data gets overwritten there is no snapshot to restore from. Deploy/check the backup function.
-            </span>
-            <button onClick={()=>setBackupBannerDismissed(true)}
-              style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14,fontFamily:"inherit",flexShrink:0}}>✕</button>
-          </div>
-        );
-      })()}
-
-      {/* My Day quick-add. Phone: a floating "+" bottom-right on the list
-          views (lifts above the SIMPRO pill when that is showing; hidden while
-          a job is open — Job Detail has its own "+ Need"). Laptop: the "+ Need"
-          buttons in My Day / Needs / Job Detail open the same sheet. */}
-      {!isContractor && can(identity,"tasks.create") && ON_MOBILE && !selected && ["myday","home","foreman","needs"].includes(view) && (
-        <button onClick={()=>setQuickAdd({})} aria-label="Add a need or task"
-          style={{position:"fixed", right:20,
-            bottom:`calc(${(getAccess(identity)==="admin" && simproCandidates.filter(c=>!c.ignored).length>0) ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`,
-            zIndex:8990, width:56, height:56, borderRadius:"50%", background:C.accent, color:"#fff", border:"none", cursor:"pointer",
-            boxShadow:"0 8px 20px rgba(59,91,165,0.45)", display:"flex", alignItems:"center", justifyContent:"center"}}>
-          <Icon name="plus" size={26} stroke={2.5}/>
-        </button>
-      )}
+  // v594 (One Place, ship 1): the real job card, quick-add, bell, push toast, version popups and save status
+  // live here so the app and /dashboard mount the same ones, never copies. Same saves, same version lock.
+  const jobDrawer = selected&&(selected.quickJob
+        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} onDelete={isContractor?null:(id)=>{flushJob(selected);deleteJob(id);}} foremenList={_foremen} leadsList={_leads}/>
+        : selected.tempPed
+        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
+            canConvertQuote={can(identity,"quotes.convert")}
+            initialTab={openTab} users={users} identity={identity} needs={needs}
+            jobs={jobs}
+            onUpdateOtherJob={(jobId,patch)=>{ const other=allJobs.find(j=>j.id===jobId); if(other && jobId!==selected.id) updateJob({...other,...patch},patch); }}
+            offline={!isOnline}
+            onQuickAdd={(preset)=>setQuickAdd(preset||{})}
+            onConvertQuote={(q)=>{
+              // q already has simproNo set from the prompt
+              const updated={...q, type:""};
+              setAllJobs(js=>js.map(j=>j.id===q.id?updated:j));
+              saveJob(updated,{type:"", simproNo:q.simproNo||""});
+              setSelected(updated);
+            }}
+            onMoveBackToUpcoming={async (job)=>{
+              // Suggestion #1: pull a REGULAR job back to Upcoming. Same
+              // data-safety order as the quote-undo below: build + save the
+              // upcoming entry FIRST, only then delete the job doc. Guarded
+              // upstream by jobHasLoggedWork, re-checked here defensively.
+              if(jobHasLoggedWork(job)){ toast.error && toast.error("This job has work logged — can't move it back to Upcoming."); return; }
+              if(!await showConfirm({
+                message:`Move "${job.name||"this job"}" back to the Upcoming pipeline? It leaves the Job Board. Name, address, GC, and foreman carry over.`,
+                confirmLabel:"Move to Upcoming", cancelLabel:"Cancel"
+              })) return;
+              const u = {
+                id: uid(), name: job.name||"", address: job.address||"", city:"", sales:"",
+                customer: job.gc||"", notes:"", lastFollowUp:"",
+                foreman: job.foreman && job.foreman!=="Unassigned" ? job.foreman : "",
+                projectedStart: job.roughProjectedStart||"", startConfirmed: !!job.roughStartConfirmed, photos:[],
+              };
+              const next=[u, ...upcoming];
+              try {
+                await mergeSaveSettingsFields("upcoming_jobs",{items:next, updated_at:new Date().toISOString()});
+              } catch(err){
+                console.error("Move-job-back save failed:",err);
+                toast.error && toast.error("Couldn't save to Upcoming — job was NOT moved.");
+                return;
+              }
+              setUpcoming(next);
+              setAllJobs(js=>js.filter(j=>j.id!==job.id));
+              if(selected?.id===job.id) setSelected(null);
+              deleteJobRemote(job.id);
+              setView("upcoming");
+              toast.success && toast.success(`Moved "${job.name||"job"}" back to Upcoming.`);
+            }}
+            onMoveQuoteBackToUpcoming={async (q)=>{
+              // Recovery for an accidental "→ Quote" promote from Upcoming.
+              // Data-safety order of operations:
+              //   1. Build the upcoming entry from the quote's name/address/gc/foreman.
+              //   2. Write upcoming list to Firestore FIRST (via setDoc directly
+              //      so we can catch errors — saveAllUpcoming swallows them).
+              //   3. Only after that write resolves do we delete the quote job
+              //      doc. If the upcoming write fails, we bail before deleting
+              //      so no data is lost.
+              if(!await showConfirm({
+                message:`Move "${q.name||"this quote"}" back to the Upcoming pipeline? The quote will be removed from the Quotes list.`,
+                confirmLabel:"Move Back", cancelLabel:"Cancel"
+              })) return;
+              const u = {
+                id: uid(),
+                name: q.name || "",
+                address: q.address || "",
+                city: "",
+                sales: "",
+                customer: q.gc || "",
+                notes: "",
+                lastFollowUp: "",
+                foreman: q.foreman && q.foreman!=="Unassigned" ? q.foreman : "",
+              };
+              const next = [u, ...upcoming];
+              try {
+                await mergeSaveSettingsFields("upcoming_jobs",
+                  {items:next, updated_at:new Date().toISOString()});
+              } catch(err) {
+                console.error("Move-quote-back save failed:", err);
+                toast.error && toast.error("Couldn't save to Upcoming — quote was NOT moved.");
+                return;
+              }
+              setUpcoming(next);
+              // Now it's safe to remove the quote job — upcoming already has the data.
+              setAllJobs(js=>js.filter(j=>j.id!==q.id));
+              if(selected?.id===q.id) setSelected(null);
+              deleteJobRemote(q.id);
+              setView("upcoming");
+              toast.success && toast.success(`Moved "${q.name||"quote"}" back to Upcoming.`);
+            }}
+          />);
+  const quickAddSheet = (<>
       {quickAdd && can(identity,"tasks.create") && (
         <NeedQuickAdd identity={identity} users={users} jobs={jobs} preset={quickAdd} onSave={saveNeed} onAddNeedPhotos={addNeedPhotos} onClose={()=>setQuickAdd(null)}/>
       )}
-
-      {/* Version lock — the Update now popup (replaces the old bottom-left
-          pill, which could be ignored). Hard block: full screen, no close,
-          the app dimmed and inert behind it. During typing grace (a focused
-          field, ≤ 5 min) a red top bar shows instead so a half-filled form
-          can be finished and saved first. Phases: block / saving / retry /
-          stuck — see the Always-current block. */}
-      {/* SOFT: a newer build exists but nothing is required (Koy 2026-10-06:
-          "hard block only on require"). Bottom card, never blocks, Later hides
-          it ≤ 30 min or until the next newer build. Idle phones still reload
-          silently. A minBuild raise swaps this for the hard block at once. */}
+  </>);
+  const versionLockUi = (<>
       {softNewer && !hardLock && (
         <div data-he-lock="newer" data-he-phase={lockPhase} role="status"
           style={{position:"fixed", left:12, right:12, bottom:"calc(16px + env(safe-area-inset-bottom, 0px))", zIndex:9000,
@@ -75606,6 +75661,372 @@ function App() {
           </div>
         </div>
       )}
+  </>);
+  const pushToastEl = (<>
+      {pushToast && (
+        <div onClick={() => {
+          if (pushToast.jobId || pushToast.view) {
+            openInboxItem({ id: pushToast.nid || "", read: !pushToast.nid, jobId: pushToast.jobId || "",
+              section: pushToast.section || "", view: pushToast.view || "", needId: pushToast.needId || "" });
+          }
+          setPushToast(null);
+        }} style={{
+          position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
+          zIndex:99999, background:"#1B1F24", color:"#F4F6F8",
+          borderRadius:12, padding:"12px 18px", maxWidth:360, width:"90%",
+          boxShadow:"0 8px 32px #0008", cursor:"pointer",
+          display:"flex", flexDirection:"column", gap:2,
+        }}>
+          <div style={{fontWeight:700, fontSize:14}}>{stripEmoji(pushToast.title)}</div>
+          {pushToast.body && <div style={{fontSize:14, color:"#CDD3DB"}}>{stripEmoji(pushToast.body)}</div>}
+          {(pushToast.jobId || pushToast.view) && <div style={{fontSize:12.5, color:D.text, marginTop:2}}>Tap to open →</div>}
+        </div>
+      )}
+  </>);
+  const inboxBellBtn = (
+          <button onClick={()=>setInboxOpen(o=>!o)} title="Notifications"
+            style={{position:"relative",padding:"6px 9px",border:`1px solid ${B.line}`,borderRadius:99,
+              background:inboxOpen?`${C.accent}33`:"none",color:inboxUnread>0?C.text:C.dim,cursor:"pointer",
+              display:"inline-flex",alignItems:"center",flexShrink:0,fontFamily:"inherit"}}>
+            <Icon name="bell" size={14} stroke={2.25}/>
+            {inboxUnread>0 && (
+              <span style={{position:"absolute",top:-4,right:-4,minWidth:16,height:16,borderRadius:99,
+                background:"#C62828",color:"#fff",fontSize:11,fontWeight:800,display:"inline-flex",
+                alignItems:"center",justifyContent:"center",padding:"0 4px",boxSizing:"border-box"}}>
+                {inboxUnread>9?"9+":inboxUnread}
+              </span>
+            )}
+          </button>
+  );
+  const inboxOverlays = (<>
+          {broadcastOpen && canBroadcast(identity) && (
+            <BroadcastComposer identity={identity} users={users} onClose={()=>setBroadcastOpen(false)}/>
+          )}
+          {announceOpen && identity && (
+            <AnnouncementView key={announceOpen} identity={identity} id={announceOpen} onClose={()=>setAnnounceOpen(null)}
+              onStep={(bid)=>setAnnounceOpen(bid)}
+              siblings={(() => { const m = officeMsgs.find(x => x.id === announceOpen);
+                return m ? bcTabOrder(officeMsgs.filter(x => x.kind === m.kind)).map(x => x.id) : []; })()}/>
+          )}
+          {inboxOpen && (
+            <>
+              <div onClick={()=>setInboxOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
+              <div style={{position:"fixed",top:hdrBottom+6,right:8,zIndex:9999,width:"min(380px, calc(100vw - 16px))",
+                maxHeight:`min(480px, calc(100vh - ${hdrBottom+18}px))`,overflowY:"auto",background:C.card,
+                border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,0.18)",padding:8}}>
+                {IS_DASH_PAGE && (
+                  <label style={{display:"flex",alignItems:"flex-start",gap:8,padding:"8px",margin:"0 0 6px",borderRadius:8,background:C.surface,fontSize:12.5,color:C.text,cursor:"pointer"}}>
+                    <input type="checkbox" checked={pushOpensDash} style={{marginTop:2}} onChange={e=>{ const on=e.target.checked; setPushOpensDash(on); hePushPrefWrite(on); }}/>
+                    <span><b>Job pushes on this device open the dashboard.</b> Task pushes still open My Day in the app.</span>
+                  </label>
+                )}
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 8px 8px"}}>
+                  <span style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.06em",color:C.text,
+                    display:"inline-flex",alignItems:"center",gap:6}}>
+                    <Icon name="bell" size={12} stroke={2.5}/> NOTIFICATIONS
+                  </span>
+                  <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                    {canBroadcast(identity) && (
+                      <button onClick={()=>{setInboxOpen(false);setBroadcastOpen(true);}} title="Send a notification to everyone, a group, or picked people"
+                        style={{fontSize:12.5,color:C.accent,background:"none",border:`1px solid ${C.accent}55`,borderRadius:99,cursor:"pointer",
+                          fontFamily:"inherit",fontWeight:700,padding:"2px 9px",display:"inline-flex",alignItems:"center",gap:4}}>
+                        <Icon name="send" size={10} stroke={2.5}/> Send
+                      </button>
+                    )}
+                    {inboxUnread>0 && (
+                      <button onClick={()=>markInboxRead(inboxUnreadIds, "mark_all")}
+                        style={{fontSize:12.5,color:C.accent,background:"none",border:"none",cursor:"pointer",
+                          fontFamily:"inherit",fontWeight:700,padding:"2px 4px"}}>
+                        Mark all read
+                      </button>
+                    )}
+                  </span>
+                </div>
+                {inboxItems.length===0 && (
+                  <div style={{padding:"22px 12px",textAlign:"center",fontSize:13,color:C.dim}}>
+                    No notifications yet — nudges and reminders will land here.
+                  </div>
+                )}
+                {/* Office messages (announcements) sit in their own group at the top
+                    with a colored strip + tag, so they never get lost between change
+                    orders and return trips (Koy, 2026-10-06 mockup). v514: one card per
+                    message, and only what still needs you stays open — the rest fold
+                    into one "✓ N done" line (newest 5 + See all in My Day). */}
+                {officeMsgs.length > 0 && (() => {
+                  const need = officeMsgs.filter(m=>m.needs), done = officeMsgs.filter(m=>!m.needs);
+                  const openMsg = (id) => { setInboxOpen(false); setAnnounceOpen(id); };
+                  return (
+                    <>
+                      <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"4px 8px 4px",display:"flex"}}>
+                        <span style={{flex:1}}>FROM THE OFFICE</span>{need.length>0 && <span>{need.length} need{need.length===1?"s":""} you</span>}
+                      </div>
+                      {need.length===0 && <div style={{fontSize:13,color:C.dim,padding:"2px 10px 6px"}}>Nothing from the office needs you right now.</div>}
+                      {need.map(m=>{
+                        const kd = BC_KINDS[m.kind];
+                        const preview = m.kind==="discussion" && m.lastReply ? m.lastReply : m.body;
+                        return (
+                          <button key={m.id} onClick={()=>openMsg(m.id)}
+                            style={{display:"flex",width:"100%",textAlign:"left",padding:0,marginBottom:4,border:`1px solid ${kd.color}55`,
+                              borderRadius:9,cursor:"pointer",fontFamily:"inherit",background:"transparent",overflow:"hidden"}}>
+                            <span style={{width:4,background:kd.color,flexShrink:0}}/>
+                            <span style={{flex:1,minWidth:0,padding:"8px 10px",background:`${C.accent}14`,display:"block"}}>
+                              <span style={{display:"flex",alignItems:"center",gap:6}}>
+                                {bcTag(m.kind)}
+                                <span style={{fontSize:13,fontWeight:800,color:C.text,flex:1,minWidth:0,
+                                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.headline}</span>
+                                <span style={{fontSize:12,color:C.dim,flexShrink:0}}>{m.lastAt?timeAgo(m.lastAt):""}</span>
+                              </span>
+                              {preview && (
+                                <span style={{fontSize:13,color:C.text,marginTop:3,lineHeight:1.35,
+                                  overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{stripEmoji(preview)}</span>
+                              )}
+                              <span style={{display:"flex",gap:8,marginTop:4,fontSize:12.5,color:C.dim,flexWrap:"wrap"}}>
+                                {m.from && <span>{m.from}</span>}
+                                {m.attachments.length>0 && <span>{m.attachments.length} attached</span>}
+                                <span style={{color:kd.color,fontWeight:700}}>{bcNeedLabel(m)}</span>
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {done.length>0 && (
+                        <button onClick={()=>setBellDoneOpen(o=>!o)} aria-expanded={bellDoneOpen}
+                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:`1px dashed ${C.border}`,
+                            background:C.surface,borderRadius:9,padding:"8px 10px",cursor:"pointer",fontFamily:"inherit",
+                            fontSize:13,fontWeight:600,color:C.dim,marginBottom:4}}>
+                          <span style={{color:C.green,fontWeight:800}}>✓</span>
+                          <span style={{flex:1}}>{done.length} done</span>
+                          <Icon name={bellDoneOpen?"chevronDown":"chevronRight"} size={12}/>
+                        </button>
+                      )}
+                      {done.length>0 && bellDoneOpen && (
+                        <div style={{display:"flex",flexDirection:"column",gap:1,marginBottom:4}}>
+                          {done.slice(0,5).map(m=>(
+                            <button key={m.id} onClick={()=>openMsg(m.id)}
+                              style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:"none",background:"none",
+                                borderRadius:8,padding:"7px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:13,color:C.dim}}>
+                              <span style={{width:8,height:8,borderRadius:99,background:BC_KINDS[m.kind].color,flexShrink:0}}/>
+                              <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.text}}>{m.headline}</span>
+                              <span style={{fontSize:12.5,flexShrink:0,color:m.kind==="important"?C.green:C.dim,fontWeight:m.kind==="important"?700:400}}>
+                                {m.kind==="important" ? "✓ Got it" : (m.lastAt?timeAgo(m.lastAt):"")}
+                              </span>
+                            </button>
+                          ))}
+                          {can(identity,"myday.view") && (
+                            <button onClick={()=>{setInboxOpen(false);if(IS_DASH_PAGE){window.location.href="/?view=myday";return;}mydaySrcRef.current="bell";setView("myday");setOfficeJump({at:Date.now()});}}
+                              style={{fontSize:13,fontWeight:700,color:C.accent,background:"none",border:"none",cursor:"pointer",
+                                padding:"6px 10px",textAlign:"left",fontFamily:"inherit"}}>
+                              See all {done.length} in My Day →
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+                {officeMsgs.length > 0 && inboxItems.some(i=>!i.kind) && (
+                  <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
+                )}
+                {inboxItems.filter(i=>!i.kind).map(item=>(
+                  <button key={item.id} onClick={()=>openInboxItem(item)}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",marginBottom:2,
+                      border:"none",borderRadius:9,cursor:"pointer",fontFamily:"inherit",
+                      background:item.read?"transparent":`${C.accent}14`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7}}>
+                      {!item.read && <span style={{width:7,height:7,borderRadius:99,background:C.accent,flexShrink:0}}/>}
+                      <span style={{fontSize:13,fontWeight:item.read?600:800,color:C.text,flex:1,minWidth:0,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{stripEmoji(item.title)||"Notification"}</span>
+                      <span style={{fontSize:12,color:C.dim,flexShrink:0}}>{item.createdAt?timeAgo(item.createdAt):""}</span>
+                    </div>
+                    {item.body && (
+                      <div style={{fontSize:13,color:item.read?C.dim:C.text,marginTop:3,lineHeight:1.35,
+                        paddingLeft:!item.read?14:0}}>{stripEmoji(item.body)}</div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+  </>);
+  const appGlobalStyle = <style>{`
+
+        @keyframes taskPulse {
+          0%,100% { box-shadow: 0 0 12px rgba(178,58,58,0.13), 0 2px 8px rgba(178,58,58,0.08); }
+          50%      { box-shadow: 0 0 22px rgba(178,58,58,0.30), 0 2px 14px rgba(178,58,58,0.18); }
+        }
+        /* ── Homestead header: big centered logo that shrinks on scroll ── */
+        .he-hdr-row1{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:13px;padding:8px 16px 6px;transition:padding .18s}
+        .he-hdr-logo{display:block;height:104px;width:auto;transition:height .18s}
+        .he-hdr-horns{display:none;height:28px;width:auto}
+        .he-hdr-small .he-hdr-row1{padding:3px 16px 2px}
+        .he-hdr-small .he-hdr-logo{height:46px}
+        @media (max-height:760px){.he-hdr-logo{height:46px}.he-hdr-row1{padding:3px 16px 2px}}
+        @media (prefers-reduced-motion:reduce){.he-hdr-logo,.he-hdr-row1{transition:none}}
+        .he-home-head{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:12px}
+        @media (max-width:760px){
+          .he-home-head{grid-template-columns:minmax(0,1fr);justify-items:center}
+          .he-home-title{grid-row:1}
+        }
+        .cmd-tab{transition:background .15s,color .15s;cursor:pointer}
+        .cmd-tab:hover{background:#232936;color:#E6EAF1}
+        .cmd-cta{transition:transform .15s,box-shadow .15s;cursor:pointer}
+        .cmd-cta:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(59,91,165,.45)}
+        @keyframes cmdPulse{0%{box-shadow:0 0 0 0 rgba(52,209,127,.55)}70%{box-shadow:0 0 0 8px rgba(52,209,127,0)}100%{box-shadow:0 0 0 0 rgba(52,209,127,0)}}
+        .cmd-live{animation:cmdPulse 2.2s ease-out infinite}
+        /* ── Phone header (design pass 2026-10-14): one short row — flag mark,
+           live status, Resi/Commercial switch; date/weather and the wordmark
+           drop out, the guide hint becomes just the "?"; tabs stay scrollable. ── */
+        @media (max-width: 599px){
+          .he-hdr .he-hdr-row1{display:flex !important;align-items:center;padding:6px 12px 4px !important;gap:10px !important;flex-wrap:nowrap !important}
+          .he-hdr .he-hdr-jobs,.he-hdr .he-hdr-wx{display:none !important}
+          .he-hdr .he-hdr-mark{order:-1}
+          .he-hdr .he-hdr-logo{display:none !important}
+          .he-hdr .he-hdr-horns{display:block !important}
+          .he-hdr .he-hdr-left{flex:none}
+          .he-hdr .he-hdr-right{margin-left:auto}
+          .he-hdr .he-hdr-mode{margin-left:auto}
+          .he-hdr .he-hdr-mode button{padding:5px 9px !important;font-size:11px !important;letter-spacing:.06em !important}
+          .he-hdr .he-helpdot-hint{display:none !important}
+          .he-hdr .he-hdr-tabs{padding:2px 8px !important}
+        }
+        /* Notification problem banner: the full banner everywhere on wide screens
+           and on My Day; on phones, other tabs get one tappable line that opens
+           the same instructions. Never dismissible (notifications are critical). */
+        .he-notif-compact{display:none}
+        @media (max-width: 599px){
+          .he-notif-full.he-nf-fold{display:none !important}
+          .he-notif-compact{display:block}
+        }
+        .he-notif-compact > summary{list-style:none;cursor:pointer}
+        .he-notif-compact > summary::-webkit-details-marker{display:none}
+        @keyframes taskWarn {
+          0%,100% { box-shadow: 0 0 10px rgba(194,65,12,0.12), 0 2px 6px rgba(194,65,12,0.08); }
+          50%      { box-shadow: 0 0 18px rgba(194,65,12,0.24), 0 2px 10px rgba(194,65,12,0.14); }
+        }
+        .task-pulse { animation: taskPulse 2s ease-in-out infinite; }
+        .task-warn  { animation: taskWarn 2.5s ease-in-out infinite; }
+
+        @keyframes he-fade-in { from { opacity:0; } to { opacity:1; } }
+        @keyframes he-slide-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes he-spin { to { transform: rotate(360deg); } }
+
+        *{box-sizing:border-box;margin:0;padding:0;}
+
+        ::-webkit-scrollbar{width:4px;height:4px;}
+
+        ::-webkit-scrollbar-track{background:transparent;}
+
+        ::-webkit-scrollbar-thumb{background:#CDD3DB;border-radius:4px;}
+
+        .job-row{transition:background 0.15s,border-color 0.15s;cursor:pointer;}
+
+        .job-row:hover{background:#F4F6F8!important;border-color:#CDD3DB!important;}
+
+        .foreman-card{transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;}
+
+        .foreman-card:hover,.he-lift:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(27,31,36,.08),0 10px 24px rgba(27,31,36,.1)!important;}
+
+        .he-lift{transition:transform 0.12s,box-shadow 0.12s;}
+
+        .he-tile:hover{filter:brightness(.97);}
+
+        .he-pipe-end,.he-tile-done{max-width:190px;}
+
+        @media (max-width:700px){.he-pipe-end,.he-tile-done{max-width:none;}}
+
+        @media (prefers-reduced-motion:reduce){.he-lift,.foreman-card{transition:none;}.he-lift:hover,.foreman-card:hover{transform:none;}}
+
+`}</style>;
+  const saveHud = <HeSaveHud status={hudStatus} offlineLabel={offlineLabel} onRetry={retrySaves}/>;
+
+  if (IS_DASH_PAGE) {
+    const dashOk = canOpenDash(myLiveRec);
+    return (
+      <ProjectsCtx.Provider value={projectsCtx}>
+        {dashOk && appGlobalStyle}
+        <DashPage ok={dashOk} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
+          identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}
+          onOpenJob={(job, section) => { if (job && job.id) openJobById(job.id, section); }}
+          actions={dashOk ? <>
+            {can(identity,"tasks.create") && <button type="button" className="od-app od-add" onClick={()=>setQuickAdd({})} aria-label="Add a task"><Icon name="plus" size={13} stroke={2.5}/><span className="l">Add task</span></button>}
+            <span className="od-bell">{inboxBellBtn}</span>
+          </> : null}
+          onUpdateJob={(job, patch) => { const cur = (jobs || []).find(x => x.id === job.id) || job; updateJob({ ...cur, ...patch }, patch); }}/>
+        {dashOk && <>
+          <HEPhotoLightboxHost/>
+          {saveHud}{versionLockUi}{pushToastEl}{inboxOverlays}{jobDrawer}{quickAddSheet}
+          {openProjectId && !selected && <ProjectSheet projectId={openProjectId} onClose={() => setOpenProjectId(null)} />}
+        </>}
+      </ProjectsCtx.Provider>
+    );
+  }
+
+  return (
+    <ProjectsCtx.Provider value={projectsCtx}>
+    <div style={{minHeight:"100vh",background:"transparent",fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
+      {/* Page backdrop + longhorn watermark (design pass 2026-10-14). It used to be a
+          z-index 0 layer that painted OVER every non-positioned card. Now it is one
+          fixed layer at z-index -1, under all content. The page colour (C.bg) lives in
+          the same layer so the watermark is not hidden behind an opaque root
+          background; the 85% C.bg wash over the logo is the old 0.15 opacity. */}
+      <div aria-hidden="true" style={{position:"fixed",inset:0,zIndex:-1,pointerEvents:"none",
+        background:"linear-gradient(rgba(255,255,255,.92),rgba(255,255,255,.92)), url(/icon-512.png) center center / min(1100px, 100vw) auto no-repeat, #FFFFFF"}}/>
+      <HEConfirmHost/>
+      <HEUndoHost/>
+      <HEPhotoLightboxHost/>
+      <HEToastHost/>
+      {saveHud}
+
+      {/* Backup observability banner (Kweller hardening Layer 5). Red strip
+          for admin/manager when the nightly Firestore backup has never run or
+          hasn't stamped settings/backupStatus in 48h — a silent safety-net
+          failure cost us the Kweller designer replies once; never again.
+          backupStatus===null means still loading (no banner yet);
+          false means the doc is confirmed missing. Dismiss is per-session. */}
+      {can(identity,"settings.view") && !backupBannerDismissed && backupStatus!==null && (() => {
+        const lastRun = backupStatus && backupStatus.lastRunAt ? new Date(backupStatus.lastRunAt).getTime() : 0;
+        const staleOrMissing = !backupStatus || backupStatus.ok===false || (Date.now() - lastRun > 48*60*60*1000);
+        if (!staleOrMissing) return null;
+        return (
+          <div style={{position:"sticky",top:0,zIndex:9500,background:"#C62828",color:"#fff",
+            padding:"8px 16px",paddingTop:"calc(8px + env(safe-area-inset-top, 0px))",
+            display:"flex",alignItems:"center",gap:10,fontSize:13,fontWeight:700}}>
+            <Icon name="alertTriangle" size={14}/>
+            <span style={{flex:1,minWidth:0}}>
+              Nightly Firestore backups {backupStatus ? "haven't run in over 48 hours" : "have never run"} — if data gets overwritten there is no snapshot to restore from. Deploy/check the backup function.
+            </span>
+            <button onClick={()=>setBackupBannerDismissed(true)}
+              style={{minWidth:"var(--he-tap, 32px)",background:"none",border:"none",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14,fontFamily:"inherit",flexShrink:0}}>✕</button>
+          </div>
+        );
+      })()}
+
+      {/* My Day quick-add. Phone: a floating "+" bottom-right on the list
+          views (lifts above the SIMPRO pill when that is showing; hidden while
+          a job is open — Job Detail has its own "+ Need"). Laptop: the "+ Need"
+          buttons in My Day / Needs / Job Detail open the same sheet. */}
+      {!isContractor && can(identity,"tasks.create") && ON_MOBILE && !selected && ["myday","home","foreman","needs"].includes(view) && (
+        <button onClick={()=>setQuickAdd({})} aria-label="Add a need or task"
+          style={{position:"fixed", right:20,
+            bottom:`calc(${(getAccess(identity)==="admin" && simproCandidates.filter(c=>!c.ignored).length>0) ? 92 : 24}px + env(safe-area-inset-bottom, 0px))`,
+            zIndex:8990, width:56, height:56, borderRadius:"50%", background:C.accent, color:"#fff", border:"none", cursor:"pointer",
+            boxShadow:"0 8px 20px rgba(59,91,165,0.45)", display:"flex", alignItems:"center", justifyContent:"center"}}>
+          <Icon name="plus" size={26} stroke={2.5}/>
+        </button>
+      )}
+      {quickAddSheet}
+
+      {/* Version lock — the Update now popup (replaces the old bottom-left
+          pill, which could be ignored). Hard block: full screen, no close,
+          the app dimmed and inert behind it. During typing grace (a focused
+          field, ≤ 5 min) a red top bar shows instead so a half-filled form
+          can be finished and saved first. Phases: block / saving / retry /
+          stuck — see the Always-current block. */}
+      {/* SOFT: a newer build exists but nothing is required (Koy 2026-10-06:
+          "hard block only on require"). Bottom card, never blocks, Later hides
+          it ≤ 30 min or until the next newer build. Idle phones still reload
+          silently. A minBuild raise swaps this for the hard block at once. */}
+      {versionLockUi}
 
       {/* Simpro Inbox — floating button + modal. Admin-only: the badge is
           hidden for non-admin users (crew/foreman) so they don't see "3
@@ -75790,25 +76211,7 @@ function App() {
         );
       })()}
       {/* Push notification foreground toast — tap to open the relevant job */}
-      {pushToast && (
-        <div onClick={() => {
-          if (pushToast.jobId || pushToast.view) {
-            openInboxItem({ id: pushToast.nid || "", read: !pushToast.nid, jobId: pushToast.jobId || "",
-              section: pushToast.section || "", view: pushToast.view || "", needId: pushToast.needId || "" });
-          }
-          setPushToast(null);
-        }} style={{
-          position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
-          zIndex:99999, background:"#1B1F24", color:"#F4F6F8",
-          borderRadius:12, padding:"12px 18px", maxWidth:360, width:"90%",
-          boxShadow:"0 8px 32px #0008", cursor:"pointer",
-          display:"flex", flexDirection:"column", gap:2,
-        }}>
-          <div style={{fontWeight:700, fontSize:14}}>{stripEmoji(pushToast.title)}</div>
-          {pushToast.body && <div style={{fontSize:14, color:"#CDD3DB"}}>{stripEmoji(pushToast.body)}</div>}
-          {(pushToast.jobId || pushToast.view) && <div style={{fontSize:12.5, color:D.text, marginTop:2}}>Tap to open →</div>}
-        </div>
-      )}
+      {pushToastEl}
 
 
 
@@ -75936,161 +76339,8 @@ function App() {
         )}
         <div style={{flex:"1 0 auto",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:8}}>
           {/* ── Notification inbox bell ── */}
-          <button onClick={()=>setInboxOpen(o=>!o)} title="Notifications"
-            style={{position:"relative",padding:"6px 9px",border:`1px solid ${B.line}`,borderRadius:99,
-              background:inboxOpen?`${C.accent}33`:"none",color:inboxUnread>0?C.text:C.dim,cursor:"pointer",
-              display:"inline-flex",alignItems:"center",flexShrink:0,fontFamily:"inherit"}}>
-            <Icon name="bell" size={14} stroke={2.25}/>
-            {inboxUnread>0 && (
-              <span style={{position:"absolute",top:-4,right:-4,minWidth:16,height:16,borderRadius:99,
-                background:"#C62828",color:"#fff",fontSize:11,fontWeight:800,display:"inline-flex",
-                alignItems:"center",justifyContent:"center",padding:"0 4px",boxSizing:"border-box"}}>
-                {inboxUnread>9?"9+":inboxUnread}
-              </span>
-            )}
-          </button>
-          {broadcastOpen && canBroadcast(identity) && (
-            <BroadcastComposer identity={identity} users={users} onClose={()=>setBroadcastOpen(false)}/>
-          )}
-          {announceOpen && identity && (
-            <AnnouncementView key={announceOpen} identity={identity} id={announceOpen} onClose={()=>setAnnounceOpen(null)}
-              onStep={(bid)=>setAnnounceOpen(bid)}
-              siblings={(() => { const m = officeMsgs.find(x => x.id === announceOpen);
-                return m ? bcTabOrder(officeMsgs.filter(x => x.kind === m.kind)).map(x => x.id) : []; })()}/>
-          )}
-          {inboxOpen && (
-            <>
-              <div onClick={()=>setInboxOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
-              <div style={{position:"fixed",top:hdrBottom+6,right:8,zIndex:9999,width:"min(380px, calc(100vw - 16px))",
-                maxHeight:`min(480px, calc(100vh - ${hdrBottom+18}px))`,overflowY:"auto",background:C.card,
-                border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,0.18)",padding:8}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 8px 8px"}}>
-                  <span style={{fontSize:12.5,fontWeight:800,letterSpacing:"0.06em",color:C.text,
-                    display:"inline-flex",alignItems:"center",gap:6}}>
-                    <Icon name="bell" size={12} stroke={2.5}/> NOTIFICATIONS
-                  </span>
-                  <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
-                    {canBroadcast(identity) && (
-                      <button onClick={()=>{setInboxOpen(false);setBroadcastOpen(true);}} title="Send a notification to everyone, a group, or picked people"
-                        style={{fontSize:12.5,color:C.accent,background:"none",border:`1px solid ${C.accent}55`,borderRadius:99,cursor:"pointer",
-                          fontFamily:"inherit",fontWeight:700,padding:"2px 9px",display:"inline-flex",alignItems:"center",gap:4}}>
-                        <Icon name="send" size={10} stroke={2.5}/> Send
-                      </button>
-                    )}
-                    {inboxUnread>0 && (
-                      <button onClick={()=>markInboxRead(inboxUnreadIds, "mark_all")}
-                        style={{fontSize:12.5,color:C.accent,background:"none",border:"none",cursor:"pointer",
-                          fontFamily:"inherit",fontWeight:700,padding:"2px 4px"}}>
-                        Mark all read
-                      </button>
-                    )}
-                  </span>
-                </div>
-                {inboxItems.length===0 && (
-                  <div style={{padding:"22px 12px",textAlign:"center",fontSize:13,color:C.dim}}>
-                    No notifications yet — nudges and reminders will land here.
-                  </div>
-                )}
-                {/* Office messages (announcements) sit in their own group at the top
-                    with a colored strip + tag, so they never get lost between change
-                    orders and return trips (Koy, 2026-10-06 mockup). v514: one card per
-                    message, and only what still needs you stays open — the rest fold
-                    into one "✓ N done" line (newest 5 + See all in My Day). */}
-                {officeMsgs.length > 0 && (() => {
-                  const need = officeMsgs.filter(m=>m.needs), done = officeMsgs.filter(m=>!m.needs);
-                  const openMsg = (id) => { setInboxOpen(false); setAnnounceOpen(id); };
-                  return (
-                    <>
-                      <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"4px 8px 4px",display:"flex"}}>
-                        <span style={{flex:1}}>FROM THE OFFICE</span>{need.length>0 && <span>{need.length} need{need.length===1?"s":""} you</span>}
-                      </div>
-                      {need.length===0 && <div style={{fontSize:13,color:C.dim,padding:"2px 10px 6px"}}>Nothing from the office needs you right now.</div>}
-                      {need.map(m=>{
-                        const kd = BC_KINDS[m.kind];
-                        const preview = m.kind==="discussion" && m.lastReply ? m.lastReply : m.body;
-                        return (
-                          <button key={m.id} onClick={()=>openMsg(m.id)}
-                            style={{display:"flex",width:"100%",textAlign:"left",padding:0,marginBottom:4,border:`1px solid ${kd.color}55`,
-                              borderRadius:9,cursor:"pointer",fontFamily:"inherit",background:"transparent",overflow:"hidden"}}>
-                            <span style={{width:4,background:kd.color,flexShrink:0}}/>
-                            <span style={{flex:1,minWidth:0,padding:"8px 10px",background:`${C.accent}14`,display:"block"}}>
-                              <span style={{display:"flex",alignItems:"center",gap:6}}>
-                                {bcTag(m.kind)}
-                                <span style={{fontSize:13,fontWeight:800,color:C.text,flex:1,minWidth:0,
-                                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.headline}</span>
-                                <span style={{fontSize:12,color:C.dim,flexShrink:0}}>{m.lastAt?timeAgo(m.lastAt):""}</span>
-                              </span>
-                              {preview && (
-                                <span style={{fontSize:13,color:C.text,marginTop:3,lineHeight:1.35,
-                                  overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{stripEmoji(preview)}</span>
-                              )}
-                              <span style={{display:"flex",gap:8,marginTop:4,fontSize:12.5,color:C.dim,flexWrap:"wrap"}}>
-                                {m.from && <span>{m.from}</span>}
-                                {m.attachments.length>0 && <span>{m.attachments.length} attached</span>}
-                                <span style={{color:kd.color,fontWeight:700}}>{bcNeedLabel(m)}</span>
-                              </span>
-                            </span>
-                          </button>
-                        );
-                      })}
-                      {done.length>0 && (
-                        <button onClick={()=>setBellDoneOpen(o=>!o)} aria-expanded={bellDoneOpen}
-                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:`1px dashed ${C.border}`,
-                            background:C.surface,borderRadius:9,padding:"8px 10px",cursor:"pointer",fontFamily:"inherit",
-                            fontSize:13,fontWeight:600,color:C.dim,marginBottom:4}}>
-                          <span style={{color:C.green,fontWeight:800}}>✓</span>
-                          <span style={{flex:1}}>{done.length} done</span>
-                          <Icon name={bellDoneOpen?"chevronDown":"chevronRight"} size={12}/>
-                        </button>
-                      )}
-                      {done.length>0 && bellDoneOpen && (
-                        <div style={{display:"flex",flexDirection:"column",gap:1,marginBottom:4}}>
-                          {done.slice(0,5).map(m=>(
-                            <button key={m.id} onClick={()=>openMsg(m.id)}
-                              style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",border:"none",background:"none",
-                                borderRadius:8,padding:"7px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:13,color:C.dim}}>
-                              <span style={{width:8,height:8,borderRadius:99,background:BC_KINDS[m.kind].color,flexShrink:0}}/>
-                              <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.text}}>{m.headline}</span>
-                              <span style={{fontSize:12.5,flexShrink:0,color:m.kind==="important"?C.green:C.dim,fontWeight:m.kind==="important"?700:400}}>
-                                {m.kind==="important" ? "✓ Got it" : (m.lastAt?timeAgo(m.lastAt):"")}
-                              </span>
-                            </button>
-                          ))}
-                          {can(identity,"myday.view") && (
-                            <button onClick={()=>{setInboxOpen(false);mydaySrcRef.current="bell";setView("myday");setOfficeJump({at:Date.now()});}}
-                              style={{fontSize:13,fontWeight:700,color:C.accent,background:"none",border:"none",cursor:"pointer",
-                                padding:"6px 10px",textAlign:"left",fontFamily:"inherit"}}>
-                              See all {done.length} in My Day →
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-                {officeMsgs.length > 0 && inboxItems.some(i=>!i.kind) && (
-                  <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.08em",color:C.faint,padding:"8px 8px 4px"}}>EVERYTHING ELSE</div>
-                )}
-                {inboxItems.filter(i=>!i.kind).map(item=>(
-                  <button key={item.id} onClick={()=>openInboxItem(item)}
-                    style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",marginBottom:2,
-                      border:"none",borderRadius:9,cursor:"pointer",fontFamily:"inherit",
-                      background:item.read?"transparent":`${C.accent}14`}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7}}>
-                      {!item.read && <span style={{width:7,height:7,borderRadius:99,background:C.accent,flexShrink:0}}/>}
-                      <span style={{fontSize:13,fontWeight:item.read?600:800,color:C.text,flex:1,minWidth:0,
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{stripEmoji(item.title)||"Notification"}</span>
-                      <span style={{fontSize:12,color:C.dim,flexShrink:0}}>{item.createdAt?timeAgo(item.createdAt):""}</span>
-                    </div>
-                    {item.body && (
-                      <div style={{fontSize:13,color:item.read?C.dim:C.text,marginTop:3,lineHeight:1.35,
-                        paddingLeft:!item.read?14:0}}>{stripEmoji(item.body)}</div>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+          {inboxBellBtn}
+          {inboxOverlays}
           <span style={{fontSize:12.5,color:C.text,background:C.card,border:`1px solid ${B.line}`,
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
             {identity.name} · {ACCESS_LABELS[getAccess(identity)]||getAccess(identity)}
@@ -76253,95 +76503,7 @@ function App() {
 
       })()}
 
-      <style>{`
-
-        @keyframes taskPulse {
-          0%,100% { box-shadow: 0 0 12px rgba(178,58,58,0.13), 0 2px 8px rgba(178,58,58,0.08); }
-          50%      { box-shadow: 0 0 22px rgba(178,58,58,0.30), 0 2px 14px rgba(178,58,58,0.18); }
-        }
-        /* ── Homestead header: big centered logo that shrinks on scroll ── */
-        .he-hdr-row1{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:13px;padding:8px 16px 6px;transition:padding .18s}
-        .he-hdr-logo{display:block;height:104px;width:auto;transition:height .18s}
-        .he-hdr-horns{display:none;height:28px;width:auto}
-        .he-hdr-small .he-hdr-row1{padding:3px 16px 2px}
-        .he-hdr-small .he-hdr-logo{height:46px}
-        @media (max-height:760px){.he-hdr-logo{height:46px}.he-hdr-row1{padding:3px 16px 2px}}
-        @media (prefers-reduced-motion:reduce){.he-hdr-logo,.he-hdr-row1{transition:none}}
-        .he-home-head{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:12px}
-        @media (max-width:760px){
-          .he-home-head{grid-template-columns:minmax(0,1fr);justify-items:center}
-          .he-home-title{grid-row:1}
-        }
-        .cmd-tab{transition:background .15s,color .15s;cursor:pointer}
-        .cmd-tab:hover{background:#232936;color:#E6EAF1}
-        .cmd-cta{transition:transform .15s,box-shadow .15s;cursor:pointer}
-        .cmd-cta:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(59,91,165,.45)}
-        @keyframes cmdPulse{0%{box-shadow:0 0 0 0 rgba(52,209,127,.55)}70%{box-shadow:0 0 0 8px rgba(52,209,127,0)}100%{box-shadow:0 0 0 0 rgba(52,209,127,0)}}
-        .cmd-live{animation:cmdPulse 2.2s ease-out infinite}
-        /* ── Phone header (design pass 2026-10-14): one short row — flag mark,
-           live status, Resi/Commercial switch; date/weather and the wordmark
-           drop out, the guide hint becomes just the "?"; tabs stay scrollable. ── */
-        @media (max-width: 599px){
-          .he-hdr .he-hdr-row1{display:flex !important;align-items:center;padding:6px 12px 4px !important;gap:10px !important;flex-wrap:nowrap !important}
-          .he-hdr .he-hdr-jobs,.he-hdr .he-hdr-wx{display:none !important}
-          .he-hdr .he-hdr-mark{order:-1}
-          .he-hdr .he-hdr-logo{display:none !important}
-          .he-hdr .he-hdr-horns{display:block !important}
-          .he-hdr .he-hdr-left{flex:none}
-          .he-hdr .he-hdr-right{margin-left:auto}
-          .he-hdr .he-hdr-mode{margin-left:auto}
-          .he-hdr .he-hdr-mode button{padding:5px 9px !important;font-size:11px !important;letter-spacing:.06em !important}
-          .he-hdr .he-helpdot-hint{display:none !important}
-          .he-hdr .he-hdr-tabs{padding:2px 8px !important}
-        }
-        /* Notification problem banner: the full banner everywhere on wide screens
-           and on My Day; on phones, other tabs get one tappable line that opens
-           the same instructions. Never dismissible (notifications are critical). */
-        .he-notif-compact{display:none}
-        @media (max-width: 599px){
-          .he-notif-full.he-nf-fold{display:none !important}
-          .he-notif-compact{display:block}
-        }
-        .he-notif-compact > summary{list-style:none;cursor:pointer}
-        .he-notif-compact > summary::-webkit-details-marker{display:none}
-        @keyframes taskWarn {
-          0%,100% { box-shadow: 0 0 10px rgba(194,65,12,0.12), 0 2px 6px rgba(194,65,12,0.08); }
-          50%      { box-shadow: 0 0 18px rgba(194,65,12,0.24), 0 2px 10px rgba(194,65,12,0.14); }
-        }
-        .task-pulse { animation: taskPulse 2s ease-in-out infinite; }
-        .task-warn  { animation: taskWarn 2.5s ease-in-out infinite; }
-
-        @keyframes he-fade-in { from { opacity:0; } to { opacity:1; } }
-        @keyframes he-slide-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
-        @keyframes he-spin { to { transform: rotate(360deg); } }
-
-        *{box-sizing:border-box;margin:0;padding:0;}
-
-        ::-webkit-scrollbar{width:4px;height:4px;}
-
-        ::-webkit-scrollbar-track{background:transparent;}
-
-        ::-webkit-scrollbar-thumb{background:#CDD3DB;border-radius:4px;}
-
-        .job-row{transition:background 0.15s,border-color 0.15s;cursor:pointer;}
-
-        .job-row:hover{background:#F4F6F8!important;border-color:#CDD3DB!important;}
-
-        .foreman-card{transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;}
-
-        .foreman-card:hover,.he-lift:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 2px 4px rgba(27,31,36,.08),0 10px 24px rgba(27,31,36,.1)!important;}
-
-        .he-lift{transition:transform 0.12s,box-shadow 0.12s;}
-
-        .he-tile:hover{filter:brightness(.97);}
-
-        .he-pipe-end,.he-tile-done{max-width:190px;}
-
-        @media (max-width:700px){.he-pipe-end,.he-tile-done{max-width:none;}}
-
-        @media (prefers-reduced-motion:reduce){.he-lift,.foreman-card{transition:none;}.he-lift:hover,.foreman-card:hover{transform:none;}}
-
-      `}</style>
+      {appGlobalStyle}
 
 
       {/* ── HOME PAGE ── */}
@@ -77121,97 +77283,7 @@ function App() {
       )}
 
 
-      {selected&&(selected.quickJob
-        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} onDelete={isContractor?null:(id)=>{flushJob(selected);deleteJob(id);}} foremenList={_foremen} leadsList={_leads}/>
-        : selected.tempPed
-        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
-        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
-            canConvertQuote={can(identity,"quotes.convert")}
-            initialTab={openTab} users={users} identity={identity} needs={needs}
-            jobs={jobs}
-            onUpdateOtherJob={(jobId,patch)=>{ const other=allJobs.find(j=>j.id===jobId); if(other && jobId!==selected.id) updateJob({...other,...patch},patch); }}
-            offline={!isOnline}
-            onQuickAdd={(preset)=>setQuickAdd(preset||{})}
-            onConvertQuote={(q)=>{
-              // q already has simproNo set from the prompt
-              const updated={...q, type:""};
-              setAllJobs(js=>js.map(j=>j.id===q.id?updated:j));
-              saveJob(updated,{type:"", simproNo:q.simproNo||""});
-              setSelected(updated);
-            }}
-            onMoveBackToUpcoming={async (job)=>{
-              // Suggestion #1: pull a REGULAR job back to Upcoming. Same
-              // data-safety order as the quote-undo below: build + save the
-              // upcoming entry FIRST, only then delete the job doc. Guarded
-              // upstream by jobHasLoggedWork, re-checked here defensively.
-              if(jobHasLoggedWork(job)){ toast.error && toast.error("This job has work logged — can't move it back to Upcoming."); return; }
-              if(!await showConfirm({
-                message:`Move "${job.name||"this job"}" back to the Upcoming pipeline? It leaves the Job Board. Name, address, GC, and foreman carry over.`,
-                confirmLabel:"Move to Upcoming", cancelLabel:"Cancel"
-              })) return;
-              const u = {
-                id: uid(), name: job.name||"", address: job.address||"", city:"", sales:"",
-                customer: job.gc||"", notes:"", lastFollowUp:"",
-                foreman: job.foreman && job.foreman!=="Unassigned" ? job.foreman : "",
-                projectedStart: job.roughProjectedStart||"", startConfirmed: !!job.roughStartConfirmed, photos:[],
-              };
-              const next=[u, ...upcoming];
-              try {
-                await mergeSaveSettingsFields("upcoming_jobs",{items:next, updated_at:new Date().toISOString()});
-              } catch(err){
-                console.error("Move-job-back save failed:",err);
-                toast.error && toast.error("Couldn't save to Upcoming — job was NOT moved.");
-                return;
-              }
-              setUpcoming(next);
-              setAllJobs(js=>js.filter(j=>j.id!==job.id));
-              if(selected?.id===job.id) setSelected(null);
-              deleteJobRemote(job.id);
-              setView("upcoming");
-              toast.success && toast.success(`Moved "${job.name||"job"}" back to Upcoming.`);
-            }}
-            onMoveQuoteBackToUpcoming={async (q)=>{
-              // Recovery for an accidental "→ Quote" promote from Upcoming.
-              // Data-safety order of operations:
-              //   1. Build the upcoming entry from the quote's name/address/gc/foreman.
-              //   2. Write upcoming list to Firestore FIRST (via setDoc directly
-              //      so we can catch errors — saveAllUpcoming swallows them).
-              //   3. Only after that write resolves do we delete the quote job
-              //      doc. If the upcoming write fails, we bail before deleting
-              //      so no data is lost.
-              if(!await showConfirm({
-                message:`Move "${q.name||"this quote"}" back to the Upcoming pipeline? The quote will be removed from the Quotes list.`,
-                confirmLabel:"Move Back", cancelLabel:"Cancel"
-              })) return;
-              const u = {
-                id: uid(),
-                name: q.name || "",
-                address: q.address || "",
-                city: "",
-                sales: "",
-                customer: q.gc || "",
-                notes: "",
-                lastFollowUp: "",
-                foreman: q.foreman && q.foreman!=="Unassigned" ? q.foreman : "",
-              };
-              const next = [u, ...upcoming];
-              try {
-                await mergeSaveSettingsFields("upcoming_jobs",
-                  {items:next, updated_at:new Date().toISOString()});
-              } catch(err) {
-                console.error("Move-quote-back save failed:", err);
-                toast.error && toast.error("Couldn't save to Upcoming — quote was NOT moved.");
-                return;
-              }
-              setUpcoming(next);
-              // Now it's safe to remove the quote job — upcoming already has the data.
-              setAllJobs(js=>js.filter(j=>j.id!==q.id));
-              if(selected?.id===q.id) setSelected(null);
-              deleteJobRemote(q.id);
-              setView("upcoming");
-              toast.success && toast.success(`Moved "${q.name||"quote"}" back to Upcoming.`);
-            }}
-          />)}
+      {jobDrawer}
 
       {/* ── BOOK PAGE (all of a coordinator's foremen's jobs in one spot) ── */}
       {/* Book page removed 2026-09-12 — one company, no books; ALL JOBS below covers it. */}

@@ -49,6 +49,36 @@ function deepLinkUrl(d) {
   return origin + "/";
 }
 
+// v594 (One Place): "Job pushes on this device open the dashboard" (set in the dashboard's bell). Only a job
+// push moves; a task or view push goes where it always went. Any trouble reading the setting means the app.
+function readPushOpensDash() {
+  return new Promise(resolve => {
+    const t = setTimeout(() => resolve(false), 400);
+    const done = v => { clearTimeout(t); resolve(v === true); };
+    try {
+      const r = indexedDB.open("he_sw_prefs", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onerror = () => done(false);
+      r.onsuccess = () => {
+        try {
+          const idb = r.result, g = idb.transaction("kv", "readonly").objectStore("kv").get("pushOpensDash");
+          g.onsuccess = () => { idb.close(); done(g.result); };
+          g.onerror = () => { idb.close(); done(false); };
+        } catch (e) { done(false); }
+      };
+    } catch (e) { done(false); }
+  });
+}
+// Which open window gets the tap, or which address opens when there is none. Pure.
+function notifClickPlan(wins, target, url, prefOn, origin) {
+  const mine = (wins || []).filter(c => c && String(c.url || "").startsWith(origin));
+  const isDash = c => { try { return /^\/dashboard\/?$/.test(new URL(c.url).pathname); } catch (e) { return false; } };
+  const wantsDash = !!prefOn && !!target.jobId && !target.view;
+  const client = (wantsDash ? mine.find(isDash) : mine.find(c => !isDash(c))) || mine[0] || null;
+  const toDash = wantsDash && String(url).startsWith(origin + "/?");
+  return { client, url: toDash ? origin + "/dashboard?" + String(url).slice(origin.length + 2) : url };
+}
+
 // Best-effort "the device displayed it" ping (callable protocol over fetch).
 // Never retried, never blocks the banner, silently skipped for test pushes.
 function sendReceipt(d, visible) {
@@ -149,12 +179,13 @@ self.addEventListener("notificationclick", event => {
 
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const app = wins.find(c => c.url.startsWith(self.location.origin));
-    if (app) {
-      try { await app.focus(); } catch (e) { /* focus can be refused; still deliver the message */ }
-      app.postMessage(target);
+    const prefOn = await readPushOpensDash();
+    const plan = notifClickPlan(wins, target, url, prefOn, self.location.origin);
+    if (plan.client) {
+      try { await plan.client.focus(); } catch (e) { /* focus can be refused; still deliver the message */ }
+      plan.client.postMessage(target);
       return;
     }
-    await self.clients.openWindow(url);
+    await self.clients.openWindow(plan.url);
   })());
 });
