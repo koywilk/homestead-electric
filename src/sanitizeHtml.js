@@ -257,14 +257,9 @@ function purifier() {
  * tag. Mirrors the escape already applied to the FieldInk sibling path at
  * App.js:24243.
  */
-function escapeHtml(text) {
-  return String(text == null ? "" : text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+// v603: the function body lives in src/escapeHtml.js (no requires) so the
+// duetApi Cloud Function can use the same lines; re-exported here unchanged.
+const { escapeHtml } = require("./escapeHtml");
 
 // Sanitizing is cheap but these values render inside punch lists that can run
 // to hundreds of rows and re-render on every keystroke elsewhere on the page.

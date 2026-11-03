@@ -8,11 +8,18 @@
 // Guardrails, enforced here on every call (plan §3, docs/DUET-WRITES-PLAN.md
 // in the connector repo):
 //   • collections: jobs (update only: one item in changeOrders / returnTrips,
-//     or the statusUpdate scalar — ship 2; a photo on one item — ship 3),
-//     needs (create + update; a photo — ship 3). Storage: one object under the
-//     app's own jobs/<id>/… photo folders (ship 3), deleted again only when
-//     its own transaction failed. Never a delete, never a job create, never
-//     anything else.
+//     or the statusUpdate scalar — ship 2; a photo on one item — ship 3; one
+//     question in roughQuestions / finishQuestions, one note in jobNotes (+
+//     the jobNotesMigratedAt stamp), one entry in roughUpdates /
+//     finishUpdates — ship 4), needs (create + update; a photo — ship 3),
+//     homeowner_requests/<jobId> (ship 4: the questionThreads.<key> field
+//     ONLY — one appended message — plus its versions subcollection, where
+//     the writer's own snapshot is added and pruned to 10 exactly as the
+//     app's snapshotHomeownerRequestVersion does). Storage: one object under
+//     the app's own jobs/<id>/… photo folders (ship 3), deleted again only
+//     when its own transaction failed. Never a delete of data, never a job
+//     create, never anything else. The ONLY deletes anywhere in this file
+//     are that Storage cleanup and the versions prune.
 //   • one item per call; transaction, read-modify-write by id
 //   • names checked against settings/users (active, not contractor)
 //   • idempotent: duet_writes/<requestId> is the audit doc AND the replay key
@@ -41,19 +48,37 @@
 // that item's photos[] and audits — entry under `after`, never the bytes. If
 // the transaction refuses or fails after the upload, the just-uploaded object
 // (and only that object) is deleted again.
+// Ship 4 (questions, job notes, daily updates): nine more job writes through
+// the same jobWrite() transaction — QAList.addQuestion / My Day's Save answer
+// and Done / the QAList un-tick on one question found by id across the three
+// floors; addNote / addLine / a line edit / archive / soft delete on one job
+// note, with the app's own migration materialized (functions/jobNotesShape.js,
+// a byte copy of src/jobNotesShape.js) and jobNotesMigratedAt stamped the
+// first time, exactly as JobDetail u() does; DailyUpdates.add prepended — and
+// ONE write on homeowner_requests/<jobId> (question.reply) copying
+// postQuestionThreadMessage: the thread key "<phase>_<floor>_<qid>", a
+// first-ever doc set, otherwise the one dotted questionThreads.<key> updated,
+// then the versions snapshot pruned to 10. Answers go through the app's own
+// escapeHtml (functions/escapeHtml.js, a byte copy of src/escapeHtml.js).
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
 const PH = require("./photos.js");
+const QS = require("./questions.js");
+const NU = require("./notesUpdates.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 602;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 603;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const AUDIT = "duet_writes";
+const QUESTION_ACTIONS = ["question.add", "question.answer", "question.reopen"];
+const NOTE_ACTIONS = ["note.add", "note.addLine", "note.editLine", "note.archive", "note.delete", "dailyUpdate.add"];
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
+const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS];   // every action that is ONE jobWrite() transaction
 const PHOTO_ACTIONS = ["photo.add"];
-const ACTIONS = ["task.create", "task.update", ...JOB_ACTIONS, ...PHOTO_ACTIONS];
+const THREAD_ACTIONS = ["question.reply"];
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -77,6 +102,13 @@ function freshIso(prevIso) {
 }
 function stamp(requestId, updatedAt) {
   return { updated_at: updatedAt, saved_by: SAVED_BY, device: "duet", tab: `duet-${String(requestId).slice(0, 8)}`, app_build: BUILD, w: `${BUILD}.duet${Math.random().toString(36).slice(2, 10)}` };
+}
+
+// The app's sanitize(): drop undefined values before a Firestore write.
+function dropUndefined(obj) {
+  if (Array.isArray(obj)) return obj.map(dropUndefined);
+  if (obj && typeof obj === "object" && Object.getPrototypeOf(obj) === Object.prototype) return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined).map(([k, v]) => [k, dropUndefined(v)]));
+  return obj;
 }
 
 // io: { nowIso(), todayYmd(), getAudit(id), countRecent(sinceIso), getJob(id), getUsers(),
@@ -155,9 +187,95 @@ function planJobAction(action, args, ctx) {
         if (p.noop) return { noop: true, result: { statusUpdate: p.statusUpdate } };
         return { fields: p.fields, before: p.before, after: { ...p.fields }, result: { statusUpdate: p.fields.statusUpdate, statusUpdateBy: p.fields.statusUpdateBy, changed: p.changed, historyLength: Array.isArray(p.fields.statusUpdateHistory) ? p.fields.statusUpdateHistory.length : undefined } };
       }
+      // ── Ship 4 ─────────────────────────────────────────────────────────────
+      case "question.add": {
+        const p = QS.planAddQuestion(args, c); if (p.refused) return p;
+        return { fields: { [p.field]: p.questions }, before: { [p.field]: null }, after: { [p.field]: p.q }, itemId: p.q.id,
+          result: { qId: p.q.id, phase: args.phase, floor: p.floor, number: p.number, question: p.q.question, for: p.q.for, room: p.q.room || "", pushTo: ["foreman", "coordinator"] } };
+      }
+      case "question.answer": {
+        const p = QS.planAnswerQuestion(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { qId: p.q.id, floor: p.floor, number: p.number, done: true } };
+        return { fields: { [p.field]: p.questions }, before: { [p.field]: p.before }, after: { [p.field]: p.q }, itemId: p.q.id,
+          result: { qId: p.q.id, phase: args.phase, floor: p.floor, number: p.number, changed: p.changed, done: p.q.done, answeredBy: p.q.answeredBy || "", answeredVia: p.q.answeredVia || "", pushTo: [] } };
+      }
+      case "question.reopen": {
+        const p = QS.planReopenQuestion(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { qId: p.q.id, floor: p.floor, number: p.number, done: false } };
+        return { fields: { [p.field]: p.questions }, before: { [p.field]: p.before }, after: { [p.field]: p.q }, itemId: p.q.id,
+          result: { qId: p.q.id, phase: args.phase, floor: p.floor, number: p.number, changed: p.changed, done: false, gcRejected: !!p.patch.gcRejected, pushTo: [] } };
+      }
+      case "note.add": {
+        const p = NU.planAddNote(args, c); if (p.refused) return p;
+        const stamped = Object.prototype.hasOwnProperty.call(p.fields, "jobNotesMigratedAt");
+        return { fields: p.fields, before: { jobNotes: null, ...(stamped ? { jobNotesMigratedAt: null } : {}) }, after: { jobNotes: p.note, ...(stamped ? { jobNotesMigratedAt: p.fields.jobNotesMigratedAt } : {}) }, itemId: p.note.id,
+          result: { noteId: p.note.id, lineId: p.note.lines[0].id, number: p.number, title: p.note.title, phase: p.note.phase, migratedLegacyNotes: p.migrated, notesOnJob: p.fields.jobNotes.length, pushTo: [] } };
+      }
+      case "note.addLine": {
+        const p = NU.planAddLine(args, c); if (p.refused) return p;
+        return { fields: p.fields, before: { jobNotes: p.before }, after: { jobNotes: p.note }, itemId: p.note.id,
+          result: { noteId: p.note.id, lineId: p.line.id, number: p.number, lines: p.note.lines.length, pushTo: [] } };
+      }
+      case "note.editLine": {
+        const p = NU.planEditLine(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { noteId: p.note.id, lineId: p.line.id, number: p.number } };
+        return { fields: p.fields, before: { jobNotes: p.before }, after: { jobNotes: p.note }, itemId: p.note.id,
+          result: { noteId: p.note.id, lineId: p.line.id, number: p.number, text: p.line.text, pushTo: [] } };
+      }
+      case "note.archive": {
+        const p = NU.planArchiveNote(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { noteId: p.note.id, number: p.number, archived: !!p.note.archived } };
+        return { fields: p.fields, before: { jobNotes: p.before }, after: { jobNotes: p.note }, itemId: p.note.id,
+          result: { noteId: p.note.id, number: p.number, archived: !!p.note.archived, pushTo: [] } };
+      }
+      case "note.delete": {
+        const p = NU.planDeleteNote(args, c); if (p.refused) return p;
+        return { fields: p.fields, before: { jobNotes: p.before }, after: { jobNotes: p.note }, itemId: p.note.id,
+          result: { noteId: p.note.id, number: p.number, deleted: true, softDelete: true, promotedLinesKept: p.promotedLines, pushTo: [] } };
+      }
+      case "dailyUpdate.add": {
+        const p = NU.planAddDailyUpdate(args, c); if (p.refused) return p;
+        return { fields: { [p.field]: p.updates }, before: { [p.field]: null }, after: { [p.field]: p.entry }, itemId: p.entry.id,
+          result: { updateId: p.entry.id, phase: args.phase, date: p.entry.date, number: p.number, text: p.entry.text, pushTo: ["coordinator"] } };
+      }
       default: return { refused: "unknown action" };
     }
   };
+}
+
+// Ship 4: ONE reply on a question's discussion thread — postQuestionThreadMessage
+// line for line, on homeowner_requests/<jobId> (never the job doc: the Kweller
+// rule for outside-party data). The job is read in the same transaction only
+// to find the question (its floor is part of the key); the thread doc is read
+// under lock, the one dotted questionThreads.<key> written (a first-ever doc
+// is set whole, as the app does), the audit doc rides along, and AFTER the
+// write the app's versions snapshot is taken and pruned to 10 — best effort,
+// never blocking, exactly snapshotHomeownerRequestVersion's fail-open.
+async function threadReply(io, requestId, action, args, ctx, finish, refused) {
+  const jobId = String(args.jobId || "");
+  if (!JOB_ID.test(jobId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll: "homeowner_requests" });
+  let out = null, prevDoc = null, wrote = false;
+  await io.runTx(async (tx) => {
+    const jsnap = await tx.get(io.jobRef(jobId));
+    const raw = jsnap && jsnap.exists ? jsnap.data() : null;
+    const job = raw && raw.data ? { id: jobId, data: raw.data } : null;
+    const p = QS.planThreadReply(args, { ...ctx, job });
+    if (p.refused) { out = finish(job ? 400 : 404, { ok: false, refused: p.refused }, { ok: false, why: p.refused, coll: "homeowner_requests", docId: jobId }); tx.set(io.auditRef(requestId), out.audit); return; }
+    const hsnap = await tx.get(io.hrRef(jobId));
+    prevDoc = hsnap && hsnap.exists ? hsnap.data() : null;
+    const w = QS.threadAppend(prevDoc, jobId, p.key, p.msg);
+    if (w.set) tx.set(io.hrRef(jobId), w.set); else tx.update(io.hrRef(jobId), w.update);
+    wrote = true;
+    const result = { ok: true, requestId, action, jobId, jobName: job.data.name || "", qId: p.q.id, phase: args.phase, floor: p.floor, number: p.number, key: p.key, messageId: w.msg.id, messagesInThread: w.count, role: w.msg.role, newThreadDoc: !!w.set, pushTo: [] };
+    out = finish(200, result, { ok: true, coll: "homeowner_requests", docId: jobId, itemId: p.q.id, fields: ["questionThreads." + p.key], before: { questionThreads: { [p.key]: { messages: w.before } } }, after: { questionThreads: { [p.key]: w.msg } }, newDoc: !!w.set });
+    tx.set(io.auditRef(requestId), out.audit);
+  });
+  if (wrote) {
+    let snapped = false;
+    try { snapped = await io.snapshotHrVersion(jobId, prevDoc, "duet", ctx.nowIso); } catch (e) { snapped = false; }
+    out.body.versionSnapshot = snapped;
+  }
+  return { status: out.status, body: out.body };
 }
 // Ship 3: ONE photo onto ONE item. Order matters for "never an orphan file":
 //   1. bytes checked (magic number, 7 MB, name cleaned) — nothing read yet;
@@ -251,7 +369,8 @@ async function handle(body, io) {
   const recent = await io.countRecent(new Date(Date.parse(nowIso) - 3600 * 1000).toISOString());
   if (recent >= RATE_PER_HOUR) throw new Refusal(429, `Duet has made ${recent} changes in the last hour — the limit is ${RATE_PER_HOUR}. Try again later.`);
 
-  const ctx = { nowIso, bucketNow: `${io.todayYmd()}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz };
+  const todayYmd = io.todayYmd();
+  const ctx = { nowIso, todayYmd, bucketNow: `${todayYmd}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz };
   const base = { at: nowIso, action: b.action, by: SAVED_BY, email, requestId, expireAt: new Date(Date.parse(nowIso) + 90 * 86400 * 1000).toISOString() };
   const finish = (status, bodyOut, auditExtra) => ({ status, body: bodyOut, audit: { ...base, ...auditExtra, response: { status, body: bodyOut } } });
 
@@ -287,7 +406,7 @@ async function handle(body, io) {
     return { status: 200, body: result };
   }
 
-  if (JOB_ACTIONS.includes(b.action)) {
+  if (JOB_WRITE_ACTIONS.includes(b.action)) {
     const jobId = String(args.jobId || "");
     if (!JOB_ID.test(jobId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll: "jobs" });
     const r = await jobWrite(io, requestId, b.action, jobId, planJobAction(b.action, args, ctx), finish);
@@ -296,6 +415,11 @@ async function handle(body, io) {
 
   if (b.action === "photo.add") {
     const r = await photoAdd(io, requestId, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
+  if (THREAD_ACTIONS.includes(b.action)) {
+    const r = await threadReply(io, requestId, b.action, args, ctx, finish, refused);
     return { status: r.status, body: r.body };
   }
 
@@ -354,6 +478,19 @@ function firestoreIo({ db, FieldValue, getUsers, TZ, storage }) {
     runTx: (fn) => db.runTransaction(fn),
     needRef: (id) => db.collection("needs").doc(id),
     jobRef: (id) => db.collection("jobs").doc(id),
+    hrRef: (id) => db.collection("homeowner_requests").doc(id),
+    // snapshotHomeownerRequestVersion (App.js ~L22890): the prior doc into
+    // homeowner_requests/<id>/versions {snap, at, by}, newest 10 kept. The
+    // prune is the only Firestore delete in this file, and it only ever
+    // touches this writer's own snapshots.
+    snapshotHrVersion: async (jobId, prevData, tag, nowIso) => {
+      if (!prevData) return false;
+      const col = db.collection("homeowner_requests").doc(jobId).collection("versions");
+      await col.add({ snap: dropUndefined(prevData), at: nowIso || new Date().toISOString(), by: tag || "unknown" });
+      const snaps = await col.orderBy("at", "desc").limit(30).get();
+      await Promise.all(snaps.docs.slice(10).map(d => d.ref.delete().catch(() => {})));
+      return true;
+    },
     auditRef: (id) => db.collection(AUDIT).doc(id),
     arrayUnion: (...x) => FieldValue.arrayUnion(...x),
     serverTimestamp: () => FieldValue.serverTimestamp(),
@@ -391,3 +528,7 @@ module.exports.SAVED_BY = SAVED_BY;
 module.exports.ACTIONS = ACTIONS;
 module.exports.JOB_ACTIONS = JOB_ACTIONS;
 module.exports.PHOTO_ACTIONS = PHOTO_ACTIONS;
+module.exports.JOB_WRITE_ACTIONS = JOB_WRITE_ACTIONS;
+module.exports.QUESTION_ACTIONS = QUESTION_ACTIONS;
+module.exports.NOTE_ACTIONS = NOTE_ACTIONS;
+module.exports.THREAD_ACTIONS = THREAD_ACTIONS;

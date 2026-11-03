@@ -269,4 +269,4 @@ function planSetStatusUpdate(args, ctx) {
   return { fields, before, changed: Object.keys(patch).filter(k => !sameVal(patch[k], job[k])) };
 }
 
-module.exports = { CO_STATUSES, RT_STATUSES, CO_TEXT, RT_TEXT, newItemId, mdy, planCreateCO, planEditCO, planSetCOStatus, planConvertCO, planCreateRT, planUpdateRT, planSetStatusUpdate };
+module.exports = { CO_STATUSES, RT_STATUSES, CO_TEXT, RT_TEXT, newItemId, mdy, jobGate, planCreateCO, planEditCO, planSetCOStatus, planConvertCO, planCreateRT, planUpdateRT, planSetStatusUpdate };
