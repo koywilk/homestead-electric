@@ -58,16 +58,17 @@ const extractLine = (name) => { const i = src.indexOf(`const ${name} = `); if (i
 // Array of objects: find from marker to closing ];
 const extractArray = (name) => { const start = src.indexOf(`const ${name} = `); if (start < 0) throw new Error(`extract: const ${name} not found`); const end = src.indexOf("];", start); if (end < 0) throw new Error(`extract: no closing ]; for ${name}`); return src.slice(start, end + 2) + ";"; };
 
-const FN = ["localYmd","sameName","needKind","needAssignee","needForeman","dueBucketFromDate",
+const MOVED = ["sameName", "needAssignee", "dueBucketFromDate", "needUpdates", "needWorkReset"]; // v600: live in src/needShape.js
+const FN = ["localYmd","needKind","needForeman",
   "isSnoozed","needIsOpen","resiHead","resiHeadName","defaultAssigneeFor","isMine","onHead","headQueue",
   "punchAssignedTo","questionsAssignedTo","myJobsFor","headAutoTasks","scanAutoTasks","matterportScanNeeded","autoDelegation","autoRowState","autoTaskDoc","foldDutyTwins","myDayCategoryOf","myDayCategories",
-  "needUpdates","lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
+  "lastNeedUpdate","needRequester","needUpdateAudience","needUpdateLine","sentByMe","completedForMe",
   "routeKeyOfAuto","routeKeyOfDuty","routeKeyOfRedline","activeCoverName","coverName","hatHolderNames","ownersForRoute","coveredFor",
   "isInactiveJob","staleReason","rowMatches","batchCaps","focusKeysToday","sentFinishedForMe","userKeyOf",
   "taskPhotoPath","needPhotos","teamPulse",
   "usageSeenKey","shouldLogUsage","usageRollup","usageLastDays","usageWithZeros",
   "bucketOfYmd","needBucket","needPriority","prioRank","rowPriority","compareMyDayRows","mydayBadgeCount",
-  "needWorking","needWorkReset","compareNeedsBoard","bunchRows",
+  "needWorking","compareNeedsBoard","bunchRows",
   "myDayGroupPref","myDaySections","sentChaseState","sentChaseOrder","mergeDoneRows","isAutoSnoozed","autoSnoozePatch","autoWakePatch","snoozedMineNeeds","myDayDueWord","myDayJumpTarget",
   "loadsListRows","loadsListCsv","jobListRows","jobListCsv","homeBoardFilter","pipelineTiles","schedHourBar","jobStageBand","jobProgressTiles","stageBarColor","hdrCompactNext",
   "homeRunsPanelRows","homeRunsPanelList","homeRunsCsv","homeRunsText",
@@ -102,9 +103,13 @@ const combined = [
   extractConst("lutronLoadsOn"),
   extractLine("_lutronViewCache"),
   ...FN.map(extractFunction),
-  `({ ${FN.join(", ")}, can, HAT_REGISTRY })`,
+  `({ ${FN.join(", ")}, ${MOVED.join(", ")}, can, HAT_REGISTRY })`,
 ].join("\n");
-const sandbox = vm.createContext({});
+// v600: sameName / needAssignee / dueBucketFromDate / needUpdates / needWorkReset
+// moved to src/needShape.js (shared with duetApi) — loaded as the shipped module,
+// not extracted from App.js, and handed to the sandbox as globals.
+const NEED_SHAPE = require(path.join(__dirname, "..", "src", "needShape.js"));
+const sandbox = vm.createContext(Object.fromEntries(MOVED.map(n => [n, NEED_SHAPE[n]])));
 const H = vm.runInContext(combined, sandbox, { filename: "needs-extract.vm.js" });
 const eq = (a, b, msg) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), msg);
 

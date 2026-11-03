@@ -7628,6 +7628,16 @@ exports.planFileByHand     = _planIntake.planFileByHand;
 // v542: "Not ours" from the office dashboard (same gate as planFileByHand).
 exports.planDismissByHand  = _planIntake.planDismissByHand;
 
+// ─── Duet write access (connector decision D9, 2026-11-03) ──────────────────
+// Claude Duet's only door into Command Center for writes: the Homestead
+// connector calls duetApi with the bearer secret DUET_WRITE_TOKEN
+// (scripts/duet-write-token.js). Ship 1: tasks (needs create + update) through
+// the app's own task shape (functions/needShape.js = src/needShape.js). Every
+// call is one item, one transaction, audited in duet_writes/<requestId>.
+// Deploy ONLY this one:
+//   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric
+exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, getUsers, TZ }).duetApi;
+
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it
 // (functions/materialPO/, rules tested by scripts/materialpo-test.js). Mode on

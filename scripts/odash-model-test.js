@@ -71,16 +71,19 @@ const b = src.indexOf("function OfficeDash(");
 if (a < 0 || b < 0) throw new Error("dashboard block markers not found");
 const parts = [
   cst("C"), cst("ROUGH_STATUSES"), cst("QC_STATUSES"), cst("getStatusDef"), cst("parseStage"), cst("getAccess"),
-  fn("sameName"), fn("localYmd"), cst("parseAnyDate"), cst("effRS"), cst("effFS"), cst("sbv2WalkPunch"), cst("SBV2_EXCLUDE_NAME"),
+  fn("localYmd"), cst("parseAnyDate"), cst("effRS"), cst("effFS"), cst("sbv2WalkPunch"), cst("SBV2_EXCLUDE_NAME"),
   cst("commOf"), cst("commPhase"), cst("coIsConverted"), fn("matterportScanNeeded"), fn("qcWalkRows"), fn("qcBucketOf"),
-  fn("isSnoozed"), fn("needIsOpen"), fn("needAssignee"), fn("needPriority"), cst("effectiveShareIds"), cst("computeEffectiveSharedIds"),
+  fn("isSnoozed"), fn("needIsOpen"), fn("needPriority"), cst("effectiveShareIds"), cst("computeEffectiveSharedIds"),
   src.slice(a, b),
   cst("canOpenDash"),
 ];
 const code = babel.transformSync(parts.join("\n\n"), { babelrc: false, configFile: false, sourceType: "script", presets: [[require.resolve("@babel/preset-react"), { runtime: "classic" }]] }).code;
 
+// v600: sameName / needAssignee live in src/needShape.js (shared with duetApi) — the shipped module, as globals.
+const NEED_SHAPE = require(path.join(__dirname, "..", "src", "needShape.js"));
 function makeSandbox(extra = {}) {
   const sb = {
+    sameName: NEED_SHAPE.sameName, needAssignee: NEED_SHAPE.needAssignee,
     console, Date, Math, JSON, Object, Array, String, Number, Set, Map, RegExp, isNaN, parseInt, parseFloat,
     React: { createElement: () => null }, Component: class {}, Fragment: "f",
     useState: () => [null, () => {}], useEffect: () => {}, useMemo: (f) => f(), useRef: () => ({}),

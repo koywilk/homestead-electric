@@ -10,6 +10,7 @@ import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messagi
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 import SafeHtml from "./sanitizeHtml";
 import PunchTicks from "./punchTicks";
+import NeedShape from "./needShape";
 import { syncPostHogIdentity, trackDash, heTrack, heCaptureError } from "./posthog";
 import { readableInk } from "./a11y";
 import { HeSaveHud, HeUnfold, useHeFlip, useHeViewSlide, heFlashKey, heFlyTo, heZoomIn, heSwipeRowProps, heJustSwiped, heReducedRaw, heMotionOff, heSetMotionOff, heFlyToTab, heToastAnchor, heZoomFrom, useHeTabSwipe, HePresence, HeUndoBar, HeSyncChip, HeCount, HeSkeleton, HeTabInk, heNoteRemoteJobChanges, heFlashFor, heEnter, useHePop, useHeTabInk, useHePaneEase, useHeSheetDrag, HeStrikeSpan } from "./motion";
@@ -29,6 +30,10 @@ const safeImageSrc = SafeHtml.safeImageSrc;// same, but allows blob:/data:image
 // Punch check-off slots (v559): each flip of `done` is its own dotted-path
 // write `data.punchTicks.<itemId>`, overlaid on every read. See src/punchTicks.js.
 const { isTickKey, tickIdOf, slotWins, mergeTickMaps, punchTickPatches, applyPunchTicks, foldTickPatches } = PunchTicks;
+// v600: the My Day task shape + its funnel rules are shared with duetApi (Duet
+// write access, connector D9). One source: src/needShape.js, copied to
+// functions/needShape.js by scripts/need-shape-sync.js.
+const { sameName, needAssignee, needUpdates, dueBucketFromDate, needWorkReset, normalizeNeed, newNeedId, buildNeed, needPatch, needUpdateEntry } = NeedShape;
 // Open a stored URL only if it is actually navigable. React does NOT block
 // javascript: URLs, and photo/attachment records live in anonymously-writable
 // collections — so an unsafe value must simply do nothing, not open a tab.
@@ -7369,18 +7374,12 @@ function NeedQuickAdd({ identity, users, jobs, preset, onSave, onAddNeedPhotos, 
   const save = () => {
     const t = text.trim(); if (!t) return;
     const now = new Date().toISOString();
-    const need = {
-      id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
-      kind, text: t,
-      dueBucket: due.date ? (dueBucketFromDate(due.date) || "week") : due.bucket,
-      dueDate: due.date || "",
-      snoozedUntil: "",
-      priority: prio === "urgent" || prio === "low" ? prio : "",   // v446
-      assignedTo: assignedTo || "", assignedBy: me, assignedAt: now,
-      foreman: job ? (job.foreman || "") : (myTitle === "foreman" ? me : (myForemanName || "")),
-      jobId: job ? job.id : "", jobName: job ? (job.name || "") : "",
-      status: "open", createdBy: me, createdAt: now, doneAt: "", doneBy: "",
-    };
+    // v600: the shape lives in src/needShape.js (shared with duetApi) — same fields, same defaults.
+    const need = buildNeed({
+      kind, text: t, dueBucket: due.bucket, dueDate: due.date || "", priority: prio,
+      assignedTo: assignedTo || "", job,
+      foremanIfNoJob: myTitle === "foreman" ? me : (myForemanName || ""),
+    }, me, now, newNeedId());
     onSave && onSave(need);
     if (pics.length && onAddNeedPhotos) onAddNeedPhotos(need.id, need.jobId, pics.map(p => p.file));
     toast.success(!assignedTo ? "Added — unassigned" : sameName(assignedTo, me) ? "Added to your day" : `Added to ${first(assignedTo)}'s day`);
@@ -61951,9 +61950,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-02 · App SW version: v599
+**Last manifest update:** 2026-11-03 · App SW version: v600
 ---
 
+- **Claude Duet can add and update My Day tasks from a chat; the task shape moves to one shared file** · 'shipped 2026-11-03' · 'SW v600' · 'duetApi' · 'functions/duetWrites/api.js' · 'functions/duetWrites/needs.js' · 'src/needShape.js' · 'functions/needShape.js' · 'duet_writes' · 'DUET_WRITE_TOKEN' · Koy, on the Homestead connector (decision D9, approved 2026-11-03): Duet should be able to do "anything at all" in Command Center; the plan narrows that to the app’s own save paths, one ship at a time, tasks first. **New Cloud Function 'duetApi'** ('firebase-functions/v1' onRequest, Secret Manager bearer 'DUET_WRITE_TOKEN', same door as 'planRoutineApi'): the connector POSTs '{requestId, action, email, args}'; actions 'task.create' and 'task.update'. The function checks the person against 'settings/users' (active, not a contractor; typo → the close names), refuses archived or missing jobs, caps text at 2,000 characters, refuses the same open task asked twice for the same person within 10 minutes, and allows 60 changes an hour. Every change is ONE transaction that writes the task and an audit doc 'duet_writes/<requestId>' ('before'/'after' of every field, the response, 90-day 'expireAt') together; the same 'requestId' again returns the first answer and writes nothing. Envelope: 'saved_by "Duet (Koy)"', 'device "duet"', 'tab "duet-<id>"', integer 'app_build' + fresh 'w' (so 'versionLock.js' counts a stamped server write), 'updated_at' strictly newer than the doc’s. Item-level names are plain 'Koy', so 'onNeedWrite' keeps the app’s own rules: a task Koy gives himself stays silent, a task for Josh pushes Josh, done by Koy on someone’s task pushes the creator. **Shared shape:** 'sameName', 'needAssignee', 'needUpdates', 'dueBucketFromDate', 'needWorkReset', 'normalizeNeed' and the new 'buildNeed' / 'needPatch' / 'needUpdateEntry' move from App.js to 'src/needShape.js' (CommonJS, like 'punchTicks.js'); 'NeedQuickAdd.save', 'patchNeed' and 'addNeedUpdate' now call them, so a phone’s task and Duet’s task are built by the same lines. 'scripts/need-shape-sync.js' keeps 'functions/needShape.js' byte-identical (prebuild fails on drift). Tests: 'scripts/duet-writes-test.js' (23 checks in prebuild: the exact NeedQuickAdd doc key for key, patchNeed/addNeedUpdate semantics, name refusals, duplicate refusal, replay, rate limit, stamped envelope, dotted keys + arrayUnion, only 'needs' + 'duet_writes' ever written, no delete path). Setup: 'node scripts/duet-write-token.js' (makes the secret, copies it for Vercel). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric'** (Koy), then 'CC_WRITE_URL' + 'CC_WRITE_TOKEN' in Vercel (connector v0.10.0, 'docs/DUET-WRITES-SETUP.md'). **Why it won’t lose data:** the app’s task writes are unchanged in effect — the moved functions are the same code, called from the same places, and the test pins the doc shape key for key. The function never deletes, never creates jobs, never writes any collection but 'needs' and its own 'duet_writes'; task updates are dotted 'data.<field>' keys with 'arrayUnion' for notes (patchNeed’s write), inside a transaction that re-reads the doc, so another phone’s concurrent edit to a different field survives. 'ledgerNeeds' still snapshots every update into 'recovery_ledger'; creates are covered by the audit doc. No job field, loader or rules change.
 - **An inspection can be marked failed more than once: Failed again** · 'shipped 2026-11-02' · 'SW v599' · 'InspFailAgain' · 'inspFailCount' · 'inspItemsNotOnTrip' · 'odRealAtts' · 'detectTriggers' · Koy: *"there is no way to mark an inspection failed more than 1 time."* A lit Fail button clears the result, so a repeat fail took clearing it and tapping again, with no sign that this was the way. While a rough or final inspection reads failed, a **Failed again** button sits beside Pass / Fail. It asks first, then logs a new attempt dated today with 'repeat:true', which sends the failed-inspection push. 'odRealAtts' keeps a 'repeat' attempt even on the same day as the last fail, so the dashboard counts it. The new attempt snapshots only items still open, and the Failed Items header shows the count from the second fail on. Items added while a return trip from that inspection is still open used to sit behind the green chip and never reach the trip; the chip now becomes **→ Add N to the return trip** until they are on it. 'functions/gcNotify.js' also tells the GC about a repeat fail, which needs a functions deploy. The existing Pass and Fail buttons work as before. Help guides: 'rough.html', 'finish.html'.
 - **Simpro POs - Master: one sheet with every PO, and a card under Automations; the PO pull is live** · 'shipped 2026-11-02' · 'SW v598' · 'buildSheetRows' · 'refreshSheet' · 'OD_SIMPRO_PO_SHEET' · Koy: *"make this into a clean spready sheet similar to appliance loads, and add it to the automations in the dashboard ... then i want this flippled live it looks pretty correct to me."* 'settings/simproPoSync.mode' set to 'live' 2026-11-02 18:44 MT on Koy's word; first live run 18:45: 51 new cards, 1 number filled in, 28 typed links, 85 from the app, 1 waiting, 0 errors. New Google Sheet **Simpro POs - Master** (Koy's Drive, the functions' service account has edit access): **Summary** (one row per job with an All jobs total: POs, new from Simpro, typed, filled in, from the app, Order Sent, Picked Up, needs a look), **All POs** (PO #, date, job #, job, supplier, list, cost center, made by, how it got here, status, picked up, material list; newest first, filters on, dates sort as dates), **Needs a look** (no open job has the Simpro #, two job cards share it, the number is typed on another job's card, sent from the app but no card has the number, voided in Simpro; each says what to do). The hourly run rebuilds it from Simpro, 'simpro_po_link' and the live cards, as values only (RAW, so a PO's notes can't become a formula). New rows are written before old ones clear, so a failed write leaves the last good sheet and logs 'sheetError', changing nothing else. **Automations:** a Simpro POs - Master card in Automated docs and a **Simpro POs** section with live or off, last hourly check, the counts, **Refresh**, **Open sheet** and a line when anything needs a look, read from 'settings/simproPoSync' when the tab opens. Tests: 'scripts/simpro-pull-sim.js' +3 (41 scenarios). 'scripts/simpro-pull-dryrun.js --sheet' shows what the next rewrite would hold. Guides: dashboard, materials. Crew brief 'docs/crew-briefs/v598.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scheduledSimproPOSync,functions:syncSimproPOsForJob --project homestead-electric'** (Koy). **Why it won't lose data:** the sheet only reads jobs and Simpro; its only new writes are to its own sheet and three fields on the function's own 'settings/simproPoSync'. The dashboard section only reads. No job field, loader or rules change. Card logic for the pull is unchanged except the 'updated_at' build stamp.
 - **POs made in Simpro show up on Material Tracking by themselves; a receipt in Simpro marks the card Picked Up** · 'shipped 2026-11-02' · 'SW v596' · 'scheduledSimproPOSync' · 'syncSimproPOsForJob' · 'functions/materialPO/simproPull.js' · 'simpro_po_link' · 'simproPulled' · Koy: *"if a po is sent from simpro it doesnt track in the CC. Can we make that a thing? so I dont have to enter the po manually in the CC"*, then *"when a receipt is put in we have the material so they can be marked picked up."* Every 5 minutes one read of 'GET /vendorOrders/' (the row itself carries 'AssignedTo.Job', cost center, vendor, notes and maker). Each PO not yet handled stops at the first line that fits: **sent from the app** (private-notes tag or 'material_po_log') is left alone; **PO # typed on a card on that job** links in place with nothing visible changed, however it was typed ('PO-6216', '7250/ 7252', '7115 (Under Power...)'); **a card with no PO # and a near-identical list** (shared words 80%+, one match only, card made within 45 days before or 7 after the PO) gets the blanks filled; **anything else** makes a new card, folded, 'Simpro' pill, with the maker and cost center inside: Rough In → Rough, Finish → Finish, any PO on a commercial job → Materials, Warranty / Generators / the rest → Finish with the cost center as a chip. It never matches by supplier alone: the May sync did, used the 'Job.ID' filter Simpro ignores, and left 39 of 97 cards showing a PO from another job (not touched by this ship). Skips rather than guesses on no job, a job not in the app, a Simpro # two jobs share, an archived job, or a draft (Stage Pending); those come in once fixed. Hourly: **a receipt ('/vendorOrders/{id}/receipts/') ticks Picked Up** by Simpro on the receipt's date on cards this pull made or linked, once per PO so an un-tick stays, and if a person ticked it first their call stands from then on; app-sent cards are not touched; a pull-made card nobody has worked or edited folds into a card someone typed the same number on later; a PO voided in Simpro gets a **Voided in Simpro** pill and nothing is deleted. Start date 2026-10-03 (Koy: last 30 days), list window 45 days. Dry run against live data 2026-11-02: 165 POs → 84 app, 28 typed, 1 filled in, 51 new (17 Rough, 9 Finish, 14 Finish with a label, 11 Materials), 1 job not in the app. List match back test on 407 typed-PO cards at 80%: 249 right, 0 wrong, 158 get their own card. **ACE** added to the Source dropdown so ACE cards get the receipt photo box. Mode on 'settings/simproPoSync': missing or 'dry' = watch mode, hourly, writes only its own 'lastRun'; 'live'; 'off'. 'syncSimproPOsForJob' now runs the same rules for one job through 'AssignedTo.Job=' (no UI calls it). Tests: new 'scripts/simpro-pull-sim.js' (38 scenarios in prebuild), 'scripts/simpro-pull-dryrun.js' runs the real code on live data with writes blocked. Guides: materials, rough, finish. Crew brief 'docs/crew-briefs/v596.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scheduledSimproPOSync,functions:syncSimproPOsForJob --project homestead-electric'** (Koy), then watch mode for a day, then 'mode: "live"'. **Why it won't lose data:** Simpro is GET only. On a job it adds cards or fills blanks through a transaction on the live doc, and the app's '_threeWayMerge' keeps a server-added card (tested on the real function). It never changes a typed PO #, a list or which list a card is on. It removes only its own card, and only when nobody has worked it and the number is on another card. 'simpro_po_link' is function-only under the rules' catch-all, so no rules change, and it's written with the card, so a removed card stays removed. No new top-level job field, so no loader change.
@@ -67243,28 +67243,14 @@ function localYmd(d) {
   const p = (n) => String(n).padStart(2, "0");
   return `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`;
 }
-function sameName(a, b) {
-  const x = String(a || "").trim().toLowerCase(), y = String(b || "").trim().toLowerCase();
-  if (!x || !y) return false;
-  return x === y || x.startsWith(y + " ") || y.startsWith(x + " ");
-}
+// sameName / needAssignee / needUpdates / dueBucketFromDate / needWorkReset /
+// normalizeNeed moved to src/needShape.js (v600) — same code, shared with duetApi.
 function needKind(n) { return (n && n.kind) || "need"; }
-// `??` on purpose: an explicit "" (unassigned) is honored; an ABSENT field falls
-// to the legacy book owner. This one line is what keeps the pre-existing docs
-// working without a rewrite.
-function needAssignee(n) { return String((n && (n.assignedTo ?? n.coordinator)) || "").trim(); }
 function needForeman(n, jobs) {
   if (!n) return "";
   if (n.foreman) return n.foreman;
   const j = n.jobId && (jobs || []).find(x => x && x.id === n.jobId);
   return (j && j.foreman) || "";
-}
-// "" → null so a caller keeps whatever bucket it already had.
-function dueBucketFromDate(ymd, now) {
-  if (!ymd) return null;
-  const d = new Date(ymd + "T00:00:00"); if (isNaN(d)) return null;
-  const t = now ? new Date(now) : new Date(); t.setHours(0, 0, 0, 0); t.setDate(t.getDate() + 1);
-  return d <= t ? "tomorrow" : "week";
 }
 // ISO YYYY-MM-DD strings compare lexically. Snoozed rows leave every list and
 // come back on their own the morning of snoozedUntil (v392 pattern).
@@ -67279,7 +67265,6 @@ function needIsOpen(n, todayYmd) { return !!n && n.status !== "done" && !isSnooz
 // the other side of the task — never the author. Koy (2026-09-21): "i dont
 // want them to think im ignoring request if i myself am waiting to hear back
 // from someone".
-function needUpdates(n) { return Array.isArray(n && n.updates) ? n.updates : []; }
 function lastNeedUpdate(n) { const u = needUpdates(n); return u.length ? u[u.length - 1] : null; }
 function needRequester(n) { return String((n && (n.assignedBy || n.createdBy)) || "").trim(); }
 function needUpdateAudience(n, by) {
@@ -67304,18 +67289,6 @@ function needWorking(n) {
   const u = lastNeedUpdate(n);
   if (u && u.kind === "waiting" && String(u.at || "") > String(n.startedAt)) return null;
   return { by: String(n.startedBy), at: String(n.startedAt) };
-}
-// The patch funnel's rule: handing a task to someone else, closing it or
-// reopening it ends "Working" (the new person hasn't started; a closed task
-// isn't being worked). A patch that sets startedBy itself is left alone, and
-// a same-person / same-status patch (an Edit re-save) changes nothing.
-function needWorkReset(patch, current) {
-  if (!patch || "startedBy" in patch) return {};
-  const handOff = "assignedTo" in patch && !(current && sameName(needAssignee(current), patch.assignedTo));
-  const statusFlip = "status" in patch && !(current && current.status === patch.status);
-  // Always clear on a real flip, even when this copy shows no start — another
-  // phone may have started it since this copy was taken (two blank fields cost nothing).
-  return handOff || statusFlip ? { startedBy: "", startedAt: "" } : {};
 }
 // Needs board order inside every lane / group (v539): Working → urgent →
 // normal → low → the Tomorrow lane → oldest first.
@@ -73929,15 +73902,7 @@ function App() {
 
   // Needs Board writes — same envelope as manualTasks. Optimistic local update so
   // the board reflects instantly; the onSnapshot listener reconciles from Firestore.
-  // Normalize on the way out so every doc in `needs` is self-consistent no
-  // matter which UI wrote it. Additive: only fills derived/default keys.
-  const normalizeNeed = (need) => {
-    const n = { ...need };
-    if (!n.kind) n.kind = "need";
-    if (n.dueDate) { const b = dueBucketFromDate(n.dueDate); if (b) n.dueBucket = b; }
-    if (!n.dueBucket) n.dueBucket = "week";
-    return n;
-  };
+  // normalizeNeed (fills kind / dueBucket defaults) comes from src/needShape.js (v600).
   const saveNeed = async (need) => {
     const n = normalizeNeed(need);
     setNeeds(prev => { const i=(prev||[]).findIndex(x=>x.id===n.id); if(i>=0){ const nx=[...prev]; nx[i]=n; return nx; } return [...(prev||[]), n]; });
@@ -74004,10 +73969,9 @@ function App() {
   const patchNeed = async (id, patch, current, note) => {
     // v539: a hand-off / close / reopen ends "Working on it" — here in the
     // funnel so every writer (board To:, My Day pick, batch push, Edit) obeys.
-    const p = { ...patch, ...needWorkReset(patch, current) };
     const nowIso = new Date().toISOString();
-    if ("assignedTo" in p) { p.assignedBy = identity?.name || ""; p.assignedAt = nowIso; }
-    if (p.dueDate) { const b = dueBucketFromDate(p.dueDate); if (b) p.dueBucket = b; }
+    // v600: Working reset + assignment stamp + due bucket come from needPatch (src/needShape.js, shared with duetApi).
+    const p = needPatch(patch, current, identity?.name || "", nowIso);
     const entry = note ? { by: identity?.name || "", at: nowIso, kind: ["void", "edit", "reopen"].includes(note.kind) ? note.kind : "note", text: String(note.text || "").trim() } : null;
     setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, ...p, ...(entry ? { updates: [...needUpdates(n), entry] } : {}) } : n));
     const upd = { updated_at: nowIso, saved_by: identity?.name || "" };
@@ -74021,12 +73985,9 @@ function App() {
   // with a date also snoozes; a reply from the other side un-snoozes.
   const addNeedUpdate = async (id, { kind, text, until }, current) => {
     const nowIso = new Date().toISOString();
-    const entry = { by: identity?.name || "", at: nowIso, kind: kind === "waiting" ? "waiting" : "note", text: String(text || "").trim(), ...(kind === "waiting" && until ? { until } : {}) };
-    if (!entry.text) return;
-    const isAssignee = !!current && sameName(needAssignee(current), entry.by);
-    const extra = {};
-    if (entry.kind === "waiting" && entry.until && isAssignee) extra.snoozedUntil = entry.until;
-    else if (!isAssignee && current && current.snoozedUntil) extra.snoozedUntil = "";
+    // v600: entry shape + snooze rule come from needUpdateEntry (src/needShape.js, shared with duetApi).
+    const { entry, extra } = needUpdateEntry({ kind, text, until }, current, identity?.name || "", nowIso);
+    if (!entry) return;
     setNeeds(prev => (prev||[]).map(n => n.id===id ? { ...n, updates: [...needUpdates(n), entry], ...extra } : n));
     const upd = { updated_at: nowIso, saved_by: entry.by, "data.updates": arrayUnion(entry) };
     Object.keys(extra).forEach(k => { upd["data."+k] = extra[k]; });
