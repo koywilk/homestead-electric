@@ -11,7 +11,9 @@
 //     or the statusUpdate scalar — ship 2; a photo on one item — ship 3; one
 //     question in roughQuestions / finishQuestions, one note in jobNotes (+
 //     the jobNotesMigratedAt stamp), one entry in roughUpdates /
-//     finishUpdates — ship 4), needs (create + update; a photo — ship 3),
+//     finishUpdates — ship 4; one punch item in roughPunch / finishPunch /
+//     qcPunch + its punchTicks.<id> slot + linked returnTrips entries —
+//     ship 6), needs (create + update; a photo — ship 3),
 //     homeowner_requests/<jobId> (ship 4: the questionThreads.<key> field
 //     ONLY — one appended message — plus its versions subcollection, where
 //     the writer's own snapshot is added and pruned to 10 exactly as the
@@ -84,6 +86,21 @@
 // mirror in settings/crewPTO.list added once on approve and pulled otherwise —
 // and refuses to change a decided request without force:true. The app's own
 // triggers (job_assigned / lead_assigned, onTimeOffDecision) push on their own.
+// Ship 6 (punch items): seven more jobWrite() actions, all on ONE item of ONE
+// punch tree (data.roughPunch / finishPunch / qcPunch) found by id across
+// upper / main / basement / extras floors and general / hotcheck / rooms, the
+// tree written back whole in the app's own handleFloorChange shape (every
+// floor normalized, extras kept). punch.setDone flips exactly as the checkbox
+// does AND writes the item's own check-off slot data.punchTicks.<id> (derived
+// by the app's punchTickPatches — the slot is the record of truth) AND, for
+// rough / finish, mirrors the flip onto linked return-trip entries as
+// handlePhasePunchChange does — all in the one transaction. punch.add appends
+// commitAdd's item (text through the app's escapeHtml, Mountain-time YMD
+// stamp), creating a room when the name is new and fanning that room out
+// EMPTY to the other phase as fanOutAddedRooms does; punch.assign / waiting /
+// editText patch one field set; punch.void (QC-walk items only, reason
+// required) strips the item's clones from open QC-Fail trips in the same
+// write, punch.restore clears the four void fields. Never a delete of an item.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -92,17 +109,19 @@ const QS = require("./questions.js");
 const NU = require("./notesUpdates.js");
 const CR = require("./crew.js");
 const TO = require("./timeOff.js");
+const PU = require("./punch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 604;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 605;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const AUDIT = "duet_writes";
 const QUESTION_ACTIONS = ["question.add", "question.answer", "question.reopen"];
 const NOTE_ACTIONS = ["note.add", "note.addLine", "note.editLine", "note.archive", "note.delete", "dailyUpdate.add"];
 const PEOPLE_ACTIONS = ["job.setPeople"];
+const PUNCH_ACTIONS = ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"];
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
-const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS];   // every action that is ONE jobWrite() transaction
+const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS];   // every action that is ONE jobWrite() transaction
 const PHOTO_ACTIONS = ["photo.add"];
 const THREAD_ACTIONS = ["question.reply"];
 const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
@@ -289,6 +308,20 @@ function planJobAction(action, args, ctx) {
         return { fields: p.fields, before: p.before, after: p.after,
           result: { field: p.field, from: p.from, to: p.to, [p.field]: p.to, pushTo: p.pushTo } };
       }
+      // ── Ship 6 ─────────────────────────────────────────────────────────────
+      // Each planner already answers in jobWrite's shape ({refused} | {noop,
+      // result} | {fields, before, after, itemId, result}); the fields are the
+      // whole tree as data.<phase>Punch, plus data.punchTicks.<id> (the slot,
+      // dotted — never the whole map) and data.returnTrips when a done flip
+      // cascaded or a void stripped clones. Audits keep the ONE item (and the
+      // touched trip entries) before / after, never the tree.
+      case "punch.setDone": return PU.planSetDone(args, c);
+      case "punch.add": return PU.planAdd(args, c);
+      case "punch.assign": return PU.planAssign(args, c);
+      case "punch.waiting": return PU.planWaiting(args, c);
+      case "punch.void": return PU.planVoid(args, c);
+      case "punch.restore": return PU.planRestore(args, c);
+      case "punch.editText": return PU.planEditText(args, c);
       default: return { refused: "unknown action" };
     }
   };
@@ -703,6 +736,7 @@ module.exports.QUESTION_ACTIONS = QUESTION_ACTIONS;
 module.exports.NOTE_ACTIONS = NOTE_ACTIONS;
 module.exports.THREAD_ACTIONS = THREAD_ACTIONS;
 module.exports.PEOPLE_ACTIONS = PEOPLE_ACTIONS;
+module.exports.PUNCH_ACTIONS = PUNCH_ACTIONS;
 module.exports.CREW_ACTIONS = CREW_ACTIONS;
 module.exports.TIMEOFF_ACTIONS = TIMEOFF_ACTIONS;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;

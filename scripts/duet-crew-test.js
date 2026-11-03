@@ -483,7 +483,7 @@ ok("findTeam: \"Keegan's crew\" → his team; a team id; a member's name → the
     assert.deepStrictEqual(api.JOB_ACTIONS, ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"], "the ship-2 list is untouched");
     assert.deepStrictEqual(api.PEOPLE_ACTIONS, ["job.setPeople"]); assert.deepStrictEqual(api.CREW_ACTIONS, ["crew.assign", "crew.unassign", "crew.setLead"]); assert.deepStrictEqual(api.TIMEOFF_ACTIONS, ["timeOff.decide"]);
     assert.ok(api.JOB_WRITE_ACTIONS.includes("job.setPeople") && !api.JOB_WRITE_ACTIONS.includes("crew.assign"));
-    assert.strictEqual(api.BUILD, 604);
+    assert.ok(api.BUILD >= 604, "BUILD is at least the ship-5 SW version");
     for (const a of ["crew.clearDay", "crew.setHours", "crew.copyWeek", "team.save", "timeOff.create", "timeOff.remove", "timeOff.delete", "users.save", "pto.add", "pto.remove"]) {
       await assert.rejects(run({ requestId: RID, action: a, args: {} }, fakeIo({ docs: DOCS() })), (e) => e.status === 400 && /action must be/.test(e.message), a);
     }
