@@ -7667,7 +7667,8 @@ exports.attachStoreReceipt = _receipt.attachStoreReceipt;
 // (functions/materialPO/simproPull.js, tested by scripts/simpro-pull-sim.js).
 // Mode on settings/simproPoSync: dry (default) | live | off. Deploy ONLY these:
 //   firebase deploy --only functions:scheduledSimproPOSync,functions:syncSimproPOsForJob
-const _simproPull = require("./materialPO/simproPull.js")({ functions, db, simproReqWithRetry, requireAppKey });
+const _simproPull = require("./materialPO/simproPull.js")({ functions, db, simproReqWithRetry, requireAppKey,
+  getSheets: () => google.sheets({ version: "v4", auth: new google.auth.GoogleAuth({ scopes: ["https://www.googleapis.com/auth/spreadsheets"] }) }) });
 exports.scheduledSimproPOSync = _simproPull.scheduledSimproPOSync;
 exports.syncSimproPOsForJob = _simproPull.syncSimproPOsForJob;
 

@@ -520,6 +520,70 @@ test("A card with no id can't break a job", async () => {
   assert.equal(led("7302").how, "created"); assert.equal(led("7302").cardId, "simpro_7302");
 });
 
+const fakeSheets = (fail) => { const calls = { update: [], clear: [] }; return { calls, api: { spreadsheets: { values: {
+  batchUpdate: async (a) => { if (fail) throw new Error("no access"); calls.update.push(a); },
+  batchClear: async (a) => { calls.clear.push(a); },
+} } } }; };
+const withSheets = (ctx, fs) => make({ functions, db: ctx.db, simproReqWithRetry: ctx.sim.req, requireAppKey: () => {}, getSheets: () => fs.api });
+
+test("The hourly run rewrites the sheet: every PO, right status, Needs a look, sorted newest first", async () => {
+  const j = STRATTON();
+  j.finishMaterials.push({ id: "t", po: "7600", source: "CED", items: "typed list", ordered: true });
+  const ctx = setup({ s: j, br: { name: "Bridle Wood", simproNo: "940", roughMaterials: [{ id: "z", po: "7235", items: "q" }] }, lot: { name: "Lot 23", simproNo: "1386" } });
+  ctx.sim.pos = [
+    PO(7302, 959, "Residential (Finish)"), PO(7319, 959, "Residential (Warranty)", { notes: "<div>5x WR GFCI</div>", date: "2026-10-21" }), PO(7600, 959, "Residential (Finish)"),
+    PO(7384, 959, "Residential (Finish)", { priv: "Sent from the Command Center", by: "" }), PO(7345, 1460, "Residential (Finish)"), PO(7235, 1386, "Residential (Finish)"), PO(4001, null, ""),
+  ];
+  ctx.sim.receipts["7319"] = [{ ID: 1, DateIssued: "2026-10-22" }];
+  const fs = fakeSheets();
+  await withSheets(ctx, fs).run({ full: true });
+  const data = Object.fromEntries(fs.calls.update[0].requestBody.data.map((d) => [d.range, d.values]));
+  assert.equal(fs.calls.update[0].requestBody.valueInputOption, "RAW", "notes can't become formulas");
+  const all = data["'All POs'!A2"];
+  assert.deepEqual(all.map((r) => r[0]), [7600, 7384, 7345, 7319, 7302, 7235], "newest first, the no-job stock PO left out");
+  const row = (po) => all.find((r) => r[0] === po);
+  assert.deepEqual(row(7319).slice(2, 12), [959, "Stratton Residence", "CED", "Finish", "Residential (Warranty)", "Treycen Rollene", "New from Simpro", "Picked Up", "Simpro · 10/22/2026", "5x WR GFCI"]);
+  assert.equal(row(7319)[1], 46316, "10/21/2026 as a sortable date");
+  assert.equal(row(7302)[9], "Order Sent"); assert.equal(row(7600)[8], "Typed on a card"); assert.equal(row(7384)[8], "Sent from the app");
+  assert.equal(row(7345)[3], "(no open job in the app)"); assert.equal(row(7345)[9], "Waiting");
+  const needs = data["'Needs a look'!A2"];
+  assert.deepEqual(needs.map((r) => [r[1], r[0]]).sort((a, b) => a[0] - b[0]), [[7235, "Typed on another job's card"], [7345, "No open job has this Simpro #"], [7384, "Sent from the app, but no card has the number"]]);
+  assert(needs.find((r) => r[1] === 7235)[6].includes("Bridle Wood"));
+  const sum = data["Summary!A3"];
+  assert.deepEqual(sum[0], ["All jobs", "", 6, 3, 1, 0, 1, 3, 1, 3]);
+  const st = sum.find((r) => r[0] === "Stratton Residence");
+  assert.deepEqual(st.slice(1), [959, 4, 2, 1, 0, 1, 2, 1, 1]);
+  assert(data["Summary!A1"][0][0].includes("10/3/2026"));
+  assert.deepEqual(fs.calls.clear[0].requestBody.ranges, [`Summary!A${3 + sum.length}:J`, `'All POs'!A${2 + all.length}:L`, `'Needs a look'!A${2 + needs.length}:G`], "old rows below get cleared, after the write");
+  const cfg = ctx.db.store.get("settings/simproPoSync");
+  assert.equal(cfg.totals.pos, 6); assert.equal(cfg.totals.needsLook, 3); assert.equal(cfg.sheetError, ""); assert(cfg.sheetAt);
+});
+
+test("A sheet failure changes nothing else, is logged, and old rows stay", async () => {
+  const ctx = setup({ s: STRATTON() });
+  ctx.sim.pos = [PO(7302, 959, "Residential (Finish)")];
+  const fs = fakeSheets(true);
+  const r = await withSheets(ctx, fs).run({ full: true });
+  assert.equal(r.ok, true); assert.equal(fs.calls.clear.length, 0, "nothing cleared when the write failed");
+  assert(ctx.job("s").finishMaterials.some((c) => c.po === "7302"));
+  assert.equal(ctx.db.store.get("settings/simproPoSync").sheetError, "no access");
+});
+
+test("The sheet only rewrites hourly, and a voided PO stays on it", async () => {
+  const ctx = setup({ s: STRATTON() });
+  ctx.sim.pos = [PO(7302, 959, "Residential (Finish)")];
+  const fs = fakeSheets();
+  const pull = withSheets(ctx, fs);
+  await pull.run({});
+  assert.equal(fs.calls.update.length, 0, "not on a 5-minute run");
+  const gone = ctx.sim.pos[0]; ctx.sim.pos = [];
+  ctx.sim.details["7302"] = { ...gone, Archived: true, Stage: "Voided" };
+  await pull.run({ full: true });
+  const data = Object.fromEntries(fs.calls.update[0].requestBody.data.map((d) => [d.range, d.values]));
+  assert.equal(data["'All POs'!A2"][0][9], "Voided in Simpro");
+  assert.equal(data["'Needs a look'!A2"][0][0], "Voided in Simpro");
+});
+
 test("Watch mode (also when the setting is missing) changes no job and writes only its own log", async () => {
   for (const mode of ["dry", null]) {
     const { db, sim, pull, job } = setup({ s: STRATTON() }, mode);

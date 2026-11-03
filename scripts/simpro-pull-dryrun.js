@@ -6,6 +6,7 @@
  *   node scripts/simpro-pull-dryrun.js            # the whole company
  *   node scripts/simpro-pull-dryrun.js 959        # one Simpro job
  *   node scripts/simpro-pull-dryrun.js --json out.json
+ *   node scripts/simpro-pull-dryrun.js --sheet --json out.json   # what the hourly run would put on the sheet
  */
 "use strict";
 const fs = require("fs");
@@ -21,6 +22,8 @@ const TOKEN = fs.readFileSync(path.join(__dirname, "../functions/index.js"), "ut
 const args = process.argv.slice(2);
 const jsonAt = args.indexOf("--json");
 const jsonOut = jsonAt >= 0 ? args.splice(jsonAt, 2)[1] : "";
+const sheetAt = args.indexOf("--sheet");
+if (sheetAt >= 0) args.splice(sheetAt, 1);
 const jobNo = args[0] || "";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -49,8 +52,17 @@ const functions = {
 };
 
 (async () => {
-  const pull = make({ functions, db, simproReqWithRetry, requireAppKey: () => {} });
-  const res = await pull.run(jobNo ? { jobNo } : { full: true });
+  // --sheet: what the hourly run would write to the Google Sheet. Prints it, writes nothing.
+  if (sheetAt >= 0) {
+    const out = { update: null };
+    const getSheets = () => ({ spreadsheets: { values: { batchUpdate: async (x) => { out.update = x.requestBody.data; }, batchClear: async () => {} } } });
+    const pull = make({ functions, db, simproReqWithRetry, requireAppKey: () => {}, getSheets });
+    const b = await pull.refreshSheet(await pull.loadCfg());
+    console.log(b.note); console.log(b.totals);
+    if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(b, null, 1));
+    process.exit(0);
+  }
+  const res = await make({ functions, db, simproReqWithRetry, requireAppKey: () => {} }).run(jobNo ? { jobNo } : { full: true });
   if (!res.ok) { console.error(res); process.exit(1); }
   console.log(res.counts);
   (res.rows || []).filter((r) => r.how !== "typed").forEach((r) => console.log(`${r.how.padEnd(8)} ${r.po}  ${r.date.padEnd(10)} ${r.list.replace("Materials", "").padEnd(7)} ${r.vendor.padEnd(16)} ${r.received ? "picked " : "       "} ${r.job} · ${r.cc} · ${r.by || "-"}`));

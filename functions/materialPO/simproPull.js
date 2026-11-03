@@ -17,6 +17,10 @@
 // folds a pull-made card into a card someone later typed the same number on, and
 // marks a pull-made card when its PO is voided in Simpro.
 //
+// The hourly run also rewrites the "Simpro POs - Master" Google Sheet: Summary by job,
+// All POs (every PO from the start date on, however it got here) and Needs a look.
+// A sheet failure is logged and changes nothing else.
+//
 // Mode lives on settings/simproPoSync: "dry" (default when missing, writes only its
 // own lastRun log) | "live" | "off".
 //
@@ -26,6 +30,7 @@
 "use strict";
 const R = require("./rules.js");
 
+const SHEET_ID = "1pxs9kEDbcN5w3_bnGBV4z9DWSpqQhdHuDEexhrt1Rpw";   // shared with the functions' service account
 const START_DATE = "2026-10-03";   // Koy: last 30 days, then everything new
 const WINDOW_DAYS = 45;            // the list call never reads further back than this
 const PAGE_SIZE = 250;
@@ -36,7 +41,7 @@ const CARD_BEFORE_DAYS = 45;       // a no-PO card older than this before the PO
 const CARD_AFTER_DAYS = 7;
 const FOLD_DAYS = 14;
 const SYNC_BY = "Simpro";
-const SYNC_BUILD = 596;
+const SYNC_BUILD = 597;
 const COLUMNS = "ID,Stage,Status,Vendor,AssignedTo,DateIssued,DueDate,VendorNotes,PrivateNotes,Archived,CreatedBy";
 const LISTS = ["roughMaterials", "finishMaterials", "commMaterials"];
 const MADE_FIELDS = ["items", "source", "date", "pickupDate"];   // the ledger keeps these as the pull wrote them
@@ -182,9 +187,117 @@ function planFold(lists, cardId, poId, made) {
   return { from: mine.list, to: other.list, otherId: other.c.id, carryPick: !!(c.pickedUp && !other.c.pickedUp && !other.c.deliveredToShop), pickedUpAt: c.pickedUpAt || "" };
 }
 
+// ── The Google Sheet. Pure: what Simpro and the jobs say now, as rows. ──
+const LIST_NAME = { roughMaterials: "Rough", finishMaterials: "Finish", commMaterials: "Materials" };
+const HOW_NAME = { created: "New from Simpro", linked: "Number filled in", typed: "Typed on a card", app: "Sent from the app" };
+const LIST_CHARS = 500;
+// Google counts dates in days from 12/30/1899, so the column sorts as dates.
+const sheetDate = (iso) => { const t = Date.parse(`${T(iso).slice(0, 10)}T00:00:00Z`); return Number.isFinite(t) ? Math.round(t / DAY_MS) + 25569 : ""; };
+const dateFromMdy = (mdyStr) => { const m = T(mdyStr).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); return m ? `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}` : ""; };
+const oneLine = (html) => plainLines(html).join(" · ").slice(0, LIST_CHARS);
+function cardStatus(c) {
+  if (!c) return "";
+  if (c.simproVoided) return "Voided in Simpro";
+  if (c.pickedUp) return "Picked Up";
+  if (c.deliveredToShop) return "Delivered to Shop";
+  if (c.ordered) return "Order Sent";
+  return c.needsOrder ? "Need to Order" : "Saved";
+}
+function pickedText(c) {
+  if (!c) return "";
+  if (c.pickedUp) return [T(c.pickedUpBy), T(c.pickedUpAt)].filter(Boolean).join(" · ") || "Yes";
+  if (c.deliveredToShop) return [T(c.deliveredToShopBy), T(c.deliveredToShopAt)].filter(Boolean).join(" · ") || "Yes";
+  return "";
+}
+// pos = Simpro's list. ledger = simpro_po_link docs with their id. jobs = [{ id, data }].
+function buildSheetRows({ pos, ledger, jobs, logNos, nowIso, startDate }) {
+  const ledById = new Map(ledger.map((l) => [String(l.id), l]));
+  const openByNo = new Map(), byId = new Map(), typedOn = new Map();
+  jobs.forEach(({ id, data }) => {
+    if (!data) return;
+    byId.set(id, data);
+    const no = T(data.simproNo);
+    if (no && !isInactive(data)) { if (!openByNo.has(no)) openByNo.set(no, []); openByNo.get(no).push(id); }
+    LISTS.forEach((list) => (Array.isArray(data[list]) ? data[list] : []).forEach((c) => {
+      if (!c) return;
+      typedNumbers(c.po).forEach((n) => { if (!typedOn.has(n)) typedOn.set(n, []); typedOn.get(n).push({ jobId: id, list, card: c }); });
+    }));
+  });
+  const all = [], needs = [];
+  const look = (what, id, iso, jobNo, job, vendor, todo) => needs.push({ iso, row: [what, Number(id), sheetDate(iso), jobNo === "" ? "" : Number(jobNo), job, vendor, todo] });
+  const seen = new Set();
+  pos.filter((p) => jobNoOf(p) && isOrder(p)).forEach((p) => {
+    const id = String(p.ID), jobNo = jobNoOf(p), led = ledById.get(id);
+    seen.add(id);
+    const open = openByNo.get(jobNo) || [];
+    const jobId = (led && led.jobId) || (open.length === 1 ? open[0] : "");
+    const job = jobId ? byId.get(jobId) : null;
+    const hits = typedOn.get(id) || [];
+    const fromLedger = led && led.list && led.cardId != null && job ? (Array.isArray(job[led.list]) ? job[led.list] : []).find((c) => c && c.id === led.cardId) : null;
+    const here = hits.find((h) => h.jobId === jobId);
+    const card = fromLedger || (here && here.card) || null;
+    const list = fromLedger ? led.list : (here ? here.list : "");
+    const fromApp = isFromApp(p, logNos) || (led && led.how === "app");
+    const waiting = !led && !fromApp;
+    const how = fromApp ? HOW_NAME.app : led ? (HOW_NAME[led.how] || led.how) : "Waiting";
+    const jobName = job ? T(job.name) : "";
+    const status = card ? cardStatus(card) : waiting ? "Waiting" : "No card has it";
+    const items = oneLine(card && T(card.items) ? card.items : p.VendorNotes);
+    all.push([Number(id), sheetDate(p.DateIssued), Number(jobNo), jobName || "(no open job in the app)", vendorOf(p), LIST_NAME[list] || "", ccNameOf(p), makerOf(p), how, status, pickedText(card), items]);
+    if (waiting) {
+      look(open.length > 1 ? `${open.length} job cards share this Simpro #` : "No open job has this Simpro #", id, T(p.DateIssued), jobNo, jobName, vendorOf(p),
+        open.length > 1 ? "Fix the Simpro # so only one job card has it. The PO comes in by itself." : "Add the job to the app, or fix its Simpro #. The PO comes in by itself.");
+    }
+    if (fromApp && !card) {
+      look("Sent from the app, but no card has the number", id, T(p.DateIssued), jobNo, jobName, vendorOf(p), `The PO went out, but the number isn't on a card on this job. Type ${id} on the card it belongs to.`);
+    }
+    const other = hits.find((h) => h.jobId !== jobId);
+    if (other) {
+      const otherName = T(byId.get(other.jobId) && byId.get(other.jobId).name);
+      look("Typed on another job's card", id, T(p.DateIssued), jobNo, jobName, vendorOf(p), `The number is on ${otherName}'s card, but Simpro has this PO on job ${jobNo}. Fix the number on that card, or move the PO in Simpro.`);
+    }
+  });
+  // A PO voided in Simpro drops off its list, so it comes from the card the pull made.
+  ledger.filter((l) => l.voidedAt && !seen.has(String(l.id))).forEach((l) => {
+    const job = byId.get(l.jobId);
+    const c = job && (Array.isArray(job[l.list]) ? job[l.list] : []).find((x) => x && x.id === l.cardId);
+    if (!c) return;
+    const iso = T(l.dateIssued) || dateFromMdy(c.date);
+    all.push([Number(l.id), sheetDate(iso), Number(l.jobNo), T(job.name), T(c.simproSupplier), LIST_NAME[l.list] || "", T(c.simproCostCenter), T(c.simproMadeBy), HOW_NAME[l.how] || l.how, "Voided in Simpro", pickedText(c), oneLine(c.items)]);
+    look("Voided in Simpro", l.id, iso, l.jobNo, T(job.name), T(c.simproSupplier), "The card is still on the job. Remove it if nobody needs it.");
+  });
+  all.sort((a, b) => b[0] - a[0]);
+  needs.sort((a, b) => (a.iso < b.iso ? 1 : a.iso > b.iso ? -1 : 0));
+
+  const lookCount = new Map();
+  needs.forEach((n) => lookCount.set(String(n.row[3]), (lookCount.get(String(n.row[3])) || 0) + 1));
+  const COL = { "New from Simpro": 3, "Typed on a card": 4, "Number filled in": 5, "Sent from the app": 6 };
+  const blank = (name, no) => [name, no, 0, 0, 0, 0, 0, 0, 0, 0];
+  const sum = new Map(), total = blank("All jobs", "");
+  all.forEach((r) => {
+    const key = `${r[2]}|${r[3]}`;
+    if (!sum.has(key)) sum.set(key, blank(r[3], r[2]));
+    [sum.get(key), total].forEach((s) => {
+      s[2]++;
+      if (COL[r[8]]) s[COL[r[8]]]++;
+      if (r[9] === "Order Sent") s[7]++;
+      if (r[9] === "Picked Up" || r[9] === "Delivered to Shop") s[8]++;
+    });
+  });
+  sum.forEach((s) => { s[9] = lookCount.get(String(s[1])) || 0; });
+  total[9] = needs.length;
+  const when = new Date(nowIso).toLocaleString("en-US", { timeZone: "America/Denver", month: "numeric", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return {
+    note: `Every PO from ${mdy(startDate)} on. Updated ${when}. The app rewrites this sheet every hour, so edits here won't stay.`,
+    summary: [total, ...[...sum.values()].sort((a, b) => String(a[0]).localeCompare(String(b[0])))],
+    all, needs: needs.map((n) => n.row),
+    totals: { pos: total[2], created: total[3], typed: total[4], linked: total[5], fromApp: total[6], orderSent: total[7], pickedUp: total[8], needsLook: needs.length },
+  };
+}
+
 const patchCard = (arr, id, patch) => (arr || []).map((c) => (c && c.id === id ? { ...c, ...patch } : c));
 
-module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, requireAppKey }) {
+module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, requireAppKey, getSheets = null }) {
   const HttpsError = functions.https.HttpsError;
   const CFG = () => db.collection("settings").doc("simproPoSync");
   const LEDGER = () => db.collection("simpro_po_link");
@@ -203,7 +316,7 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
     let c = {};
     try { const d = await CFG().get(); c = d.exists ? (d.data() || {}) : {}; } catch (e) {}
     const mode = ["off", "dry", "live"].includes(T(c.mode)) ? T(c.mode) : "dry";
-    return { mode, startDate: T(c.startDate) || START_DATE, waiting: (c.waiting || []).map(String) };
+    return { mode, startDate: T(c.startDate) || START_DATE, waiting: (c.waiting || []).map(String), sheetId: T(c.sheetId) || SHEET_ID };
   }
 
   async function fetchPos({ start, jobNo }) {
@@ -361,6 +474,29 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
     return out;
   }
 
+  // Values only (RAW, so a PO's notes can't become a formula): the look of the sheet was
+  // set once by hand. New rows go in first and old ones are cleared after, so a failed
+  // write leaves the last good sheet.
+  async function refreshSheet(cfg) {
+    if (!getSheets) return null;
+    const pos = await fetchPos({ start: cfg.startDate });
+    const [ledSnap, jobSnap, logNos] = [await LEDGER().where("dateIssued", ">=", cfg.startDate).get(), await JOBS().get(), await logNumbers()];
+    const jobs = [];
+    jobSnap.forEach((d) => jobs.push({ id: d.id, data: (d.data() || {}).data }));
+    const built = buildSheetRows({ pos, ledger: ledSnap.docs.map((d) => ({ id: d.id, ...d.data() })), jobs, logNos, nowIso: new Date().toISOString(), startDate: cfg.startDate });
+    const sheets = getSheets();
+    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: cfg.sheetId, requestBody: { valueInputOption: "RAW", data: [
+      { range: "Summary!A1", values: [[built.note]] },
+      { range: "Summary!A3", values: built.summary },
+      ...(built.all.length ? [{ range: "'All POs'!A2", values: built.all }] : []),
+      ...(built.needs.length ? [{ range: "'Needs a look'!A2", values: built.needs }] : []),
+    ] } });
+    await sheets.spreadsheets.values.batchClear({ spreadsheetId: cfg.sheetId, requestBody: { ranges: [
+      `Summary!A${3 + built.summary.length}:J`, `'All POs'!A${2 + built.all.length}:L`, `'Needs a look'!A${2 + built.needs.length}:G`,
+    ] } });
+    return built;
+  }
+
   // full = the hourly run. jobNo = one job only (the callable).
   async function run({ full = false, jobNo = "" } = {}) {
     const nowIso = new Date().toISOString();
@@ -437,8 +573,16 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
     errors.push(...extra.errors);
     const counts = { listed: listed.length, fromApp: fromApp.length, typed: 0, linked: 0, created: 0, waiting: skips.length, errors: errors.length, picked: extra.picked, folded: extra.folded, voided: extra.voided };
     rows.forEach((r) => { counts[r.how]++; });
+    let sheetInfo = {};
+    if (full && !jobNo && getSheets) {
+      try { const b = await refreshSheet(cfg); sheetInfo = { sheetId: cfg.sheetId, sheetAt: new Date().toISOString(), totals: b.totals, sheetError: "" }; }
+      catch (e) {
+        sheetInfo = { sheetError: String(e.message || e).slice(0, 200) };
+        functions.logger.error("[simproPull] sheet failed", { error: String(e.message || e) });
+      }
+    }
     if (!jobNo) {
-      await CFG().set({ waiting: full ? nextWaiting : [...new Set([...cfg.waiting, ...nextWaiting])],
+      await CFG().set({ ...sheetInfo, waiting: full ? nextWaiting : [...new Set([...cfg.waiting, ...nextWaiting])],
         lastRun: { at: new Date().toISOString(), full, counts, rows: rows.slice(0, 150), skips: skips.slice(0, 40), errors: errors.slice(0, 20) } }, { merge: true });
     }
     functions.logger.info("[simproPull] done", { mode: cfg.mode, full, ...counts });
@@ -461,6 +605,6 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
       return run({ jobNo: simproJobNo });
     });
 
-  return { scheduledSimproPOSync, syncSimproPOsForJob, run };
+  return { scheduledSimproPOSync, syncSimproPOsForJob, run, refreshSheet, loadCfg };
 };
-Object.assign(module.exports, { START_DATE, LIST_MATCH, plainLines, listScore, typedNumbers, isFromApp, sourceFor, listFor, planPo, planFold, buildCard, mdy });
+Object.assign(module.exports, { START_DATE, LIST_MATCH, plainLines, listScore, typedNumbers, isFromApp, sourceFor, listFor, planPo, planFold, buildCard, mdy, buildSheetRows, sheetDate, SHEET_ID });
