@@ -15263,15 +15263,11 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
     safeOrders.forEach(o => { m[o.id] = true; }); // all start collapsed
     return m;
   });
-  // Simpro PO sync was pulled back — matching wasn't accurate enough to
-  // trust with field data. The Cloud Function (syncSimproPOsForJob) is
-  // still deployed but no UI calls it. The "SYNC FROM SIMPRO" button is
-  // intentionally not rendered below. When we iterate on matching (probably
-  // item-overlap matching instead of supplier+date), we can re-enable the
-  // button by uncommenting the JSX block in the return. The state and
-  // helper used to live here — removed cleanly.
+  // POs made in Simpro arrive by themselves (functions/materialPO/simproPull.js),
+  // so a card can appear while this list is open. Those start folded like the rest.
+  const isFolded = (o) => (collapsed[o.id] === undefined ? !!(o.simproPulled || o.simproLinked) : !!collapsed[o.id]);
 
-  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
+  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","ACE","Other"];
   const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:true}]);
 
   const upd = (id, p) => {
@@ -15284,14 +15280,10 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
 
   const del = async (id) => { if(!await showConfirm("Remove this purchase order?")) return; onChange(safeOrders.filter(o => o.id!==id)); };
 
-  const toggle = (id) => setCollapsed(c => ({...c, [id]: !c[id]}));
+  const toggle = (id) => { const o = safeOrders.find(x => x.id === id); const was = o ? isFolded(o) : !!collapsed[id]; setCollapsed(c => ({...c, [id]: !was})); };
 
   return (
     <div>
-      {/* Sync-from-Simpro button removed — matching wasn't reliable enough
-          to ship. To re-enable in the future: restore the button JSX here
-          AND the syncFromSimpro / syncing state declared above. The
-          Cloud Function syncSimproPOsForJob is still deployed and callable. */}
       {canOrderFromBid && (
         <button onClick={()=>setBuilderOpen(true)} style={{width:"100%",marginBottom:8,background:C.accent,border:"none",color:"#fff",borderRadius:9,
           padding:"11px 14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>New order from the bid</button>
@@ -15304,7 +15296,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
           return rank(a) - rank(b);
         })
         .map((o,i) => {
-        const isCollapsed = !!collapsed[o.id];
+        const isCollapsed = isFolded(o);
         // Four states (in priority order): pickedUp > deliveredToShop > ordered > needsOrder
         const cardBg     = o.pickedUp ? "rgba(22,163,74,0.05)"
                          : o.deliveredToShop ? "rgba(22,163,74,0.05)"
@@ -15340,8 +15332,11 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 <StatusPill variant="done" bordered>Picked Up</StatusPill>
               )}
               {o.source && (
-                <StatusPill variant="accent">{o.source}</StatusPill>
+                <StatusPill variant="accent">{o.source === "Other" && o.simproSupplier ? o.simproSupplier : o.source}</StatusPill>
               )}
+              {o.simproPulled && <StatusPill variant="info">Simpro</StatusPill>}
+              {o.simproChip && <StatusPill variant="neutral">{o.simproChip}</StatusPill>}
+              {o.simproVoided && <StatusPill variant="blocked">Voided in Simpro</StatusPill>}
               {/* v548: receipt badge on store-run cards (No receipt only once it's picked up) */}
               {(() => { const rs = receiptState(o);
                 return rs === "have" ? <StatusPill variant="done">Receipt</StatusPill>
@@ -15395,6 +15390,11 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 {o.poCustom && (
                   <div style={{fontSize:13,color:C.text,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",marginTop:6}}>
                     <b style={{color:C.dim,fontWeight:700}}>Told {o.source || "CED"}:</b> {o.poCustom}
+                  </div>
+                )}
+                {(o.simproPulled || o.simproLinked) && (
+                  <div style={{fontSize:12.5,color:C.dim,marginTop:6}}>
+                    {o.simproPulled ? `Made in Simpro${o.simproMadeBy ? ` by ${o.simproMadeBy}` : ""}` : `PO number from Simpro, the list matched this card`}{o.simproCostCenter ? ` · ${o.simproCostCenter}` : ""}
                   </div>
                 )}
 
@@ -17159,7 +17159,7 @@ function JobOrdersSummary({job, onOrder, phases = ["rough","finish"]}) {
               <StatusPill variant={variant}>{label}</StatusPill>
             </span>
             <span style={{gridColumn:"1/-1",fontSize:12.5,color:C.dim}}>
-              {o._ph}{who ? ` · ${who}` : ""}{when ? ` · ${when}` : ""}{o.poSentVia==="app" ? (o.poSentMode==="test" ? " · test send from the app" : " · sent from the app") : ""}
+              {o._ph}{who ? ` · ${who}` : ""}{when ? ` · ${when}` : ""}{o.poSentVia==="app" ? (o.poSentMode==="test" ? " · test send from the app" : " · sent from the app") : ""}{o.simproPulled ? " · made in Simpro" : ""}
             </span>
             {lines.length > 0 && (
               <span style={{gridColumn:"1/-1",fontSize:12.5,color:C.faint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
@@ -61868,6 +61868,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 **Last manifest update:** 2026-11-02 · App SW version: v595
 ---
 
+- **POs made in Simpro show up on Material Tracking by themselves; a receipt in Simpro marks the card Picked Up** · 'shipped 2026-11-02' · 'SW v596' · 'scheduledSimproPOSync' · 'syncSimproPOsForJob' · 'functions/materialPO/simproPull.js' · 'simpro_po_link' · 'simproPulled' · Koy: *"if a po is sent from simpro it doesnt track in the CC. Can we make that a thing? so I dont have to enter the po manually in the CC"*, then *"when a receipt is put in we have the material so they can be marked picked up."* Every 5 minutes one read of 'GET /vendorOrders/' (the row itself carries 'AssignedTo.Job', cost center, vendor, notes and maker). Each PO not yet handled stops at the first line that fits: **sent from the app** (private-notes tag or 'material_po_log') is left alone; **PO # typed on a card on that job** links in place with nothing visible changed, however it was typed ('PO-6216', '7250/ 7252', '7115 (Under Power...)'); **a card with no PO # and a near-identical list** (shared words 80%+, one match only, card made within 45 days before or 7 after the PO) gets the blanks filled; **anything else** makes a new card, folded, 'Simpro' pill, with the maker and cost center inside: Rough In → Rough, Finish → Finish, any PO on a commercial job → Materials, Warranty / Generators / the rest → Finish with the cost center as a chip. It never matches by supplier alone: the May sync did, used the 'Job.ID' filter Simpro ignores, and left 39 of 97 cards showing a PO from another job (not touched by this ship). Skips rather than guesses on no job, a job not in the app, a Simpro # two jobs share, an archived job, or a draft (Stage Pending); those come in once fixed. Hourly: **a receipt ('/vendorOrders/{id}/receipts/') ticks Picked Up** by Simpro on the receipt's date on cards this pull made or linked, once per PO so an un-tick stays, and if a person ticked it first their call stands from then on; app-sent cards are not touched; a pull-made card nobody has worked or edited folds into a card someone typed the same number on later; a PO voided in Simpro gets a **Voided in Simpro** pill and nothing is deleted. Start date 2026-10-03 (Koy: last 30 days), list window 45 days. Dry run against live data 2026-11-02: 165 POs → 84 app, 28 typed, 1 filled in, 51 new (17 Rough, 9 Finish, 14 Finish with a label, 11 Materials), 1 job not in the app. List match back test on 407 typed-PO cards at 80%: 249 right, 0 wrong, 158 get their own card. **ACE** added to the Source dropdown so ACE cards get the receipt photo box. Mode on 'settings/simproPoSync': missing or 'dry' = watch mode, hourly, writes only its own 'lastRun'; 'live'; 'off'. 'syncSimproPOsForJob' now runs the same rules for one job through 'AssignedTo.Job=' (no UI calls it). Tests: new 'scripts/simpro-pull-sim.js' (38 scenarios in prebuild), 'scripts/simpro-pull-dryrun.js' runs the real code on live data with writes blocked. Guides: materials, rough, finish. Crew brief 'docs/crew-briefs/v596.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scheduledSimproPOSync,functions:syncSimproPOsForJob --project homestead-electric'** (Koy), then watch mode for a day, then 'mode: "live"'. **Why it won't lose data:** Simpro is GET only. On a job it adds cards or fills blanks through a transaction on the live doc, and the app's '_threeWayMerge' keeps a server-added card (tested on the real function). It never changes a typed PO #, a list or which list a card is on. It removes only its own card, and only when nobody has worked it and the number is on another card. 'simpro_po_link' is function-only under the rules' catch-all, so no rules change, and it's written with the card, so a removed card stays removed. No new top-level job field, so no loader change.
 - **CC anyone on a PO email, and an expired login now asks for the PIN instead of quietly losing buttons** · 'shipped 2026-11-02' · 'SW v595' · 'PoCopyToBox' · 'cleanCopyTo' · 'extraCc' · 'functions/materialPO/send.js' · 'IDENTITY_TTL' · 'data-po-sending' · Koy: *"where did the order from the bid option go?"* It showed on his phone but not his desktop: the saved login runs out 24 hours after the PIN, while an open tab keeps showing the person logged in, so everything that re-reads 'getIdentity()' (New order from the bid, Send to CED, receipts) vanished with no message. A reload and PIN brought it back. Now the app saves, closes the job and shows the PIN screen when the login runs out, on return to the tab or within a minute while it's open, waiting for anyone typing in a box or mid PO send. Then Koy: *"would like the ability to CC someone on the email being sent."* Send to CED and New order from the bid each have an optional CC box, up to 5 addresses typed per send, on top of bids@ and the sender. A bad address is refused before any PO exists, test mode still copies nobody, a retry with a blank box keeps who the first try named, and the send record keeps 'extraCc'. Needs 'sendMaterialPO,sendMaterialOrder' deployed before the app.
 - **Dashboard, one place, ship 1: the real job card opens on the Dashboard with no reload, on the right tab; bell, pushes and Add task work there; dashboard visits get their own usage count** · 'shipped 2026-11-01' · 'SW v594' · 'DashPage' · 'jobDrawer' · 'inboxBellBtn' · 'hePushPrefWrite' · 'notifClickPlan' · Koy: *"one place to handle all my work"*. '/dashboard' now mounts the app's own 'JobDetail', 'NeedQuickAdd', bell, push toast, version popups and save status (moved above the dashboard return, one copy each; the crew app still mounts them). A job panel's **Open job** opens the card in place; a question, change order or return trip row opens it on that tab; Close returns to where you were. A task or other-screen notification still opens the app on it until My Day moves here (ship 2). New per-device switch in the Dashboard's bell, **Job pushes on this device open the dashboard** (localStorage plus IndexedDB 'he_sw_prefs' for 'firebase-messaging-sw.js'), off by default; only job pushes move. Foreman view's dollar mask now covers the whole page. Usage: a dashboard visit logs as 'views/dash', no longer 'views/myday'. Gate: 'scripts/dash-oneplace-test.js'. Guide 'dashboard.html'. **Why it won't lose data:** the same job card saving through the same 'updateJob' funnel, version lock and stale-copy checks; no new job field, no rule change, no function change; the push switch is stored only on the device.
 - **Homestead lettering on the other pages** · 'shipped 2026-10-30' · 'SW v592' · 'PAGE_TITLE' · 'GROUP_TITLE' · 'PageHeader' · 'BRAND_SLAB' · Koy: *"Brand the other pages."* Page titles now use the same slab lettering as the logo, in logo brown, in normal capitals instead of all caps: Today, My Day, Needs, Huddle, Tasks, QC Walks, Scheduling Forecast and Crew Planner, Upcoming Jobs, Job Start, Job Prep, Change Orders, Time Off, Activity Log, Quotes, Contractors, Team Members, Settings, App Map, Plan Changes, plus the crew and contractor pages. Group headings on All Jobs, Tasks, Job Prep and Crew Board, and the Simpro Inbox heading, get the lettering too. Crew and contractor names and group headings keep their own colors, because those colors mean something. Nothing moved: only the lettering changed, and no title got taller. Left alone: the office dashboard, Scoreboard, FieldInk, share links, printouts, pop-up titles and the insides of job tabs. **Why it won't lose data:** only text styling on titles and the shared page header changed, with no new saves, no changed saves and no change to what any title button or link does.
