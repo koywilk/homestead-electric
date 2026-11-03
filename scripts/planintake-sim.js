@@ -429,5 +429,58 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   eq([...w.files.values()].filter(f => /^Quote #2299/.test(f.name)).length, 1, "still exactly one folder for the quote");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only / quote-folder-name scenarios passed");
+// 14 ── texted plans (Koy 2026-11-03): the Mac drops PDF + note into _Plan Inbox/_From Texts
+{
+  const FOLDER = "application/vnd.google-apps.folder";
+  const hourAgo = new Date(Date.now() - 3600e3).toISOString(), justNow = new Date(Date.now() - 600e3).toISOString();
+  const note = (o) => Buffer.from(JSON.stringify(o));
+  const seed = () => [
+    { id: "INBOX0000000", name: "_Plan Inbox", mimeType: FOLDER, parents: [PARENT] },
+    { id: "DROP00000000", name: "_From Texts", mimeType: FOLDER, parents: ["INBOX0000000"] },
+    { id: "TXT1", name: "ab12cd34 - Tolbert Appliance Specs.pdf", parents: ["DROP00000000"], md5Checksum: "m-new", size: "9", createdTime: hourAgo, content: Buffer.from("%PDF-appl") },
+    { id: "TXT1N", name: "ab12cd34 - Tolbert Appliance Specs.pdf.json", mimeType: "application/json", parents: ["DROP00000000"], createdTime: hourAgo,
+      content: note({ filename: "Tolbert Appliance Specs.pdf", from: "Jeran Rybal", conversation: "Jeran Rybal", date: "2026-11-02", texts: [{ who: "Jeran Rybal", text: "Tolbert appliance package, final" }] }) },
+    { id: "TXT2", name: "ffff0000 - no note yet.pdf", parents: ["DROP00000000"], md5Checksum: "m-wait", size: "9", createdTime: justNow, content: Buffer.from("%PDF-wait") },
+    { id: "TXT3", name: "eeee1111 - Already Filed.pdf", parents: ["DROP00000000"], md5Checksum: "m-dup", size: "9", createdTime: hourAgo, content: Buffer.from("%PDF-dup") },
+    { id: "TXT3N", name: "eeee1111 - Already Filed.pdf.json", mimeType: "application/json", parents: ["DROP00000000"], createdTime: hourAgo, content: note({ filename: "Already Filed.pdf", from: "Josh" }) },
+    { id: "TXT4", name: "dddd2222 - still uploading.pdf", parents: ["DROP00000000"], size: "9", createdTime: hourAgo, content: Buffer.from("%PDF-up") },
+    { id: "TXT4N", name: "dddd2222 - still uploading.pdf.json", mimeType: "application/json", parents: ["DROP00000000"], createdTime: hourAgo, content: note({ filename: "still uploading.pdf" }) },
+  ];
+  // dry never touches the drop folder
+  const d = world({ seedFiles: seed() });
+  await (d.pi._runOnce());
+  eq(d.files.get("TXT1").parents, ["DROP00000000"], "dry: texted PDF left where the Mac put it");
+  eq(d.docs("agentQueue").filter(x => x.via === "text").length, 0, "dry: nothing queued from texts");
+
+  const w = world({ ccJobs: { j1407: { name: "Tolbert Residence", simproNo: "1407", driveFolderId: "" } }, seedFiles: seed() });
+  w.store.set("planIntakeState/md5_m-dup", { type: "md5", fileId: "SOMEWHERE_ELSE", where: "filed" });
+  w.setMode("live");
+  const c = await (w.pi._runOnce());
+  eq([c.text.queued, c.text.duplicate, c.text.waiting], [1, 1, 2], "one queued, one already filed, two waiting (no note yet / no checksum yet)");
+  const it = w.get("agentQueue/text_TXT1");
+  eq([it.type, it.via, it.from, it.filename, it.inboxFileId, it.date], ["email_pdf", "text", "Jeran Rybal (text)", "Tolbert Appliance Specs.pdf", "TXT1", "2026-11-02"], "queued like an emailed plan, marked as a text");
+  assert(/Tolbert appliance package/.test(it.body), "the texts around it go to the Routine");
+  eq([w.files.get("TXT1").parents, w.files.get("TXT1").name], [["INBOX0000000"], "2026-11-02 – Tolbert Appliance Specs.pdf"], "PDF moved up into _Plan Inbox, same id, dated name");
+  const done = [...w.files.values()].find(f => f.name === "Done" && f.parents[0] === "DROP00000000");
+  eq(["TXT1N", "TXT3", "TXT3N"].map(id => w.files.get(id).parents[0]), [done.id, done.id, done.id], "note + already-filed PDF moved to _From Texts/Done");
+  eq(["TXT2", "TXT4"].map(id => w.files.get(id).parents[0]), ["DROP00000000", "DROP00000000"], "waiting PDFs untouched");
+  eq(w.get("planIntakeState/md5_m-new").fileId, "TXT1", "checksum recorded so an emailed copy is a duplicate");
+  w.store.set("planIntakeState/config", { ...w.get("planIntakeState/config"), runLockAt: "" });
+  const again = await (w.pi._runOnce());
+  eq([again.text.queued, w.docs("agentQueue").filter(x => x.via === "text").length], [0, 1], "a second run queues nothing new");
+
+  const TOKEN = "e".repeat(64);
+  process.env.PLAN_ROUTINE_TOKEN = TOKEN;
+  const res = { code: 200, status(x) { this.code = x; return this; }, json(o) { this.body = o; return this; }, set() { return this; }, send(x) { this.body = x; return this; } };
+  await w.pi.planRoutineApi({ method: "POST", path: "/decide", query: {}, get: (h) => (h.toLowerCase() === "authorization" ? `Bearer ${TOKEN}` : ""),
+    body: { item: "text_TXT1", action: "file", kind: "job", number: "1407", category: "appliance", reason: "texted by Jeran: Tolbert appliance package" } }, res);
+  if (!(res.body && res.body.ok)) console.log("DECIDE:", res.code, JSON.stringify(res.body));
+  eq(res.body && res.body.ok, true, "the Routine files a texted plan the same way");
+  eq(w.files.get(w.files.get("TXT1").parents[0]).name, "APPLIANCE SPECS", "lands in MOST UPDATED / APPLIANCE SPECS, where the appliance pull reads");
+  const f = w.docs("agentFindings").find(x => x.type === "plans_filed" && /Tolbert Appliance Specs/.test(x.summary));
+  assert(f && f.links.every(l => l.url), "no blank Email link on a texted plan");
+  eq(w.driveLog.filter(x => x[0] === "delete").length, 0, "nothing deleted");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only / quote-folder-name / texted-plans scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });

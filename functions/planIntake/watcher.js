@@ -705,6 +705,85 @@ module.exports = function makePlanIntake(deps) {
     }
   }
 
+  // ══ Texted plans (Koy 2026-11-03, PDFs only) ═══════════════════════════════
+  // Koy's Mac (~/dev/text-digest) copies each PDF an approved work contact texts him
+  // into _Plan Inbox/_From Texts, then writes "<pdf name>.json" beside it: the file's
+  // real name, who sent it, the conversation and the texts around it. The note goes
+  // last, so a PDF with a note is whole. Each one moves up into _Plan Inbox and is
+  // queued as `email_pdf` with via:"text", so filing, dismissing, the dashboard card
+  // and the weekly review treat it exactly like an emailed plan. Live mode only (the
+  // Mac writes into the live inbox). Never deletes: a PDF that is already filed, and
+  // every note, moves to _From Texts/Done.
+  const DROP_FOLDERS = [{ name: "_From Texts", via: "text" }];
+  const DROP_NOTE_WAIT_MS = 6 * 3600 * 1000;      // a PDF whose note never arrived is queued anyway after this
+  async function listDrop(drive, folderId) {
+    const out = []; let pageToken;
+    do {
+      const r = await drive.files.list({ q: `'${folderId}' in parents and trashed=false`, fields: "nextPageToken,files(id,name,mimeType,md5Checksum,size,createdTime)", pageSize: 200, pageToken, supportsAllDrives: true, includeItemsFromAllDrives: true });
+      out.push(...(r.data.files || [])); pageToken = r.data.nextPageToken;
+    } while (pageToken);
+    return out;
+  }
+  async function readNote(drive, file) {
+    if (!file) return {};
+    try {
+      const r = await drive.files.get({ fileId: file.id, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+      const n = JSON.parse(Buffer.from(r.data).toString("utf8"));
+      return n && typeof n === "object" ? n : {};
+    } catch (e) { return {}; }
+  }
+  async function processDrops(ctx, counts) {
+    const { cfg, drive } = ctx;
+    if (cfg.mode !== "live") return;
+    const inbox = ctx.inboxId || (await findOrMakeFolder(drive, homeParent(cfg), INBOX_FOLDER, { create: false })).id;
+    if (!inbox) return;
+    for (const src of DROP_FOLDERS) {
+      const drop = await findOrMakeFolder(drive, inbox, src.name, { create: false });
+      if (!drop.id) continue;                                      // the Mac hasn't sent anything yet
+      const c = counts[src.via] = counts[src.via] || { queued: 0, duplicate: 0, waiting: 0 };
+      const kids = await listDrop(drive, drop.id);
+      const notes = new Map(kids.filter(f => /\.json$/i.test(f.name)).map(f => [f.name.replace(/\.json$/i, ""), f]));
+      const pdfs = kids.filter(f => f.mimeType !== FOLDER_MIME && /\.pdf$/i.test(f.name))
+        .sort((a, b) => String(a.createdTime || "").localeCompare(String(b.createdTime || "")));
+      let done = "";
+      const toDone = async (f) => {
+        if (!f) return;
+        done = done || (await findOrMakeFolder(drive, drop.id, "Done", { create: true })).id;
+        await drive.files.update({ fileId: f.id, addParents: done, removeParents: drop.id, fields: "id", supportsAllDrives: true });
+      };
+      for (const pdf of pdfs) {
+        if (ctx.deadline() < 90 * 1000) break;
+        const noteFile = notes.get(pdf.name);
+        const age = Date.now() - Date.parse(pdf.createdTime || 0);
+        // Drive hands out the checksum once the upload is whole.
+        if ((!noteFile && age < DROP_NOTE_WAIT_MS) || !pdf.md5Checksum) { c.waiting++; continue; }
+        try {
+          const note = await readNote(drive, noteFile);
+          const md5 = pdf.md5Checksum;
+          const seen = await md5Seen(cfg.mode, md5);
+          if (seen && seen.fileId !== pdf.id) {
+            await toDone(pdf); await toDone(noteFile);
+            c.duplicate++; continue;
+          }
+          const filename = String(note.filename || pdf.name).replace(/[\\/]/g, "-").slice(0, 200);
+          const date = /^\d{4}-\d{2}-\d{2}$/.test(String(note.date || "")) ? note.date : today();
+          const from = `${String(note.from || "unknown").replace(/[\\/]/g, "-").slice(0, 80)} (${src.via})`;
+          const texts = (Array.isArray(note.texts) ? note.texts : []).map(t => `${t.who || "?"}: ${t.text || ""}`).join("\n");
+          await enqueue(cfg.mode, `${src.via}_${pdf.id}`, {
+            type: "email_pdf", via: src.via, from, subject: String(note.conversation || "").slice(0, 200), date,
+            threadId: "", gmailLink: "", body: texts.slice(-1500), senderHistory: await senderHistory(cfg.mode, from),
+            filename, source: src.via, md5, bytes: Number(pdf.size) || 0, inboxFileId: pdf.id,
+          });
+          await md5Mark(cfg.mode, md5, { fileId: pdf.id, where: "inbox", name: filename });
+          // Same file id after the move, so the queued item already points at it.
+          await drive.files.update({ fileId: pdf.id, addParents: inbox, removeParents: drop.id, requestBody: { name: `${date} – ${filename}` }, fields: "id", supportsAllDrives: true });
+          await toDone(noteFile);
+          c.queued++;
+        } catch (e) { counts.errors.push(`${src.via} ${pdf.name}: ${e.message}`.slice(0, 200)); }
+      }
+    }
+  }
+
   // Once a day: the jobs + open quotes the Routine may file against, with
   // addresses — so the Routine never needs Simpro or Firestore access itself.
   async function refreshCandidates(ctx, counts) {
@@ -879,7 +958,7 @@ module.exports = function makePlanIntake(deps) {
       await finding(cfg.mode, `unmatched_${item.id}`, { number: String(d.bestGuess || ""), type: "unmatched_plan",
         extra: { item: item.id, bestGuess: String(d.bestGuess || ""), altGuess, altWhy, canFile: !!item.inboxFileId, filename: item.filename || "", from: item.from || "" },
         summary: `Plan not matched: ${item.filename || item.link || "link"} from ${item.from}${d.bestGuess ? ` — best guess ${d.bestGuess}` : ""}${d.reason ? ` (${String(d.reason).slice(0, 120)})` : ""}`,
-        links: [...(item.inboxFileId ? [{ label: "File", url: `https://drive.google.com/file/d/${item.inboxFileId}/view` }] : []), { label: "Email", url: item.gmailLink }] });
+        links: [...(item.inboxFileId ? [{ label: "File", url: `https://drive.google.com/file/d/${item.inboxFileId}/view` }] : []), ...(item.gmailLink ? [{ label: "Email", url: item.gmailLink }] : [])] });
       return { status: "unmatched", note: String(d.reason || "").slice(0, 200) };
     }
     if (d.action === "match_walk") {
@@ -921,7 +1000,7 @@ module.exports = function makePlanIntake(deps) {
     await db.collection(STATE).doc(`${prefixOf(cfg.mode)}sender_${item.from}`).set({ type: "sender", numbers: { [`${kind === "quote" ? "Q" : "#"}${number}`]: deps.FieldValue.increment(1) } }, { merge: true });
     await finding(cfg.mode, `filed_${item.id}`, { number: kind === "quote" ? `Q${number}` : number, type: "plans_filed",
       summary: `Filed "${item.filename}" from ${item.from} into ${kind === "quote" ? "Q" : "#"}${number} / MOST UPDATED${cf.name ? ` / ${cf.name}` : ""} as "${name}"${d.reason ? ` — ${String(d.reason).slice(0, 120)}` : ""}`,
-      links: [{ label: "Folder", url: folderUrl(targetId) }, { label: "Email", url: item.gmailLink }] });
+      links: [{ label: "Folder", url: folderUrl(targetId) }, ...(item.gmailLink ? [{ label: "Email", url: item.gmailLink }] : [])] });
     await resolveFinding(cfg.mode, `unmatched_${item.id}`, "filed", d.by || "the Routine");
     return { status: "done", note: name };
   }
@@ -1093,6 +1172,7 @@ module.exports = function makePlanIntake(deps) {
       const ctx = { cfg, drive, auth, deadline: () => RUN_BUDGET_MS - (Date.now() - started) };
       await processWalks(ctx, counts).catch(e => { counts.errors.push(`calendar: ${e.message}`.slice(0, 200)); });
       await processMail(ctx, counts).catch(e => { counts.errors.push(`mail: ${e.message}`.slice(0, 200)); });
+      await processDrops(ctx, counts).catch(e => { counts.errors.push(`drops: ${e.message}`.slice(0, 200)); });
       const p = prefixOf(cfg.mode);
       const snap = await db.collection(STATE).where("type", "==", "quote").get();
       const tracked = snap.docs.filter(d => d.id.startsWith(`${p}quote_`))
