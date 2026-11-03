@@ -558,7 +558,7 @@ await ok("handle: the seven actions exist and nothing like a delete / move / add
   assert.deepStrictEqual(api.PUNCH_ACTIONS, ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"]);
   assert.ok(api.PUNCH_ACTIONS.every(a => api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a)));
   assert.deepStrictEqual(api.JOB_ACTIONS, ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"], "the ship-2 list is untouched");
-  assert.strictEqual(api.BUILD, 605);
+  assert.ok(api.BUILD >= 605, "BUILD is at least the ship-6 SW version");
   for (const a of ["punch.delete", "punch.remove", "punch.move", "punch.addFloor", "punch.removeFloor", "punch.deleteRoom", "punch.renameRoom", "punch.severity", "punch.setDoneAll"]) {
     await assert.rejects(run({ requestId: RID(900), action: a, args: {} }, fakeIo({ docs: DOCS() })), (e) => e.status === 400 && /action must be/.test(e.message), a);
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // stage-change-test (v549, UX batch 2): the Rough / Finish stage selects now
-// share stageChangePlan() in src/App.js. This pulls the SHIPPED function out
-// of App.js verbatim, runs it on real-shaped jobs (Miller #1438, Skyridge Lot
+// share stageChangePlan() — since v606 in src/stageChange.js (shared with
+// duetApi). This runs the SHIPPED module on real-shaped jobs (Miller #1438, Skyridge Lot
 // 208 #1419 as they were on 2026-10-16), and checks:
 //   - every side effect the old inline handlers had is unchanged for a job that
 //     is not on hold (parity sweep over every stage on a grid of jobs),
@@ -13,32 +13,17 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const vm = require("vm");
 const assert = require("assert");
 
+// v606 (Duet write access D9 ship 7): stageChangePlan moved out of App.js into
+// src/stageChange.js (byte for byte) so duetApi runs the same function. This
+// test drives the module that ships, and pins that App.js still takes it from
+// there (no second copy can creep back into App.js).
 const src = fs.readFileSync(path.join(__dirname, "..", "src", "App.js"), "utf8");
-function extractFrom(marker) {
-  const start = src.indexOf(marker);
-  if (start < 0) throw new Error(`extract: "${marker}" not found in App.js`);
-  // Start at the body brace: the signature has a `counts = {}` default.
-  let i = src.indexOf(") {", start) + 2, depth = 0, quote = null;
-  for (; i < src.length; i++) {
-    const c = src[i], d = src[i + 1];
-    if (quote) { if (c === "\\") { i++; continue; } if (c === quote) quote = null; continue; }
-    if (c === "/" && d === "/") { i = src.indexOf("\n", i); continue; }
-    if (c === "/" && d === "*") { i = src.indexOf("*/", i + 2) + 1; continue; }
-    if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
-    if (c === "{") depth++;
-    else if (c === "}") { depth--; if (depth === 0) { i++; break; } }
-  }
-  return src.slice(start, i);
-}
-const line = (name) => { const i = src.indexOf(`const ${name} = `); return src.slice(i, src.indexOf("\n", i)); };
-const arr = (name) => { const i = src.indexOf(`const ${name} = `); return src.slice(i, src.indexOf("];", i) + 2); };
-const code = [line("parseStage"), arr("QC_STATUSES"), line("READY_TO_INVOICE_ALERTS"), extractFrom("function stageChangePlan(")].join("\n") + "\nthis.stageChangePlan = stageChangePlan;";
-const box = { C: new Proxy({}, { get: () => "#000" }) }; // QC_STATUSES colours read C.* tokens
-vm.runInNewContext(code, box);
-const plan = box.stageChangePlan;
+assert.ok(!/function stageChangePlan\(/.test(src), "App.js must not define its own stageChangePlan — it lives in src/stageChange.js");
+assert.ok(/const \{ stageChangePlan, READY_TO_INVOICE_ALERTS \} = StageChange;/.test(src) && /import StageChange from "\.\/stageChange";/.test(src), "App.js takes stageChangePlan + READY_TO_INVOICE_ALERTS from src/stageChange.js");
+const plan = require(path.join(__dirname, "..", "src", "stageChange.js")).stageChangePlan;
+
 
 let n = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); n++; };

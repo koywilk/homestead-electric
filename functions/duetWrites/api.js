@@ -13,7 +13,10 @@
 //     the jobNotesMigratedAt stamp), one entry in roughUpdates /
 //     finishUpdates — ship 4; one punch item in roughPunch / finishPunch /
 //     qcPunch + its punchTicks.<id> slot + linked returnTrips entries —
-//     ship 6), needs (create + update; a photo — ship 3),
+//     ship 6; the phase status / stage / schedule-date scalars, the two
+//     inspection results + attempts + items (+ linked returnTrips entries), the
+//     QC status / date + qcRtChoice stamps (+ the QC return trip), the prep
+//     checklist maps — ship 7), needs (create + update; a photo — ship 3),
 //     homeowner_requests/<jobId> (ship 4: the questionThreads.<key> field
 //     ONLY — one appended message — plus its versions subcollection, where
 //     the writer's own snapshot is added and pruned to 10 exactly as the
@@ -101,6 +104,26 @@
 // editText patch one field set; punch.void (QC-walk items only, reason
 // required) strips the item's clones from open QC-Fail trips in the same
 // write, punch.restore clears the four void fields. Never a delete of an item.
+// Ship 7 (phase status, stage, inspections, QC, prep, schedule dates): eight
+// more jobWrite() actions, each the app's own handler on the job's scalar
+// fields (functions/duetWrites/stages.js, line for line): phase.setStatus is
+// the STATUS select's exact patch (OnHold / Scheduled / StartConfirmed rule /
+// StatusDate / DepositDismissed + rough's Matterport and QC flips on the first
+// complete; complete refused while the phase's punch — slots applied — has
+// open items); phase.setStage runs the app's OWN stageChangePlan
+// (src/stageChange.js, byte-copied to functions/stageChange.js) and writes
+// every derived field it returns; inspection.setResult is Pass / Fail / clear
+// + the attempt literal, and Failed again (repeat:true) while it reads failed;
+// inspection.items adds a failed item or ticks one (rough mirrors done onto
+// returnTrips[].punch[] entries with fromRoughInspectionId); inspection
+// .createTrip is the → Create Return Trip literal (or → Add N to the open
+// trip); qc.setStatus is runQcVerdict's base patch with a required then:
+// rt | crew on fail / passed_items (the QC trip from qcTripPlan's items, the
+// qcRtChoice<P> / By / At stamps); prep.tick writes both prep maps whole
+// (prepItemPatch); phase.setDates is the schedule-window modal, the PROJ.
+// START input (+ waiting_date) and the CONFIRM button. None of these fields
+// are on the versions WATCH list, so the audit doc's before is the only undo:
+// every field written, derived ones included, is in before / after.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -110,9 +133,10 @@ const NU = require("./notesUpdates.js");
 const CR = require("./crew.js");
 const TO = require("./timeOff.js");
 const PU = require("./punch.js");
+const SG = require("./stages.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 605;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 606;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const AUDIT = "duet_writes";
@@ -120,8 +144,9 @@ const QUESTION_ACTIONS = ["question.add", "question.answer", "question.reopen"];
 const NOTE_ACTIONS = ["note.add", "note.addLine", "note.editLine", "note.archive", "note.delete", "dailyUpdate.add"];
 const PEOPLE_ACTIONS = ["job.setPeople"];
 const PUNCH_ACTIONS = ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"];
+const STAGE_ACTIONS = ["phase.setStatus", "phase.setStage", "inspection.setResult", "inspection.items", "inspection.createTrip", "qc.setStatus", "prep.tick", "phase.setDates"];
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
-const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS];   // every action that is ONE jobWrite() transaction
+const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...STAGE_ACTIONS];   // every action that is ONE jobWrite() transaction
 const PHOTO_ACTIONS = ["photo.add"];
 const THREAD_ACTIONS = ["question.reply"];
 const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
@@ -322,6 +347,20 @@ function planJobAction(action, args, ctx) {
       case "punch.void": return PU.planVoid(args, c);
       case "punch.restore": return PU.planRestore(args, c);
       case "punch.editText": return PU.planEditText(args, c);
+      // ── Ship 7 ─────────────────────────────────────────────────────────────
+      // Scalar fields on the job (status / stage / inspection / QC / prep /
+      // dates) in the app's own patch shapes, plus returnTrips when an
+      // inspection or QC verdict makes or extends a trip. Each planner answers
+      // in jobWrite's shape; before / after hold EVERY field written (none of
+      // these are versioned by the app — this audit is the undo).
+      case "phase.setStatus": return SG.planSetPhaseStatus(args, c);
+      case "phase.setStage": return SG.planSetStage(args, c);
+      case "inspection.setResult": return SG.planSetInspection(args, c);
+      case "inspection.items": return SG.planInspectionItems(args, c);
+      case "inspection.createTrip": return SG.planCreateInspectionTrip(args, c);
+      case "qc.setStatus": return SG.planSetQcStatus(args, c);
+      case "prep.tick": return SG.planTickPrep(args, c);
+      case "phase.setDates": return SG.planSetScheduleDates(args, c);
       default: return { refused: "unknown action" };
     }
   };
@@ -737,6 +776,7 @@ module.exports.NOTE_ACTIONS = NOTE_ACTIONS;
 module.exports.THREAD_ACTIONS = THREAD_ACTIONS;
 module.exports.PEOPLE_ACTIONS = PEOPLE_ACTIONS;
 module.exports.PUNCH_ACTIONS = PUNCH_ACTIONS;
+module.exports.STAGE_ACTIONS = STAGE_ACTIONS;
 module.exports.CREW_ACTIONS = CREW_ACTIONS;
 module.exports.TIMEOFF_ACTIONS = TIMEOFF_ACTIONS;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;
