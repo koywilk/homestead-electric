@@ -7,8 +7,9 @@
 //
 // Guardrails, enforced here on every call (plan §3, docs/DUET-WRITES-PLAN.md
 // in the connector repo):
-//   • collections: jobs (read only in ship 1), needs (create + update). Never
-//     a delete, never a job create, never anything else.
+//   • collections: jobs (update only: one item in changeOrders / returnTrips,
+//     or the statusUpdate scalar — ship 2), needs (create + update). Never a
+//     delete, never a job create, never anything else.
 //   • one item per call; transaction, read-modify-write by id
 //   • names checked against settings/users (active, not contractor)
 //   • idempotent: duet_writes/<requestId> is the audit doc AND the replay key
@@ -21,15 +22,26 @@
 // "Duet (Koy)" for the ledgers and Koy's tripwire push, a non-browser tab so
 // no open job tab mistakes it for its own echo, and updated_at strictly newer
 // than the doc's (the simproPull freshIso lesson).
+// Ship 2 (change orders, return trips, status update): every job write is a
+// transaction on jobs/<id> that re-reads the doc, changes ONE item by id in
+// data.changeOrders / data.returnTrips (or the statusUpdate scalar), and
+// writes that whole array back as a dotted key — what the app's three-way
+// merge produces for a baseline that IS the live doc. The app's client-only
+// FieldInk mirror (publishCcChangeOrders → cccos) does not run for these
+// (plan 9b, accepted); onJobUpdate's pushes (co_new, co_approved,
+// rt_assigned) and the versions snapshot fire on their own.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
+const JI = require("./jobItems.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 600;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 601;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const AUDIT = "duet_writes";
-const ACTIONS = ["task.create", "task.update"];
+const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
+const ACTIONS = ["task.create", "task.update", ...JOB_ACTIONS];
+const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
 
 class Refusal extends Error { constructor(status, why) { super(why); this.status = status; } }
@@ -54,7 +66,85 @@ function stamp(requestId, updatedAt) {
 }
 
 // io: { nowIso(), todayYmd(), getAudit(id), countRecent(sinceIso), getJob(id), getUsers(),
-//       openNeeds({jobId, assignedTo}), runTx(fn), needRef(id), auditRef(id), arrayUnion(...x), rand() }
+//       openNeeds({jobId, assignedTo}), runTx(fn), needRef(id), jobRef(id), auditRef(id),
+//       arrayUnion(...x), serverTimestamp(), rand(), tz }
+
+// One job write, the same way for every ship-2 action: re-read the job in the
+// transaction, plan against the live copy, write the dotted data.<field> keys
+// with the job envelope the app's saveJob patch carries (updated_at strictly
+// newer, lastActivityAt, saved_by / device / tab, version-lock stamp,
+// merged:false) and the audit doc in the same transaction. `plan(job)` returns
+// {refused} | {noop, result} | {fields:{<field>: value}, before:{<field>: value},
+// after:{<field>: value}, itemId, result:{...}}.
+async function jobWrite(io, requestId, action, jobId, plan, finish) {
+  let out = null;
+  await io.runTx(async (tx) => {
+    const snap = await tx.get(io.jobRef(jobId));
+    const raw = snap && snap.exists ? snap.data() : null;
+    const job = raw && raw.data ? { id: jobId, data: raw.data } : null;
+    const p = plan(job);
+    if (p.refused) { out = finish(job ? 400 : 404, { ok: false, refused: p.refused }, { ok: false, why: p.refused, coll: "jobs", docId: jobId }); tx.set(io.auditRef(requestId), out.audit); return; }
+    if (p.noop) { out = finish(200, { ok: true, requestId, action, jobId, jobName: job.data.name || "", noop: true, message: "Already that way — nothing to change.", ...(p.result || {}) }, { ok: true, noop: true, coll: "jobs", docId: jobId, fields: [] }); tx.set(io.auditRef(requestId), out.audit); return; }
+    const updatedAt = freshIso(raw.updated_at);
+    const upd = { ...stamp(requestId, updatedAt), lastActivityAt: io.serverTimestamp(), merged: false };
+    Object.keys(p.fields).forEach(k => { upd["data." + k] = p.fields[k]; });
+    tx.update(io.jobRef(jobId), upd);
+    const result = { ok: true, requestId, action, jobId, jobName: job.data.name || "", ...p.result };
+    out = finish(200, result, { ok: true, coll: "jobs", docId: jobId, fields: Object.keys(p.fields), itemId: p.itemId || null, before: p.before, after: p.after });
+    tx.set(io.auditRef(requestId), out.audit);
+  });
+  return out;
+}
+
+// Each ship-2 planner → the fields to write + what to audit and answer.
+// Audits keep the ONE item before/after (not the whole array): that is the
+// undo material, and photos make arrays big.
+function planJobAction(action, args, ctx) {
+  return (job) => {
+    const c = { ...ctx, job };
+    switch (action) {
+      case "co.create": {
+        const p = JI.planCreateCO(args, c); if (p.refused) return p;
+        return { fields: { changeOrders: p.changeOrders }, before: { changeOrders: null }, after: { changeOrders: p.co }, itemId: p.co.id,
+          result: { coId: p.co.id, number: p.number, desc: p.co.desc, coStatus: p.co.coStatus, createdBy: p.co.createdBy, pushTo: ["foreman", "coordinator", "Jeromy"] } };
+      }
+      case "co.edit": {
+        const p = JI.planEditCO(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { coId: p.co.id } };
+        return { fields: { changeOrders: p.changeOrders }, before: { changeOrders: p.before }, after: { changeOrders: p.co }, itemId: p.co.id,
+          result: { coId: p.co.id, number: p.number, changed: p.changed } };
+      }
+      case "co.setStatus": {
+        const p = JI.planSetCOStatus(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { coId: p.co.id, coStatus: p.co.coStatus } };
+        return { fields: { changeOrders: p.changeOrders }, before: { changeOrders: p.before }, after: { changeOrders: p.co }, itemId: p.co.id,
+          result: { coId: p.co.id, number: p.number, from: p.from, to: p.to, coStatusDate: p.co.coStatusDate, changed: p.changed, pushTo: p.to === "approved" ? ["lead", "foreman", "coordinator"] : [] } };
+      }
+      case "co.convert": {
+        const p = JI.planConvertCO(args, c); if (p.refused) return p;
+        return { fields: { changeOrders: p.changeOrders, returnTrips: p.returnTrips }, before: { changeOrders: p.before, returnTrips: null }, after: { changeOrders: p.co, returnTrips: p.rt }, itemId: p.co.id,
+          result: { coId: p.co.id, number: p.number, rtId: p.rt.id, rtNumber: p.returnTrips.length, scope: p.rt.scope, photosCarried: p.rt.photos.length } };
+      }
+      case "rt.create": {
+        const p = JI.planCreateRT(args, c); if (p.refused) return p;
+        return { fields: { returnTrips: p.returnTrips }, before: { returnTrips: null }, after: { returnTrips: p.rt }, itemId: p.rt.id,
+          result: { rtId: p.rt.id, number: p.number, scope: p.rt.scope, rtStatus: p.rt.rtStatus || "", rtStatusDate: p.rt.rtStatusDate || "", assignedTo: p.rt.assignedTo || "", pushTo: p.rt.assignedTo && p.rt.assignedTo !== "Unassigned" ? p.rt.assignedTo : null } };
+      }
+      case "rt.update": {
+        const p = JI.planUpdateRT(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { rtId: p.rt.id } };
+        return { fields: { returnTrips: p.returnTrips }, before: { returnTrips: p.before }, after: { returnTrips: p.rt }, itemId: p.rt.id,
+          result: { rtId: p.rt.id, number: p.number, changed: p.changed, rtStatus: p.rt.rtStatus || "", rtStatusDate: p.rt.rtStatusDate || "", assignedTo: p.rt.assignedTo || "", pushTo: p.pushTo } };
+      }
+      case "job.setStatusUpdate": {
+        const p = JI.planSetStatusUpdate(args, c); if (p.refused) return p;
+        if (p.noop) return { noop: true, result: { statusUpdate: p.statusUpdate } };
+        return { fields: p.fields, before: p.before, after: { ...p.fields }, result: { statusUpdate: p.fields.statusUpdate, statusUpdateBy: p.fields.statusUpdateBy, changed: p.changed, historyLength: Array.isArray(p.fields.statusUpdateHistory) ? p.fields.statusUpdateHistory.length : undefined } };
+      }
+      default: return { refused: "unknown action" };
+    }
+  };
+}
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -71,7 +161,7 @@ async function handle(body, io) {
   const recent = await io.countRecent(new Date(Date.parse(nowIso) - 3600 * 1000).toISOString());
   if (recent >= RATE_PER_HOUR) throw new Refusal(429, `Duet has made ${recent} changes in the last hour — the limit is ${RATE_PER_HOUR}. Try again later.`);
 
-  const ctx = { nowIso, bucketNow: `${io.todayYmd()}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined };
+  const ctx = { nowIso, bucketNow: `${io.todayYmd()}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz };
   const base = { at: nowIso, action: b.action, by: SAVED_BY, email, requestId, expireAt: new Date(Date.parse(nowIso) + 90 * 86400 * 1000).toISOString() };
   const finish = (status, bodyOut, auditExtra) => ({ status, body: bodyOut, audit: { ...base, ...auditExtra, response: { status, body: bodyOut } } });
 
@@ -105,6 +195,13 @@ async function handle(body, io) {
       throw e;
     }
     return { status: 200, body: result };
+  }
+
+  if (JOB_ACTIONS.includes(b.action)) {
+    const jobId = String(args.jobId || "");
+    if (!JOB_ID.test(jobId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll: "jobs" });
+    const r = await jobWrite(io, requestId, b.action, jobId, planJobAction(b.action, args, ctx), finish);
+    return { status: r.status, body: r.body };
   }
 
   // task.update
@@ -149,8 +246,11 @@ function firestoreIo({ db, FieldValue, getUsers, TZ }) {
     },
     runTx: (fn) => db.runTransaction(fn),
     needRef: (id) => db.collection("needs").doc(id),
+    jobRef: (id) => db.collection("jobs").doc(id),
     auditRef: (id) => db.collection(AUDIT).doc(id),
     arrayUnion: (...x) => FieldValue.arrayUnion(...x),
+    serverTimestamp: () => FieldValue.serverTimestamp(),
+    tz: TZ,
   };
 }
 
@@ -180,3 +280,4 @@ module.exports.Refusal = Refusal;
 module.exports.BUILD = BUILD;
 module.exports.SAVED_BY = SAVED_BY;
 module.exports.ACTIONS = ACTIONS;
+module.exports.JOB_ACTIONS = JOB_ACTIONS;
