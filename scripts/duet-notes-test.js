@@ -516,7 +516,7 @@ const checkEnvelope = (upd) => {
     }
     const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
     assert.ok(!/tx\.delete\(/.test(src), "no tx.delete anywhere in api.js");
-    assert.strictEqual((src.match(/\.delete\(/g) || []).length, 2, "exactly two deletes in api.js: the ship-3 Storage cleanup and the versions prune");
+    assert.strictEqual((src.match(/\.delete\(/g) || []).length, 3, "exactly three deletes in api.js: the ship-3 Storage cleanup, the versions prune, and (ship 5) FieldValue.delete() on an emptied planner cell — a map key, never a doc");
     n++; console.log("ok   handle: no hard-delete / edit-update action exists; BUILD is the ship-4 SW version; api.js has no tx.delete");
   })();
   console.log(`duet-notes-test: ${n} checks passed`);
