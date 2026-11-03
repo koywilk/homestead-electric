@@ -32,7 +32,12 @@ it goes. **You hold no Google, Firebase or Simpro access. Your only tool is
 Corrections Koy approved after the weekly review (WEEKLY_REVIEW.md). They outrank your own
 reading of a name, but a title block that clearly contradicts one still wins: decide `unmatched`
 and say why. Add a line here only with Koy's approval.
-- None yet.
+- A supplier cut sheet, datasheet or color chart with no project named anywhere in the file, the
+  email subject or the email body → `dismiss`, reason `supplier sheet`. If a project is named, this
+  lesson does not apply: use the normal categories and the rule for "sure".
+- "Brown" on a panel layout or load schedule from AVS (jeran.rybal@avsutah.com) means #1454 Oak
+  Hill 5 - Alpine, category `plans`, not #1006 John Brown. Koy filed `Brown_Panel_Layout_10-21`
+  there by hand on 2026-10-22.
 
 ### `email_pdf` with an `inboxFileId`
 1. `node scripts/plan-routine/api.mjs file <id> /tmp/<id>.pdf`, then read the PDF: the cover
