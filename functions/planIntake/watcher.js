@@ -713,8 +713,9 @@ module.exports = function makePlanIntake(deps) {
   // queued as `email_pdf` with via:"text", so filing, dismissing, the dashboard card
   // and the weekly review treat it exactly like an emailed plan. Live mode only (the
   // Mac writes into the live inbox). Never deletes: a PDF that is already filed, and
-  // every note, moves to _From Texts/Done.
-  const DROP_FOLDERS = [{ name: "_From Texts", via: "text" }];
+  // every note, moves to _From Texts/Done. processChat (below) fills _From Chat the
+  // same way.
+  const DROP_FOLDERS = [{ name: "_From Texts", via: "text" }, { name: "_From Chat", via: "chat" }];
   const DROP_NOTE_WAIT_MS = 6 * 3600 * 1000;      // a PDF whose note never arrived is queued anyway after this
   async function listDrop(drive, folderId) {
     const out = []; let pageToken;
@@ -782,6 +783,99 @@ module.exports = function makePlanIntake(deps) {
         } catch (e) { counts.errors.push(`${src.via} ${pdf.name}: ${e.message}`.slice(0, 200)); }
       }
     }
+  }
+
+  // ══ Google Chat plans (Koy 2026-11-03: "yes, reuse it") ════════════════════
+  // Reads Koy's Chat as Koy with the Homestead connector's read-only Chat sign-in
+  // (its OAuth client, a refresh token of its own), saved as `chat` inside
+  // PLAN_INTAKE_GOOGLE_OAUTH by scripts/plan-intake-chat-auth.js, so the deploy
+  // needs no new secret. Off until config.chatSince is set. From then on, every PDF
+  // someone else posts in a space Koy is in goes into _Plan Inbox/_From Chat with a
+  // note, and processDrops (run right after) queues it like a texted plan. A PDF
+  // shared as a Drive file is fetched with the watcher's Drive access when it can
+  // be; otherwise it is queued as a link for the Routine, like a private Drive link
+  // in an email. Chat is only ever read: the scopes are read-only.
+  const CHAT_CONTEXT_MS = 3 * 3600 * 1000;        // texts this close before a PDF go in its note
+  function chatCreds() {
+    let o = {};
+    try { o = JSON.parse(process.env[OAUTH_SECRET] || "{}").chat || {}; } catch (_) { /* calendarAuth reports a bad secret */ }
+    if (!o.client_id || !o.client_secret || !o.refresh_token) throw new Error("Chat sign-in missing — run scripts/plan-intake-chat-auth.js, then redeploy planIntakeWatcher");
+    const auth = new google.auth.OAuth2(o.client_id, o.client_secret);
+    auth.setCredentials({ refresh_token: o.refresh_token });
+    return { auth, myUser: String(o.my_user || "") };
+  }
+  const isPdfAttachment = (a) => /pdf/i.test(String(a.contentType || "")) || /\.pdf$/i.test(String(a.contentName || ""));
+  async function processChat(ctx, counts) {
+    const { cfg, drive, auth } = ctx;
+    if (cfg.mode !== "live" || !cfg.chatSince) return;
+    const { auth: chatAuth, myUser } = chatCreds();
+    const chat = google.chat({ version: "v1", auth: chatAuth });
+    const started = nowIso();
+    const since = String(cfg.chatCursor || cfg.chatSince);
+    const c = counts.chatRead = { spaces: 0, pdfs: 0, links: 0, duplicate: 0 };
+    const spaces = []; let pageToken;
+    do {
+      const r = await chat.spaces.list({ pageSize: 1000, pageToken });
+      spaces.push(...(r.data.spaces || [])); pageToken = r.data.nextPageToken;
+    } while (pageToken);
+    let dropId = "", cutShort = false;
+    for (const space of spaces.filter(s => String(s.lastActiveTime || "") > since)) {
+      if (ctx.deadline() < 150 * 1000) { cutShort = true; break; }
+      c.spaces++;
+      const msgs = []; let pt;
+      do {
+        const r = await chat.spaces.messages.list({ parent: space.name, filter: `createTime > "${since}"`, pageSize: 500, pageToken: pt });
+        msgs.push(...(r.data.messages || [])); pt = r.data.nextPageToken;
+      } while (pt && msgs.length < 2000);
+      for (const m of msgs) {
+        const sender = m.sender || {};
+        if (myUser && sender.name === myUser) continue;               // never Koy's own posts
+        const pdfs = (m.attachment || []).filter(isPdfAttachment);
+        if (!pdfs.length) continue;
+        const key = String(m.name || "").replace(/[^A-Za-z0-9_.-]/g, "_");
+        const sref = db.collection(STATE).doc(`chat_${key}`);
+        if ((await sref.get()).exists) continue;
+        const when = Date.parse(m.createTime || "") || Date.now();
+        const date = new Date(when).toLocaleDateString("en-CA", { timeZone: TZ });
+        // Google may leave displayName empty under a user sign-in; the Chat user id is the fallback.
+        const from = String(sender.displayName || sender.name || "unknown");
+        const conversation = String(space.displayName || (space.spaceType === "DIRECT_MESSAGE" ? `DM with ${from}` : space.name));
+        const texts = msgs.filter(x => x.text && Math.abs((Date.parse(x.createTime || "") || 0) - when) <= CHAT_CONTEXT_MS && Date.parse(x.createTime || "") <= when)
+          .slice(-10).map(x => ({ who: x.sender && x.sender.name === myUser ? "Koy" : String((x.sender && x.sender.displayName) || from), text: String(x.text).slice(0, 1000) }));
+        const out = [];
+        for (const [i, a] of pdfs.entries()) {
+          const filename = String(a.contentName || "plans.pdf").replace(/[\\/]/g, "-").slice(0, 200);
+          let buf = null, why = "";
+          try {
+            if (a.attachmentDataRef && a.attachmentDataRef.resourceName) {
+              const r = await chat.media.download({ resourceName: a.attachmentDataRef.resourceName, alt: "media" }, { responseType: "arraybuffer" });
+              buf = Buffer.from(r.data);
+            } else if (a.driveDataRef && a.driveDataRef.driveFileId) {
+              const r = await drive.files.get({ fileId: a.driveDataRef.driveFileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+              buf = Buffer.from(r.data);
+            } else why = "no file reference";
+          } catch (e) { why = String(e.message || e).slice(0, 60); }
+          if (buf && (buf.length > MAX_FETCH_BYTES || buf.slice(0, 5).toString() !== "%PDF-")) { buf = null; why = why || "not a PDF or too large"; }
+          if (!buf) {
+            // Can't open it here: the Routine gets it as a link, like a private Drive link in an email.
+            const driveId = a.driveDataRef && a.driveDataRef.driveFileId;
+            await enqueue(cfg.mode, `chat_${key}_${i + 1}`, { type: "email_pdf", via: "chat", from: `${from} (chat)`, subject: conversation, date,
+              threadId: "", gmailLink: "", body: texts.map(t => `${t.who}: ${t.text}`).join("\n").slice(-1500), senderHistory: await senderHistory(cfg.mode, `${from} (chat)`),
+              filename, source: `chat ${driveId ? "Drive file" : "attachment"} (not fetched: ${why})`, link: driveId ? `https://drive.google.com/file/d/${driveId}/view` : "", inboxFileId: "" });
+            c.links++; out.push({ filename, link: true }); continue;
+          }
+          if (await md5Seen(cfg.mode, md5Of(buf))) { c.duplicate++; out.push({ filename, duplicate: true }); continue; }
+          dropId = dropId || (await findOrMakeFolder(drive, await inboxId(ctx), "_From Chat", { create: true })).id;
+          const name = `${key.slice(-8)}${i} - ${filename}`;
+          await driveUploadResumable(auth, { name, mime: "application/pdf", parentId: dropId, buffer: buf });
+          const note = { filename, from, conversation, date, sentAt: m.createTime || "", texts };
+          await driveUploadResumable(auth, { name: `${name}.json`, mime: "application/json", parentId: dropId, buffer: Buffer.from(JSON.stringify(note)) });
+          c.pdfs++; out.push({ filename, dropped: name });
+        }
+        await sref.set({ type: "chat", mode: cfg.mode, message: String(m.name || ""), space: String(space.name || ""), at: nowIso(), files: out });
+      }
+    }
+    if (!cutShort) await db.collection(STATE).doc("config").set({ chatCursor: started }, { merge: true });
   }
 
   // Once a day: the jobs + open quotes the Routine may file against, with
@@ -1172,6 +1266,7 @@ module.exports = function makePlanIntake(deps) {
       const ctx = { cfg, drive, auth, deadline: () => RUN_BUDGET_MS - (Date.now() - started) };
       await processWalks(ctx, counts).catch(e => { counts.errors.push(`calendar: ${e.message}`.slice(0, 200)); });
       await processMail(ctx, counts).catch(e => { counts.errors.push(`mail: ${e.message}`.slice(0, 200)); });
+      await processChat(ctx, counts).catch(e => { counts.errors.push(`chat: ${e.message}`.slice(0, 200)); });
       await processDrops(ctx, counts).catch(e => { counts.errors.push(`drops: ${e.message}`.slice(0, 200)); });
       const p = prefixOf(cfg.mode);
       const snap = await db.collection(STATE).where("type", "==", "quote").get();
