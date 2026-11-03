@@ -7636,7 +7636,7 @@ exports.planDismissByHand  = _planIntake.planDismissByHand;
 // call is one item, one transaction, audited in duet_writes/<requestId>.
 // Deploy ONLY this one:
 //   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric
-exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, getUsers, TZ }).duetApi;
+exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, getUsers, TZ, storage: admin.storage() }).duetApi;
 
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it

@@ -8,8 +8,11 @@
 // Guardrails, enforced here on every call (plan §3, docs/DUET-WRITES-PLAN.md
 // in the connector repo):
 //   • collections: jobs (update only: one item in changeOrders / returnTrips,
-//     or the statusUpdate scalar — ship 2), needs (create + update). Never a
-//     delete, never a job create, never anything else.
+//     or the statusUpdate scalar — ship 2; a photo on one item — ship 3),
+//     needs (create + update; a photo — ship 3). Storage: one object under the
+//     app's own jobs/<id>/… photo folders (ship 3), deleted again only when
+//     its own transaction failed. Never a delete, never a job create, never
+//     anything else.
 //   • one item per call; transaction, read-modify-write by id
 //   • names checked against settings/users (active, not contractor)
 //   • idempotent: duet_writes/<requestId> is the audit doc AND the replay key
@@ -30,17 +33,28 @@
 // FieldInk mirror (publishCcChangeOrders → cccos) does not run for these
 // (plan 9b, accepted); onJobUpdate's pushes (co_new, co_approved,
 // rt_assigned) and the versions snapshot fire on their own.
+// Ship 3 (photo.add): the first Storage write. The bytes are checked by magic
+// number and capped at 7 MB, the item is located on the live doc FIRST (so a
+// missing trip never leaves an orphan file), the object is saved to the same
+// Storage folder the app's own uploader uses for that item with a Firebase
+// download token, and ONE transaction re-reads the doc, appends the entry to
+// that item's photos[] and audits — entry under `after`, never the bytes. If
+// the transaction refuses or fails after the upload, the just-uploaded object
+// (and only that object) is deleted again.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
+const PH = require("./photos.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 601;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 602;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const AUDIT = "duet_writes";
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
-const ACTIONS = ["task.create", "task.update", ...JOB_ACTIONS];
+const PHOTO_ACTIONS = ["photo.add"];
+const ACTIONS = ["task.create", "task.update", ...JOB_ACTIONS, ...PHOTO_ACTIONS];
+const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -145,6 +159,82 @@ function planJobAction(action, args, ctx) {
     }
   };
 }
+// Ship 3: ONE photo onto ONE item. Order matters for "never an orphan file":
+//   1. bytes checked (magic number, 7 MB, name cleaned) — nothing read yet;
+//   2. the live doc is read and the item located (missing / archived /
+//      signed-off / converted / voided refuse here, before any upload);
+//   3. the object is saved under the app's own folder for that item with a
+//      Firebase download token → the app's download URL;
+//   4. ONE transaction re-reads the doc, locates the item again, appends the
+//      entry to its photos[] (job: whole array / punch tree as the dotted
+//      field with the job envelope; task: ONE arrayUnion on data.photos like
+//      addNeedPhotos) and writes the audit doc with the entry under `after`;
+//   5. a refusal inside the transaction, or any failure after the upload,
+//      deletes the object just written — and only that object.
+// args: { target: rt|co|punch|task, jobId (not for task), itemId, name, data (base64) }
+async function photoAdd(io, requestId, args, ctx, finish, refused) {
+  const target = String(args.target || "");
+  if (!PH.TARGETS.includes(target)) return refused(400, `target must be one of ${PH.TARGETS.join(", ")}.`, { coll: target === "task" ? "needs" : "jobs" });
+  const coll = target === "task" ? "needs" : "jobs";
+  const itemId = String(args.itemId || "");
+  let docId;
+  if (target === "task") {
+    if (!NEED_ID.test(itemId)) return refused(400, "itemId must be the task's needId (need_…).", { coll });
+    docId = itemId;
+  } else {
+    docId = String(args.jobId || "");
+    if (!JOB_ID.test(docId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll });
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(itemId)) return refused(400, "itemId must be the item's id (from cc_list_return_trips, cc_list_change_orders or cc_get_job punch).", { coll });
+  }
+  const photo = PH.decodePhoto(args);
+  if (photo.refused) return refused(400, photo.refused, { coll, docId });
+
+  // Locate on the live doc before uploading anything.
+  const ref = target === "task" ? io.needRef(docId) : io.jobRef(docId);
+  const raw0 = await io.readDoc(ref);
+  const doc0 = raw0 && raw0.data ? { id: docId, data: raw0.data } : null;
+  const loc = PH.locate(target, itemId, doc0);
+  if (loc.refused) return refused(doc0 ? 400 : 404, loc.refused, { coll, docId, itemId });
+  const nowMs = Date.parse(ctx.nowIso);
+  const photoId = PH.newPhotoId(target, nowMs, loc.photos.map(p => p && p.id), ctx.rand);
+  const storagePath = `${loc.folder}/${photoId}.${photo.ext}`;
+  const token = io.newToken();
+  const url = await io.putObject(storagePath, photo.buf, photo.type, token);
+  const entry = PH.photoEntry(target, { photoId, name: photo.name, url, storagePath, type: photo.type, nowIso: ctx.nowIso });
+  const auditBase = { coll, docId, itemId, storagePath, bytes: photo.size, contentType: photo.type };
+
+  let out = null;
+  try {
+    await io.runTx(async (tx) => {
+      const snap = await tx.get(ref);
+      const raw = snap && snap.exists ? snap.data() : null;
+      const doc = raw && raw.data ? { id: docId, data: raw.data } : null;
+      const p = PH.planAttach(target, itemId, entry, doc);
+      if (p.refused) { out = finish(doc ? 400 : 404, { ok: false, refused: p.refused }, { ok: false, why: p.refused, ...auditBase, cleanedUp: true }); out.cleanup = true; tx.set(io.auditRef(requestId), out.audit); return; }
+      const updatedAt = freshIso(raw.updated_at);
+      const result = { ok: true, requestId, action: "photo.add", target, itemId, photoId, name: photo.name, type: photo.type, bytes: photo.size, storagePath, photosOnItem: p.photosNow, on: p.label };
+      if (p.kind === "need") {
+        // addNeedPhotos: stampWrite({ updated_at, saved_by, "data.photos": arrayUnion(entry) }) — never the whole array.
+        tx.update(ref, { ...stamp(requestId, updatedAt), "data.photos": io.arrayUnion(entry) });
+        Object.assign(result, { needId: docId, jobId: p.jobId });
+        out = finish(200, result, { ok: true, ...auditBase, fields: ["photos"], before: p.before, after: p.after });
+      } else {
+        const upd = { ...stamp(requestId, updatedAt), lastActivityAt: io.serverTimestamp(), merged: false };
+        Object.keys(p.fields).forEach(k => { upd["data." + k] = p.fields[k]; });
+        tx.update(ref, upd);
+        Object.assign(result, { jobId: docId, jobName: doc.data.name || "", field: p.field, number: p.number });
+        out = finish(200, result, { ok: true, ...auditBase, fields: Object.keys(p.fields), before: p.before, after: p.after });
+      }
+      tx.set(io.auditRef(requestId), out.audit);
+    });
+  } catch (e) {
+    await io.deleteObject(storagePath).catch(() => {});
+    throw e;
+  }
+  if (out.cleanup) await io.deleteObject(storagePath).catch(() => {});
+  return { status: out.status, body: out.body };
+}
+
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -204,9 +294,14 @@ async function handle(body, io) {
     return { status: r.status, body: r.body };
   }
 
+  if (b.action === "photo.add") {
+    const r = await photoAdd(io, requestId, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
   // task.update
   const needId = String(args.needId || "");
-  if (!/^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/.test(needId)) return refused(400, "needId must be a task id like need_1730650000001_ab12c.", { coll: "needs" });
+  if (!NEED_ID.test(needId)) return refused(400, "needId must be a task id like need_1730650000001_ab12c.", { coll: "needs" });
   let out = null;
   await io.runTx(async (tx) => {
     const snap = await tx.get(io.needRef(needId));
@@ -228,9 +323,21 @@ async function handle(body, io) {
   return { status: out.status, body: out.body };
 }
 
-// Real Firestore io. Admin SDK: tx.create fails with ALREADY_EXISTS (code 6).
-function firestoreIo({ db, FieldValue, getUsers, TZ }) {
+// Real Firestore + Storage io. Admin SDK: tx.create fails with ALREADY_EXISTS
+// (code 6). Storage: the app's bucket (src/App.js storageBucket), objects saved
+// with a Firebase download token in their custom metadata so the URL the app
+// gets from getDownloadURL() and the one built here are the same string.
+function firestoreIo({ db, FieldValue, getUsers, TZ, storage }) {
+  const bucket = storage ? storage.bucket(PH.BUCKET) : null;
   return {
+    readDoc: async (ref) => { const s = await ref.get(); return s.exists ? s.data() : null; },
+    newToken: () => crypto.randomUUID(),
+    putObject: async (path, buf, contentType, token) => {
+      if (!bucket) throw new Error("Storage is not wired into duetApi.");
+      await bucket.file(path).save(buf, { resumable: false, contentType, metadata: { contentType, metadata: { firebaseStorageDownloadTokens: token } } });
+      return PH.downloadUrl(bucket.name, path, token);
+    },
+    deleteObject: async (path) => { if (bucket) await bucket.file(path).delete({ ignoreNotFound: true }); },
     nowIso: () => new Date().toISOString(),
     todayYmd: () => new Date().toLocaleDateString("en-CA", { timeZone: TZ }),
     rand: () => Math.random().toString(36).slice(2, 7),
@@ -254,12 +361,14 @@ function firestoreIo({ db, FieldValue, getUsers, TZ }) {
   };
 }
 
-module.exports = function makeDuetApi({ functions, db, FieldValue, getUsers, TZ }) {
-  const io = firestoreIo({ db, FieldValue, getUsers, TZ });
+module.exports = function makeDuetApi({ functions, db, FieldValue, getUsers, TZ, storage }) {
+  const io = firestoreIo({ db, FieldValue, getUsers, TZ, storage });
   const duetApi = functions
     // invoker "public" like planRoutineApi: Google's door stays open so Vercel
-    // can reach it; the bearer-token check is the gate.
-    .runWith({ timeoutSeconds: 60, memory: "256MB", secrets: [SECRET], invoker: "public" })
+    // can reach it; the bearer-token check is the gate. 512 MB / 120 s since
+    // ship 3: a 7 MB photo arrives as a 9.3 MB base64 body and is decoded,
+    // sniffed and uploaded in one request.
+    .runWith({ timeoutSeconds: 120, memory: "512MB", secrets: [SECRET], invoker: "public" })
     .https.onRequest(async (req, res) => {
       if (!tokenOk(req)) { res.status(401).json({ ok: false, error: "unauthorized" }); return; }
       if (req.method !== "POST") { res.status(405).json({ ok: false, error: "POST only" }); return; }
@@ -281,3 +390,4 @@ module.exports.BUILD = BUILD;
 module.exports.SAVED_BY = SAVED_BY;
 module.exports.ACTIONS = ACTIONS;
 module.exports.JOB_ACTIONS = JOB_ACTIONS;
+module.exports.PHOTO_ACTIONS = PHOTO_ACTIONS;
