@@ -70,6 +70,23 @@ t("inspection result fires once entered", (() => {
   const tr = N.detectTriggers({ name: "Rose", roughInspectionResult: "" }, { name: "Rose", roughInspectionResult: "pass" });
   return tr.some((x) => x.type === "inspection" && x.payload.result === "pass");
 })());
+t("a repeat fail fires when only the attempts list grows", (() => {
+  const tr = N.detectTriggers(
+    { name: "Rose", finalInspectionResult: "fail", finalInspectionAttempts: [{ result: "fail" }] },
+    { name: "Rose", finalInspectionResult: "fail", finalInspectionAttempts: [{ result: "fail" }, { result: "fail", repeat: true }] });
+  return tr.filter((x) => x.type === "inspection").length === 1 && tr.some((x) => x.payload.phase === "Final" && x.payload.result === "fail");
+})());
+t("a first fail fires once, not twice", (() => {
+  const tr = N.detectTriggers(
+    { name: "Rose", roughInspectionResult: "", roughInspectionAttempts: [] },
+    { name: "Rose", roughInspectionResult: "fail", roughInspectionAttempts: [{ result: "fail" }] });
+  return tr.filter((x) => x.type === "inspection").length === 1;
+})());
+t("editing a failed job with no new attempt stays quiet", (() => {
+  const atts = [{ result: "fail" }];
+  const tr = N.detectTriggers({ name: "Rose", roughInspectionResult: "fail", roughInspectionAttempts: atts }, { name: "Rose", roughInspectionResult: "fail", roughInspectionAttempts: atts });
+  return !tr.some((x) => x.type === "inspection");
+})());
 t("rough-complete milestone fires on 100%", (() => {
   const tr = N.detectTriggers({ name: "R", roughStage: "80%" }, { name: "R", roughStage: "100%" });
   return tr.some((x) => x.type === "milestone" && /Rough complete/.test(x.payload.label));

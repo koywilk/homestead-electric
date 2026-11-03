@@ -34001,6 +34001,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               {r==="pass"?"✓ Pass":"✗ Fail"}
                             </button>
                           ))}
+                          <InspFailAgain result={job.roughInspectionResult} attempts={job.roughInspectionAttempts} items={job.roughInspectionItems} what="rough (4-way) inspection" onLog={a=>u({roughInspectionAttempts:[...(job.roughInspectionAttempts||[]),a]})}/>
                           <InspNoShow date={job.fourWayTargetDate} result={job.roughInspectionResult} what="rough (4-way) inspection" onClear={()=>u({fourWayTargetDate:""})}/>
                         </div>
                       </div>
@@ -34008,7 +34009,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       {/* Failed items */}
                       {job.roughInspectionResult==="fail"&&(
                         <HeUnfold style={{marginBottom:10,padding:"8px 10px",background:"#C6282808",border:"1px solid #C6282822",borderRadius:7}}>
-                          <div style={{fontSize:12,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
+                          <div style={{fontSize:12,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS{inspFailCount(job.roughInspectionAttempts,job.roughInspectionResult)>1?` · FAILED ${inspFailCount(job.roughInspectionAttempts,job.roughInspectionResult)} TIMES`:""}</div>
                           {(job.roughInspectionItems||[]).map((item,i)=>(
                             <div key={item.id} data-hekey={"insp_"+item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
                               <input type="checkbox" checked={!!item.done} onChange={()=>{
@@ -34063,6 +34064,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               // v495 — same feedback + no-duplicate treatment as the final
                               // inspection button below (Koy: "nothing tells you it does work").
                               const existingRT=(job.returnTrips||[]).find(r=>r&&!r.signedOff&&(r.fromFailedRough===true||r.scope==="Failed 4-way inspection items"));
+                              const notOnTrip=inspItemsNotOnTrip(job.roughInspectionItems,existingRT,"fromRoughInspectionId");
+                              if (existingRT && notOnTrip.length) return (
+                                <button onClick={()=>{
+                                  u({returnTrips:(job.returnTrips||[]).map(r=>r&&r.id===existingRT.id?{...r,punch:[...(r.punch||[]),...notOnTrip.map(x=>({id:uid(),text:x.text,done:false,...punchStamp(),fromRoughInspectionId:x.id||""}))]}:r)});
+                                  heFlyToTab("Return Trips", `${notOnTrip.length} item${notOnTrip.length===1?"":"s"} → Return Trips`);
+                                  toast.success(`Added ${notOnTrip.length} item${notOnTrip.length===1?"":"s"} to the open return trip.`);
+                                }}
+                                  style={{fontSize:12.5,padding:"3px 10px",borderRadius:5,background:"#C6282818",border:"1px solid #C6282833",color:"#C62828",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Add {notOnTrip.length} to the return trip</button>
+                              );
                               if (existingRT) return (
                                 <span style={{fontSize:12.5,padding:"3px 10px",borderRadius:5,background:"#2E8B5718",border:"1px solid #2E8B5733",color:"#2E8B57",fontWeight:700}}
                                   title="Already on a return trip — see the Return Trips tab">✓ On a return trip · {(existingRT.punch||[]).length} item{(existingRT.punch||[]).length===1?"":"s"}</span>
@@ -34378,6 +34388,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               {r==="pass"?"✓ Pass":"✗ Fail"}
                             </button>
                           ))}
+                          <InspFailAgain result={job.finalInspectionResult} attempts={job.finalInspectionAttempts} items={job.finalInspectionItems} what="final inspection" onLog={a=>u({finalInspectionAttempts:[...(job.finalInspectionAttempts||[]),a]})}/>
                           <InspNoShow date={job.finalInspectionTargetDate} result={job.finalInspectionResult} what="final inspection" onClear={()=>u({finalInspectionTargetDate:""})}/>
                         </div>
                       </div>
@@ -34385,7 +34396,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       {/* Failed items */}
                       {job.finalInspectionResult==="fail"&&(
                         <HeUnfold style={{marginBottom:10,padding:"8px 10px",background:"#C6282808",border:"1px solid #C6282822",borderRadius:7}}>
-                          <div style={{fontSize:12,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
+                          <div style={{fontSize:12,color:"#C62828",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS{inspFailCount(job.finalInspectionAttempts,job.finalInspectionResult)>1?` · FAILED ${inspFailCount(job.finalInspectionAttempts,job.finalInspectionResult)} TIMES`:""}</div>
                           {(job.finalInspectionItems||[]).map((item,i)=>(
                             <div key={item.id} data-hekey={"insp_"+item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
                               <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
@@ -34419,6 +34430,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               // already made from this inspection shows a ✓ chip in the button's
                               // place, a tap toasts what it made, and a repeat tap is refused.
                               const existingRT=(job.returnTrips||[]).find(r=>r&&!r.signedOff&&(r.fromFailedFinal===true||r.scope==="Failed final inspection items"));
+                              const notOnTrip=inspItemsNotOnTrip(job.finalInspectionItems,existingRT);
+                              if (existingRT && notOnTrip.length) return (
+                                <button onClick={()=>{
+                                  u({returnTrips:(job.returnTrips||[]).map(r=>r&&r.id===existingRT.id?{...r,punch:[...(r.punch||[]),...notOnTrip.map(x=>({id:uid(),text:x.text,done:false,...punchStamp()}))]}:r)});
+                                  heFlyToTab("Return Trips", `${notOnTrip.length} item${notOnTrip.length===1?"":"s"} → Return Trips`);
+                                  toast.success(`Added ${notOnTrip.length} item${notOnTrip.length===1?"":"s"} to the open return trip.`);
+                                }}
+                                  style={{fontSize:12.5,padding:"3px 10px",borderRadius:5,background:"#C6282818",border:"1px solid #C6282833",color:"#C62828",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Add {notOnTrip.length} to the return trip</button>
+                              );
                               if (existingRT) return (
                                 <span style={{fontSize:12.5,padding:"3px 10px",borderRadius:5,background:"#2E8B5718",border:"1px solid #2E8B5733",color:"#2E8B57",fontWeight:700}}
                                   title="Already on a return trip — see the Return Trips tab">✓ On a return trip · {(existingRT.punch||[]).length} item{(existingRT.punch||[]).length===1?"":"s"}</span>
@@ -48997,6 +49017,38 @@ function InspNoShow({ date, result, what, onClear }) {
   );
 }
 
+// An inspection can fail more than once, but a lit Fail button clears the result
+// instead of logging another one. This button logs the repeat: a new attempt
+// marked repeat, so the same-day filter in odRealAtts keeps it. Only items still
+// open go on its snapshot; a blank snapshot lets the dashboard read the new list
+// once it is typed.
+const inspFailCount = (attempts, result) => odRealAtts(attempts, result, "").filter(a => a.result === "fail").length;
+function InspFailAgain({ result, attempts, items, what, onLog }) {
+  if (result !== "fail") return null;
+  const next = Math.max(1, inspFailCount(attempts, result)) + 1;
+  return (
+    <button onClick={async () => {
+      if (!await showConfirm({ title: `Did the ${what} fail again?`, message: `This logs failure number ${next}, dated today, and alerts the foreman. Then add what the inspector called to the failed items.`, confirmLabel: "Log the failure", cancelLabel: "Cancel" })) return;
+      const now = new Date();
+      onLog({ id: uid(), date: `${now.getMonth()+1}/${now.getDate()}/${now.getFullYear()}`, result: "fail", items: (items || []).filter(x => x && !x.done).map(x => ({ text: x.text || "" })), by: getIdentity()?.name || "", repeat: true });
+      toast.success(`Failure number ${next} logged`);
+    }}
+      style={{ padding: "3px 9px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${C.red}55`, background: C.card, color: C.red, fontFamily: "inherit" }}>
+      Failed again
+    </button>
+  );
+}
+// Failed items typed after the open return trip was built never reach it, so a
+// repeat fail would sit behind a chip saying it is on the trip. Matched by the
+// source item's id where the trip keeps one, and by text where it doesn't.
+const inspItemsNotOnTrip = (items, rt, linkKey) => {
+  const punch = (rt && rt.punch) || [];
+  const norm = (t) => String(t || "").trim().toLowerCase();
+  const ids = new Set(linkKey ? punch.map(p => p && p[linkKey]).filter(Boolean) : []);
+  const texts = new Set(punch.map(p => norm(p && p.text)));
+  return (items || []).filter(x => x && !x.done && norm(x.text) && !ids.has(x.id) && !texts.has(norm(x.text)));
+};
+
 function PlanFileForm({ f, identity, onDone }) {
   const guess = String(f.bestGuess || f.number || "");
   const [kind, setKind] = useState(/^Q/i.test(guess) ? "quote" : "job");
@@ -49280,7 +49332,7 @@ function odWhen(ev, now) {
 // showed 5 failed inspections where Overview and Quality showed 3).
 function odRealAtts(list, result, ph) {
   const out = [];
-  (list || []).forEach(a => { if (!a || !a.result) return; const p = out[out.length - 1]; if (p && p.result === a.result && p.date === a.date) return; out.push({ ...a, ph }); });
+  (list || []).forEach(a => { if (!a || !a.result) return; const p = out[out.length - 1]; if (p && p.result === a.result && p.date === a.date && !a.repeat) return; out.push({ ...a, ph }); });
   if (!result && out.length) out.pop();
   return out;
 }
@@ -61899,9 +61951,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-02 · App SW version: v595
+**Last manifest update:** 2026-11-02 · App SW version: v599
 ---
 
+- **An inspection can be marked failed more than once: Failed again** · 'shipped 2026-11-02' · 'SW v599' · 'InspFailAgain' · 'inspFailCount' · 'inspItemsNotOnTrip' · 'odRealAtts' · 'detectTriggers' · Koy: *"there is no way to mark an inspection failed more than 1 time."* A lit Fail button clears the result, so a repeat fail took clearing it and tapping again, with no sign that this was the way. While a rough or final inspection reads failed, a **Failed again** button sits beside Pass / Fail. It asks first, then logs a new attempt dated today with 'repeat:true', which sends the failed-inspection push. 'odRealAtts' keeps a 'repeat' attempt even on the same day as the last fail, so the dashboard counts it. The new attempt snapshots only items still open, and the Failed Items header shows the count from the second fail on. Items added while a return trip from that inspection is still open used to sit behind the green chip and never reach the trip; the chip now becomes **→ Add N to the return trip** until they are on it. 'functions/gcNotify.js' also tells the GC about a repeat fail, which needs a functions deploy. The existing Pass and Fail buttons work as before. Help guides: 'rough.html', 'finish.html'.
 - **Simpro POs - Master: one sheet with every PO, and a card under Automations; the PO pull is live** · 'shipped 2026-11-02' · 'SW v598' · 'buildSheetRows' · 'refreshSheet' · 'OD_SIMPRO_PO_SHEET' · Koy: *"make this into a clean spready sheet similar to appliance loads, and add it to the automations in the dashboard ... then i want this flippled live it looks pretty correct to me."* 'settings/simproPoSync.mode' set to 'live' 2026-11-02 18:44 MT on Koy's word; first live run 18:45: 51 new cards, 1 number filled in, 28 typed links, 85 from the app, 1 waiting, 0 errors. New Google Sheet **Simpro POs - Master** (Koy's Drive, the functions' service account has edit access): **Summary** (one row per job with an All jobs total: POs, new from Simpro, typed, filled in, from the app, Order Sent, Picked Up, needs a look), **All POs** (PO #, date, job #, job, supplier, list, cost center, made by, how it got here, status, picked up, material list; newest first, filters on, dates sort as dates), **Needs a look** (no open job has the Simpro #, two job cards share it, the number is typed on another job's card, sent from the app but no card has the number, voided in Simpro; each says what to do). The hourly run rebuilds it from Simpro, 'simpro_po_link' and the live cards, as values only (RAW, so a PO's notes can't become a formula). New rows are written before old ones clear, so a failed write leaves the last good sheet and logs 'sheetError', changing nothing else. **Automations:** a Simpro POs - Master card in Automated docs and a **Simpro POs** section with live or off, last hourly check, the counts, **Refresh**, **Open sheet** and a line when anything needs a look, read from 'settings/simproPoSync' when the tab opens. Tests: 'scripts/simpro-pull-sim.js' +3 (41 scenarios). 'scripts/simpro-pull-dryrun.js --sheet' shows what the next rewrite would hold. Guides: dashboard, materials. Crew brief 'docs/crew-briefs/v598.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scheduledSimproPOSync,functions:syncSimproPOsForJob --project homestead-electric'** (Koy). **Why it won't lose data:** the sheet only reads jobs and Simpro; its only new writes are to its own sheet and three fields on the function's own 'settings/simproPoSync'. The dashboard section only reads. No job field, loader or rules change. Card logic for the pull is unchanged except the 'updated_at' build stamp.
 - **POs made in Simpro show up on Material Tracking by themselves; a receipt in Simpro marks the card Picked Up** · 'shipped 2026-11-02' · 'SW v596' · 'scheduledSimproPOSync' · 'syncSimproPOsForJob' · 'functions/materialPO/simproPull.js' · 'simpro_po_link' · 'simproPulled' · Koy: *"if a po is sent from simpro it doesnt track in the CC. Can we make that a thing? so I dont have to enter the po manually in the CC"*, then *"when a receipt is put in we have the material so they can be marked picked up."* Every 5 minutes one read of 'GET /vendorOrders/' (the row itself carries 'AssignedTo.Job', cost center, vendor, notes and maker). Each PO not yet handled stops at the first line that fits: **sent from the app** (private-notes tag or 'material_po_log') is left alone; **PO # typed on a card on that job** links in place with nothing visible changed, however it was typed ('PO-6216', '7250/ 7252', '7115 (Under Power...)'); **a card with no PO # and a near-identical list** (shared words 80%+, one match only, card made within 45 days before or 7 after the PO) gets the blanks filled; **anything else** makes a new card, folded, 'Simpro' pill, with the maker and cost center inside: Rough In → Rough, Finish → Finish, any PO on a commercial job → Materials, Warranty / Generators / the rest → Finish with the cost center as a chip. It never matches by supplier alone: the May sync did, used the 'Job.ID' filter Simpro ignores, and left 39 of 97 cards showing a PO from another job (not touched by this ship). Skips rather than guesses on no job, a job not in the app, a Simpro # two jobs share, an archived job, or a draft (Stage Pending); those come in once fixed. Hourly: **a receipt ('/vendorOrders/{id}/receipts/') ticks Picked Up** by Simpro on the receipt's date on cards this pull made or linked, once per PO so an un-tick stays, and if a person ticked it first their call stands from then on; app-sent cards are not touched; a pull-made card nobody has worked or edited folds into a card someone typed the same number on later; a PO voided in Simpro gets a **Voided in Simpro** pill and nothing is deleted. Start date 2026-10-03 (Koy: last 30 days), list window 45 days. Dry run against live data 2026-11-02: 165 POs → 84 app, 28 typed, 1 filled in, 51 new (17 Rough, 9 Finish, 14 Finish with a label, 11 Materials), 1 job not in the app. List match back test on 407 typed-PO cards at 80%: 249 right, 0 wrong, 158 get their own card. **ACE** added to the Source dropdown so ACE cards get the receipt photo box. Mode on 'settings/simproPoSync': missing or 'dry' = watch mode, hourly, writes only its own 'lastRun'; 'live'; 'off'. 'syncSimproPOsForJob' now runs the same rules for one job through 'AssignedTo.Job=' (no UI calls it). Tests: new 'scripts/simpro-pull-sim.js' (38 scenarios in prebuild), 'scripts/simpro-pull-dryrun.js' runs the real code on live data with writes blocked. Guides: materials, rough, finish. Crew brief 'docs/crew-briefs/v596.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scheduledSimproPOSync,functions:syncSimproPOsForJob --project homestead-electric'** (Koy), then watch mode for a day, then 'mode: "live"'. **Why it won't lose data:** Simpro is GET only. On a job it adds cards or fills blanks through a transaction on the live doc, and the app's '_threeWayMerge' keeps a server-added card (tested on the real function). It never changes a typed PO #, a list or which list a card is on. It removes only its own card, and only when nobody has worked it and the number is on another card. 'simpro_po_link' is function-only under the rules' catch-all, so no rules change, and it's written with the card, so a removed card stays removed. No new top-level job field, so no loader change.
 - **CC anyone on a PO email, and an expired login now asks for the PIN instead of quietly losing buttons** · 'shipped 2026-11-02' · 'SW v595' · 'PoCopyToBox' · 'cleanCopyTo' · 'extraCc' · 'functions/materialPO/send.js' · 'IDENTITY_TTL' · 'data-po-sending' · Koy: *"where did the order from the bid option go?"* It showed on his phone but not his desktop: the saved login runs out 24 hours after the PIN, while an open tab keeps showing the person logged in, so everything that re-reads 'getIdentity()' (New order from the bid, Send to CED, receipts) vanished with no message. A reload and PIN brought it back. Now the app saves, closes the job and shows the PIN screen when the login runs out, on return to the tab or within a minute while it's open, waiting for anyone typing in a box or mid PO send. Then Koy: *"would like the ability to CC someone on the email being sent."* Send to CED and New order from the bid each have an optional CC box, up to 5 addresses typed per send, on top of bids@ and the sender. A bad address is refused before any PO exists, test mode still copies nobody, a retry with a blank box keeps who the first try named, and the send record keeps 'extraCc'. Needs 'sendMaterialPO,sendMaterialOrder' deployed before the app.

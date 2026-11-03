@@ -200,6 +200,12 @@ function detectTriggers(before, after) {
   // 2. Inspection result entered/changed (rough or final).
   if (nowHas("roughInspectionResult")) out.push({ type: "inspection", payload: { jobName: name, phase: "Rough", result: a.roughInspectionResult } });
   if (nowHas("finalInspectionResult")) out.push({ type: "inspection", payload: { jobName: name, phase: "Final", result: a.finalInspectionResult } });
+  // A repeat fail leaves the result on "fail", so only the attempts list grows.
+  [["rough", "Rough"], ["final", "Final"]].forEach(([k, phase]) => {
+    const rk = k + "InspectionResult", ak = k + "InspectionAttempts";
+    const added = (Array.isArray(a[ak]) ? a[ak] : []).slice((Array.isArray(b[ak]) ? b[ak] : []).length);
+    if (a[rk] === "fail" && !changed(rk) && added.some((x) => x && x.result === "fail")) out.push({ type: "inspection", payload: { jobName: name, phase, result: "fail" } });
+  });
 
   // 3. Milestone — rough/finish complete, or power on ("house is hot").
   const becameComplete = (stageK, statusK, label) => {
