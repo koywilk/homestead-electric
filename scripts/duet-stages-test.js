@@ -118,7 +118,7 @@ const jobUpdate = (io, jobId = FORTH) => { const u = io.log.filter(l => l[0] ===
 const dataKeys = (upd) => Object.keys(upd).filter(k => k.startsWith("data.")).map(k => k.slice(5)).sort();
 const checkStamp = (upd) => {
   assert.strictEqual(upd.saved_by, "Duet (Koy)"); assert.strictEqual(upd.device, "duet"); assert.ok(upd.tab.startsWith("duet-7777"));
-  assert.ok(Number.isInteger(upd.app_build) && upd.app_build === 606 && /^606\.duet[a-z0-9]{6,}$/.test(upd.w), "version-lock stamp 606");
+  assert.ok(Number.isInteger(upd.app_build) && upd.app_build >= 606 && new RegExp("^" + upd.app_build + "\\.duet[a-z0-9]{6,}$").test(upd.w), "version-lock stamp >= 606");
   assert.strictEqual(upd.merged, false); assert.deepStrictEqual(upd.lastActivityAt, { __serverTimestamp: true });
   assert.ok(Date.parse(upd.updated_at) > Date.parse("2026-11-03T20:00:00.000Z"), "updated_at strictly newer than the doc's");
 };
@@ -533,7 +533,7 @@ await ok("handle: the eight actions exist, nothing like a delete / archive / job
   assert.ok(api.STAGE_ACTIONS.every(a => api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a)));
   assert.deepStrictEqual(api.PUNCH_ACTIONS, ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"]);
   assert.deepStrictEqual(api.JOB_ACTIONS, ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"]);
-  assert.strictEqual(api.BUILD, 606);
+  assert.ok(api.BUILD >= 606, "BUILD at least 606 (ship 8 bumped it to 607)");
   for (const a of ["job.archive", "job.delete", "job.create", "inspection.deleteItem", "inspection.clearAttempts", "prep.override", "phase.setMode", "job.setField"]) {
     await assert.rejects(api.handle({ requestId: RID(900), action: a, args: {} }, fakeIo()), (e) => e.status === 400 && /action must be/.test(e.message), a);
   }

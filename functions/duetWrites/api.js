@@ -124,6 +124,29 @@
 // START input (+ waiting_date) and the CONFIRM button. None of these fields
 // are on the versions WATCH list, so the audit doc's before is the only undo:
 // every field written, derived ones included, is in before / after.
+// Ship 8 (material cards + the PO sender — the FIRST action in this plan that
+// can email a vendor): material.addCard / editCard / tick are three more
+// jobWrite() actions on ONE card of data.roughMaterials / finishMaterials /
+// commMaterials (functions/duetWrites/materials.js: + Add PO's literal, the
+// add-material helpers' newest-open-card append, the field writers, the
+// checkbox literals; receipts never). material.previewPo is a READ that runs
+// ONLY the pure rules of functions/materialPO/rules.js plus gc_config/
+// material_po (mode, testTo, bids, liveAccess) and gc_config/mail.soakTo —
+// never the mail key — and, live only, one Simpro GET for the vendor's email;
+// it audits a hash of supplier + lines + mode + pickup + CC + recipients.
+// material.sendPo requires confirmPreviewId: a previewPo audit for the same
+// job + card under 15 minutes old whose hash still matches; refuses in mode
+// off; is capped at 10 per rolling hour on its own counter; then runs the app's
+// OWN sendMaterialPO (functions/materialPO/send.js, the same factory index.js
+// exports, with requireMember replaced by Koy's settings/users record — the
+// bearer already proves it's Koy; clientTest:false ONLY when the mode is live,
+// so a test-mode send goes to the test inbox with [TEST] exactly as the app's)
+// and, after it answers, writes the send sheet's own card patch through
+// jobWrite() with the send result (poNo, mode, recipients — never the key) in
+// the audit. The sender itself writes material_po_log/<job>_<phase>_<card> as
+// it always has. Never retried: a timeout answer says to check the log / the
+// card first (a PO may exist). sendMaterialOrder (the CED catalog order) is
+// NOT reachable from here.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -134,11 +157,14 @@ const CR = require("./crew.js");
 const TO = require("./timeOff.js");
 const PU = require("./punch.js");
 const SG = require("./stages.js");
+const MA = require("./materials.js");
+const { matchUserByName } = require("../nameMatch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 606;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 607;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
+const SEND_PO_PER_HOUR = 10;       // ship 8: material.sendPo has its own, stricter counter on top of the 60
 const AUDIT = "duet_writes";
 const QUESTION_ACTIONS = ["question.add", "question.answer", "question.reopen"];
 const NOTE_ACTIONS = ["note.add", "note.addLine", "note.editLine", "note.archive", "note.delete", "dailyUpdate.add"];
@@ -146,12 +172,14 @@ const PEOPLE_ACTIONS = ["job.setPeople"];
 const PUNCH_ACTIONS = ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"];
 const STAGE_ACTIONS = ["phase.setStatus", "phase.setStage", "inspection.setResult", "inspection.items", "inspection.createTrip", "qc.setStatus", "prep.tick", "phase.setDates"];
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
-const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...STAGE_ACTIONS];   // every action that is ONE jobWrite() transaction
+const MATERIAL_CARD_ACTIONS = ["material.addCard", "material.editCard", "material.tick"];
+const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...STAGE_ACTIONS, ...MATERIAL_CARD_ACTIONS];   // every action that is ONE jobWrite() transaction
 const PHOTO_ACTIONS = ["photo.add"];
 const THREAD_ACTIONS = ["question.reply"];
 const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
 const TIMEOFF_ACTIONS = ["timeOff.decide"];
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS];
+const MATERIAL_PO_ACTIONS = ["material.previewPo", "material.sendPo"];   // ship 8: preview = read + audit; sendPo = the real sender, then ONE jobWrite()
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -222,7 +250,7 @@ async function jobWrite(io, requestId, action, jobId, plan, finish) {
     Object.keys(p.fields).forEach(k => { upd["data." + k] = p.fields[k]; });
     tx.update(io.jobRef(jobId), upd);
     const result = { ok: true, requestId, action, jobId, jobName: job.data.name || "", ...p.result };
-    out = finish(200, result, { ok: true, coll: "jobs", docId: jobId, fields: Object.keys(p.fields), itemId: p.itemId || null, before: p.before, after: p.after });
+    out = finish(200, result, { ok: true, coll: "jobs", docId: jobId, fields: Object.keys(p.fields), itemId: p.itemId || null, before: p.before, after: p.after, ...(p.audit || {}) });
     tx.set(io.auditRef(requestId), out.audit);
   });
   return out;
@@ -361,6 +389,14 @@ function planJobAction(action, args, ctx) {
       case "qc.setStatus": return SG.planSetQcStatus(args, c);
       case "prep.tick": return SG.planTickPrep(args, c);
       case "phase.setDates": return SG.planSetScheduleDates(args, c);
+      // ── Ship 8 ─────────────────────────────────────────────────────────────
+      // ONE material card on ONE of the three lists, the list written back
+      // whole as data.<list> (what the app's u({<list>}) does); before / after
+      // hold the ONE card. material.sendPo's card patch runs through jobWrite()
+      // too, from materialPo() below, after the real sender has answered.
+      case "material.addCard": return MA.planAddCard(args, c);
+      case "material.editCard": return MA.planEditCard(args, c);
+      case "material.tick": return MA.planTick(args, c);
       default: return { refused: "unknown action" };
     }
   };
@@ -577,6 +613,90 @@ async function timeOffDecide(io, requestId, action, args, ctx, finish, refused) 
   return { status: out.status, body: out.body };
 }
 
+// Ship 8: the PO preview and the PO send. Neither is a plain jobWrite():
+//   previewPo — reads the job (plain read, no lock: nothing is written but the
+//   audit), the PO config (mode / testTo / bids / liveAccess — soakTo is the
+//   only thing read from gc_config/mail), the card's material_po_log doc
+//   (already sent?) and, LIVE only, the vendor's and Koy's emails from Simpro
+//   (GETs), then runs the pure rules and audits the preview with its hash.
+//   sendPo   — refuses without a fresh, matching previewPo audit for this job +
+//   card (confirmPreviewId), refuses in mode off, counts its own 10 / hour,
+//   resolves Koy's settings/users record (the bearer proves it's Koy; the
+//   sender's gate still checks admin in test / liveAccess in live), then calls
+//   the app's OWN sendMaterialPO handler in-process (io.sendPo) with
+//   clientTest:false ONLY in live mode. A refusal from the sender is answered
+//   as is and audited (no card write). After a PO answer, ONE jobWrite() puts
+//   the send sheet's patch on the card; the audit carries the send result
+//   (poNo, kind, mode, costCenter, emailOk, emailedTo, again) — never the key.
+async function materialPo(io, requestId, action, args, ctx, finish, refused) {
+  const jobId = String(args.jobId || "");
+  if (!JOB_ID.test(jobId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll: "jobs" });
+  const cardId = String(args.cardId || "");
+  const raw0 = await io.readDoc(io.jobRef(jobId));
+  const job = raw0 && raw0.data ? { id: jobId, data: raw0.data } : null;
+  const cfg = await io.loadPoCfg();
+  const koy = matchUserByName(ctx.users, "Koy");
+  const koyUser = koy.user && !koy.ambiguous ? koy.user : null;
+  const koyAccess = koyUser ? io.accessOf(koyUser) : "";
+  const auditBase = { coll: "jobs", docId: jobId, itemId: cardId || null };
+  const loc = job ? MA.findCard(job.data, cardId) : null;
+  const clean = loc ? MA.cleanSendArgs(args, loc.card, loc.phase) : null;
+  const rule = clean && !clean.refused ? clean.rule : null;
+  const log = loc ? await io.readPoLog(jobId, loc.phase, cardId) : null;
+  let vendorEmail = "", senderEmail = "";
+  if (rule && rule.kind === "email" && cfg.mode === "live") {
+    try { vendorEmail = await io.vendorEmail(rule.simproName); } catch (e) { vendorEmail = ""; }
+    try { senderEmail = koyUser ? await io.senderEmail(koyUser.name) : ""; } catch (e) { senderEmail = ""; }
+  }
+  const p = MA.planPreview(args, { ...ctx, job }, cfg, { koyAccess, vendorEmail, senderEmail, log });
+  if (p.refused) return refused(job ? 400 : 404, p.refused, auditBase);
+  if (!koyUser) return refused(400, "Koy isn't on the active team list, so the sender has nobody to send as. Nothing was sent.", auditBase);
+
+  if (action === "material.previewPo") {
+    const body = { ok: true, requestId, action, jobId, jobName: job.data.name || "", previewId: requestId, ...p.preview, koyAccess, pushTo: [] };
+    const r = finish(200, body, { ok: true, ...auditBase, read: true, fields: [], preview: { hash: p.hash, key: p.key, kind: p.preview.kind, supplier: p.preview.supplier, mode: cfg.mode, lineCount: p.preview.lineCount, recipients: p.preview.recipients, alreadySent: p.preview.alreadySent, canSend: p.preview.canSend } });
+    await io.runTx(async (tx) => { tx.set(io.auditRef(requestId), r.audit); });
+    return { status: 200, body };
+  }
+
+  // material.sendPo
+  const previewId = String(args.confirmPreviewId || "");
+  if (!RID.test(previewId)) return refused(400, "confirmPreviewId must be the previewId from cc_preview_material_po. Preview first, show Koy, then send. Nothing was sent.", auditBase);
+  if (cfg.mode === "off") return refused(400, "Sending POs from the app is turned off (gc_config/material_po.mode = off). Nothing was sent.", auditBase);
+  if (p.preview.wouldRefuse) return refused(403, `${p.preview.wouldRefuse} Nothing was sent.`, auditBase);
+  const recentSends = (await io.recentActions(new Date(Date.parse(ctx.nowIso) - 3600 * 1000).toISOString())).filter(a => a === "material.sendPo").length;
+  if (recentSends >= SEND_PO_PER_HOUR) throw new Refusal(429, `Duet has sent ${recentSends} POs in the last hour — the limit is ${SEND_PO_PER_HOUR}. Try again later.`);
+  const prior = await io.getAudit(previewId);
+  const mismatch = MA.previewMatches(prior, { jobId, cardId, hash: p.hash, nowIso: ctx.nowIso });
+  if (mismatch) return refused(409, mismatch, { ...auditBase, confirmPreviewId: previewId });
+
+  // The app's own sender, in-process, as Koy. clientTest:false ONLY when live.
+  const sendData = { jobId, phase: p.send.phase, orderId: cardId, source: p.send.source, items: p.send.items, get: p.send.get, date: p.send.date,
+    ...(p.send.get === "custom" ? { custom: p.send.custom } : {}), ...(p.send.copyTo.length ? { copyTo: p.send.copyTo.join(", ") } : {}), ...(p.send.phase === "comm" ? { ccId: p.send.ccId } : {}),
+    clientTest: cfg.mode === "live" ? false : true };
+  let res;
+  try {
+    res = await io.sendPo(sendData, koyUser);
+  } catch (e) {
+    const code = String((e && e.code) || "");
+    const msg = String((e && e.message) || "The sender failed.").slice(0, 300);
+    const unclear = code === "unavailable" || code === "already-exists" || code === "internal" || code === "deadline-exceeded" || !code;
+    const why = unclear ? `${msg} A PO MAY exist: check material_po_log/${p.key} or the card (cc_list_material_cards) before trying again — a fresh preview + send with a new requestId finds the same PO instead of making a second one.` : `${msg} Nothing was sent.`;
+    return refused(unclear ? 502 : 400, why, { ...auditBase, confirmPreviewId: previewId, senderCode: code, logKey: p.key });
+  }
+  if (!res || !res.poNo) return refused(502, `Simpro didn't send back a PO number. Check material_po_log/${p.key} before trying again.`, { ...auditBase, confirmPreviewId: previewId, logKey: p.key });
+  const sendResult = { poNo: String(res.poNo), kind: res.kind || "", mode: res.mode || "", supplier: res.supplier || "", costCenter: res.costCenter || "", emailOk: !!res.emailOk, emailError: res.emailError || "", emailedTo: Array.isArray(res.emailedTo) ? res.emailedTo : [], copied: Array.isArray(res.copied) ? res.copied : [], again: !!res.again };
+  const note = sendResult.mode === "test" ? `TEST send: PO ${sendResult.poNo} is real in Simpro and marked TEST — void it there. The email went only to the test inbox.` : sendResult.kind === "email" ? (sendResult.emailOk ? `PO ${sendResult.poNo} emailed to ${sendResult.emailedTo.join(", ")}.` : `PO ${sendResult.poNo} was made but the email failed: ${sendResult.emailError}. Preview + send again re-emails the same PO.`) : `PO ${sendResult.poNo} is ready for the store run — no email.`;
+  const plan = (jobNow) => {
+    const q = MA.planSendPatch(cardId, sendResult, p.send, { ...ctx, job: jobNow });
+    const extra = { send: sendResult, poNo: sendResult.poNo, mode: sendResult.mode, emailOk: sendResult.emailOk, emailedTo: sendResult.emailedTo, again: sendResult.again, confirmPreviewId: previewId, logKey: p.key, note, pushTo: [] };
+    if (q.noop) return { noop: true, result: { ...q.result, ...extra } };
+    return { ...q, audit: { send: sendResult, confirmPreviewId: previewId, logKey: p.key }, result: { ...q.result, ...extra } };
+  };
+  const r = await jobWrite(io, requestId, action, jobId, plan, finish);
+  return { status: r.status, body: r.body };
+}
+
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -657,6 +777,11 @@ async function handle(body, io) {
     return { status: r.status, body: r.body };
   }
 
+  if (MATERIAL_PO_ACTIONS.includes(b.action)) {
+    const r = await materialPo(io, requestId, b.action, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
   // task.update
   const needId = String(args.needId || "");
   if (!NEED_ID.test(needId)) return refused(400, "needId must be a task id like need_1730650000001_ab12c.", { coll: "needs" });
@@ -685,9 +810,61 @@ async function handle(body, io) {
 // (code 6). Storage: the app's bucket (src/App.js storageBucket), objects saved
 // with a Firebase download token in their custom metadata so the URL the app
 // gets from getDownloadURL() and the one built here are the same string.
-function firestoreIo({ db, FieldValue, FieldPath, getUsers, TZ, storage }) {
+function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps }) {
   const bucket = storage ? storage.bucket(PH.BUCKET) : null;
+  const T = (v) => String(v == null ? "" : v).trim();
+  const md = materialDeps || {};
+  const R = require("../materialPO/rules.js");
   return {
+    // Ship 8: the PO config the send factory's loadCfg reads — mode / testTo /
+    // bids / liveAccess from gc_config/material_po, and from gc_config/mail ONLY
+    // soakTo (the test inbox default). The mail key is never read into this.
+    loadPoCfg: async () => {
+      let c = {};
+      try { const d = await db.collection("gc_config").doc("material_po").get(); c = d.exists ? (d.data() || {}) : {}; } catch (e) {}
+      let soakTo = "";
+      try { const m = md.loadMailConfig ? await md.loadMailConfig() : null; soakTo = T(m && m.soakTo); } catch (e) {}
+      const mode = ["off", "test", "live"].includes(T(c.mode)) ? T(c.mode) : "test";
+      const liveAccess = Array.isArray(c.liveAccess) && c.liveAccess.length ? c.liveAccess : ["admin", "manager", "standard", "limited"];
+      return { mode, liveAccess, testTo: T(c.testTo) || soakTo, bids: T(c.bids) || "bids@homesteadelectric.net" };
+    },
+    // The card's send record (material_po_log/<job>_<phase>_<card>), trimmed to what the preview shows.
+    readPoLog: async (jobId, phase, cardId) => {
+      const key = R.logKey(jobId, phase, cardId);
+      if (!key) return null;
+      const s = await db.collection("material_po_log").doc(key).get();
+      if (!s.exists) return null;
+      const l = s.data() || {};
+      return { status: T(l.status), poNo: T(l.poNo), mode: T(l.mode), emailOk: !!l.emailOk, emailedTo: Array.isArray(l.emailedTo) ? l.emailedTo : [] };
+    },
+    accessOf: (u) => (md.accessOf ? md.accessOf(u) : (u && u.access) || "limited"),
+    // Live only: the supplier's email on its Simpro vendor record (one GET, the sender's own lookup).
+    vendorEmail: async (simproName) => {
+      if (!md.simproReqWithRetry) return "";
+      const r = await md.simproReqWithRetry("GET", "/vendors/?pageSize=250&columns=ID,Name,Email");
+      const v = r && r.ok && Array.isArray(r.data) ? R.vendorFor({ simproName }, r.data) : null;
+      return T(v && v.Email);
+    },
+    // Live only: Koy's email on his Simpro employee record (the sender's reply-to / CC).
+    senderEmail: async (name) => {
+      if (!md.simproReqWithRetry || !name) return "";
+      const r = await md.simproReqWithRetry("GET", "/employees/?pageSize=250&columns=ID,Name");
+      const hit = r && r.ok && Array.isArray(r.data) ? r.data.find(e => T(e.Name).toLowerCase() === T(name).toLowerCase()) : null;
+      if (!hit) return "";
+      const d = await md.simproReqWithRetry("GET", `/employees/${hit.ID}`);
+      return T(d && d.ok && d.data && d.data.PrimaryContact && d.data.PrimaryContact.Email);
+    },
+    // The app's OWN sendMaterialPO handler, in-process: the same factory index.js
+    // exports, built with the real Simpro / mail / Gmail deps and a `functions`
+    // whose onCall hands back the handler itself; requireMember answers with the
+    // user resolved here (the bearer already proved it's Koy).
+    sendPo: async (data, user) => {
+      if (!md.simproReqWithRetry || !md.loadMailConfig) throw new Error("Material PO sending is not wired into duetApi (materialDeps).");
+      const stub = { https: { HttpsError: functions.https.HttpsError, onCall: (fn) => fn }, runWith() { return this; }, logger: functions.logger };
+      const { sendMaterialPO } = require("../materialPO/send.js")({ functions: stub, db, TZ, simproReqWithRetry: md.simproReqWithRetry, requireMember: async () => user, accessOf: md.accessOf, loadMailConfig: md.loadMailConfig, gmailSend: md.gmailSend || null });
+      return sendMaterialPO(data);
+    },
+    recentActions: async (sinceIso) => { const s = await db.collection(AUDIT).where("at", ">", sinceIso).select("action").get(); return s.docs.map(d => (d.data() || {}).action); },
     // Ship 5: the ONLY way this file opens a settings doc. An id outside
     // SETTINGS_DOCS (settings/users above all) throws before any read.
     settingsRef: (id) => {
@@ -740,8 +917,8 @@ function firestoreIo({ db, FieldValue, FieldPath, getUsers, TZ, storage }) {
   };
 }
 
-module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage }) {
-  const io = firestoreIo({ db, FieldValue, FieldPath, getUsers, TZ, storage });
+module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps }) {
+  const io = firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps });
   const duetApi = functions
     // invoker "public" like planRoutineApi: Google's door stays open so Vercel
     // can reach it; the bearer-token check is the gate. 512 MB / 120 s since
@@ -779,6 +956,9 @@ module.exports.PUNCH_ACTIONS = PUNCH_ACTIONS;
 module.exports.STAGE_ACTIONS = STAGE_ACTIONS;
 module.exports.CREW_ACTIONS = CREW_ACTIONS;
 module.exports.TIMEOFF_ACTIONS = TIMEOFF_ACTIONS;
+module.exports.MATERIAL_CARD_ACTIONS = MATERIAL_CARD_ACTIONS;
+module.exports.MATERIAL_PO_ACTIONS = MATERIAL_PO_ACTIONS;
+module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;
 module.exports.settingsDocAllowed = settingsDocAllowed;
 module.exports.settingsDocFields = settingsDocFields;

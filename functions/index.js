@@ -7634,9 +7634,15 @@ exports.planDismissByHand  = _planIntake.planDismissByHand;
 // (scripts/duet-write-token.js). Ship 1: tasks (needs create + update) through
 // the app's own task shape (functions/needShape.js = src/needShape.js). Every
 // call is one item, one transaction, audited in duet_writes/<requestId>.
+// Ship 8 (2026-11-03): material.sendPo runs the SAME sendMaterialPO factory
+// below in-process (functions/materialPO/send.js) with these real deps and
+// requireMember replaced by Koy's settings/users record — so the Gmail sender is
+// built first, above this export (it only needs functions + db).
 // Deploy ONLY this one:
 //   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric
-exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage() }).duetApi;
+const _poGmail = require("./materialPO/gmail.js")({ functions, db });
+exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage(),
+  materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send } }).duetApi;
 
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it
@@ -7646,7 +7652,7 @@ exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: ad
 //   firebase deploy --only functions:sendMaterialPO
 // 2026-10-09: PO email goes through Google Workspace as bids@ (po-mailer service
 // account, domain-wide delegation, gmail.send only) — CED's Mimecast held the .cc mail.
-const _poGmail = require("./materialPO/gmail.js")({ functions, db });
+// (_poGmail is built above duetApi since ship 8 — duetApi shares it.)
 const _materialPO = require("./materialPO/send.js")({
   functions, db, TZ,
   simproReqWithRetry,
