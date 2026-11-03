@@ -199,4 +199,26 @@ t("custom Get it (Koy 2026-10-15: \"i just want a custom box option\")", () => {
   assert(e.text.includes("Order in <b>4</b> & call"), "plain-text email keeps it as typed");
 });
 
+t("CC on the PO email: typed addresses, cleaned up and capped", () => {
+  eq(R.cleanCopyTo("  Gary@GC.example, josh@homesteadelectric.net;bo@x.co\nbo@x.co "), { list: ["Gary@GC.example", "josh@homesteadelectric.net", "bo@x.co"], bad: [] }, "commas, semicolons, spaces, repeats");
+  eq(R.cleanCopyTo(["a@x.co", "A@X.CO"]), { list: ["a@x.co"], bad: [] }, "an array works; repeats ignore case");
+  eq(R.cleanCopyTo(""), { list: [], bad: [] }, "blank is fine");
+  eq(R.cleanCopyTo(undefined), { list: [], bad: [] }, "missing is fine");
+  eq(R.cleanCopyTo("gary at gc").bad, ["gary", "at", "gc"], "not an address");
+  eq(R.cleanCopyTo("a@x.co\r\nBcc: spy@evil.example").bad, ["Bcc:"], "a line break can't sneak in a header");
+  eq(R.cleanCopyTo("<a@x.co>").bad, ["<a@x.co>"], "only a bare address");
+  eq(R.cleanCopyTo("1@x.co 2@x.co 3@x.co 4@x.co 5@x.co").tooMany, undefined, "five is allowed");
+  eq(R.cleanCopyTo("1@x.co 2@x.co 3@x.co 4@x.co 5@x.co 6@x.co").tooMany, true, "six is too many");
+});
+
+t("CC on the PO email: who actually gets copied", () => {
+  const base = { vendorEmail: "homestead@cedaf.example", bids: "bids@homesteadelectric.net", senderEmail: "keegan@homesteadelectric.example" };
+  eq(R.recipients({ ...base, mode: "live", extraCc: ["gary@gc.example"] }).cc,
+    ["bids@homesteadelectric.net", "keegan@homesteadelectric.example", "gary@gc.example"], "added after bids@ and the sender");
+  eq(R.recipients({ ...base, mode: "live", extraCc: ["BIDS@homesteadelectric.net", "homestead@cedaf.example"] }).cc,
+    ["bids@homesteadelectric.net", "keegan@homesteadelectric.example"], "already on the email: not listed twice, supplier never copied on its own email");
+  eq(R.recipients({ ...base, mode: "live" }).cc, ["bids@homesteadelectric.net", "keegan@homesteadelectric.example"], "no CC typed: same as before");
+  eq(R.recipients({ ...base, mode: "test", testTo: "koy@example.com", extraCc: ["gary@gc.example"] }).cc, [], "test mode still copies nobody");
+});
+
 console.log(`materialpo-test: ${n} groups passed`);

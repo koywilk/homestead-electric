@@ -472,6 +472,77 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     assert(mails[0].html.includes("First words") && !mails[0].html.includes("Edited words"), "the PO already made carries its first words");
   });
 
+  // ── v595: CC someone on the PO email ──
+  await t("CC: a card's email copies the typed address and says so; the send record keeps it", async () => {
+    const { db, send } = setup("live");
+    const r = await send({ by: "keegan", clientTest: false, copyTo: "gary@gc.example, josh@homesteadelectric.example" });
+    assert.deepStrictEqual(mails[0].cc, ["bids@homesteadelectric.net", "keegan@homesteadelectric.example", "gary@gc.example", "josh@homesteadelectric.example"]);
+    assert.deepStrictEqual(mails[0].to, ["homestead@cedaf.example"], "the supplier stays the only To");
+    assert.deepStrictEqual(r.copied, ["gary@gc.example", "josh@homesteadelectric.example"]);
+    const log = [...db.store.entries()].find(([k]) => k.startsWith("material_po_log/"))[1];
+    assert.deepStrictEqual(log.extraCc, ["gary@gc.example", "josh@homesteadelectric.example"]);
+  });
+
+  await t("CC: a bad address is refused before any PO exists", async () => {
+    const { simpro, send, order } = setup("live");
+    await rejects(send({ by: "keegan", clientTest: false, copyTo: "gary at gc" }), "invalid-argument", "bad on a card");
+    await rejects(send({ by: "keegan", clientTest: false, copyTo: "1@x.co 2@x.co 3@x.co 4@x.co 5@x.co 6@x.co" }), "invalid-argument", "too many on a card");
+    await rejects(order({ by: "keegan", clientTest: false, copyTo: "gary at gc" }), "invalid-argument", "bad on an order");
+    assert.strictEqual(simpro.pos.length, 0); assert.strictEqual(mails.length, 0);
+  });
+
+  await t("CC: test mode copies nobody, even when someone typed an address", async () => {
+    const { send } = setup("test");
+    const r = await send({ copyTo: "gary@gc.example" });
+    assert.deepStrictEqual(mails[0].to, ["koywilkinson@gmail.example"]);
+    assert.strictEqual((mails[0].cc || []).length, 0);
+    assert.deepStrictEqual(r.copied, []);
+  });
+
+  await t("CC: the email fails, Resend with a blank box keeps the first address, no second PO", async () => {
+    const { simpro, send } = setup("live");
+    failMail = 1;
+    const r1 = await send({ by: "keegan", clientTest: false, copyTo: "gary@gc.example" });
+    assert.strictEqual(r1.emailOk, false);
+    assert.deepStrictEqual(r1.copied, [], "nobody was copied on an email that didn't go");
+    const r2 = await send({ by: "keegan", clientTest: false });
+    assert.strictEqual(r2.emailOk, true); assert.strictEqual(simpro.pos.length, 1, "no second PO");
+    assert(mails[0].cc.includes("gary@gc.example"), "still copied");
+  });
+
+  await t("CC: the email fails, Resend with a new address uses the new one", async () => {
+    const { send } = setup("live");
+    failMail = 1;
+    await send({ by: "keegan", clientTest: false, copyTo: "gary@gc.example" });
+    await send({ by: "keegan", clientTest: false, copyTo: "bo@gc.example" });
+    assert(mails[0].cc.includes("bo@gc.example") && !mails[0].cc.includes("gary@gc.example"));
+  });
+
+  await t("CC: an order copies the address once on its one email", async () => {
+    const { order } = setup("live");
+    const r = await order({ by: "keegan", clientTest: false, copyTo: "gary@gc.example" });
+    assert.strictEqual(mails.length, 1);
+    assert(mails[0].cc.includes("gary@gc.example"));
+    assert.deepStrictEqual(r.copied, ["gary@gc.example"]);
+  });
+
+  await t("CC: Finish sending from a card still copies who the order named", async () => {
+    const { order } = setup("live");
+    failMail = 1;
+    const r1 = await order({ by: "keegan", clientTest: false, copyTo: "gary@gc.example" });
+    assert.strictEqual(r1.emailOk, false);
+    const r2 = await order({ by: "keegan", clientTest: false, groups: [], resume: true });
+    assert.strictEqual(r2.emailOk, true);
+    assert(mails[0].cc.includes("gary@gc.example"));
+    assert.deepStrictEqual(r2.copied, ["gary@gc.example"]);
+  });
+
+  await t("CC: a store run makes its PO number and emails nobody, whatever is in the box", async () => {
+    const { send } = setup("live");
+    const r = await send({ by: "keegan", clientTest: false, source: "Home Depot", copyTo: "not checked" });
+    assert(r.poNo); assert.strictEqual(mails.length, 0);
+  });
+
   // ── v570: the PO form on the Simpro PO and on the card ──
   const CARD_LOG = "material_po_log/J1438_rough_1791484665123";
   const CARD = { by: "keegan", jobId: "J1438", phase: "rough", orderId: "1791484665123", po: "7300" };

@@ -15818,6 +15818,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
             const r = await memberCallable("sendMaterialPO", me)({ jobId, phase, orderId:o.id, source:o.source,
               items:o.items||"", get:sendSheet.get, date:isCustom ? "" : (sendSheet.date||""), clientTest:MATERIAL_PO_TEST,
               ...(isCustom ? { custom: customText } : {}),
+              ...(kind === "email" && String(sendSheet.copyTo||"").trim() ? { copyTo: String(sendSheet.copyTo).trim() } : {}),
               ...(isComm ? { ccId: ccPick.id } : {}) });
             const res = (r && r.data) || {};
             if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
@@ -15855,7 +15856,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                   <div style={{fontSize:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
                     {done.mode === "test"
                       ? <>Test send: the email went only to <b>{(done.emailedTo||[]).join(", ")}</b>. {done.supplier} did not get it. Void PO {done.poNo} in Simpro when you're done looking.</>
-                      : <>Emailed to {done.supplier}. bids@ and you are copied, and their reply comes to you.</>}
+                      : <>Emailed to {done.supplier}. bids@ and you are copied{(done.copied||[]).length ? <>, and so {done.copied.length === 1 ? "is" : "are"} <b>{done.copied.join(", ")}</b></> : null}. Their reply comes to you.</>}
                   </div>
                 )}
                 {done.kind === "email" && !done.emailOk && (
@@ -15919,6 +15920,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                       whiteSpace:"pre-wrap",maxHeight:200,overflowY:"auto"}}>{lines.join("\n")}</div>
                     <span style={{fontSize:12.5,color:C.faint}}>To change the list, close this and edit it on the card.</span>
                   </div>
+                  <PoCopyToBox value={sendSheet.copyTo||""} onChange={v=>setSendSheet(s=>({...s, copyTo:v, error:""}))}/>
                 </>)}
                 {kind !== "email" && (
                   <div style={{fontSize:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
@@ -15996,7 +15998,7 @@ function PoSendMotion({ phase = "sending", steps = [], title = "", sub = "" }) {
   useEffect(() => { if (phase === "sent") { try { if (navigator.vibrate) navigator.vibrate(25); } catch {} } }, [phase]);
   const GREEN = "#1F7A3F", RED = "#C62828";
   return (
-    <div role="status" aria-live="polite" style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"18px 8px 10px",textAlign:"center"}}>
+    <div role="status" aria-live="polite" data-po-sending={phase === "sending" ? "1" : undefined} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,padding:"18px 8px 10px",textAlign:"center"}}>
       <style>{PO_MOTION_CSS}</style>
       {phase === "sending" && (
         <svg width="150" height="72" viewBox="0 0 150 72" aria-hidden="true">
@@ -16059,6 +16061,19 @@ function PoCustomBox({ value, onChange }) {
         placeholder="e.g. Not stock: please order in 4 of the 20A dimmers and call Brady with an ETA"
         style={{fontFamily:"inherit",fontSize:15,lineHeight:1.4,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.card,color:C.text,resize:"vertical",minHeight:84}}/>
       <span style={{fontSize:12.5,color:C.faint}}>Goes in the email, on the PO form and in Simpro's supplier notes instead of a pickup date.{value.length > PO_CUSTOM_MAX - 60 ? ` ${PO_CUSTOM_MAX - value.length} characters left.` : ""}</span>
+    </label>
+  );
+}
+
+// v595: CC someone on the PO email. Optional and typed fresh per send; the server checks the addresses before any PO exists.
+function PoCopyToBox({ value, onChange }) {
+  return (
+    <label style={{display:"grid",gap:6}}>
+      <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>CC (optional)</span>
+      <input type="text" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={value} onChange={e=>onChange(e.target.value)}
+        placeholder="name@example.com"
+        style={{fontFamily:"inherit",fontSize:15,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.card,color:C.text}}/>
+      <span style={{fontSize:12.5,color:C.faint}}>Anyone else who should get this email. Up to 5, with a comma between them.</span>
     </label>
   );
 }
@@ -16132,6 +16147,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
       if (isCustom && !customText) { setError("Type what CED should do in the Custom box."); setBusy(false); return; }
       const r = await memberCallable("sendMaterialOrder", me, PO_ORDER_CALL)({ jobId, phase, orderId: draft.orderId, source: "CED", get: draft.get, date: isCustom ? "" : draft.date,
         ...(isCustom ? { custom: customText } : {}),
+        ...(String(draft.copyTo || "").trim() ? { copyTo: String(draft.copyTo).trim() } : {}),
         clientTest: MATERIAL_PO_TEST, groups: groups.map(g => ({ ccId: g.ccId, items: g.items, typed: g.typed })) });
       const res = (r && r.data) || {};
       const cards = poOrderCards(res, draft.orderId, isCustom ? "" : draft.date, me, isCustom ? customText : "");
@@ -16199,7 +16215,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
       {(result.pos || []).map(p => <Fragment key={p.poNo}>{box(<><b>PO {p.poNo}</b> · {p.costCenter}<br /><span style={{color:C.dim}}>{(p.lines || []).length} line{(p.lines || []).length === 1 ? "" : "s"}</span></>)}</Fragment>)}
       {result.ok && result.emailOk && box(result.mode === "test"
         ? <>Test send: the email went only to <b>{(result.emailedTo || []).join(", ")}</b>. CED did not get it. Void the PO{(result.pos || []).length === 1 ? "" : "s"} in Simpro when you're done looking.</>
-        : <>Emailed to CED in one email with {(result.pos || []).length === 1 ? "the PO form" : "every PO form"} attached. bids@ and you are copied, and their reply comes to you.</>)}
+        : <>Emailed to CED in one email with {(result.pos || []).length === 1 ? "the PO form" : "every PO form"} attached. bids@ and you are copied{(result.copied || []).length ? <>, and so {result.copied.length === 1 ? "is" : "are"} <b>{result.copied.join(", ")}</b></> : null}. Their reply comes to you.</>)}
       {result.ok && !result.emailOk && box(<span style={{color:"#C62828"}}>The POs are in Simpro, but the email didn't go out: {result.emailError || "unknown error"}. Tap Send again to retry the email. It won't make new POs.</span>)}
       {!result.ok && result.failed && box(<span style={{color:"#C62828"}}>{result.failed.costCenter} didn't go through: {result.failed.error}. Tap Send again to finish. The PO{(result.pos || []).length === 1 ? "" : "s"} already made won't be made twice, and the email goes once everything is made.</span>)}
       {box(<>Each PO is on its own card in Material Tracking{ok ? ", marked Ordered" : ""}.</>)}
@@ -16307,6 +16323,7 @@ function OrderBuilder({ open, onClose, jobId, phase, bid, onRefreshBid, onUpsert
     {!groups.length && box("Nothing in the order yet.")}
     {groups.length > 10 && box(<span style={{color:"#C62828"}}>One order can have up to 10 cost centers. Send this one with 10, then start a new order for the rest.</span>)}
     {secondary("Add from another cost center", () => setStep("cc"))}
+    <PoCopyToBox value={draft.copyTo || ""} onChange={v => { setError(""); setDraft(d => ({ ...d, copyTo: v })); }}/>
     {box(<>One email to <b>CED's Homestead inbox</b> with {groups.length === 1 ? "the PO form" : `all ${groups.length} PO forms`}. bids@ and you are copied, so CED's reply reaches both.</>)}
     {error && box(<span style={{color:"#C62828"}}>{error}</span>, { borderColor: "rgba(178,58,58,0.3)", background: "rgba(178,58,58,0.06)" })}
   </>, primary(busy ? "Sending…" : `Send to CED${groups.length > 1 ? ` (${groups.length} POs)` : ""}`, send, !groups.length || groups.length > 10 || (draft.get === "custom" && !String(draft.custom || "").trim())));
@@ -61848,9 +61865,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-10-30 · App SW version: v592
+**Last manifest update:** 2026-11-02 · App SW version: v595
 ---
 
+- **CC anyone on a PO email, and an expired login now asks for the PIN instead of quietly losing buttons** · 'shipped 2026-11-02' · 'SW v595' · 'PoCopyToBox' · 'cleanCopyTo' · 'extraCc' · 'functions/materialPO/send.js' · 'IDENTITY_TTL' · 'data-po-sending' · Koy: *"where did the order from the bid option go?"* It showed on his phone but not his desktop: the saved login runs out 24 hours after the PIN, while an open tab keeps showing the person logged in, so everything that re-reads 'getIdentity()' (New order from the bid, Send to CED, receipts) vanished with no message. A reload and PIN brought it back. Now the app saves, closes the job and shows the PIN screen when the login runs out, on return to the tab or within a minute while it's open, waiting for anyone typing in a box or mid PO send. Then Koy: *"would like the ability to CC someone on the email being sent."* Send to CED and New order from the bid each have an optional CC box, up to 5 addresses typed per send, on top of bids@ and the sender. A bad address is refused before any PO exists, test mode still copies nobody, a retry with a blank box keeps who the first try named, and the send record keeps 'extraCc'. Needs 'sendMaterialPO,sendMaterialOrder' deployed before the app.
 - **Dashboard, one place, ship 1: the real job card opens on the Dashboard with no reload, on the right tab; bell, pushes and Add task work there; dashboard visits get their own usage count** · 'shipped 2026-11-01' · 'SW v594' · 'DashPage' · 'jobDrawer' · 'inboxBellBtn' · 'hePushPrefWrite' · 'notifClickPlan' · Koy: *"one place to handle all my work"*. '/dashboard' now mounts the app's own 'JobDetail', 'NeedQuickAdd', bell, push toast, version popups and save status (moved above the dashboard return, one copy each; the crew app still mounts them). A job panel's **Open job** opens the card in place; a question, change order or return trip row opens it on that tab; Close returns to where you were. A task or other-screen notification still opens the app on it until My Day moves here (ship 2). New per-device switch in the Dashboard's bell, **Job pushes on this device open the dashboard** (localStorage plus IndexedDB 'he_sw_prefs' for 'firebase-messaging-sw.js'), off by default; only job pushes move. Foreman view's dollar mask now covers the whole page. Usage: a dashboard visit logs as 'views/dash', no longer 'views/myday'. Gate: 'scripts/dash-oneplace-test.js'. Guide 'dashboard.html'. **Why it won't lose data:** the same job card saving through the same 'updateJob' funnel, version lock and stale-copy checks; no new job field, no rule change, no function change; the push switch is stored only on the device.
 - **Homestead lettering on the other pages** · 'shipped 2026-10-30' · 'SW v592' · 'PAGE_TITLE' · 'GROUP_TITLE' · 'PageHeader' · 'BRAND_SLAB' · Koy: *"Brand the other pages."* Page titles now use the same slab lettering as the logo, in logo brown, in normal capitals instead of all caps: Today, My Day, Needs, Huddle, Tasks, QC Walks, Scheduling Forecast and Crew Planner, Upcoming Jobs, Job Start, Job Prep, Change Orders, Time Off, Activity Log, Quotes, Contractors, Team Members, Settings, App Map, Plan Changes, plus the crew and contractor pages. Group headings on All Jobs, Tasks, Job Prep and Crew Board, and the Simpro Inbox heading, get the lettering too. Crew and contractor names and group headings keep their own colors, because those colors mean something. Nothing moved: only the lettering changed, and no title got taller. Left alone: the office dashboard, Scoreboard, FieldInk, share links, printouts, pop-up titles and the insides of job tabs. **Why it won't lose data:** only text styling on titles and the shared page header changed, with no new saves, no changed saves and no change to what any title button or link does.
 - **Screen usage and dashboard crash reports (PostHog)** · 'shipped 2026-10-30' · 'SW v591' · 'heTrack' · 'heCaptureError' · 'OdBoundary' · Koy asked for a crash counter and a count of which screens get opened. The crash side already existed: PostHog has reported uncaught errors by person and build since v529. This adds the two missing pieces. A 'screen_opened' event sends the screen's fixed key for signed-in staff, one second after the screen settles, because the app changes screens without changing the address and page views can't tell them apart. The dashboard's error boundary now reports what it catches, since a caught error never reaches PostHog's automatic capture. Both stay silent until 'REACT_APP_POSTHOG_KEY' is set at build time; the live bundle had no key on 2026-10-30, so none of the PostHog events have reached PostHog yet. No Firestore read or write, no app localStorage key, nothing on a save path, and every call is wrapped so a PostHog failure can't reach the app.
@@ -72369,6 +72387,31 @@ function App() {
     const iv = setInterval(check, 30 * 60 * 1000);
     return () => { cancelled = true; document.removeEventListener("visibilitychange", onVis); clearInterval(iv); };
   }, [identity?.id]);
+
+  // ── Login expiry (v595) ──────────────────────────────────────
+  // The saved login lasts IDENTITY_TTL, but `identity` here is only read when the
+  // app opens. A tab left open past that still looked logged in while everything
+  // that re-reads getIdentity() (New order from the bid, Send to CED, receipts)
+  // quietly vanished. So when it runs out: save, close the job, ask for the PIN.
+  // Waits for anyone typing in a box or mid PO send; the next check catches it.
+  useEffect(() => {
+    if (!identity?.id) return;
+    const check = () => {
+      if (getIdentity()) return;
+      const a = document.activeElement, tag = a && a.tagName;
+      const typing = document.visibilityState === "visible" && a && (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || a.isContentEditable);
+      if (typing || document.querySelector("[data-po-sending]")) return;
+      flushSaves();
+      setSelected(null);
+      setOpenTab(null);
+      setIdentity(null);
+    };
+    check();
+    const onVis = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVis);
+    const iv = setInterval(check, 60 * 1000);
+    return () => { document.removeEventListener("visibilitychange", onVis); clearInterval(iv); };
+  }, [identity?.id]); // eslint-disable-line
 
   // ── Color overrides (keyed by full name) ─────────────────────
   const [_colorOverrides, set_colorOverrides] = useState({

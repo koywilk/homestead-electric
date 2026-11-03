@@ -129,13 +129,30 @@ function vendorNotesHtml(lines, pickup) {
   return out.join("");
 }
 
+// v595: the CC box on the send screens. Commas, semicolons, spaces or line breaks
+// between addresses. Only bare addresses pass, so nothing typed can add an email
+// header. bad = what isn't an address; the send is refused before any PO exists.
+const COPY_TO_MAX = 5;
+function cleanCopyTo(raw) {
+  const words = (Array.isArray(raw) ? raw.join(" ") : String(raw == null ? "" : raw)).split(/[\s,;]+/).filter(Boolean);
+  const seen = new Set(), list = [], bad = [];
+  for (const w of words) {
+    if (!/^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(w)) { bad.push(w); continue; }
+    const k = w.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); list.push(w); }
+  }
+  return list.length > COPY_TO_MAX ? { list, bad, tooMany: true } : { list, bad };
+}
+
 // Who gets the email. Test: ONLY the test inbox, nobody copied. Live: the
-// supplier, with bids@ and the sender copied, replies to the sender.
-function recipients({ mode, testTo, vendorEmail, bids, senderEmail }) {
+// supplier, with bids@, the sender and anyone from the CC box (extraCc) copied,
+// replies to the sender.
+function recipients({ mode, testTo, vendorEmail, bids, senderEmail, extraCc }) {
   const ok = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || ""));
   if (mode === "test") return ok(testTo) ? { to: [testTo], cc: [], replyTo: "" } : null;
   if (mode !== "live" || !ok(vendorEmail)) return null;
-  const cc = [bids, senderEmail].filter(ok).filter((e, i, a) => a.indexOf(e) === i && e !== vendorEmail);
+  const seen = new Set([String(vendorEmail).toLowerCase()]);
+  const cc = [bids, senderEmail, ...(extraCc || [])].filter(ok).filter((e) => { const k = String(e).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   return { to: [vendorEmail], cc, replyTo: ok(senderEmail) ? senderEmail : (ok(bids) ? bids : "") };
 }
 
@@ -322,6 +339,6 @@ function decodeReceiptPhoto(b64) {
 }
 
 module.exports = { SUPPLIERS, supplierRule, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
-  pickupLine, cleanCustom, getMode, CUSTOM_MAX, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
+  pickupLine, cleanCustom, getMode, CUSTOM_MAX, cleanCopyTo, COPY_TO_MAX, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
   poList, cleanOrderGroups, orderLine, groupKey,
   STORE_VENDORS, RECEIPT_MAX_BYTES, cleanPoNo, poJobNo, checkStorePo, receiptFileName, receiptCount, receiptKey, decodeReceiptPhoto };

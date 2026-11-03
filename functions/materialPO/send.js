@@ -68,6 +68,13 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     return `Simpro said ${r ? r.status : "nothing"}${msg ? `: ${msg}` : ""}`;
   };
   const okList = (r) => r && r.ok && Array.isArray(r.data);
+  // v595: the CC box. A bad address stops the send before any PO exists.
+  const copyToOf = (data) => {
+    const c = R.cleanCopyTo(data.copyTo);
+    if (c.bad.length) throw new HttpsError("invalid-argument", `"${c.bad[0].slice(0, 80)}" isn't an email address. Fix it or clear the CC box.`);
+    if (c.tooMany) throw new HttpsError("invalid-argument", `One email can CC up to ${R.COPY_TO_MAX} people.`);
+    return c.list;
+  };
 
   // Small per-instance caches: these lists change rarely.
   const cache = {};
@@ -180,8 +187,9 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
   // supplier while the switch is on test.
   async function emailFor(cfg, log) {
     const mode = R.emailMode(cfg.mode, log.mode);
-    const live = { to: log.vendorEmail, cc: [cfg.bids, log.sender && log.sender.email].filter(Boolean).join(", ") };
-    const rcpt = R.recipients({ mode, testTo: cfg.testTo, vendorEmail: log.vendorEmail, bids: cfg.bids, senderEmail: log.sender && log.sender.email });
+    const extraCc = log.extraCc || [];
+    const live = { to: log.vendorEmail, cc: [cfg.bids, log.sender && log.sender.email, ...extraCc].filter(Boolean).join(", ") };
+    const rcpt = R.recipients({ mode, testTo: cfg.testTo, vendorEmail: log.vendorEmail, bids: cfg.bids, senderEmail: log.sender && log.sender.email, extraCc });
     if (!rcpt) return { ok: false, error: mode === "test" ? "No test inbox set (gc_config/material_po.testTo)." : "This supplier has no email address in Simpro." };
     let pdf = null, pdfError = "";
     try { pdf = await pdfFor(log); } catch (e) { pdfError = String(e.message || e).slice(0, 200); functions.logger.warn("[materialPO] PDF failed, sending the list in the email instead", { po: log.poNo, error: pdfError }); }
@@ -256,7 +264,8 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
 
   const result = (log, extra = {}) => ({
     poNo: log.poNo, kind: log.kind, mode: log.mode, supplier: log.supplierName, costCenter: log.costCenter,
-    emailOk: !!log.emailOk, emailError: log.emailError || "", emailedTo: log.emailedTo || [], ...extra,
+    emailOk: !!log.emailOk, emailError: log.emailError || "", emailedTo: log.emailedTo || [],
+    copied: log.emailOk && log.emailMode !== "test" ? (log.extraCc || []) : [], ...extra,
   });
 
   // Email step for a log that already has a PO number. Claims the email first.
@@ -272,7 +281,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     if (claimed.skip) return result(claimed.cur, { again: true });
     const em = await emailFor(cfg, log);
     const sent = em.ok ? await markSent(log.simproPoId) : false;
-    const upd = { status: "done", emailOk: !!em.ok, emailError: em.ok ? "" : (em.error || ""), emailedTo: em.to || [], emailMode: em.mode || "",
+    const upd = { status: "done", emailOk: !!em.ok, emailError: em.ok ? "" : (em.error || ""), emailedTo: em.to || [], emailMode: em.mode || "", extraCc: log.extraCc || [],
       pdfAttached: !!em.pdf, pdfError: em.pdfError || "",
       emailId: em.id || "", statusMarked: sent, emailingAt: null, doneAt: nowIso() };
     await ref.set(upd, { merge: true });
@@ -317,7 +326,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
   // Claims the key in a transaction, recovers a PO whose Simpro answer was lost,
   // writes everything down before the POST, then creates. Never emails; the
   // caller decides. Returns { log, again } (again = it already existed).
-  async function ensurePo({ ref, key, cfg, user, base, rule, lines, items, get, dueIso, custom, pickCc, ccMissing }) {
+  async function ensurePo({ ref, key, cfg, user, base, rule, lines, items, get, dueIso, custom, extraCc, pickCc, ccMissing }) {
     const claimId = "CC-" + crypto.randomBytes(5).toString("hex");
     const fresh = () => ({ status: "creating", claimId, startedAt: nowIso(), by: user.name, ...base, mode: cfg.mode, kind: rule.kind });
     const claim = await db.runTransaction(async (tx) => {
@@ -380,7 +389,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
 
       const log = {
         kind: rule.kind, mode: cfg.mode, claimId, supplierName: rule.simproName, vendorId: vendor.ID, vendorEmail: T(vendor.Email),
-        costCenter: cc.name, costCenterId: cc.id, jobNo, jobName, lines, items: items || [], pickup, get, dueIso, sender, by: user.name,
+        costCenter: cc.name, costCenterId: cc.id, jobNo, jobName, lines, items: items || [], pickup, get, dueIso, sender, by: user.name, extraCc: extraCc || [],
         reference: `Job No. ${jobNo} - ${jobName}`, dateIssued: today(), siteName, siteAddress, vendorAddress, company: companyBlock,
       };
       await ref.set(log, { merge: true });   // so a lost answer can be finished later
@@ -450,15 +459,17 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       // empty box is refused here, before any PO exists.
       const get = R.getMode(data.get);
       if (get === "custom" && rule.kind === "email" && !R.cleanCustom(data.custom)) throw new HttpsError("invalid-argument", "Type what CED should do in the Custom box.");
+      const copyTo = rule.kind === "email" ? copyToOf(data) : [];
       const ref = LOG().doc(key);
       const { log, again } = await ensurePo({
         ref, key, cfg, user, base: { jobId, phase, orderId }, rule, lines, items: null,
-        get, dueIso: get === "custom" ? "" : R.cardDateToIso(data.date), custom: data.custom,
+        get, dueIso: get === "custom" ? "" : R.cardDateToIso(data.date), custom: data.custom, extraCc: copyTo,
         pickCc: (jobNo) => costCenterFor(jobNo, phase, ccId),
         ccMissing: (jobNo) => ccId ? `That cost center isn't on Simpro job ${jobNo} any more. Refresh Bid Items and pick it again.` : `Couldn't find a ${phase === "rough" ? "Rough In" : "Finish"} cost center on Simpro job ${jobNo}.`,
       });
       if (log.kind === "email" && !log.emailOk) {
-        const r = await finishEmail(ref, cfg, log);
+        // A retry with a blank CC box keeps who the first try named.
+        const r = await finishEmail(ref, cfg, copyTo.length ? { ...log, extraCc: copyTo } : log);
         return again ? { ...r, again: true } : r;
       }
       return result(log, again ? { again: true } : {});
@@ -485,13 +496,14 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       return { cur, fresh, done: [...done] };
     });
     if (claimed.busy) throw new HttpsError("already-exists", "This order is being emailed right now. Give it a minute, then refresh.");
-    if (claimed.skip) return { emailOk: true, emailedTo: claimed.cur.emailedTo || [], emailError: "", mode: claimed.cur.emailMode || claimed.cur.mode, again: true };
+    const extraCc = claimed.cur && Array.isArray(claimed.cur.extraCc) ? claimed.cur.extraCc : []; // v595: written when the order was sent
+    if (claimed.skip) return { emailOk: true, emailedTo: claimed.cur.emailedTo || [], emailError: "", mode: claimed.cur.emailMode || claimed.cur.mode, copied: (claimed.cur.emailMode || claimed.cur.mode) === "live" ? extraCc : [], again: true };
     const logs = claimed.fresh.map(m => m.log); // only POs no email has carried yet
 
     const first = logs[0];
     const mode = logs.some(l => R.emailMode(cfg.mode, l.mode) === "test") ? "test" : "live";
-    const live = { to: first.vendorEmail, cc: [cfg.bids, first.sender && first.sender.email].filter(Boolean).join(", ") };
-    const rcpt = R.recipients({ mode, testTo: cfg.testTo, vendorEmail: first.vendorEmail, bids: cfg.bids, senderEmail: first.sender && first.sender.email });
+    const live = { to: first.vendorEmail, cc: [cfg.bids, first.sender && first.sender.email, ...extraCc].filter(Boolean).join(", ") };
+    const rcpt = R.recipients({ mode, testTo: cfg.testTo, vendorEmail: first.vendorEmail, bids: cfg.bids, senderEmail: first.sender && first.sender.email, extraCc });
     let em;
     const pdfs = {};
     if (!rcpt) em = { ok: false, error: mode === "test" ? "No test inbox set (gc_config/material_po.testTo)." : "This supplier has no email address in Simpro." };
@@ -509,13 +521,13 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
     }
     const sent = {};
     if (em.ok) for (const l of logs) sent[l.poNo] = await markSent(l.simproPoId);
-    const per = { emailOk: !!em.ok, emailError: em.ok ? "" : (em.error || ""), emailedTo: em.to || [], emailMode: mode, emailId: em.id || "" };
+    const per = { emailOk: !!em.ok, emailError: em.ok ? "" : (em.error || ""), emailedTo: em.to || [], emailMode: mode, emailId: em.id || "", extraCc };
     for (const m of claimed.fresh) await LOG().doc(m.key).set({ ...per, status: em.ok ? "done" : m.log.status, statusMarked: !!sent[m.log.poNo], doneAt: nowIso() }, { merge: true });
     const emailedPoNos = em.ok ? [...claimed.done, ...logs.map(l => String(l.poNo))] : claimed.done;
     await orderRef.set({ ...per, emailedPoNos, emailingAt: null, doneAt: nowIso() }, { merge: true });
     if (!em.ok) functions.logger.warn("[materialPO] order email failed", { pos: logs.map(l => l.poNo), error: em.error });
     if (em.ok) for (const m of claimed.fresh) await attachForm(LOG().doc(m.key), { ...m.log, ...per }, pdfs[m.log.poNo]);
-    return { emailOk: !!em.ok, emailedTo: em.to || [], emailError: per.emailError, mode };
+    return { emailOk: !!em.ok, emailedTo: em.to || [], emailError: per.emailError, mode, copied: em.ok && mode === "live" ? extraCc : [] };
   }
 
   const sendMaterialOrder = functions
@@ -536,6 +548,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       if (get === "custom" && !resume && !R.cleanCustom(data.custom)) throw new HttpsError("invalid-argument", "Type what CED should do in the Custom box.");
       const dueIso = get === "custom" ? "" : R.cardDateToIso(data.date);
       const custom = data.custom;
+      const copyTo = copyToOf(data);
 
       // Every cost center must be on this job's bid in Simpro right now.
       const { jobNo } = await jobFor(jobId);
@@ -546,6 +559,8 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       // The order doc remembers every PO made for it (madeKeys), so a Send again
       // that no longer lists a cost center still emails that cost center's PO.
       const orderRef = LOG().doc(orderKey);
+      // On the order doc from the start, so Finish sending from a card (blank box) still copies them.
+      if (copyTo.length) await orderRef.set({ extraCc: copyTo }, { merge: true });
       const noteMade = (key) => db.runTransaction(async (tx) => {
         const cur = (await tx.get(orderRef)).data() || {};
         const keys = Array.isArray(cur.madeKeys) ? cur.madeKeys : [];
@@ -588,7 +603,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       await addEarlier(made);
       if (!made.length) throw new HttpsError("failed-precondition", "No POs were made for this order yet. Open New order from the bid to send it.");
       const em = await finishOrderEmail(orderRef, cfg, made, { jobId, phase, orderId, by: user.name });
-      return { ok: true, mode: em.mode || cfg.mode, emailOk: em.emailOk, emailedTo: em.emailedTo, emailError: em.emailError || "", again: !!em.again,
+      return { ok: true, mode: em.mode || cfg.mode, emailOk: em.emailOk, emailedTo: em.emailedTo, emailError: em.emailError || "", copied: em.copied || [], again: !!em.again,
         pos: posOf(made) };
     });
 
