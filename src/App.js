@@ -7909,6 +7909,26 @@ const punchStamp = () => {
   };
 };
 
+// punchDayLabel — "Aug 13 · 82 days" for the dates on a punch row (2026-11-03).
+// Koy: "i need to see what date these were created and what date weve been
+// waiting for things since". Reads addedAtTs / addedAt / waitingSince. A bare
+// YYYY-MM-DD is read as a LOCAL day (new Date("2026-08-13") is UTC midnight,
+// which is Aug 12 in Mountain time). Days count calendar days, not 24h blocks.
+const punchDayLabel = (v) => {
+  if (!v) return "";
+  const s = String(v);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) : new Date(s);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const day0 = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day0(now) - day0(d)) / 86400000);
+  const md = d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+  return `${md} · ${days <= 0 ? "today" : days === 1 ? "1 day" : `${days} days`}`;
+};
+// waitingSince is stamped from v613 on. An item already waiting before then has
+// no start date saved; its row says "since before Nov 3" rather than guessing.
+const PUNCH_WAIT_STAMP_FROM = "Nov 3";
+
 // Format any date string for display as M/D/YYYY
 const fmtDisplay = (str) => {
   if(!str) return "";
@@ -13084,14 +13104,16 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
     setMobileSheet(null);
   };
 
+  // waitingSince is stamped only when an item STARTS waiting. Editing the reason
+  // ("Material" → "Fixture") keeps the original date: it is still the same stall.
   const commitWaiting = (id, text) => {
-    onChange(safeItems.map(i => i.id === id ? { ...i, waiting: true, waitingOn: text.trim() } : i));
+    onChange(safeItems.map(i => i.id === id ? { ...i, waiting: true, waitingOn: text.trim(), ...(i.waiting ? {} : { waitingSince: new Date().toISOString() }) } : i));
     setWaitingEditId(null);
     setWaitingText('');
   };
 
   const clearWaiting = (id) => {
-    onChange(safeItems.map(i => i.id === id ? { ...i, waiting: false, waitingOn: '' } : i));
+    onChange(safeItems.map(i => i.id === id ? { ...i, waiting: false, waitingOn: '', waitingSince: undefined } : i));
   };
 
   const commitMaterial = (id, text) => {
@@ -13266,9 +13288,9 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   onMouseLeave={e=>e.target.style.background='transparent'}>
                   <RichText html={item.text}/>
                 </HeStrikeSpan>
-                {(item.addedBy||item.checkedBy||(filterIds!=null)||(scheduledRTMap&&scheduledRTMap[item.id]&&!item.done))&&(
+                {(item.addedBy||item.addedAtTs||item.addedAt||item.checkedBy||(filterIds!=null)||(scheduledRTMap&&scheduledRTMap[item.id]&&!item.done))&&(
                   <span style={{fontSize:11,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
-                    {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
+                    {!item.done&&(item.addedBy||punchDayLabel(item.addedAtTs||item.addedAt))&&<span>{item.addedBy?`added by ${item.addedBy}`:'added'}{punchDayLabel(item.addedAtTs||item.addedAt)?` · ${punchDayLabel(item.addedAtTs||item.addedAt)}`:''}</span>}
                     {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
                     {item.fromQC&&!item.voided&&<span style={{fontSize:11,fontWeight:700,background:'#F4ECE2',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
                     {item.fromGC&&!item.voided&&<span title={item.addedBy||"From the general contractor"} style={{fontSize:11,fontWeight:700,background:'#EAEEF6',color:'#2E477D',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD9EC',lineHeight:1.6}}>GC</span>}
@@ -13406,6 +13428,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               <span style={{fontSize:12,fontWeight:700,background:C.slateBg,color:C.slateInk,
                 borderRadius:99,padding:'2px 8px',border:'1px solid #C9D1DC'}}>
                 {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
+              </span>
+              <span style={{fontSize:11,color:C.dim}}
+                title={item.waitingSince ? '' : `This item was marked waiting before the app saved the date (${PUNCH_WAIT_STAMP_FROM}).`}>
+                {item.waitingSince ? `since ${punchDayLabel(item.waitingSince)}` : `since before ${PUNCH_WAIT_STAMP_FROM}`}
               </span>
               <button onClick={()=>{setWaitingEditId(item.id);setWaitingText(item.waitingOn||'');}}
                 style={{fontSize:11,background:'none',border:'none',color:C.faint,cursor:'pointer',textDecoration:'underline',padding:0}}>
@@ -14584,9 +14610,9 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onVo
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
           style={{minWidth:"var(--he-tap, 32px)",background:'none',border:'none',color:C.faint,cursor:'pointer',fontSize:13,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
-      {(item.addedBy||item.checkedBy)&&(
+      {(item.addedBy||item.addedAtTs||item.addedAt||item.checkedBy)&&(
         <div style={{fontSize:11,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
-          {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
+          {!item.done&&(item.addedBy||punchDayLabel(item.addedAtTs||item.addedAt))&&<span>{item.addedBy?`added by ${item.addedBy}`:'added'}{punchDayLabel(item.addedAtTs||item.addedAt)?` · ${punchDayLabel(item.addedAtTs||item.addedAt)}`:''}</span>}
           {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?` · ${item.checkedAt}`:''}</span>}
         </div>
       )}
@@ -61701,8 +61727,9 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-03 · App SW version: v612
+**Last manifest update:** 2026-11-03 · App SW version: v613
 ---
+- **Punch items show the day they were added and how long they've been waiting** · 'shipped 2026-11-03' · 'SW v613' · 'punchDayLabel' · 'waitingSince' · 'PUNCH_WAIT_STAMP_FROM' · Koy: *"i need to see what date these were created and what date weve been waiting for things since."* The "added by" line on every open punch item (Rough, Finish and the legacy QC list) now ends with the day and its age, e.g. *added by Jacob Spackman · Aug 13 · 82 days*, read from the 'addedAtTs' / 'addedAt' stamp every item has carried since 2026-08-11 (254 of the 328 open items on 2026-11-03; older ones without a stamp show no date). Tapping **Wait** now also saves 'waitingSince' (ISO) on the item, and the Waiting badge row shows *since Nov 3 · today*. The date is set only when an item starts waiting: editing the reason keeps it, and **Waiting ×** removes it. Items that were already waiting before v613 have no saved start date (none could be recovered for the 149 waiting on 2026-11-03), so they say *since before Nov 3*. Help guide: 'rough.html'. **Why it won't lose data:** one new key inside existing punch items, written through the same 'onChange' → saveJob path the Waiting button already used; clearing sets it to 'undefined', which 'sanitize()' drops, so a cleared item has exactly the shape it had before; no top-level job field, no loader or rules change.
 
 - **New order from the bid: a pasted list keeps its lines** · 'shipped 2026-11-03' · 'SW v612' · 'poSplitTyped' · 'scripts/po-paste-test.js' · Koy: *"when i paste a list into the type in more parts or notes on a po order it pastes it all as one line, so it doesnt appear right on the po card or the pdf attachment"*. The **Type in parts or notes** box is a one-line input, so the browser turned a pasted list's line breaks into spaces and the whole list became ONE typed row (and the server's 'cleanOrderGroups' squashes any break inside a row too). Now a paste that has line breaks is split into one typed row per line (what was already in the box joins the first line), and typing a line and tapping Add is unchanged; bullets ('- ', '• ', '* ', '– ', '· ') come off the front of a line, spreadsheet tabs become spaces, blank lines drop, a part that starts with a dash and no space ('-48 V') or a numbered line keeps it. Each row is already its own line on the card's list and its own row on the PO PDF. Over 60 typed rows on one cost center shows a red note (the server keeps the first 60, 'cleanOrderGroups'). The card's own **Send to CED** list box was already multi-line and is not touched. Gate: 'scripts/po-paste-test.js' (10 checks in prebuild, runs the live 'poSplitTyped' from App.js and pins the 60 to the server's slice). Guide: 'rough.html'. Hosting deploy only. **Why it won't lose data:** client-only, inside the order draft before anything is sent; the draft shape ('typed[ccId]' = array of strings) is the same, there are just more rows; no function, rules, loader or saved-field change.
 - **Plans and appliance specs people text Koy or post in Google Chat go into Plan Intake like emailed ones (PDFs only)** · 'shipped 2026-11-03' · 'SW v611' · 'planIntakeWatcher' · 'functions/planIntake/watcher.js' · 'scripts/plan-intake-chat-auth.js' · '~/dev/text-digest/digest.py' · Koy: *"use the same … tool that we made for duet to read my text and google chat and have it feed plans and appliance specs etc to the plan intake and appliance automations"*, then *"PDFs only first"*, then *"yes, reuse it"* (the connector's Chat sign-in). **Google Chat (watcher, 'processChat', off until 'config.chatSince'):** reads Koy's Chat as Koy with the Homestead connector's OAuth client and its two read-only Chat scopes (a refresh token of its own, saved as 'chat' inside 'PLAN_INTAKE_GOOGLE_OAUTH' by 'node scripts/plan-intake-chat-auth.js'; '--on' / '--off' set the switch). Each run reads only spaces active since 'config.chatCursor', skips Koy's own posts ('my_user') and anything that isn't a PDF, downloads uploaded PDFs through Chat and Drive-file PDFs through the watcher's Drive access, and writes each into **_Plan Inbox / _From Chat** with the same note as a texted PDF, which the drop sweep below queues in the same run ('via: "chat"'). A Drive file it can't open is queued as a link for the Routine. 'planIntakeState/chat_<message>' marks each message so nothing is taken twice; a missing sign-in shows as a watcher error. **Mac half:** with 'plans.on' in the text-digest folder, each 15-minute run copies every PDF an approved work contact texted (allowlist rules: a group only if everyone in it is approved; never Koy's own sends; never photos) once into **Job Plans / _Plan Inbox / _From Texts**, then writes '<file>.json' beside it with the real file name, the sender, the conversation and the texts within 3 hours of it; 'plans-sent.json' remembers what went. A PDF still in iCloud (not downloaded to the Mac) is retried. **Watcher half (every 30 min, live mode only):** a PDF with its note (or no note after 6 h) and a Drive checksum moves up into _Plan Inbox under its dated name (same file id) and is queued as 'email_pdf' with 'via: "text"', 'from: "<name> (text)"', the conversation as 'subject' and the texts as 'body', so the Routine, Today's Plans card, hand filing, Not ours and the weekly review all treat it as an emailed plan. A PDF whose bytes are already filed, and every note, move to _From Texts/Done. An appliance package it files lands in MOST UPDATED / APPLIANCE SPECS, where the nightly Appliance Loads routine finds it. Findings no longer show a blank Email link. Gates: 'scripts/planintake-sim.js' texted-plans and chat-plans scenarios (prebuild) + '~/dev/text-digest/test_plans.py' (fake Messages database). **Why it won't lose data:** the Mac reads Messages read-only and Chat is read with read-only scopes; both only add files to Drive; the watcher only moves files (never deletes or overwrites) and writes plan-intake collections only, no job record. Turn off: delete 'plans.on' (texts), 'node scripts/plan-intake-chat-auth.js --off' (Chat).
