@@ -29490,6 +29490,163 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
+// ── Cut sheets library (2026-11-04) ─────────────────────────────────────────
+// Koy: "where would be a good place to link this in the app so it's easily
+// accessible by everybody?" The Shared Drive › Homestead Job Organization ›
+// Cut sheets folder (category › brand › PDF, built from the most-ordered Simpro
+// parts) is "anyone with the link — Viewer", so the same API-key listing the
+// Drive Plans section uses reads it. Read-only: nothing here writes a job.
+const CUT_SHEETS_FOLDER_ID = "1c0EOl4CNsik5TfPDWdUH9ZLJEQsAU4vO";
+const CUT_SHEETS_TTL_MS = 10 * 60 * 1000;   // one listing per app session per 10 min, shared by every job
+let cutSheetsCache = null;                 // { at, sheets, indexUrl }
+// ── Cut sheets helpers (pure — tested verbatim by scripts/cutsheets-test.js)
+function cutSheetRow(f, path) {
+  const name = String(f.name || "").replace(/\.pdf$/i, "");
+  const brand = path[1] || "";
+  return { id: f.id, name, brand, category: (path[0] || "").replace(/^\d+\s+/, ""), catSort: path[0] || "", mimeType: f.mimeType,
+    url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+    // "Brand – Product – PART" file names: show the product without repeating the brand folder
+    title: brand && name.startsWith(brand + " – ") ? name.slice(brand.length + 3) : name };
+}
+// Pure — every word typed must appear; punctuation ignored so "hom120" finds "HOM120" and "wfrx 2" finds "WFRX-2".
+function filterCutSheets(sheets, q) {
+  const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const words = String(q || "").toLowerCase().split(/\s+/).map(norm).filter(Boolean);
+  if (!words.length) return sheets;
+  return sheets.filter(s => { const hay = norm(`${s.name} ${s.brand} ${s.category}`); return words.every(w => hay.includes(w)); });
+}
+// ── end Cut sheets helpers
+async function listDriveFolder(folderId) {
+  const out = [];
+  let pageToken = "";
+  do {
+    const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=nextPageToken,files(id,name,mimeType,webViewLink)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    const data = await (await fetch(url)).json();
+    if (data.error) throw new Error(data.error.message || "Could not load the cut sheets folder");
+    out.push(...(data.files || []));
+    pageToken = data.nextPageToken || "";
+  } while (pageToken);
+  return out;
+}
+async function loadCutSheets(force = false) {
+  if (!force && cutSheetsCache && Date.now() - cutSheetsCache.at < CUT_SHEETS_TTL_MS) return cutSheetsCache;
+  const FOLDER = "application/vnd.google-apps.folder";
+  const sheets = [];
+  let indexUrl = "";
+  const walk = async (folderId, path) => {
+    if (path.length > 3) return;   // category › brand › (one more level, e.g. GM Tape Lighting) is the deepest it goes
+    const items = await listDriveFolder(folderId);
+    await Promise.all(items.map(async (f) => {
+      if (f.mimeType === FOLDER) { if (!/^_?archive/i.test(f.name)) await walk(f.id, [...path, f.name]); return; }
+      if (!path.length) { if (/cut sheet index/i.test(f.name)) indexUrl = f.webViewLink || `https://docs.google.com/spreadsheets/d/${f.id}`; return; }
+      sheets.push(cutSheetRow(f, path));
+    }));
+  };
+  await walk(CUT_SHEETS_FOLDER_ID, []);
+  sheets.sort((a, b) => a.catSort.localeCompare(b.catSort) || a.brand.localeCompare(b.brand) || a.title.localeCompare(b.title));   // 01 Wiring … 08 Generators, the folder's own order
+  cutSheetsCache = { at: Date.now(), sheets, indexUrl };
+  return cutSheetsCache;
+}
+
+function CutSheetsSection() {
+  const [open, setOpen] = useState(false);
+  const [lib, setLib] = useState(cutSheetsCache);
+  const [error, setError] = useState("");
+  const [q, setQ] = useState("");
+  const [openCats, setOpenCats] = useState(() => new Set());
+  const [viewFile, setViewFile] = useState(null);
+  useEffect(() => { if (viewFile) heTrack("cut_sheet_opened", { brand: viewFile.brand || "" }); }, [viewFile && viewFile.id]); // eslint-disable-line
+  const load = (force) => {
+    setError("");
+    loadCutSheets(force).then(setLib).catch(e => setError((e && e.message) || "Could not load the cut sheets."));
+  };
+  const toggle = (next) => { setOpen(next); if (next && (!lib || Date.now() - lib.at >= CUT_SHEETS_TTL_MS)) load(false); };
+  const sheets = lib ? lib.sheets : [];
+  const hits = filterCutSheets(sheets, q);
+  const searching = !!q.trim();
+  const groups = [];   // [{category, brands:[{brand, sheets}]}] in sorted order
+  for (const s of hits) {
+    let g = groups[groups.length - 1];
+    if (!g || g.category !== s.category) groups.push(g = { category: s.category, brands: [] });
+    let b = g.brands[g.brands.length - 1];
+    if (!b || b.brand !== s.brand) g.brands.push(b = { brand: s.brand, sheets: [] });
+    b.sheets.push(s);
+  }
+  const flipCat = (c) => setOpenCats(prev => { const n = new Set(prev); n.has(c) ? n.delete(c) : n.add(c); return n; });
+  const linkBtn = { fontSize: 12.5, fontWeight: 600, color: C.blue, textDecoration: "none", border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px", flexShrink: 0 };
+  const row = (s) => (
+    <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+      <span style={{ flexShrink: 0, color: C.dim, display: "inline-flex" }}><Icon name="fileText" size={16}/></span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</div>
+        {searching && <div style={{ fontSize: 12, color: C.faint }}>{s.brand} · {s.category}</div>}
+      </div>
+      <button onClick={() => setViewFile(s)}
+        style={{ fontSize: 12.5, fontWeight: 600, color: C.accent, background: `${C.accent}12`, border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px", cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
+        View
+      </button>
+      <a href={s.url} target="_blank" rel="noreferrer" style={linkBtn}>Open ↗</a>
+    </div>
+  );
+  return (
+    <FoldSection label="Cut Sheets" color={C.blue} open={open} onToggle={toggle}
+      meta={lib ? `${sheets.length} product sheet${sheets.length === 1 ? "" : "s"}` : "shop library · search by part"}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search a part, like HOM120 or 4in wafer" inputMode="search"
+          style={{ flex: "1 1 220px", minWidth: 180, padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.text, fontSize: 14, fontFamily: "inherit" }}/>
+        {lib && lib.indexUrl && <a href={lib.indexUrl} target="_blank" rel="noreferrer" style={linkBtn}>Cut Sheet Index ↗</a>}
+        <a href={`https://drive.google.com/drive/folders/${CUT_SHEETS_FOLDER_ID}`} target="_blank" rel="noreferrer" style={linkBtn}>Folder in Drive ↗</a>
+      </div>
+      {error ? (
+        <div style={{ fontSize: 13, color: C.red, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {error}
+          <button onClick={() => load(true)} style={{ fontSize: 12.5, fontWeight: 600, color: C.accent, background: "none", border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>Try again</button>
+        </div>
+      ) : !lib ? (
+        <div style={{ fontSize: 13, color: C.faint }}>Loading the cut sheets…</div>
+      ) : !hits.length ? (
+        <div style={{ fontSize: 13, color: C.faint }}>No cut sheet matches “{q.trim()}”. Check the part number, or ask the office to add the sheet.</div>
+      ) : groups.map(g => {
+        const n = g.brands.reduce((t, b) => t + b.sheets.length, 0);
+        const catOpen = searching || openCats.has(g.category);   // folded with a count until tapped; a search opens every match
+        return (
+          <div key={g.category} style={{ marginBottom: 6 }}>
+            <div onClick={() => !searching && flipCat(g.category)} role="button" aria-expanded={catOpen}
+              style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 40, cursor: searching ? "default" : "pointer", borderBottom: `1px solid ${C.border}`, userSelect: "none" }}>
+              <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em", color: C.text }}>{g.category.toUpperCase()}</span>
+              <span style={{ flex: 1, minWidth: 0, textAlign: "right", fontSize: 12.5, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {g.brands.length > 3 ? `${g.brands.length} brands` : g.brands.map(b => b.brand).join(", ")}
+              </span>
+              <span style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 700, color: C.dim }}>{n}</span>
+              {!searching && <span style={{ color: C.dim, fontSize: 14, fontWeight: 700 }}>{catOpen ? "▾" : "▸"}</span>}
+            </div>
+            {catOpen && <div style={{ paddingTop: 8 }}>
+              {g.brands.map(b => (
+                <div key={b.brand} style={{ marginBottom: 6 }}>
+                  {!searching && <div style={{ fontSize: 11, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", margin: "2px 0 6px" }}>{b.brand.toUpperCase()}</div>}
+                  {b.sheets.map(row)}
+                </div>
+              ))}
+            </div>}
+          </div>
+        );
+      })}
+      {viewFile && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000, display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", gap: 12, background: "rgba(255,255,255,0.08)", flexShrink: 0 }}>
+            <span style={{ fontSize: 14, color: "#fff", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{viewFile.brand} / {viewFile.title}</span>
+            <a href={viewFile.url} target="_blank" rel="noreferrer"
+              style={{ fontSize: 13, color: C.blue, fontWeight: 600, textDecoration: "none", border: `1px solid ${C.blue}66`, borderRadius: 7, padding: "5px 12px", flexShrink: 0 }}>Open in Drive ↗</a>
+            <button onClick={() => setViewFile(null)} aria-label="Close"
+              style={{ background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%", color: "#fff", fontSize: 20, width: 36, height: 36, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>✕</button>
+          </div>
+          <iframe src={`https://drive.google.com/file/d/${viewFile.id}/preview`} title={viewFile.title} style={{ flex: 1, width: "100%", border: "none" }} allow="autoplay"/>
+        </div>
+      )}
+    </FoldSection>
+  );
+}
+
 function PlansTab({job, onUpdate, onOpenBidItems=null}) {
   // v542 (Projects spec §4): every block starts folded with a count on its header.
   const [driveCount, setDriveCount] = useState(null);
@@ -29518,6 +29675,8 @@ function PlansTab({job, onUpdate, onOpenBidItems=null}) {
         meta={driveCount == null ? "loading…" : `${plural(driveCount, "file")}${project ? ` · ${buildingShortName(job, project)} folder` : ""}`}>
         <DriveFilesSection job={job} onUpdate={onUpdate} onCount={setDriveCount} />
       </FoldSection>
+
+      <CutSheetsSection />
 
       {project && (
         <FoldSection label="Project-wide plans" color={PROJECT_COLOR} badge={{text:"NEW",color:C.blue}}
@@ -61947,9 +62106,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-04 · App SW version: v613
+**Last manifest update:** 2026-11-04 · App SW version: v614
 ---
 
+- **Cut Sheets on every job's Plans & Links: the shop's spec-sheet library, searchable by part** · 'shipped 2026-11-04' · 'SW v614' · 'CutSheetsSection' · 'loadCutSheets' · 'filterCutSheets' · 'scripts/cutsheets-test.js' · Koy: *"where would be a good place to link this in the app so it's easily accessible by everybody?"* The Shared Drive › Homestead Job Organization › **Cut sheets** folder (built 2026-11-04 from the parts on the most Simpro POs since April 2023: 157 manufacturer sheets in category › brand folders, plus the **Cut Sheet Index** Google Sheet) now shows as a folded **Cut Sheets** block right under Drive Plans on every job, so office, foremen, leads and crew all reach it from a tab they already use (the Tools tab was ruled out because 'tools.view' is granted per person). It starts folded with *shop library · search by part* and loads on the first open, then shows the sheet count. A search box matches every word typed with punctuation ignored (*HOM120*, *wfrx 2*, *4in wafer*, *RAB gimbal*) and lists each match with its brand and category. With nothing typed the sheets sit in category groups (01–08 folder order), folded with brand names and a count, then by brand inside. **View** opens the sheet in an in-app viewer (Drive's preview, the same as Drive Plans) and **Open ↗** opens it in Drive to download, print or send to a GC; header links open the Cut Sheet Index and the folder. The listing uses the same API-key Drive read as Drive Plans (the folder is "anyone with the link — Viewer"), walks category › brand (plus one deeper level), skips '_Archive', and is cached once per app session for 10 minutes and shared by every job; a failed read shows the error with Try again. Counts 'cut_sheet_opened' (brand) in PostHog. Gate: 'scripts/cutsheets-test.js' (14 checks in prebuild on the live 'cutSheetRow' / 'filterCutSheets'). Guide: 'planslinks.html' (new step 5 + a quick answer). Hosting deploy only. **Why it won't lose data:** read-only. It lists one Drive folder and never writes a job, a Firestore document or a Drive file; no loader, rules or function change.
 - **Claude tab on the dashboard: every change Claude made in Simpro, Command Center and Plan Intake, and (Koy only) every message it checked; Needs a look and POs by job on Automations** · 'shipped 2026-11-04' · 'SW v613' · 'claudeActivity' · 'functions/claudeActivity.js' · 'odClaudeFold' · 'odClaudeJobLabel' · 'poView' · 'settings/simproPoSync.view' · Koy: *"one that's for me specifically, but also one that Josh and Brady can view on the dashboard"*, and on the sheets: one place, so the Claude Scheduling Write Log stops getting rows and the hourly Simpro POs - Master sheet can be switched off ("that works"), then *"Add plan intake"*. **Claude tab** (tenth tab, admins, after Automations): changes this week, messages checked, flagged to Koy, plans filed this week; Flagged to you (3 days); Changes by day from 'duet_writes' (Command Center writes, refused calls left off, same action on one job within 10 min folded: "Added 13 photos"), 'claude_activity' kind 'simpro' (Simpro schedule writes, logged by the connector) and 'agentQueue' decisions (filed / set aside / walk matched, the Routine's and Koy's own, dry_/test_ left off), chips per app and a filter, tap opens the job; Plan Intake live from 'agentFindings'; Appliance Loads nightly run from that sheet's Run Log tab (public CSV); What I checked from 'claude_activity' kind 'watch'. **Two cuts, made server-side** in the new admin-PIN callable 'claudeActivity' (requireAdmin, then admin only): Koy's record gets everything; every other admin, and Koy's own *Owners' view* switch, gets the changes and counts with no message list and no emailed plan file names (a test asserts no message words anywhere in that answer). 'duet_writes', 'claude_activity' and 'agentQueue' stay server-only under the rules' catch-all, so no rules change. **Automations › Simpro POs**: the hourly PO run also saves the sheet's Needs a look and Summary rows as 'view' on 'settings/simproPoSync' (no dollar field in either; 150 / 300 rows max) even if the sheet write fails; the card lists Needs a look (what to do, tap opens the job) and a folded POs by job. 'settings/simproPoSync.sheet = "off"' stops the hourly sheet rewrite and leaves the sheet as an archive (the card says so). Tests: new 'scripts/claude-activity-test.js' (owners' cut, refused writes, folding, job and quote labels, plan rows, samples, the two log actions) in prebuild; 'scripts/simpro-pull-sim.js' +1 scenario (sheet off) and view checks. Guide 'dashboard.html' (new Claude step, Simpro POs). **duetApi log actions** ('functions/duetWrites/activity.js'): 'activity.simpro' and 'activity.watch' take 1–50 rows and write 'claude_activity/<sim_|wat_><hash or key>' docs (same row twice → same doc; links stripped, control characters out, unknown fields refused, at within 400 days); a log, not a Command Center change, so no 'duet_writes' audit, no undo, not in the hourly limit — the connector calls them after each Simpro schedule write and from its new 'cc_log_activity' tool (Watch rows, the sheet backfill). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity,functions:scheduledSimproPOSync,functions:duetApi --project homestead-electric'** (Koy); until then the tab and the PO list show sample rows marked as such. **Why it won't lose data:** the tab and the PO list only read; the callable only reads; the PO run's only new write is one field on its own settings doc; the log actions write only 'claude_activity'; no job field, loader or rules change.
 - **New order from the bid: a pasted list keeps its lines** · 'shipped 2026-11-03' · 'SW v612' · 'poSplitTyped' · 'scripts/po-paste-test.js' · Koy: *"when i paste a list into the type in more parts or notes on a po order it pastes it all as one line, so it doesnt appear right on the po card or the pdf attachment"*. The **Type in parts or notes** box is a one-line input, so the browser turned a pasted list's line breaks into spaces and the whole list became ONE typed row (and the server's 'cleanOrderGroups' squashes any break inside a row too). Now a paste that has line breaks is split into one typed row per line (what was already in the box joins the first line), and typing a line and tapping Add is unchanged; bullets ('- ', '• ', '* ', '– ', '· ') come off the front of a line, spreadsheet tabs become spaces, blank lines drop, a part that starts with a dash and no space ('-48 V') or a numbered line keeps it. Each row is already its own line on the card's list and its own row on the PO PDF. Over 60 typed rows on one cost center shows a red note (the server keeps the first 60, 'cleanOrderGroups'). The card's own **Send to CED** list box was already multi-line and is not touched. Gate: 'scripts/po-paste-test.js' (10 checks in prebuild, runs the live 'poSplitTyped' from App.js and pins the 60 to the server's slice). Guide: 'rough.html'. Hosting deploy only. **Why it won't lose data:** client-only, inside the order draft before anything is sent; the draft shape ('typed[ccId]' = array of strings) is the same, there are just more rows; no function, rules, loader or saved-field change.
 - **Plans and appliance specs people text Koy or post in Google Chat go into Plan Intake like emailed ones (PDFs only)** · 'shipped 2026-11-03' · 'SW v611' · 'planIntakeWatcher' · 'functions/planIntake/watcher.js' · 'scripts/plan-intake-chat-auth.js' · '~/dev/text-digest/digest.py' · Koy: *"use the same … tool that we made for duet to read my text and google chat and have it feed plans and appliance specs etc to the plan intake and appliance automations"*, then *"PDFs only first"*, then *"yes, reuse it"* (the connector's Chat sign-in). **Google Chat (watcher, 'processChat', off until 'config.chatSince'):** reads Koy's Chat as Koy with the Homestead connector's OAuth client and its two read-only Chat scopes (a refresh token of its own, saved as 'chat' inside 'PLAN_INTAKE_GOOGLE_OAUTH' by 'node scripts/plan-intake-chat-auth.js'; '--on' / '--off' set the switch). Each run reads only spaces active since 'config.chatCursor', skips Koy's own posts ('my_user') and anything that isn't a PDF, downloads uploaded PDFs through Chat and Drive-file PDFs through the watcher's Drive access, and writes each into **_Plan Inbox / _From Chat** with the same note as a texted PDF, which the drop sweep below queues in the same run ('via: "chat"'). A Drive file it can't open is queued as a link for the Routine. 'planIntakeState/chat_<message>' marks each message so nothing is taken twice; a missing sign-in shows as a watcher error. **Mac half:** with 'plans.on' in the text-digest folder, each 15-minute run copies every PDF an approved work contact texted (allowlist rules: a group only if everyone in it is approved; never Koy's own sends; never photos) once into **Job Plans / _Plan Inbox / _From Texts**, then writes '<file>.json' beside it with the real file name, the sender, the conversation and the texts within 3 hours of it; 'plans-sent.json' remembers what went. A PDF still in iCloud (not downloaded to the Mac) is retried. **Watcher half (every 30 min, live mode only):** a PDF with its note (or no note after 6 h) and a Drive checksum moves up into _Plan Inbox under its dated name (same file id) and is queued as 'email_pdf' with 'via: "text"', 'from: "<name> (text)"', the conversation as 'subject' and the texts as 'body', so the Routine, Today's Plans card, hand filing, Not ours and the weekly review all treat it as an emailed plan. A PDF whose bytes are already filed, and every note, move to _From Texts/Done. An appliance package it files lands in MOST UPDATED / APPLIANCE SPECS, where the nightly Appliance Loads routine finds it. Findings no longer show a blank Email link. Gates: 'scripts/planintake-sim.js' texted-plans and chat-plans scenarios (prebuild) + '~/dev/text-digest/test_plans.py' (fake Messages database). **Why it won't lose data:** the Mac reads Messages read-only and Chat is read with read-only scopes; both only add files to Drive; the watcher only moves files (never deletes or overwrites) and writes plan-intake collections only, no job record. Turn off: delete 'plans.on' (texts), 'node scripts/plan-intake-chat-auth.js --off' (Chat).
