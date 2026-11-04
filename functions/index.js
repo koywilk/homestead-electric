@@ -7657,6 +7657,32 @@ exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: ad
   materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send },
   officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById } }).duetApi;
 
+// ─── Claude tab on /dashboard (2026-11-04) ───────────────────────────────────
+// Koy: one page for him, one Josh and Brady can view, and no more separate
+// tracking sheets. Reads duet_writes (every Command Center change Duet made) and
+// claude_activity (Simpro schedule writes + the messages Duet read), both
+// server-only under the rules' catch-all, so this callable is the only way in.
+// Gate: a live ADMIN PIN (requireAdmin, then admin only — not manager). The
+// message words go only to Koy's own record; every other admin gets counts
+// (functions/claudeActivity.js builds both cuts). Read-only: no write anywhere.
+// Deploy ONLY this one:
+//   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity --project homestead-electric
+const _claudeActivity = require("./claudeActivity.js");
+exports.claudeActivity = functions.https.onCall(async (data) => {
+  const user = await requireAdmin(data);
+  if (gcAdminAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "The Claude tab is for admins.");
+  const days = Math.min(60, Math.max(1, parseInt(data && data.days, 10) || 14));
+  const since = new Date(Date.now() - days * 86400 * 1000).toISOString();
+  const [dw, ca] = await Promise.all([
+    db.collection("duet_writes").where("at", ">", since).orderBy("at", "desc").limit(1000).get(),
+    db.collection("claude_activity").where("at", ">", since).orderBy("at", "desc").limit(2000).get(),
+  ]);
+  return _claudeActivity.buildActivity({
+    duet: dw.docs.map(d => [d.id, d.data()]), activity: ca.docs.map(d => [d.id, d.data()]),
+    viewer: user, wantOwners: !!(data && data.owners), nowIso: new Date().toISOString(),
+  });
+});
+
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it
 // (functions/materialPO/, rules tested by scripts/materialpo-test.js). Mode on

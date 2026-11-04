@@ -48942,7 +48942,7 @@ function PlansCard({ identity, users = [] }) {
 // (planFileByHand / planDismissByHand callables, name + PIN), Ask <foreman> to
 // import (one My Day task through the stamped needs write) and Run now on the
 // Wednesday / Friday meeting-prep docs (their existing test-trigger callables).
-const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["goals","Goals"],["costs","Job Costs"]];
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["claude","Claude"],["goals","Goals"],["costs","Job Costs"]];
 const OD_TABS_MONEY = new Set(["goals"]);   // v569: hidden in Foreman view (the Goals tab is mostly revenue)
 // Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
 // what Koy's two Claude Routines produced, read from where they already put it.
@@ -49349,6 +49349,62 @@ function OdItem({ color, icon, tag, tagColor, title, sub, when, onClick }) {
       {onClick ? <span className="chev"><Icon name="chevronRight" size={14}/></span> : null}
     </button>
   );
+}
+
+// ── Claude tab helpers (2026-11-04) ─────────────────────────────────────────
+// A change row's job as Koy reads it: number then name ("1443 Koplin Residence").
+function odClaudeJobLabel(r, jobs) {
+  const j = r.jobId ? (jobs || []).find(x => x && String(x.id) === String(r.jobId)) : null;
+  const no = String((j && j.simproNo) || r.jobNo || "").trim();
+  const name = String((j && j.name) || r.jobName || "").trim();
+  return { job: j || null, label: [no, name.replace(new RegExp(`^#?${no}\\s*[-·]?\\s*`), "")].filter(Boolean).join(" ") || "No job" };
+}
+// Same action on the same job within 10 minutes reads as one row ("Added 13 photos").
+function odClaudeFold(changes) {
+  const out = [];
+  (changes || []).forEach(c => {
+    const p = out[out.length - 1];
+    if (p && p.action === c.action && p.jobId === c.jobId && p.jobNo === c.jobNo && p.app === c.app && c.app === "Command Center"
+      && Math.abs(Date.parse(p.lastAt) - Date.parse(c.at)) < 10 * 60 * 1000) { p.n++; p.lastAt = c.at; return; }
+    out.push({ ...c, n: 1, lastAt: c.at });
+  });
+  return out.map(c => c.n > 1 && c.action === "photo.add" ? { ...c, what: `Added ${c.n} photos` } : c.n > 1 ? { ...c, what: `${c.what} (${c.n}×)` } : c);
+}
+// Preview only: until claudeActivity is deployed the tab draws sample rows made here, in the
+// browser, from today's active jobs and team. Nothing real and nothing typed by anyone is in them.
+function odClaudeSample(jobs, users, full) {
+  const live = (jobs || []).filter(j => j && j.simproNo && !j.archived).slice(0, 8);
+  const crew = (users || []).filter(u => u && u.active !== false && u.name && !/admin/.test(String(u.access || ""))).map(u => u.name).slice(0, 8);
+  const J = (i) => live[i % Math.max(1, live.length)] || { id: "", simproNo: "1000", name: "Sample job" };
+  const P = (i) => crew[i % Math.max(1, crew.length)] || "Crew member";
+  const now = Date.now(), H = 3600 * 1000;
+  const at = (h) => new Date(now - h * H).toISOString();
+  const day = (h) => { const d = new Date(now - h * H + 24 * H); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const sim = (h, i, p, what) => ({ id: `s${h}${i}${p}`, at: at(h), app: "Simpro", action: "simpro.schedule", what, detail: "", jobId: J(i).id, jobName: J(i).name, jobNo: J(i).simproNo, who: P(p), workDate: day(h), okBy: "Koy", noop: false, undone: false });
+  const cc = (h, i, action, what, extra) => ({ id: `c${h}${i}${action}`, at: at(h), app: "Command Center", action, what, detail: "", jobId: J(i).id, jobName: J(i).name, jobNo: "", who: "", workDate: "", okBy: "Koy", noop: false, undone: false, ...(extra || {}) });
+  const changes = [
+    sim(1, 0, 0, "Schedule 7:00–5:00"), sim(1, 0, 1, "Schedule 7:00–5:00"), sim(1.2, 1, 2, "Schedule 7:00–3:00"),
+    cc(3, 2, "co.create", "Added a change order"), cc(3, 2, "co.convert", "Turned a change order into a return trip"),
+    cc(5, 3, "job.setStatusUpdate", "Wrote the job's status note"),
+    ...[0, 1, 2, 3, 4].map(k => cc(20 + k * 0.01, 3, "photo.add", "Added a photo")),
+    sim(22, 4, 3, "Schedule 6:30–1:00 and 3:00–5:00"), sim(22, 5, 3, "Schedule 1:30–3:00"),
+    cc(26, 1, "rt.update", "Updated a return trip"), cc(30, 0, "timeOff.decide", "Decided a time-off request"),
+    sim(46, 2, 4, "Moved to the next day"), sim(47, 6, 5, "Schedule 7:00–5:00"), cc(50, 4, "rt.update", "Updated a return trip", { undone: true }),
+  ].sort((a, b) => (b.at > a.at ? 1 : -1));
+  const W = (h, i, source, kind, did, why, said) => ({ id: `w${h}${i}${kind}`, at: at(h), source, from: `${P(i + 2)} (sample)`, msgAt: at(h + 2), jobName: J(i).name, jobNo: J(i).simproNo, said, did, why, kind });
+  const watch = [
+    W(0.5, 0, "Text", "flagged", "Flagged to Koy", "No PO for it in Simpro yet", "Sample: asked when the wire will be on site"),
+    W(0.5, 1, "Chat", "handled", "Already handled", "Koy answered it last night", "Sample: asked for an update from the builder"),
+    W(0.5, 2, "Text", "dismissed", "Nothing needed", "Just a thank-you", "Sample: said thanks for getting them scheduled"),
+    W(3.5, 3, "Email", "flagged", "Flagged to Koy", "Wants a date this week", "Sample: asked when the crew can come back"),
+    W(3.5, 4, "Chat", "acted", "Scheduled it", "Fit on tomorrow's open crew", "Sample: asked for a crew on a quick job"),
+    W(6.5, 5, "Text", "dismissed", "Nothing needed", "Already on the schedule", "Sample: checked who is coming tomorrow"),
+    W(24, 6, "Chat", "handled", "Already handled", "Foreman is taking care of it", "Sample: asked about a site item"),
+  ];
+  const counts = { checked: watch.length, flagged: 0, handled: 0, acted: 0, dismissed: 0 };
+  watch.forEach(w => { counts[w.kind]++; });
+  return { ok: true, sample: true, view: full ? "koy" : "owners", isKoy: full, generatedAt: new Date(now).toISOString(), changes, watchCounts: counts,
+    kindLabel: { flagged: "Flagged to Koy", handled: "Already handled", acted: "Acted on", dismissed: "Nothing needed" }, ...(full ? { watch } : {}) };
 }
 
 // The app has no error boundary, so a throw here would blank every screen.
@@ -50924,6 +50980,27 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setCostsGoals(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
   }, [tab, costsTick]);
+  // ── Claude tab (2026-11-04): what Claude Duet did — every change in Simpro and Command Center,
+  // and (Koy only) the messages it checked. Read through the admin-PIN callable claudeActivity
+  // (duet_writes + claude_activity are server-only). Until that function is deployed the tab
+  // shows sample rows built in the browser from today's jobs, marked as a preview. Nothing writes.
+  const [claudeData, setClaudeData] = useState(undefined);  // undefined = loading, else the answer (or { sample })
+  const [claudeTick, setClaudeTick] = useState(0);
+  const [claudeOwners, setClaudeOwners] = useState(false);  // Koy: see exactly what Josh and Brady see
+  const [claudeApp, setClaudeApp] = useState("all");        // all | Simpro | Command Center
+  const [claudeKind, setClaudeKind] = useState("all");      // all | flagged | handled | acted | dismissed
+  const [claudeQ, setClaudeQ] = useState("");
+  useEffect(() => {
+    if (tab !== "claude") return undefined;
+    let dead = false;
+    setClaudeData(undefined);
+    gcAdminCallable("claudeActivity", identity)({ days: 14, owners: claudeOwners }).then(
+      r => { if (!dead) setClaudeData((r && r.data) || { ok: false }); },
+      e => { if (dead) return; const code = String((e && e.code) || "");
+        setClaudeData(/permission-denied/.test(code) ? { ok: false, err: (e && e.message) || "Not allowed" }
+          : odClaudeSample(jobs, users, identity && identity.id === "koy" && !claudeOwners)); });
+    return () => { dead = true; };
+  }, [tab, claudeTick, claudeOwners]); // eslint-disable-line
   const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
   useEffect(() => {
     if (tab !== "costs" || costShard == null || costsCc[costShard]) return undefined;
@@ -52239,6 +52316,90 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       </>}
       </div>
     </div>);
+  } else if (tab === "claude") {
+    // ── Claude (2026-11-04): Koy's view = every change + the messages checked; owners' view =
+    // the changes and counts only (the server sends no message words to anyone but Koy).
+    const cd = claudeData;
+    const full = !!(cd && cd.view === "koy" && cd.watch);
+    const D = (s) => new Date(s);
+    const all = cd && cd.ok ? odClaudeFold(cd.changes || []).map(c => ({ ...c, ...odClaudeJobLabel(c, jobs) })) : [];
+    const cq = claudeQ.trim().toLowerCase();
+    const shown = all.filter(c => (claudeApp === "all" || c.app === claudeApp) && (!cq || `${c.label} ${c.who} ${c.what}`.toLowerCase().includes(cq)));
+    const weekAgo = d.now - 7 * OD_DAY;
+    const thisWeek = all.filter(c => D(c.at) >= weekAgo);
+    const wc = (cd && cd.watchCounts) || { checked: 0, flagged: 0 };
+    const watch = full ? cd.watch.map(w => ({ ...w, label: odClaudeJobLabel(w, jobs).label })) : [];
+    const watchShown = watch.filter(w => (claudeKind === "all" || w.kind === claudeKind) && (!cq || `${w.label} ${w.from} ${w.said} ${w.why}`.toLowerCase().includes(cq)));
+    const flaggedNow = watch.filter(w => w.kind === "flagged" && D(w.at) >= d.now - 3 * OD_DAY);
+    const byDay = (rows) => { const g = []; rows.forEach(r => { const k = localYmd(D(r.at)); const last = g[g.length - 1]; if (last && last.k === k) last.rows.push(r); else g.push({ k, at: D(r.at), rows: [r] }); }); return g; };
+    const dayName = (at) => localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`;
+    const KCOLOR = { flagged: OD_R, handled: OD_G, acted: OD_B, dismissed: OD_GREY };
+    const KICON = { flagged: "flag", handled: "checkCircle", acted: "calendar", dismissed: "eyeOff" };
+    const changeItem = (c) => (
+      <OdItem key={c.id} color={c.undone ? OD_GREY : c.app === "Simpro" ? OD_B : OD_G} icon={c.app === "Simpro" ? "calendar" : "pencil"}
+        tag={[c.app, c.who, c.undone && "undone"].filter(Boolean).join(" · ")}
+        title={c.label} sub={[c.what, c.detail, c.workDate && `for ${odShort(D(c.workDate + "T12:00:00"))}`, c.okBy && `OK'd by ${c.okBy}`].filter(Boolean).join(" · ")}
+        when={odTime(D(c.at))} onClick={c.job ? () => openJob(c.job) : null}/>);
+    const watchItem = (w) => (
+      <OdItem key={w.id} color={KCOLOR[w.kind]} icon={KICON[w.kind]} tag={[w.source, w.from].filter(Boolean).join(" · ")}
+        title={w.label} sub={[w.said, `${w.did}${w.why ? `: ${w.why}` : ""}`].filter(Boolean).join(" → ")} when={odTime(D(w.at))}/>);
+    const jobCounts = []; thisWeek.forEach(c => { const g = jobCounts.find(x => x.name === c.label); if (g) g.v += c.n || 1; else jobCounts.push({ name: c.label, v: c.n || 1, job: c.job }); });
+    jobCounts.sort((a, b) => b.v - a.v);
+    const nSim = thisWeek.filter(c => c.app === "Simpro").length, nCC = thisWeek.length - nSim;
+    main = (<>
+      <div className="od-head"><div><h1>Claude</h1><p>{full ? "Every change I made in Simpro and Command Center, and every message I checked" : "Every change Claude made in Simpro and Command Center for Koy"} · last 14 days</p></div>
+        <div className="od-ct-actions">
+          {isKoy ? <div className="od-seg" role="group" aria-label="Whose view">
+            <button type="button" aria-pressed={!claudeOwners} onClick={() => setClaudeOwners(false)}>My view</button>
+            <button type="button" aria-pressed={claudeOwners} onClick={() => setClaudeOwners(true)}>Owners' view</button>
+          </div> : null}
+          <button type="button" className="od-mini-btn" onClick={() => setClaudeTick(t => t + 1)}>Refresh</button>
+        </div></div>
+      {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
+      {cd === undefined ? <div className="od-white od-pad">Loading…</div> : cd && cd.ok === false ? <div className="od-white od-pad">Couldn't load this: {cd.err || "try Refresh"}</div> : <>
+        <div className="od-minis">
+          <OdMini title="Changes this week" color={OD_B} icon="pencil" value={thisWeek.length} sub={`${nSim} Simpro · ${nCC} Command Center`} onClick={() => { setClaudeApp("all"); setClaudeQ(""); }}/>
+          <OdMini title="Messages checked" color={OD_SLATE} icon="mail" value={wc.checked} sub="texts, chat and email"/>
+          <OdMini title={full ? "Flagged to you" : "Flagged to Koy"} color={OD_R} icon="flag" value={wc.flagged} sub="needed a call from Koy" onClick={full ? () => setClaudeKind("flagged") : undefined}/>
+          <OdMini title="Undone" color={OD_GREY} icon="refresh" value={all.filter(c => c.undone).length} sub="changes put back"/>
+        </div>
+        {full && flaggedNow.length ? <div className="od-white od-pad">
+          <div className="od-ct">Flagged to you<small>last 3 days · newest first</small></div>
+          <div className="od-list">{flaggedNow.map(watchItem)}</div>
+        </div> : null}
+        <div className="od-white od-pad">
+          <div className="od-ct">Changes<small>newest first · tap one to open the job</small></div>
+          <div className="od-chips">
+            {[["all", "All", all.length], ["Simpro", "Simpro", all.filter(c => c.app === "Simpro").length], ["Command Center", "Command Center", all.filter(c => c.app === "Command Center").length]].map(([k, l, n]) =>
+              <button type="button" key={k} aria-pressed={claudeApp === k} onClick={() => setClaudeApp(k)} style={{ "--c": k === "Simpro" ? OD_B : OD_G }}>{k !== "all" ? <i/> : null}{l} <span>{n}</span></button>)}
+          </div>
+          <input className="od-q" type="search" value={claudeQ} onChange={e => setClaudeQ(e.target.value)} placeholder="Filter by job number, job name or person" aria-label="Filter Claude's changes"/>
+          {shown.length ? byDay(shown).map(g => <div key={g.k}><div className="od-sec"><span>{dayName(g.at)}</span><small>{odPlural(g.rows.length, "change")}</small></div><div className="od-list">{g.rows.map(changeItem)}</div></div>)
+            : <div className="od-empty">No changes{cq || claudeApp !== "all" ? " match" : " in the last 14 days"}.</div>}
+        </div>
+        {full ? <div className="od-white od-pad">
+          <div className="od-ct">What I checked<small>every message I read and what I did with it · only you see this</small></div>
+          <div className="od-chips">
+            {[["all", "All", wc.checked], ["flagged", "Flagged to you", wc.flagged], ["acted", "Acted on", wc.acted], ["handled", "Already handled", wc.handled], ["dismissed", "Nothing needed", wc.dismissed]].map(([k, l, n]) =>
+              <button type="button" key={k} aria-pressed={claudeKind === k} onClick={() => setClaudeKind(k)} style={{ "--c": KCOLOR[k] || OD_GREY }}>{k !== "all" ? <i/> : null}{l} <span>{n || 0}</span></button>)}
+          </div>
+          {watchShown.length ? byDay(watchShown).map(g => <div key={g.k}><div className="od-sec"><span>{dayName(g.at)}</span><small>{odPlural(g.rows.length, "message")}</small></div><div className="od-list">{g.rows.map(watchItem)}</div></div>)
+            : <div className="od-empty">Nothing here{claudeKind !== "all" || cq ? " for this filter" : ""}.</div>}
+        </div> : null}
+      </>}
+    </>);
+    right = (<>
+      <Me sub={full ? "Claude · your view" : "Claude · owners' view"}/>
+      <Stats items={[[thisWeek.length, "Changes this week"], [wc.checked, "Messages checked"], [wc.flagged, "Flagged to Koy"]]}/>
+      <Sec>By job this week</Sec>
+      <div className="od-box light"><OdHBars rows={jobCounts.slice(0, 8).map(j => ({ name: j.name, note: odPlural(j.v, "change"), v: j.v, color: OD_B, onClick: j.job ? () => openJob(j.job) : undefined }))} empty="No changes this week."/></div>
+      <Sec>Where this comes from</Sec>
+      <div className="od-list">
+        <OdItem color={OD_G} icon="pencil" tag="Command Center" title="Every change Claude makes here" sub="logged by the app itself, with undo"/>
+        <OdItem color={OD_B} icon="calendar" tag="Simpro" title="Every schedule entry Claude writes" sub="logged by the connector as it writes"/>
+        <OdItem color={OD_SLATE} icon={full ? "mail" : "lock"} tag="Messages" title={full ? "Texts, chat and email Claude checks" : "Counts only"} sub={full ? "only Koy sees the words" : "the messages themselves stay with Koy"}/>
+      </div>
+    </>);
   } else if (tab === "goals") {
     // v562: the Team Goals sheet beside today's numbers. Simpro cards follow Josh's rule
     // (jobs invoiced this year, weighted, technician credit); the rest read this page's model.
@@ -53061,7 +53222,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
       </div>
       {fview ? <div className="od-fvbar"><Icon name="eyeOff" size={14}/><span><b>Foreman view.</b> No dollar amounts on this page; hours and percentages only.</span></div> : null}
-      {tab !== "cc" && (
+      {tab !== "cc" && tab !== "claude" && (
         <div className={"od-ctrl" + (filtersOpen ? " open" : "")}>
           <button type="button" className="od-fbtn" aria-expanded={filtersOpen} aria-controls="od-fpanel" onClick={() => setFiltersOpen(o => !o)}>
             <Icon name="filter" size={14}/>Filters{nFilters ? <span className="ct" aria-label={`${nFilters} on`}>{nFilters}</span> : null}
