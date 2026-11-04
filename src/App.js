@@ -49357,6 +49357,7 @@ function odClaudeJobLabel(r, jobs) {
   const j = r.jobId ? (jobs || []).find(x => x && String(x.id) === String(r.jobId)) : null;
   const no = String((j && j.simproNo) || r.jobNo || "").trim();
   const name = String((j && j.name) || r.jobName || "").trim();
+  if (!j && !no && r.quoteNo) return { job: null, label: `Quote #${String(r.quoteNo).replace(/^Q/i, "")}` };
   return { job: j || null, label: [no, name.replace(new RegExp(`^#?${no}\\s*[-·]?\\s*`), "")].filter(Boolean).join(" ") || "No job" };
 }
 // Same action on the same job within 10 minutes reads as one row ("Added 13 photos").
@@ -49381,6 +49382,7 @@ function odClaudeSample(jobs, users, full) {
   const at = (h) => new Date(now - h * H).toISOString();
   const day = (h) => { const d = new Date(now - h * H + 24 * H); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
   const sim = (h, i, p, what) => ({ id: `s${h}${i}${p}`, at: at(h), app: "Simpro", action: "simpro.schedule", what, detail: "", jobId: J(i).id, jobName: J(i).name, jobNo: J(i).simproNo, who: P(p), workDate: day(h), okBy: "Koy", noop: false, undone: false });
+  const pl = (h, i, act, what, file) => ({ id: `p${h}${i}${act}`, at: at(h), app: "Plan Intake", action: `plan.${act}`, what, detail: file, jobId: J(i).id, jobName: J(i).name, jobNo: "", quoteNo: "", who: "", workDate: "", okBy: "", noop: false, undone: false });
   const cc = (h, i, action, what, extra) => ({ id: `c${h}${i}${action}`, at: at(h), app: "Command Center", action, what, detail: "", jobId: J(i).id, jobName: J(i).name, jobNo: "", who: "", workDate: "", okBy: "Koy", noop: false, undone: false, ...(extra || {}) });
   const changes = [
     sim(1, 0, 0, "Schedule 7:00–5:00"), sim(1, 0, 1, "Schedule 7:00–5:00"), sim(1.2, 1, 2, "Schedule 7:00–3:00"),
@@ -49390,7 +49392,9 @@ function odClaudeSample(jobs, users, full) {
     sim(22, 4, 3, "Schedule 6:30–1:00 and 3:00–5:00"), sim(22, 5, 3, "Schedule 1:30–3:00"),
     cc(26, 1, "rt.update", "Updated a return trip"), cc(30, 0, "timeOff.decide", "Decided a time-off request"),
     sim(46, 2, 4, "Moved to the next day"), sim(47, 6, 5, "Schedule 7:00–5:00"), cc(50, 4, "rt.update", "Updated a return trip", { undone: true }),
-  ].sort((a, b) => (b.at > a.at ? 1 : -1));
+    pl(2, 0, "file", "Filed a plan", "Sample lighting plan rev 2.pdf"), pl(8, 1, "file", "Filed a plan", "Sample appliance specs.pdf"),
+    pl(9, 2, "dismiss", "Set aside, not plans", "Sample insurance certificate.pdf"), pl(28, 3, "match_walk", "Matched a walk to its job", "Sample walk"),
+  ].map(c => full ? c : { ...c, detail: c.app === "Plan Intake" ? "" : c.detail }).sort((a, b) => (b.at > a.at ? 1 : -1));
   const W = (h, i, source, kind, did, why, said) => ({ id: `w${h}${i}${kind}`, at: at(h), source, from: `${P(i + 2)} (sample)`, msgAt: at(h + 2), jobName: J(i).name, jobNo: J(i).simproNo, said, did, why, kind });
   const watch = [
     W(0.5, 0, "Text", "flagged", "Flagged to Koy", "No PO for it in Simpro yet", "Sample: asked when the wire will be on site"),
@@ -49403,7 +49407,7 @@ function odClaudeSample(jobs, users, full) {
   ];
   const counts = { checked: watch.length, flagged: 0, handled: 0, acted: 0, dismissed: 0 };
   watch.forEach(w => { counts[w.kind]++; });
-  return { ok: true, sample: true, view: full ? "koy" : "owners", isKoy: full, generatedAt: new Date(now).toISOString(), changes, watchCounts: counts,
+  return { ok: true, sample: true, view: full ? "koy" : "owners", isKoy: full, generatedAt: new Date(now).toISOString(), changes, watchCounts: counts, planCounts: { filed: 2, setAside: 1, walks: 1, waiting: 1 },
     kindLabel: { flagged: "Flagged to Koy", handled: "Already handled", acted: "Acted on", dismissed: "Nothing needed" }, ...(full ? { watch } : {}) };
 }
 
@@ -50866,7 +50870,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   // Overview's Needs you and the Jobs "plan waiting" tag; same query and
   // dry/test filter as the Today Plans card) and the appliance sheet.
   const [findings, setFindings] = useState(undefined);   // undefined = loading, null = unreadable
-  const planTab = ["overview", "jobs", "cc"].includes(tab);
+  const planTab = ["overview", "jobs", "cc", "claude"].includes(tab);
   useEffect(() => {
     if (!planTab) return;
     let unsub = null;
@@ -52382,8 +52386,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const dayName = (at) => localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`;
     const KCOLOR = { flagged: OD_R, handled: OD_G, acted: OD_B, dismissed: OD_GREY };
     const KICON = { flagged: "flag", handled: "checkCircle", acted: "calendar", dismissed: "eyeOff" };
+    const ACOLOR = { "Simpro": OD_B, "Command Center": OD_G, "Plan Intake": OD_P }, AICON = { "Simpro": "calendar", "Command Center": "pencil", "Plan Intake": "fileText" };
     const changeItem = (c) => (
-      <OdItem key={c.id} color={c.undone ? OD_GREY : c.app === "Simpro" ? OD_B : OD_G} icon={c.app === "Simpro" ? "calendar" : "pencil"}
+      <OdItem key={c.id} color={c.undone ? OD_GREY : ACOLOR[c.app] || OD_G} icon={AICON[c.app] || "pencil"}
         tag={[c.app, c.who, c.undone && "undone"].filter(Boolean).join(" · ")}
         title={c.label} sub={[c.what, c.detail, c.workDate && `for ${odShort(D(c.workDate + "T12:00:00"))}`, c.okBy && `OK'd by ${c.okBy}`].filter(Boolean).join(" · ")}
         when={odTime(D(c.at))} onClick={c.job ? () => openJob(c.job) : null}/>);
@@ -52392,7 +52397,13 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         title={w.label} sub={[w.said, `${w.did}${w.why ? `: ${w.why}` : ""}`].filter(Boolean).join(" → ")} when={odTime(D(w.at))}/>);
     const jobCounts = []; thisWeek.forEach(c => { const g = jobCounts.find(x => x.name === c.label); if (g) g.v += c.n || 1; else jobCounts.push({ name: c.label, v: c.n || 1, job: c.job }); });
     jobCounts.sort((a, b) => b.v - a.v);
-    const nSim = thisWeek.filter(c => c.app === "Simpro").length, nCC = thisWeek.length - nSim;
+    const nSim = thisWeek.filter(c => c.app === "Simpro").length, nPlan = thisWeek.filter(c => c.app === "Plan Intake").length, nCC = thisWeek.length - nSim - nPlan;
+    // Plan Intake, live from agentFindings (the same listener the Automations tab uses): what is
+    // waiting on Koy and what was filed this week. Real data now, not a sample.
+    const planWait = plan.waiting.slice().sort((a, b) => b._at - a._at);
+    const planFiled = plan.fl.filter(f => f.type === "plans_filed" && f._at >= weekAgo).sort((a, b) => b._at - a._at);
+    const planFolders = plan.fl.filter(f => OD_PLAN_FOLDER.includes(f.type) && f._at >= weekAgo);
+    const pc = (cd && cd.planCounts) || null;
     main = (<>
       <div className="od-head"><div><h1>Claude</h1><p>{full ? "Every change I made in Simpro and Command Center, and every message I checked" : "Every change Claude made in Simpro and Command Center for Koy"} · last 14 days</p></div>
         <div className="od-ct-actions">
@@ -52405,10 +52416,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
       {cd === undefined ? <div className="od-white od-pad">Loading…</div> : cd && cd.ok === false ? <div className="od-white od-pad">Couldn't load this: {cd.err || "try Refresh"}</div> : <>
         <div className="od-minis">
-          <OdMini title="Changes this week" color={OD_B} icon="pencil" value={thisWeek.length} sub={`${nSim} Simpro · ${nCC} Command Center`} onClick={() => { setClaudeApp("all"); setClaudeQ(""); }}/>
+          <OdMini title="Changes this week" color={OD_B} icon="pencil" value={thisWeek.length} sub={`${nSim} Simpro · ${nCC} Command Center · ${nPlan} plans`} onClick={() => { setClaudeApp("all"); setClaudeQ(""); }}/>
           <OdMini title="Messages checked" color={OD_SLATE} icon="mail" value={wc.checked} sub="texts, chat and email"/>
           <OdMini title={full ? "Flagged to you" : "Flagged to Koy"} color={OD_R} icon="flag" value={wc.flagged} sub="needed a call from Koy" onClick={full ? () => setClaudeKind("flagged") : undefined}/>
-          <OdMini title="Undone" color={OD_GREY} icon="refresh" value={all.filter(c => c.undone).length} sub="changes put back"/>
+          <OdMini title="Plans filed this week" color={OD_P} icon="fileText" value={findings === undefined ? "…" : planFiled.length} sub={`${planWait.length} waiting on ${full ? "you" : "Koy"}`} onClick={full ? () => setClaudeApp("Plan Intake") : undefined}/>
         </div>
         {full && flaggedNow.length ? <div className="od-white od-pad">
           <div className="od-ct">Flagged to you<small>last 3 days · newest first</small></div>
@@ -52417,12 +52428,30 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <div className="od-white od-pad">
           <div className="od-ct">Changes<small>newest first · tap one to open the job</small></div>
           <div className="od-chips">
-            {[["all", "All", all.length], ["Simpro", "Simpro", all.filter(c => c.app === "Simpro").length], ["Command Center", "Command Center", all.filter(c => c.app === "Command Center").length]].map(([k, l, n]) =>
-              <button type="button" key={k} aria-pressed={claudeApp === k} onClick={() => setClaudeApp(k)} style={{ "--c": k === "Simpro" ? OD_B : OD_G }}>{k !== "all" ? <i/> : null}{l} <span>{n}</span></button>)}
+            {[["all", "All", all.length], ...["Simpro", "Command Center", "Plan Intake"].map(k => [k, k, all.filter(c => c.app === k).length])].map(([k, l, n]) =>
+              <button type="button" key={k} aria-pressed={claudeApp === k} onClick={() => setClaudeApp(k)} style={{ "--c": ACOLOR[k] || OD_G }}>{k !== "all" ? <i/> : null}{l} <span>{n}</span></button>)}
           </div>
           <input className="od-q" type="search" value={claudeQ} onChange={e => setClaudeQ(e.target.value)} placeholder="Filter by job number, job name or person" aria-label="Filter Claude's changes"/>
           {shown.length ? byDay(shown).map(g => <div key={g.k}><div className="od-sec"><span>{dayName(g.at)}</span><small>{odPlural(g.rows.length, "change")}</small></div><div className="od-list">{g.rows.map(changeItem)}</div></div>)
             : <div className="od-empty">No changes{cq || claudeApp !== "all" ? " match" : " in the last 14 days"}.</div>}
+        </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Plan Intake<small>{full ? "my" : "Claude's"} runs at 7 AM, noon, 4 PM and 9 PM file emailed plans into job folders · live</small></div>
+          <div className="od-stats">
+            <div><b>{findings === undefined ? "…" : planFiled.length}</b><small>Filed this week</small></div>
+            <div><b>{pc ? pc.setAside : "–"}</b><small>Set aside, not plans</small></div>
+            <div><b>{findings === undefined ? "…" : planWait.length}</b><small>Waiting on {full ? "you" : "Koy"}</small></div>
+            <div><b>{findings === undefined ? "…" : planFolders.length}</b><small>Folders made or linked</small></div>
+          </div>
+          {full ? <>
+            {planWait.length > 0 && <><Sec right={`${planWait.length}`}>Waiting on you</Sec>
+              <div className="od-list">{planWait.slice(0, 5).map(f => <OdItem key={f.id} color={OD_R} icon="alertTriangle" tag={PLAN_LABEL[f.type] || f.type}
+                title={f.filename || planNum(f.number)} sub={odText(f.summary)} when={dayName(f._at)} onClick={() => pickTab("cc")}/>)}</div></>}
+            <Sec right={`${planFiled.length}`}>Filed this week</Sec>
+            <div className="od-list">{planFiled.slice(0, 8).map(f => { const j = (jobs || []).find(x => x && String(x.simproNo || "").trim() === String(f.number || "").replace(/^#/, "")); return (
+              <OdItem key={f.id} color={OD_P} icon="fileText" tag={planNum(f.number)} title={j ? odClaudeJobLabel({ jobId: j.id }, jobs).label : planNum(f.number)} sub={odText(f.summary)} when={dayName(f._at)} onClick={j ? () => openJob(j) : null}/>); })}
+              {!planFiled.length && <div className="od-empty">{findings === undefined ? "Loading…" : "Nothing filed this week."}</div>}</div>
+          </> : null}
         </div>
         <div className="od-white od-pad">
           <div className="od-ct">Appliance Loads, nightly run<small>{full ? "my" : "Claude's"} 1:00 AM pass over every job's appliance list · from the sheet's Run Log</small>

@@ -7673,12 +7673,16 @@ exports.claudeActivity = functions.https.onCall(async (data) => {
   if (gcAdminAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "The Claude tab is for admins.");
   const days = Math.min(60, Math.max(1, parseInt(data && data.days, 10) || 14));
   const since = new Date(Date.now() - days * 86400 * 1000).toISOString();
-  const [dw, ca] = await Promise.all([
+  const [dw, ca, pq, pw] = await Promise.all([
     db.collection("duet_writes").where("at", ">", since).orderBy("at", "desc").limit(1000).get(),
     db.collection("claude_activity").where("at", ">", since).orderBy("at", "desc").limit(2000).get(),
+    // Plan Intake (2026-11-04): decisions made in the window, and what still waits on Koy.
+    db.collection("agentQueue").where("decidedAt", ">", since).orderBy("decidedAt", "desc").limit(500).get(),
+    db.collection("agentQueue").where("status", "==", "unmatched").select().get(),
   ]);
   return _claudeActivity.buildActivity({
     duet: dw.docs.map(d => [d.id, d.data()]), activity: ca.docs.map(d => [d.id, d.data()]),
+    plans: pq.docs.map(d => [d.id, d.data()]), plansWaiting: pw.docs.filter(d => !/^(dry|test)_/.test(d.id)).length,
     viewer: user, wantOwners: !!(data && data.owners), nowIso: new Date().toISOString(),
   });
 });

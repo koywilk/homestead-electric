@@ -79,6 +79,28 @@ function fromSimpro(id, r) {
     who: str(r.who || "", 60), workDate: str(r.workDate || "", 10), okBy: str(r.okBy || "", 60), noop: false, undone: !!r.removed,
   };
 }
+// Plan Intake (Koy, 2026-11-04: "Add plan intake"): every decision on an agentQueue item —
+// the plan-intake Routine's, or Koy's own from the dashboard (decision.by names him).
+// dry_/test_ items are practice runs and stay off. The file name came from an email, so it
+// rides in `detail` and the owners' cut drops it.
+const PLAN_ACTION = { file: "Filed a plan", dismiss: "Set aside, not plans", match_walk: "Matched a walk to its job", unmatched: "Couldn't place a plan" };
+function planJobNo(q) {
+  const d = q.decision || {};
+  const m = /^\s*#?(Q?\d+)/i.exec(String(d.number || "")) || /^\s*(?:#|(Q))(\d+)/i.exec(String(d.note || "")) || /existing job #()(\d+)/i.exec(String(d.note || ""));
+  if (!m) return "";
+  return (m.length > 2 ? `${m[1] ? "Q" : ""}${m[2]}` : m[1]).replace(/^q/i, "Q");
+}
+function fromPlan(id, q) {
+  if (!q || /^(dry|test)_/.test(id) || !q.decision) return null;
+  const d = q.decision, act = d.action || q.status;
+  const no = planJobNo(q);
+  return {
+    id: str(id, 64), at: iso(d.at || q.decidedAt), app: "Plan Intake", action: `plan.${str(act, 20)}`,
+    what: PLAN_ACTION[act] || str(act, 40), detail: str(q.filename || q.title || "", 160),
+    jobId: "", jobName: "", jobNo: no.startsWith("Q") ? "" : no, quoteNo: no.startsWith("Q") ? no : "",
+    who: str(d.by || "", 60), workDate: "", okBy: "", noop: false, undone: false,
+  };
+}
 function fromWatch(id, r) {
   const kind = didKind(r.did);
   return {
@@ -91,20 +113,24 @@ function fromWatch(id, r) {
 // The whole answer. `viewer` is the verified admin record (requireAdmin); only
 // Koy's own record gets the message words, and Koy can ask for the owners'
 // cut to see exactly what Josh and Brady see.
-function buildActivity({ duet = [], activity = [], viewer, wantOwners, nowIso }) {
+function buildActivity({ duet = [], activity = [], plans = [], plansWaiting = 0, viewer, wantOwners, nowIso }) {
   const isKoy = !!viewer && viewer.id === "koy";
   const view = isKoy && !wantOwners ? "koy" : "owners";
+  const planRows = plans.map(([id, q]) => fromPlan(id, q)).filter(Boolean);
+  const planCounts = { filed: 0, setAside: 0, walks: 0, waiting: plansWaiting };
+  planRows.forEach(p => { if (p.action === "plan.file") planCounts.filed++; else if (p.action === "plan.dismiss") planCounts.setAside++; else if (p.action === "plan.match_walk") planCounts.walks++; });
   const changes = [
     ...duet.map(([id, a]) => fromDuet(id, a)),
     ...activity.filter(([, r]) => r && r.kind === "simpro").map(([id, r]) => fromSimpro(id, r)),
+    ...(view === "koy" ? planRows : planRows.map(p => ({ ...p, detail: "" }))),
   ].filter(Boolean).sort((a, b) => (b.at > a.at ? 1 : b.at < a.at ? -1 : 0));
   const watch = activity.filter(([, r]) => r && r.kind === "watch").map(([id, r]) => fromWatch(id, r))
     .sort((a, b) => (b.at > a.at ? 1 : b.at < a.at ? -1 : 0));
   const counts = { checked: watch.length, flagged: 0, handled: 0, acted: 0, dismissed: 0 };
   watch.forEach(w => { counts[w.kind]++; });
-  const out = { ok: true, view, isKoy, generatedAt: nowIso || new Date().toISOString(), changes, watchCounts: counts, kindLabel: KIND_LABEL };
+  const out = { ok: true, view, isKoy, generatedAt: nowIso || new Date().toISOString(), changes, watchCounts: counts, planCounts, kindLabel: KIND_LABEL };
   if (view === "koy") out.watch = watch;
   return out;
 }
 
-module.exports = { buildActivity, fromDuet, fromSimpro, fromWatch, didKind, ACTION_LABEL, KIND_LABEL };
+module.exports = { buildActivity, fromDuet, fromSimpro, fromWatch, fromPlan, planJobNo, didKind, ACTION_LABEL, KIND_LABEL, PLAN_ACTION };

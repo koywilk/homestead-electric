@@ -35,6 +35,29 @@ for (const [label, out] of [["Josh", buildActivity({ duet, activity, viewer: jos
   assert.strictEqual(out.changes.length, 4, `${label}: same changes`);
 }
 
+// Plan Intake rows: the Routine's decisions and Koy's own, practice runs left off,
+// the email's file name only in Koy's view.
+const { fromPlan } = require("../functions/claudeActivity.js");
+const plans = [
+  ["email_a_1", { filename: "E200 Lighting Plans rev5.pdf", status: "done", decidedAt: "2026-11-04T13:00:00Z", decision: { action: "file", at: "2026-11-04T13:00:00Z", note: "#1277 – Rev 5 – 2026-10-06 – E200 Lighting Plans rev5.pdf" } }],
+  ["email_b_1", { filename: "Claar ADU.pdf", status: "done", decision: { action: "file", at: "2026-11-04T12:00:00Z", note: "Q3322 – 2026-09-29 – Claar ADU.pdf" } }],
+  ["email_c_1", { filename: "Resume.pdf", status: "dismissed", decision: { action: "dismiss", by: "Koy Wilkinson", at: "2026-11-04T11:00:00Z", note: "not plans" } }],
+  ["walk_x", { title: "Oak Hill 5 - Homeworks", status: "done", decision: { action: "match_walk", at: "2026-11-04T10:00:00Z", note: "existing job #1454" } }],
+  ["test_email_d_1", { filename: "practice.pdf", decision: { action: "file", at: "2026-11-04T10:00:00Z", note: "#1 – x" } }],
+];
+assert.strictEqual(fromPlan("test_email_d_1", plans[4][1]), null);
+const pk = buildActivity({ plans, plansWaiting: 2, viewer: koy });
+const pr = (id) => pk.changes.find(c => c.id === id);
+assert.strictEqual(pr("email_a_1").jobNo, "1277"); assert.strictEqual(pr("email_a_1").what, "Filed a plan"); assert.strictEqual(pr("email_a_1").app, "Plan Intake");
+assert.strictEqual(pr("email_b_1").quoteNo, "Q3322"); assert.strictEqual(pr("email_b_1").jobNo, "");
+assert.strictEqual(pr("email_c_1").who, "Koy Wilkinson", "Koy's own decision says so");
+assert.strictEqual(pr("walk_x").jobNo, "1454");
+assert.strictEqual(pr("email_a_1").detail, "E200 Lighting Plans rev5.pdf");
+assert.deepStrictEqual(pk.planCounts, { filed: 2, setAside: 1, walks: 1, waiting: 2 });
+const po = buildActivity({ plans, plansWaiting: 2, viewer: josh });
+assert.ok(po.changes.every(c => c.detail === ""), "owners' cut drops the emailed file names");
+assert.deepStrictEqual(po.planCounts, pk.planCounts);
+
 assert.strictEqual(didKind("Flagged to Koy"), "flagged");
 assert.strictEqual(didKind("Already handled"), "handled");
 assert.strictEqual(didKind("Scheduled it"), "acted");
