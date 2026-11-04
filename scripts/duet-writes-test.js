@@ -149,15 +149,24 @@ ok("planUpdateTask: no-op when nothing changes; refusals for missing doc, empty 
 });
 
 // ── api.handle against a fake Firestore ──────────────────────────────────────
+
+// Firestore refuses a document holding `undefined` anywhere (2026-11-04: four
+// real punch.add calls died on `response.body.room` — the fake used to be more
+// lenient than the real thing). Same rule here.
+function assertNoUndefined(v, path) {
+  if (v === undefined) throw new Error('Cannot use "undefined" as a Firestore value (found in field "' + path + '")');
+  if (Array.isArray(v)) v.forEach((x, i) => assertNoUndefined(x, path + "[" + i + "]"));
+  else if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) Object.keys(v).forEach(k => assertNoUndefined(v[k], path ? path + "." + k : k));
+}
 function fakeIo({ docs = {}, recent = 0, users = USERS, open = [] } = {}) {
   const log = [];            // every tx op, in order
   const store = { ...docs }; // "coll/id" → doc
   const ref = (coll, id) => ({ coll, id, path: coll + "/" + id });
   const tx = {
     get: async (r) => { log.push(["get", r.path]); const d = store[r.path]; return { exists: !!d, data: () => d }; },
-    create: (r, d) => { log.push(["create", r.path]); if (store[r.path]) { const e = new Error("ALREADY_EXISTS"); e.code = 6; throw e; } store[r.path] = d; },
-    update: (r, d) => { log.push(["update", r.path, d]); store[r.path] = { ...(store[r.path] || {}), ...d }; },
-    set: (r, d) => { log.push(["set", r.path, d]); store[r.path] = d; },
+    create: (r, d) => { assertNoUndefined(d, ""); log.push(["create", r.path]); if (store[r.path]) { const e = new Error("ALREADY_EXISTS"); e.code = 6; throw e; } store[r.path] = d; },
+    update: (r, d) => { assertNoUndefined(d, ""); log.push(["update", r.path, d]); store[r.path] = { ...(store[r.path] || {}), ...d }; },
+    set: (r, d) => { assertNoUndefined(d, ""); log.push(["set", r.path, d]); store[r.path] = d; },
     delete: (r) => { log.push(["delete", r.path]); throw new Error("delete must never be called"); },
   };
   return {

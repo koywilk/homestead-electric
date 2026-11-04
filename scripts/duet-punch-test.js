@@ -85,6 +85,15 @@ const ctx = (over) => ({ nowIso: NOW, todayYmd: TODAY, bucketNow: `${TODAY}T12:0
 const jobCtx = (extra) => ctx({ job: { id: FORTH, data: JOB_DOC("Forth", extra).data } });
 
 // ── fake io ──────────────────────────────────────────────────────────────────
+
+// Firestore refuses a document holding `undefined` anywhere (2026-11-04: four
+// real punch.add calls died on `response.body.room` — the fake used to be more
+// lenient than the real thing). Same rule here.
+function assertNoUndefined(v, path) {
+  if (v === undefined) throw new Error('Cannot use "undefined" as a Firestore value (found in field "' + path + '")');
+  if (Array.isArray(v)) v.forEach((x, i) => assertNoUndefined(x, path + "[" + i + "]"));
+  else if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) Object.keys(v).forEach(k => assertNoUndefined(v[k], path ? path + "." + k : k));
+}
 function fakeIo({ docs = {}, recent = 0, users = USERS } = {}) {
   const log = [];
   const store = clone(docs);
@@ -98,8 +107,8 @@ function fakeIo({ docs = {}, recent = 0, users = USERS } = {}) {
   const tx = {
     get: async (r) => { log.push(["get", r.path]); const d = store[r.path]; return { exists: !!d, data: () => d }; },
     create: (r) => { log.push(["create", r.path]); throw new Error("create must never be called by a punch write"); },
-    update: (r, d) => { log.push(["update", r.path, d]); if (!store[r.path]) throw new Error("update on a missing doc: " + r.path); const cur = clone(store[r.path]); Object.keys(d).forEach(k => setPath(cur, k, d[k])); store[r.path] = cur; },
-    set: (r, d) => { log.push(["set", r.path, d]); store[r.path] = d; },
+    update: (r, d) => { assertNoUndefined(d, ""); log.push(["update", r.path, d]); if (!store[r.path]) throw new Error("update on a missing doc: " + r.path); const cur = clone(store[r.path]); Object.keys(d).forEach(k => setPath(cur, k, d[k])); store[r.path] = cur; },
+    set: (r, d) => { assertNoUndefined(d, ""); log.push(["set", r.path, d]); store[r.path] = d; },
     delete: (r) => { log.push(["delete", r.path]); throw new Error("delete must never be called"); },
   };
   return {

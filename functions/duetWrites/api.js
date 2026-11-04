@@ -1183,7 +1183,16 @@ async function handle(body, io) {
   const todayYmd = io.todayYmd();
   const ctx = { nowIso, todayYmd, bucketNow: `${todayYmd}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz };
   const base = { at: nowIso, action: b.action, by: SAVED_BY, email, requestId, expireAt: new Date(Date.parse(nowIso) + 90 * 86400 * 1000).toISOString() };
-  const finish = (status, bodyOut, auditExtra) => ({ status, body: bodyOut, audit: { ...base, ...auditExtra, response: { status, body: bodyOut } } });
+  // Every answer and every audit doc goes through here, so this is the one
+  // place to drop `undefined` (Firestore refuses a document holding one;
+  // 2026-11-04: four real punch.add calls died on `response.body.room` inside
+  // the transaction, so nothing was written — the audit doc rides in the same
+  // transaction on purpose). A planner may still say `room: undefined`; the
+  // key just doesn't reach Firestore or the chat.
+  const finish = (status, bodyOut, auditExtra) => {
+    const body = dropUndefined(bodyOut);
+    return { status, body, audit: dropUndefined({ ...base, ...auditExtra, response: { status, body } }) };
+  };
 
   // A refusal that is about THIS request (bad input, missing doc, duplicate) is
   // deterministic, so it is audited and replays the same way. 401/429/500 never are.
