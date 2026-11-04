@@ -433,7 +433,7 @@ ok("findTeam: \"Keegan's crew\" → his team; a team id; a member's name → the
 
   // ── the settings allowlist ────────────────────────────────────────────────
   await (async () => {
-    assert.deepStrictEqual(api.SETTINGS_DOCS, { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: [] });
+    assert.deepStrictEqual(api.SETTINGS_DOCS, { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: [], simproCandidates: ["candidates"] });   // ship 9 added simproCandidates (the Simpro inbox list, one field)
     for (const id of ["users", "appGate", "upcoming_jobs", "crewRoster", "deviceVersions", "ccSnapshot", "simproPoSync", "schedule_", "schedule_2026-11-9", "schedule_users", "", "schedule_2026-11-09/x"]) assert.strictEqual(api.settingsDocAllowed(id), false, id);
     for (const id of ["timeOffRequests", "crewPTO", "crewTeams", "schedule_2026-11-09", "schedule_2027-01-04"]) assert.strictEqual(api.settingsDocAllowed(id), true, id);
     assert.deepStrictEqual(api.settingsDocFields("schedule_2026-11-09"), ["assignments"]); assert.deepStrictEqual(api.settingsDocFields("crewTeams"), []); assert.strictEqual(api.settingsDocFields("users"), null);

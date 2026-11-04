@@ -35,9 +35,15 @@ function extractFrom(marker, label) {
   return src.slice(start, i) + ";";
 }
 
-const NAMES = ["isSimproJoinable", "projectBuildings", "projectRollup", "splitProjectJobs", "buildingHops", "buildingJobName", "buildingShortName", "simproNoConflict", "liveMilestones", "milestoneAdd", "milestoneSetRemoved", "milestoneHeaderMeta"];
+// v608 (D9 ship 9): isSimproJoinable / projectBuildings / buildingJobName / buildingShortName / simproNoConflict moved to
+// src/jobShape.js (shared with duetApi) and App.js imports them back — so they come from that module, the rest still verbatim from App.js.
+const SHARED = ["isSimproJoinable", "projectBuildings", "buildingJobName", "buildingShortName", "simproNoConflict"];
+globalThis.__JobShape = require(path.join(ROOT, "src", "jobShape.js"));
+for (const name of SHARED) if (!/^const \S+ = JobShape\.\S+;/.test(extractLine(name).replace(new RegExp("^const " + name), "const X"))) throw new Error(`App.js must define ${name} from JobShape`);
+const NAMES = [...SHARED, "projectRollup", "splitProjectJobs", "buildingHops", "liveMilestones", "milestoneAdd", "milestoneSetRemoved", "milestoneHeaderMeta"];
 const combined = [
-  ...NAMES.map(extractLine),
+  ...SHARED.map(name => `const ${name} = globalThis.__JobShape.${name};`),
+  ...NAMES.filter(n => !SHARED.includes(n)).map(extractLine),
   extractFrom("const _jeq = ", "_jeq"),
   extractFrom("const _threeWayMerge = ", "_threeWayMerge"),
   `return ({ ${NAMES.join(", ")}, _threeWayMerge });`,

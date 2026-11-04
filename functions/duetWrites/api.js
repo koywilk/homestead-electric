@@ -147,6 +147,31 @@
 // it always has. Never retried: a timeout answer says to check the log / the
 // card first (a PO may exist). sendMaterialOrder (the CED catalog order) is
 // NOT reachable from here.
+// Ship 9 (job setup — the first and only whole-doc CREATES in this plan):
+// job.createFromSimpro is importSimproCandidate line for line — the candidate
+// read from settings/simproCandidates.candidates by Simpro id, j =
+// stampDivision(blankJob() | blankQuickJob()) from the SHARED
+// functions/jobShape.js (a byte copy of src/jobShape.js, so every default a
+// phone's "+ New" writes is here too), the import stamps, data.id = the doc id,
+// written with tx.create (a second write to that id fails the transaction) +
+// the app's {data, updated_at} envelope + this stamp, and the candidates list
+// rewritten without that one in the same transaction (the ONLY write on
+// settings/simproCandidates: its `candidates` field — SETTINGS_DOCS). A live
+// job already carrying that Simpro # refuses (simproNoConflict). project.create
+// (the project literal, tx.create on projects/<id> + the source job's Site /
+// Shared patch, one tx), project.patch (dotted data.<k>: simproNo / notes /
+// archived*), project.createBuilding (createBuilding's rules, tx.create),
+// project.join (the four-field patch); job.setInfo (ONE Job Info scalar;
+// simproNo conflict-checked; division "" as the patch funnel writes it; the
+// running-contact slots composed from gcRunningToggle's taps), job.setSection
+// (jobSectionPatch + the legacy flag, the panelizedLighting flag as ONE dotted
+// key), job.archive (Duet's reversible shape — the app has NO archive handler:
+// {archived, archivedAt, archivedBy}, never `deleted`; refuses on open punch /
+// COs / trips without force:true). New collection row: projects (create +
+// dotted update, never delete). jobs now includes CREATE for the import and a
+// building only. ensureJobDriveFolder (onWrite) only LINKS a Drive folder a
+// person already made — it never creates one — and the commercial Drive chain
+// is the app's own client-side follow-up, not run here.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -158,10 +183,11 @@ const TO = require("./timeOff.js");
 const PU = require("./punch.js");
 const SG = require("./stages.js");
 const MA = require("./materials.js");
+const JSU = require("./jobSetup.js");
 const { matchUserByName } = require("../nameMatch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 607;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 608;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const SEND_PO_PER_HOUR = 10;       // ship 8: material.sendPo has its own, stricter counter on top of the 60
@@ -179,16 +205,19 @@ const THREAD_ACTIONS = ["question.reply"];
 const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
 const TIMEOFF_ACTIONS = ["timeOff.decide"];
 const MATERIAL_PO_ACTIONS = ["material.previewPo", "material.sendPo"];   // ship 8: preview = read + audit; sendPo = the real sender, then ONE jobWrite()
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS];
+const JOB_SETUP_ACTIONS = ["job.createFromSimpro", "job.setInfo", "job.setSection", "job.archive", "project.create", "project.patch", "project.createBuilding", "project.join"];   // ship 9: jobSetup() — its own transaction (extra reads: candidates, projects, siblings, Simpro-# conflicts; tx.create for the creates)
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
 const SCHEDULE_DOC = /^schedule_\d{4}-\d{2}-\d{2}$/;
 
 // The ONLY settings docs this function may open, and the one field it may write
-// on each (plan §3 item 1, ship 5 rows). Anything else — settings/users above
-// all — is refused before any read. Edited only with a row in the plan.
-const SETTINGS_DOCS = { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: [] /* read only */ };
+// on each (plan §3 item 1, ship 5 rows; ship 9 adds simproCandidates — the
+// Simpro inbox list, read for the import and rewritten without the imported
+// one). Anything else — settings/users above all — is refused before any read.
+// Edited only with a row in the plan.
+const SETTINGS_DOCS = { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: [] /* read only */, simproCandidates: ["candidates"] };
 function settingsDocFields(id) {
   const s = String(id || "");
   if (Object.prototype.hasOwnProperty.call(SETTINGS_DOCS, s)) return SETTINGS_DOCS[s];
@@ -697,6 +726,128 @@ async function materialPo(io, requestId, action, args, ctx, finish, refused) {
   return { status: r.status, body: r.body };
 }
 
+// Ship 9: job setup. ONE transaction per call, with the extra reads each
+// action needs BEFORE any write (Firestore's rule): the job, the project, the
+// Simpro candidates list, every project (a duplicate-name check), the project's
+// sibling buildings, and the live jobs carrying a Simpro # (the app's
+// simproNoConflict runs over allJobs; here it runs over a query for that
+// number, "#"-prefixed spellings included). Creates use tx.create — the import
+// and a building on jobs/<data.id>, a project on projects/prj_<id> — so a
+// second write to the same id fails the whole transaction instead of
+// overwriting; a patch on a job is jobWrite()'s exact envelope (updated_at
+// strictly newer, lastActivityAt, merged:false, the stamp, dotted data.<k>); a
+// patch on a project is patchProject's (dotted data.<k> + updated_at + saved_by
+// + the stamp). The audit doc rides in the same transaction and names every doc
+// touched; a create's `after` is the summary of what the import / building set
+// (the whole blank doc is in the job itself).
+async function jobSetup(io, requestId, action, args, ctx, finish, refused) {
+  const jobId = String(args.jobId || "");
+  const needsJob = ["job.setInfo", "job.setSection", "job.archive", "project.create", "project.join"].includes(action);
+  if (needsJob && !JOB_ID.test(jobId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll: "jobs" });
+  const projectId = String(args.projectId || "");
+  const needsProject = ["project.patch", "project.createBuilding", "project.join"].includes(action);
+  if (needsProject && !JSU.PROJECT_ID.test(projectId)) return refused(400, "projectId must be the project's id (prj_…) from cc_list_projects.", { coll: "projects" });
+  const simproArg = action === "job.createFromSimpro" ? String(args.simproId == null ? "" : args.simproId).replace(/^#/, "").trim()
+    : action === "job.setInfo" && args.field === "simproNo" ? String(args.value == null ? "" : args.value).replace(/^#/, "").trim()
+    : action === "project.patch" && args.simproNo !== undefined ? String(args.simproNo == null ? "" : args.simproNo).replace(/^#/, "").trim()
+    : action === "project.createBuilding" && args.shareSimpro !== true ? String(args.ownSimproNo == null ? "" : args.ownSimproNo).replace(/^#/, "").trim() : "";
+  if (action === "job.createFromSimpro" && !JSU.SIMPRO_ID.test(simproArg)) return refused(400, "simproId must be the Simpro job number of a candidate in the Simpro inbox (cc_list_simpro_candidates).", { coll: "jobs" });
+  const jobPatch = (tx, raw, fields) => {
+    const upd = { ...stamp(requestId, freshIso(raw.updated_at)), lastActivityAt: io.serverTimestamp(), merged: false };
+    Object.keys(fields).forEach(k => { upd["data." + k] = fields[k]; });
+    tx.update(io.jobRef(jobId), upd);
+  };
+  let out = null;
+  try {
+    await io.runTx(async (tx) => {
+      // ── reads ──
+      let raw = null, job = null;
+      if (needsJob) { const s = await tx.get(io.jobRef(jobId)); raw = s && s.exists ? s.data() : null; job = raw && raw.data ? { id: jobId, data: raw.data } : null; }
+      let praw = null, project = null;
+      if (needsProject) { const s = await tx.get(io.projectRef(projectId)); praw = s && s.exists ? s.data() : null; project = praw && praw.data ? { id: projectId, ...praw.data } : null; }
+      const conflicts = /^\d+$/.test(simproArg) ? await io.jobsBySimproNo(tx, simproArg) : [];
+      let candidates = null, candDoc = null;
+      if (action === "job.createFromSimpro") { const s = await tx.get(io.settingsRef("simproCandidates")); candDoc = s && s.exists ? s.data() : null; candidates = candDoc && Array.isArray(candDoc.candidates) ? candDoc.candidates : null; }
+      const projects = action === "project.create" ? await io.allProjects(tx) : null;
+      const siblings = action === "project.createBuilding" && project ? await io.jobsByProject(tx, projectId) : null;
+      const c = { ...ctx, job, project, conflicts, candidates, projects, siblings };
+      // Refusals name the doc the request was about: the project for project.patch, the job otherwise (a building refusal is about the project → projectId rides along).
+      const coll = action === "project.patch" ? "projects" : "jobs";
+      const auditBase = { coll, docId: action === "project.patch" ? projectId : jobId || null, ...(needsProject ? { projectId } : {}) };
+      const fail = (status, why, extra) => { out = finish(status, { ok: false, refused: why }, { ok: false, why, ...auditBase, ...(extra || {}) }); tx.set(io.auditRef(requestId), out.audit); };
+      const noop = (common, p) => { out = finish(200, { ok: true, ...common, noop: true, message: "Already that way — nothing to change.", ...(p.result || {}) }, { ok: true, noop: true, ...auditBase, fields: [] }); tx.set(io.auditRef(requestId), out.audit); };
+      const missing = () => (needsJob && !job) || (needsProject && !project);
+      switch (action) {
+        case "job.createFromSimpro": {
+          const p = JSU.planCreateFromSimpro({ ...args, simproId: simproArg }, c);
+          if (p.refused) return fail(candidates ? 400 : 404, p.refused);
+          tx.create(io.jobRef(p.docId), { data: dropUndefined(p.job), ...stamp(requestId, ctx.nowIso) });   // importSimproCandidate: setDoc(jobs/<j.id>, stampWrite({data:j, updated_at})) — create-only here
+          tx.update(io.settingsRef("simproCandidates"), { candidates: p.candidatesAfter, updated_at: ctx.nowIso });   // the app's rewrite, limited to the two fields it sets
+          const result = { ok: true, requestId, action, jobId: p.docId, jobName: p.job.name, simproNo: p.job.simproNo, kind: p.kind, division: p.division, customer: p.job.customer || "", address: p.job.address || "", foreman: p.job.foreman, tempPed: !!p.job.tempPed, quickJob: !!p.job.quickJob, wasIgnored: p.wasIgnored || undefined, candidatesLeft: p.candidatesAfter.length,
+            follows: ["The job opens on the Job Board as Unassigned — set foreman / lead (cc_set_job_people) to make it live.", "The Simpro inbox no longer lists it (the candidates list was rewritten without it).", "ensureJobDriveFolder only LINKS a Drive folder someone already made with this name; it creates none — the Drive folder (and, on a commercial job, the Simpro plans pull) is the app's Create Drive folder button.", "The app's Simpro auto-pull fills blank address / GC / contacts when the job is next opened on a phone.", "cc_search_jobs finds it by name only after FieldInk's ccjobs/index refreshes (seconds after the app next publishes) — use this jobId directly meanwhile."], pushTo: [] };
+          out = finish(200, dropUndefined(result), { ok: true, coll: "jobs", docId: p.docId, newDoc: true, fields: Object.keys(p.job), before: null, after: p.fields, docs: ["jobs/" + p.docId, "settings/simproCandidates.candidates"], candidateRemoved: simproArg });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        case "job.setInfo": case "job.setSection": case "job.archive": {
+          const p = action === "job.setInfo" ? JSU.planSetInfo(args, c) : action === "job.setSection" ? JSU.planSetSection(args, c) : JSU.planArchive(args, c);
+          if (p.refused) return fail(missing() ? 404 : 400, p.refused);
+          const common = { requestId, action, jobId, jobName: job.data.name || "" };
+          if (p.noop) return noop(common, p);
+          jobPatch(tx, raw, p.fields);
+          out = finish(200, dropUndefined({ ok: true, ...common, ...p.result, pushTo: [] }), { ok: true, coll: "jobs", docId: jobId, fields: Object.keys(p.fields), before: p.before, after: p.after });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        case "project.create": {
+          const p = JSU.planCreateProject(args, c);
+          if (p.refused) return fail(missing() ? 404 : 400, p.refused);
+          tx.create(io.projectRef(p.project.id), { data: dropUndefined(p.project), ...stamp(requestId, ctx.nowIso) });   // saveNewProject: setDoc(projects/<id>, stampWrite({data, updated_at, saved_by}))
+          jobPatch(tx, raw, p.jobPatch);                                                                               // the Site / Shared patch through u()
+          out = finish(200, dropUndefined({ ok: true, requestId, action, jobId, jobName: p.jobPatch.name, ...p.result, pushTo: [] }), { ok: true, coll: "projects", docId: p.project.id, newDoc: true, fields: Object.keys(p.project), before: null, after: p.project, job: { docId: jobId, fields: Object.keys(p.jobPatch), before: p.before, after: p.after }, docs: ["projects/" + p.project.id, "jobs/" + jobId] });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        case "project.patch": {
+          const p = JSU.planPatchProject({ ...args, projectId }, c);
+          if (p.refused) return fail(missing() ? 404 : 400, p.refused);
+          const common = { requestId, action, projectId, projectName: project.name || "" };
+          if (p.noop) return noop(common, p);
+          const upd = { ...stamp(requestId, freshIso(praw.updated_at)) };   // patchProject: {updated_at, saved_by, "data.<k>"} + stampWrite
+          Object.keys(p.patch).forEach(k => { upd["data." + k] = p.patch[k]; });
+          tx.update(io.projectRef(projectId), upd);
+          out = finish(200, dropUndefined({ ok: true, ...common, ...p.result, pushTo: [] }), { ok: true, coll: "projects", docId: projectId, fields: Object.keys(p.patch), before: p.before, after: p.after });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        case "project.createBuilding": {
+          const p = JSU.planCreateBuilding({ ...args, projectId }, c);
+          if (p.refused) return fail(missing() ? 404 : 400, p.refused);
+          tx.create(io.jobRef(p.docId), { data: dropUndefined(p.job), ...stamp(requestId, ctx.nowIso) });   // createBuilding: setDoc(jobs/<j.id>, stampWrite({data: sanitize(j), updated_at}))
+          out = finish(200, dropUndefined({ ok: true, requestId, action, ...p.result, follows: ["Buildings never get a top-level Drive folder (ensureJobDriveFolder's projectGroupId guard); plans come through the project's Simpro folder.", "cc_search_jobs finds it by name only after FieldInk's ccjobs/index refreshes — use this jobId directly meanwhile."], pushTo: [] }), { ok: true, coll: "jobs", docId: p.docId, newDoc: true, fields: Object.keys(p.job), before: null, after: p.fields, docs: ["jobs/" + p.docId], projectId });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        case "project.join": {
+          const p = JSU.planJoinProject(args, c);
+          if (p.refused) return fail(missing() ? 404 : 400, p.refused);
+          const common = { requestId, action, jobId, jobName: job.data.name || "" };
+          if (p.noop) return noop(common, p);
+          jobPatch(tx, raw, p.fields);
+          out = finish(200, dropUndefined({ ok: true, ...common, ...p.result, pushTo: [] }), { ok: true, coll: "jobs", docId: jobId, fields: Object.keys(p.fields), before: p.before, after: p.after, projectId });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        default: return fail(400, "unknown action");
+      }
+    });
+  } catch (e) {
+    if (e && (e.code === 6 || /ALREADY_EXISTS|already exists/i.test(String(e.message || "")))) return refused(409, "That id already exists — the create was refused rather than overwrite anything. Nothing was written.", { coll: action === "project.create" ? "projects" : "jobs" });
+    throw e;
+  }
+  return { status: out.status, body: out.body };
+}
+
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -779,6 +930,11 @@ async function handle(body, io) {
 
   if (MATERIAL_PO_ACTIONS.includes(b.action)) {
     const r = await materialPo(io, requestId, b.action, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
+  if (JOB_SETUP_ACTIONS.includes(b.action)) {
+    const r = await jobSetup(io, requestId, b.action, args, ctx, finish, refused);
     return { status: r.status, body: r.body };
   }
 
@@ -897,6 +1053,13 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
     runTx: (fn) => db.runTransaction(fn),
     needRef: (id) => db.collection("needs").doc(id),
     jobRef: (id) => db.collection("jobs").doc(id),
+    // Ship 9: projects/<prj_…> (create + dotted update, never delete) and the
+    // three transactional queries the job-setup planners need — read under the
+    // transaction's lock, trimmed to the fields the app's helpers look at.
+    projectRef: (id) => { if (!JSU.PROJECT_ID.test(String(id))) throw new Refusal(400, "projectId must be the project's id (prj_…)."); return db.collection("projects").doc(String(id)); },
+    jobsBySimproNo: async (tx, no) => { const n = String(no || "").replace(/^#/, "").trim(); if (!/^\d+$/.test(n)) return []; const s = await tx.get(db.collection("jobs").where("data.simproNo", "in", [n, "#" + n])); return s.docs.map(d => { const j = (d.data() || {}).data || {}; return { id: d.id, name: j.name || "", simproNo: j.simproNo || "", projectGroupId: j.projectGroupId || "", archived: !!j.archived, deleted: !!j.deleted }; }); },
+    jobsByProject: async (tx, pid) => { const s = await tx.get(db.collection("jobs").where("data.projectGroupId", "==", String(pid))); return s.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) })); },
+    allProjects: async (tx) => { const s = await tx.get(db.collection("projects")); return s.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) })); },
     hrRef: (id) => db.collection("homeowner_requests").doc(id),
     // snapshotHomeownerRequestVersion (App.js ~L22890): the prior doc into
     // homeowner_requests/<id>/versions {snap, at, by}, newest 10 kept. The
@@ -958,6 +1121,7 @@ module.exports.CREW_ACTIONS = CREW_ACTIONS;
 module.exports.TIMEOFF_ACTIONS = TIMEOFF_ACTIONS;
 module.exports.MATERIAL_CARD_ACTIONS = MATERIAL_CARD_ACTIONS;
 module.exports.MATERIAL_PO_ACTIONS = MATERIAL_PO_ACTIONS;
+module.exports.JOB_SETUP_ACTIONS = JOB_SETUP_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;
 module.exports.settingsDocAllowed = settingsDocAllowed;

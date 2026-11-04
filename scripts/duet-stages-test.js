@@ -528,13 +528,13 @@ await ok("handle: stage, inspection (fail → failedAgain → trip), QC fail →
   await assert.rejects(call(busy, "prep.tick", { key: "redlinePlans", state: "done" }), (e) => e.status === 429);
   assert.strictEqual(busy.log.filter(l => l[0] === "update").length, 0);
 });
-await ok("handle: the eight actions exist, nothing like a delete / archive / job create does; BUILD is 606; the ship-6 and ship-2 lists are untouched; api.js still has exactly three .delete( and no tx.delete; stages.js is pure", async () => {
+await ok("handle: the eight actions exist, nothing like a delete does (job.archive became a real action in ship 9 — its own reversible shape); BUILD is 606; the ship-6 and ship-2 lists are untouched; api.js still has exactly three .delete( and no tx.delete; stages.js is pure", async () => {
   assert.deepStrictEqual(api.STAGE_ACTIONS, ["phase.setStatus", "phase.setStage", "inspection.setResult", "inspection.items", "inspection.createTrip", "qc.setStatus", "prep.tick", "phase.setDates"]);
   assert.ok(api.STAGE_ACTIONS.every(a => api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a)));
   assert.deepStrictEqual(api.PUNCH_ACTIONS, ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"]);
   assert.deepStrictEqual(api.JOB_ACTIONS, ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"]);
   assert.ok(api.BUILD >= 606, "BUILD at least 606 (ship 8 bumped it to 607)");
-  for (const a of ["job.archive", "job.delete", "job.create", "inspection.deleteItem", "inspection.clearAttempts", "prep.override", "phase.setMode", "job.setField"]) {
+  for (const a of ["job.delete", "job.create", "job.unarchive", "inspection.deleteItem", "inspection.clearAttempts", "prep.override", "phase.setMode", "job.setField"]) {
     await assert.rejects(api.handle({ requestId: RID(900), action: a, args: {} }, fakeIo()), (e) => e.status === 400 && /action must be/.test(e.message), a);
   }
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");

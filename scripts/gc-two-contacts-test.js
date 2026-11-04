@@ -3,8 +3,8 @@
 // Run: node scripts/gc-two-contacts-test.js
 // Exit 0 = all pass. Wired into `prebuild`, so the pre-push hook enforces it.
 //
-// gcContactKey / gcRunningToggle are extracted LIVE from src/App.js (balanced
-// slice, no hand copy) so the test can't drift from what the Job Info tab runs.
+// gcContactKey / gcRunningToggle come from src/jobShape.js (v608: shared with
+// duetApi); App.js is pinned to import them, so the test can't drift from what the Job Info tab runs.
 //
 // Pinned:
 //  1. One-contact jobs behave byte-for-byte as before (tap marks, tap clears,
@@ -20,23 +20,10 @@ const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
 
+// v608 (D9 ship 9): the two live in src/jobShape.js (shared with duetApi); App.js imports them back — pinned here.
 const src = fs.readFileSync(path.join(__dirname, "..", "src", "App.js"), "utf8");
-function extract(name) {
-  const start = src.indexOf(`const ${name} = `);
-  if (start < 0) throw new Error(`could not find ${name} in src/App.js`);
-  let depth = 0;
-  for (let i = start; i < src.length; i++) {
-    const c = src[i];
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") depth--;
-    else if (c === ";" && depth === 0) return src.slice(start, i + 1);
-  }
-  throw new Error(`unterminated ${name}`);
-}
-const tmp = path.join(__dirname, ".gc-two-contacts-fns.tmp.js");
-fs.writeFileSync(tmp, `${extract("gcContactKey")}\n${extract("gcRunningToggle")}\nmodule.exports = { gcContactKey, gcRunningToggle };\n`);
-let gcContactKey, gcRunningToggle;
-try { ({ gcContactKey, gcRunningToggle } = require(tmp)); } finally { try { fs.unlinkSync(tmp); } catch (e) { /* best effort */ } }
+assert.ok(src.includes("const gcContactKey = JobShape.gcContactKey;") && src.includes("const gcRunningToggle = JobShape.gcRunningToggle;"), "App.js takes gcContactKey / gcRunningToggle from src/jobShape.js");
+const { gcContactKey, gcRunningToggle } = require(path.join(__dirname, "..", "src", "jobShape.js"));
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log("  ok  " + name); };

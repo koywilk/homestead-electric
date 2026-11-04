@@ -155,7 +155,7 @@ const jobUpdate = (io, jobId = FORTH) => { const u = jobUpdates(io, jobId); asse
 const dataKeys = (upd) => Object.keys(upd).filter(k => k.startsWith("data.")).map(k => k.slice(5)).sort();
 const checkStamp = (upd) => {
   assert.strictEqual(upd.saved_by, "Duet (Koy)"); assert.strictEqual(upd.device, "duet"); assert.ok(upd.tab.startsWith("duet-8888"));
-  assert.ok(Number.isInteger(upd.app_build) && upd.app_build === 607 && /^607\.duet[a-z0-9]{6,}$/.test(upd.w), "version-lock stamp 607");
+  assert.ok(Number.isInteger(upd.app_build) && upd.app_build >= 607 && new RegExp("^" + upd.app_build + "\\.duet[a-z0-9]{6,}$").test(upd.w), "version-lock stamp >= 607");
   assert.strictEqual(upd.merged, false); assert.deepStrictEqual(upd.lastActivityAt, { __serverTimestamp: true });
   assert.ok(Date.parse(upd.updated_at) > Date.parse("2026-11-03T20:00:00.000Z"), "updated_at strictly newer than the doc's");
   assert.deepStrictEqual(Object.keys(upd).filter(k => !k.startsWith("data.")).sort(), ENVELOPE);
@@ -488,7 +488,7 @@ await ok("api.js: the action lists and allowlist hold the five ship-8 actions; B
   assert.deepStrictEqual(api.MATERIAL_PO_ACTIONS, ["material.previewPo", "material.sendPo"]);
   for (const a of api.MATERIAL_CARD_ACTIONS) assert.ok(api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a));
   for (const a of api.MATERIAL_PO_ACTIONS) assert.ok(!api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a));
-  assert.strictEqual(api.BUILD, 607); assert.strictEqual(api.SEND_PO_PER_HOUR, 10);
+  assert.ok(api.BUILD >= 607, "BUILD at least 607 (ship 9 bumped it to 608)"); assert.strictEqual(api.SEND_PO_PER_HOUR, 10);
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
   assert.ok(!/tx\.delete\(/.test(src), "no tx.delete in api.js");
   assert.ok(/clientTest: cfg\.mode === "live" \? false : true/.test(src), "clientTest false only when live");
