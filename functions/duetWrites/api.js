@@ -265,7 +265,9 @@ const MATERIAL_PO_ACTIONS = ["material.previewPo", "material.sendPo"];   // ship
 const JOB_SETUP_ACTIONS = ["job.createFromSimpro", "job.setInfo", "job.setSection", "job.archive", "project.create", "project.patch", "project.createBuilding", "project.join"];   // ship 9: jobSetup() — its own transaction (extra reads: candidates, projects, siblings, Simpro-# conflicts; tx.create for the creates)
 const OFFICE_ACTIONS = ["broadcast.send", "autoTask.promote", "planIntake.decide", "upcoming.add", "upcoming.edit", "crewTeams.set", "crewRoster.set"];   // ship 10: office() — the app's own sendBroadcastAs / decideById in-process, a needs create-or-patch, three settings lists
 const UNDO_ACTIONS = ["undo.apply"];   // ship 11: undoApply() — an earlier duet_writes doc replayed from its `before` through the same writers
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS];
+const AC = require("./activity.js");
+const ACTIVITY_ACTIONS = AC.ACTIVITY_ACTIONS;   // v613: the Claude tab's log (claude_activity) — not a Command Center change: no duet_writes audit, no undo, not in the hourly limit
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -1172,6 +1174,16 @@ async function handle(body, io) {
   const args = b.args && typeof b.args === "object" ? b.args : {};
   const email = String(b.email || "").slice(0, 120);
 
+  // The Claude tab's log rows: written straight to claude_activity, each doc id
+  // the row's own hash, so a repeat call rewrites the same docs (idempotent
+  // without an audit doc). Nothing in Command Center is read or changed.
+  if (ACTIVITY_ACTIONS.includes(b.action)) {
+    const p = AC.planActivity(b.action, args, io.nowIso());
+    if (p.refused) return { status: 400, body: { ok: false, refused: p.refused } };
+    await io.writeActivity(p.docs);
+    return { status: 200, body: { ok: true, requestId, action: b.action, logged: p.docs.length, ids: p.docs.map(d => d.id), ...(p.skipped.length ? { skipped: p.skipped } : {}) } };
+  }
+
   // Same requestId → same answer, nothing written twice.
   const prior = await io.getAudit(requestId);
   if (prior && prior.response) return { status: prior.response.status || 200, body: { ...prior.response.body, replayed: true } };
@@ -1409,6 +1421,13 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
       return true;
     },
     auditRef: (id) => db.collection(AUDIT).doc(id),
+    // v613: the Claude tab's log. claude_activity/<sim_…|wat_…> only — the ids
+    // come from activity.js, never from the caller as-is.
+    writeActivity: async (docs) => {
+      const batch = db.batch();
+      docs.forEach(({ id, doc }) => { if (!/^(sim|wat)_[A-Za-z0-9_-]{6,40}$/.test(id)) throw new Refusal(400, "bad activity id"); batch.set(db.collection("claude_activity").doc(id), doc); });
+      await batch.commit();
+    },
     arrayUnion: (...x) => FieldValue.arrayUnion(...x),
     serverTimestamp: () => FieldValue.serverTimestamp(),
     tz: TZ,
@@ -1460,6 +1479,7 @@ module.exports.JOB_SETUP_ACTIONS = JOB_SETUP_ACTIONS;
 module.exports.OFFICE_ACTIONS = OFFICE_ACTIONS;
 module.exports.FIELD_ACTIONS = FIELD_ACTIONS;
 module.exports.UNDO_ACTIONS = UNDO_ACTIONS;
+module.exports.ACTIVITY_ACTIONS = ACTIVITY_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;

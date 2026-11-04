@@ -86,3 +86,36 @@ assert.ok(odClaudeSample([], [], true).changes.length > 0, "no jobs loaded yet: 
 const ps = odPoSample(jobsX); assert.strictEqual(ps.sample, true); assert.ok(ps.needs.length && ps.jobs.length);
 assert.ok(odPoSample([]).needs.length, "draws with no jobs loaded");
 console.log("claude-activity-test: ok");
+
+// duetApi's two log actions (functions/duetWrites/activity.js through api.js handle()):
+// rows → claude_activity docs, same row twice → same doc, no duet_writes audit,
+// links stripped, bad rows skipped with a reason, nothing else touched.
+(async () => {
+  const api = require("../functions/duetWrites/api.js");
+  const AC = require("../functions/duetWrites/activity.js");
+  assert.deepStrictEqual(api.ACTIVITY_ACTIONS, ["activity.simpro", "activity.watch"]);
+  assert.ok(api.ACTIVITY_ACTIONS.every(a => api.ACTIONS.includes(a) && !api.JOB_WRITE_ACTIONS.includes(a)));
+  const store = {}, log = [];
+  const io = { nowIso: () => "2026-11-04T18:00:00.000Z", writeActivity: async (docs) => { docs.forEach(d => { store[d.id] = d.doc; log.push(d.id); }); },
+    getAudit: async () => { throw new Error("activity must not read duet_writes"); }, countRecent: async () => { throw new Error("activity is not in the hourly limit"); }, runTx: async () => { throw new Error("no transaction"); } };
+  const sim = { at: "2026-11-04T15:46:00Z", jobNo: "#1443", jobName: "Koplin Residence", who: "Gage Lund", workDate: "2026-11-05", what: "Schedule 7-5", okBy: "Koy" };
+  const r1 = await api.handle({ requestId: "act_test_0001", action: "activity.simpro", args: { rows: [sim, { ...sim, workDate: "11/5" }, { at: "2027-03-01T00:00:00Z", what: "x" }] } }, io);
+  assert.strictEqual(r1.status, 200); assert.strictEqual(r1.body.logged, 1); assert.strictEqual(r1.body.skipped.length, 2);
+  const id = r1.body.ids[0]; assert.ok(/^sim_[0-9a-f]{24}$/.test(id));
+  assert.strictEqual(store[id].jobNo, "1443"); assert.strictEqual(store[id].kind, "simpro"); assert.strictEqual(store[id].removed, false);
+  const r2 = await api.handle({ requestId: "act_test_0002", action: "activity.simpro", args: { rows: [sim] } }, io);
+  assert.strictEqual(r2.body.ids[0], id, "same row, same doc — a retry or a second backfill writes nothing new");
+  const w = await api.handle({ requestId: "act_test_0003", action: "activity.watch", args: { rows: [{ at: "2026-11-04T14:15:00Z", source: "Text", from: "Someone", said: "see https://x.example/s?token=abc for the plan", did: "Flagged to Koy", why: "no PO", key: "row-0042" }] } }, io);
+  assert.strictEqual(w.body.ids[0], "wat_row-0042"); assert.ok(!store["wat_row-0042"].said.includes("token"), "links never stored");
+  const bad = await api.handle({ requestId: "act_test_0004", action: "activity.watch", args: { rows: [{ at: "2026-11-04T14:15:00Z", did: "x", email: "a@b.c" }] } }, io);
+  assert.strictEqual(bad.status, 400, "an unknown field (an email) is refused, not stored");
+  assert.strictEqual((await api.handle({ requestId: "act_test_0005", action: "activity.watch", args: { rows: new Array(51).fill({ at: "2026-11-04T14:15:00Z", did: "x" }) } }, io)).status, 400);
+  assert.ok(Object.keys(store).every(k => /^(sim|wat)_/.test(k)));
+  // The rows land exactly as the Claude tab reads them.
+  const tab = buildActivity({ activity: Object.entries(store), viewer: koy });
+  assert.strictEqual(tab.changes[0].jobNo, "1443"); assert.strictEqual(tab.watch[0].kind, "flagged");
+  assert.strictEqual(AC.clean("a\u0000b  c", 10), "a b c");
+  const src = fs.readFileSync(path.join(__dirname, "..", "functions", "duetWrites", "activity.js"), "utf8");
+  assert.ok(!/require\(["']firebase/i.test(src), "activity.js imports no Firebase");
+  console.log("claude-activity-test: duetApi log actions ok");
+})().catch((e) => { console.error("claude-activity-test FAILED:", e && e.stack || e); process.exit(1); });
