@@ -199,6 +199,31 @@
 // crewTeams.teams — now written —, crewRoster.names), each ONE item changed
 // and the list written back whole with the settings stamp. No promote (a job
 // create with photos — out), no attachments on a send.
+//
+// Ship 11 (any allowed field + undo — the last of the plan, closes batch C):
+// job.setField writes ONE scalar data.<key> on a job through jobWrite(), ONLY
+// for a key fieldPolicy.js classes "allow" (notes, flags, two inspection
+// target dates, My Day's dismissed booleans — decision 9d: Koy approves the
+// rows in the connector's docs/DUET-WRITES-FIELDS.md before batch C goes
+// live); a key a named tool owns refuses with that tool's name, every other
+// key (ids, stamps, caches, arrays, maps, derived fields, finance / sign-off
+// flags) refuses with the reason, an unknown key refuses too. Values are
+// validated per row (bool strict, text ≤ 2000 with control characters
+// stripped, dates → M/D/YYYY as DateInp stores them) and "" clears as the app
+// does; same value → noop. undo.apply reads an earlier duet_writes/<id> and
+// puts the change back from its `before` (functions/duetWrites/undo.js):
+// edits are replayed exactly and ONLY while every field still reads the
+// audit's `after` (one item by id for array fields; a done flip goes back
+// through planSetDone so the slot and the cascade follow); adds are undone by
+// the app's own closing move (task → done + voided, CO → denied, trip →
+// complete, note → soft-deleted, line → "", team / roster name → removed or
+// re-added, imported job / building → archived) or refused where the app has
+// none (question, daily update, punch item, material card, CO → trip,
+// Upcoming row, project); sends (PO, announcement, plan-intake decision,
+// thread reply, photo) are refused. The undo is its own audit doc with
+// `undoes` and stamps the original with {undoneBy, undoneAt} in the SAME
+// transaction — the only write ever made to an existing duet_writes doc, and
+// never a delete. Archived jobs refuse unless the original was the archive.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -212,10 +237,12 @@ const SG = require("./stages.js");
 const MA = require("./materials.js");
 const JSU = require("./jobSetup.js");
 const OF = require("./office.js");
+const FP = require("./fieldPolicy.js");
+const UN = require("./undo.js");
 const { matchUserByName } = require("../nameMatch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 609;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 610;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const SEND_PO_PER_HOUR = 10;       // ship 8: material.sendPo has its own, stricter counter on top of the 60
@@ -228,7 +255,8 @@ const PUNCH_ACTIONS = ["punch.setDone", "punch.add", "punch.assign", "punch.wait
 const STAGE_ACTIONS = ["phase.setStatus", "phase.setStage", "inspection.setResult", "inspection.items", "inspection.createTrip", "qc.setStatus", "prep.tick", "phase.setDates"];
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
 const MATERIAL_CARD_ACTIONS = ["material.addCard", "material.editCard", "material.tick"];
-const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...STAGE_ACTIONS, ...MATERIAL_CARD_ACTIONS];   // every action that is ONE jobWrite() transaction
+const FIELD_ACTIONS = ["job.setField"];   // ship 11: ONE allowed scalar (fieldPolicy.js) through jobWrite()
+const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...STAGE_ACTIONS, ...MATERIAL_CARD_ACTIONS, ...FIELD_ACTIONS];   // every action that is ONE jobWrite() transaction
 const PHOTO_ACTIONS = ["photo.add"];
 const THREAD_ACTIONS = ["question.reply"];
 const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
@@ -236,7 +264,8 @@ const TIMEOFF_ACTIONS = ["timeOff.decide"];
 const MATERIAL_PO_ACTIONS = ["material.previewPo", "material.sendPo"];   // ship 8: preview = read + audit; sendPo = the real sender, then ONE jobWrite()
 const JOB_SETUP_ACTIONS = ["job.createFromSimpro", "job.setInfo", "job.setSection", "job.archive", "project.create", "project.patch", "project.createBuilding", "project.join"];   // ship 9: jobSetup() — its own transaction (extra reads: candidates, projects, siblings, Simpro-# conflicts; tx.create for the creates)
 const OFFICE_ACTIONS = ["broadcast.send", "autoTask.promote", "planIntake.decide", "upcoming.add", "upcoming.edit", "crewTeams.set", "crewRoster.set"];   // ship 10: office() — the app's own sendBroadcastAs / decideById in-process, a needs create-or-patch, three settings lists
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS];
+const UNDO_ACTIONS = ["undo.apply"];   // ship 11: undoApply() — an earlier duet_writes doc replayed from its `before` through the same writers
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -459,6 +488,10 @@ function planJobAction(action, args, ctx) {
       case "material.addCard": return MA.planAddCard(args, c);
       case "material.editCard": return MA.planEditCard(args, c);
       case "material.tick": return MA.planTick(args, c);
+      // ── Ship 11 ────────────────────────────────────────────────────────────
+      // ONE allowed scalar (fieldPolicy.js) as a dotted data.<key>; owned /
+      // denied / unknown keys refuse before anything is planned.
+      case "job.setField": return FP.planSetField(args, c);
       default: return { refused: "unknown action" };
     }
   };
@@ -1029,6 +1062,108 @@ async function office(io, requestId, action, args, ctx, finish, refused) {
   return { status: out.status, body: out.body };
 }
 
+// Ship 11: put an earlier Duet change back. The original audit doc is read
+// (plain) to classify — refused / noop / already undone / an undo / a send /
+// an add with no closing move stop here — then ONE transaction re-reads the
+// original under the lock (two undos racing can't both win), reads the live
+// doc(s) the planner needs, lets undo.js decide what to write (edits replayed
+// from `before` only while every field still reads `after`; adds undone by
+// the app's own closing move), writes it with the SAME envelope the original
+// writer used (jobWrite's for a job, patchNeed's for a need, patchProject's
+// for a project, the planner's FieldPath cell / settings stamp for settings,
+// timeOffDecide's three writes for a decision), writes the undo's own audit
+// doc with `undoes`, and stamps the original {undoneBy, undoneAt}. A refusal
+// inside the transaction (changed since) is audited with the diff and leaves
+// the original un-stamped, so a later undo can still run.
+function applyUndoWrite(tx, io, requestId, ctx, w, live) {
+  const val = (v) => (v && typeof v === "object" && v.__delete === true ? io.deleteField() : v);
+  switch (w.kind) {
+    case "jobPatch": {
+      const raw = live["jobs/" + w.jobId];
+      const upd = { ...stamp(requestId, freshIso(raw.updated_at)), lastActivityAt: io.serverTimestamp(), merged: false };   // jobWrite's envelope
+      Object.keys(w.fields).forEach(k => { upd["data." + k] = val(w.fields[k]); });
+      tx.update(io.jobRef(w.jobId), upd);
+      return;
+    }
+    case "needPatch": {
+      const raw = live["needs/" + w.needId];
+      const upd = { ...stamp(requestId, freshIso(raw.updated_at)) };   // patchNeed's write
+      Object.keys(w.fields).forEach(k => { upd["data." + k] = val(w.fields[k]); });
+      if (w.arrayUnion) Object.keys(w.arrayUnion).forEach(k => { upd["data." + k] = io.arrayUnion(w.arrayUnion[k]); });
+      tx.update(io.needRef(w.needId), upd);
+      return;
+    }
+    case "projectPatch": {
+      const raw = live["projects/" + w.projectId];
+      const upd = { ...stamp(requestId, freshIso(raw.updated_at)) };   // patchProject's write
+      Object.keys(w.fields).forEach(k => { upd["data." + k] = val(w.fields[k]); });
+      tx.update(io.projectRef(w.projectId), upd);
+      return;
+    }
+    case "settingsCell": {
+      const week = live["settings/" + w.docId];
+      const st = settingsStamp(requestId, freshIso(week ? week.updatedAt : ""));
+      if (!week) { tx.set(io.settingsRef(w.docId), { assignments: { [w.key]: w.cell }, ...st }); return; }
+      tx.update(io.settingsRef(w.docId), io.fieldPath("assignments", w.key), w.cell ? w.cell : io.deleteField(), "updatedAt", st.updatedAt, "tab", st.tab, "merged", st.merged);   // crewCell's write
+      return;
+    }
+    case "settingsList": {
+      const doc = live["settings/" + w.docId];
+      const st = settingsStamp(requestId, freshIso(doc ? doc.updatedAt : ""));
+      const fields = { [w.listKey]: w.list, ...(w.pipelineStamp ? { updated_at: ctx.nowIso } : {}) };
+      if (doc) tx.update(io.settingsRef(w.docId), { ...dropUndefined(fields), ...st }); else tx.set(io.settingsRef(w.docId), { ...dropUndefined(fields), ...st });
+      return;
+    }
+    case "timeOff": {
+      const p = w.plan;
+      tx.update(io.settingsRef("timeOffRequests"), { list: p.requestsList, ...settingsStamp(requestId, freshIso(w.reqDoc.updatedAt)) });
+      if (p.needFields && w.needRaw) {
+        const upd = { ...stamp(requestId, freshIso(w.needRaw.updated_at)) };
+        Object.keys(p.needFields).forEach(k => { upd["data." + k] = p.needFields[k]; });
+        tx.update(io.needRef("toneed_" + p.request.id), upd);
+      }
+      if (p.ptoList) {
+        if (w.ptoDoc) tx.update(io.settingsRef("crewPTO"), { list: p.ptoList, ...settingsStamp(requestId, freshIso(w.ptoDoc.updatedAt)) });
+        else tx.set(io.settingsRef("crewPTO"), { list: p.ptoList, ...settingsStamp(requestId, ctx.nowIso) });
+      }
+      return;
+    }
+    default: throw new Error("unknown undo write " + w.kind);
+  }
+}
+async function undoApply(io, requestId, action, args, ctx, finish, refused) {
+  const target = String(args.requestId || "");
+  if (!RID.test(target)) return refused(400, "requestId must be the earlier Duet call's requestId (from cc_list_duet_writes or that call's own answer).", { coll: AUDIT });
+  if (target === requestId) return refused(400, "An undo can't name itself. Nothing was written.", { coll: AUDIT });
+  const orig = await io.getAudit(target);
+  const cls = UN.classify(orig);
+  if (cls.refused) return refused(cls.status || 400, cls.refused, { undoes: target, undoneAction: orig ? orig.action || null : null, coll: (orig && orig.coll) || AUDIT, docId: (orig && orig.docId) || null });
+  let out = null;
+  await io.runTx(async (tx) => {
+    const os = await tx.get(io.auditRef(target));
+    const o = os && os.exists ? os.data() : null;
+    const auditBase = { coll: cls.coll, docId: cls.docId, undoes: target, undoneAction: o ? o.action : null, itemId: (o && o.itemId) || null };
+    if (!o || o.undoneBy) { out = finish(400, { ok: false, refused: o ? `That change was already undone by ${o.undoneBy}. Nothing was written.` : "That audit record vanished mid-call. Nothing was written." }, { ok: false, why: "already undone or gone", ...auditBase }); tx.set(io.auditRef(requestId), out.audit); return; }
+    const live = {};
+    for (const path of cls.reads) {
+      const i = path.indexOf("/"), coll = path.slice(0, i), id = path.slice(i + 1);
+      const ref = coll === "jobs" ? io.jobRef(id) : coll === "needs" ? io.needRef(id) : coll === "projects" ? io.projectRef(id) : coll === "settings" ? io.settingsRef(id) : null;
+      if (!ref) throw new Refusal(400, `${coll} isn't a collection Duet reads for an undo. Nothing was written.`);
+      const s = await tx.get(ref);
+      live[path] = s && s.exists ? s.data() : null;
+    }
+    const p = UN.planUndo(o, cls, live, ctx);
+    if (p.refused) { out = finish(400, { ok: false, refused: p.refused, ...(p.diff ? { diff: p.diff } : {}) }, { ok: false, why: p.refused, ...auditBase, ...(p.diff ? { diff: p.diff } : {}) }); tx.set(io.auditRef(requestId), out.audit); return; }
+    for (const w of p.writes) applyUndoWrite(tx, io, requestId, ctx, w, live);
+    const itemId = p.itemId || auditBase.itemId || null;
+    const result = { ok: true, requestId, action, undoes: target, undoneAction: o.action, undoneAt: o.at || null, coll: cls.coll, docId: cls.docId, itemId, fields: p.fields, closing: p.closing || null, putBack: p.after, wasShowing: p.before, notes: p.notes, ...(p.result || {}) };
+    out = finish(200, dropUndefined(result), { ok: true, ...auditBase, itemId, fields: p.fields, before: p.before, after: p.after, closing: p.closing || null, notes: p.notes });
+    tx.set(io.auditRef(requestId), out.audit);
+    tx.update(io.auditRef(target), { undoneBy: requestId, undoneAt: ctx.nowIso });   // the ONLY write ever made to an existing audit doc
+  });
+  return { status: out.status, body: out.body };
+}
+
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -1121,6 +1256,11 @@ async function handle(body, io) {
 
   if (OFFICE_ACTIONS.includes(b.action)) {
     const r = await office(io, requestId, b.action, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
+  if (UNDO_ACTIONS.includes(b.action)) {
+    const r = await undoApply(io, requestId, b.action, args, ctx, finish, refused);
     return { status: r.status, body: r.body };
   }
 
@@ -1318,6 +1458,8 @@ module.exports.MATERIAL_CARD_ACTIONS = MATERIAL_CARD_ACTIONS;
 module.exports.MATERIAL_PO_ACTIONS = MATERIAL_PO_ACTIONS;
 module.exports.JOB_SETUP_ACTIONS = JOB_SETUP_ACTIONS;
 module.exports.OFFICE_ACTIONS = OFFICE_ACTIONS;
+module.exports.FIELD_ACTIONS = FIELD_ACTIONS;
+module.exports.UNDO_ACTIONS = UNDO_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;

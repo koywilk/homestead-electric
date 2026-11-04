@@ -534,7 +534,7 @@ await ok("handle: the eight actions exist, nothing like a delete does (job.archi
   assert.deepStrictEqual(api.PUNCH_ACTIONS, ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"]);
   assert.deepStrictEqual(api.JOB_ACTIONS, ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"]);
   assert.ok(api.BUILD >= 606, "BUILD at least 606 (ship 8 bumped it to 607)");
-  for (const a of ["job.delete", "job.create", "job.unarchive", "inspection.deleteItem", "inspection.clearAttempts", "prep.override", "phase.setMode", "job.setField"]) {
+  for (const a of ["job.delete", "job.create", "job.unarchive", "inspection.deleteItem", "inspection.clearAttempts", "prep.override", "phase.setMode"]) {   // job.setField became a real action in ship 11 (fieldPolicy.js allowlist)
     await assert.rejects(api.handle({ requestId: RID(900), action: a, args: {} }, fakeIo()), (e) => e.status === 400 && /action must be/.test(e.message), a);
   }
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
