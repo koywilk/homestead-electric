@@ -592,8 +592,11 @@ async function deliverMany(users, notif, extra, tag) {
   return out;
 }
 
-exports.sendBroadcast = functions.https.onCall(async (data) => {
-  const sender = await requireBroadcaster(data);
+// The send itself, as `sender` (an already-gated settings/users record). Two
+// callers, ONE body (Duet write access D9 ship 10, 2026-11-03): the callable
+// below after requireBroadcaster, and duetApi's broadcast.send in-process as
+// Koy's record after its own isBroadcaster check — never a copy of this code.
+async function sendBroadcastAs(sender, data) {
   const id = cleanId(data && data.id, ND.BROADCAST_ID_RE, "broadcast");
   const body = String((data && data.body) || "").trim().slice(0, 1000);
   if (!body) throw new functions.https.HttpsError("invalid-argument", "Write a message first.");
@@ -625,6 +628,10 @@ exports.sendBroadcast = functions.https.onCall(async (data) => {
     }).catch(e => functions.logger.error("[broadcast] record write FAILED", { id, error: e.message }));
   }
   return { ok: true, id, test, kind, title, summary };
+}
+exports.sendBroadcast = functions.https.onCall(async (data) => {
+  const sender = await requireBroadcaster(data);
+  return sendBroadcastAs(sender, data);
 });
 
 // Read every recipient's bell copy of one broadcast record → seen states.
@@ -7638,11 +7645,17 @@ exports.planDismissByHand  = _planIntake.planDismissByHand;
 // below in-process (functions/materialPO/send.js) with these real deps and
 // requireMember replaced by Koy's settings/users record — so the Gmail sender is
 // built first, above this export (it only needs functions + db).
+// Ship 10 (2026-11-03, office): broadcast.send runs the SAME sendBroadcastAs
+// body the sendBroadcast callable runs (factored out of its onCall above, two
+// callers) as Koy's record after ND.isBroadcaster; planIntake.decide runs the
+// watcher's own decide() through _planIntake.decideById (the /decide route's
+// body, one function, two callers). Neither is a copy.
 // Deploy ONLY this one:
 //   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric
 const _poGmail = require("./materialPO/gmail.js")({ functions, db });
 exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage(),
-  materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send } }).duetApi;
+  materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send },
+  officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById } }).duetApi;
 
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it

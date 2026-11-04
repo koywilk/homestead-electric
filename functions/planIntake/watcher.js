@@ -926,6 +926,37 @@ module.exports = function makePlanIntake(deps) {
     return { status: "done", note: name };
   }
 
+  // The /decide route's body as ONE function with two callers (Duet write
+  // access D9 ship 10, 2026-11-03): the Routine's POST /decide below and
+  // duetApi's planIntake.decide (decideById). `item` is the live queue doc
+  // (already read); the decision runs through decide() and the queue doc gets
+  // the same {status, decision, decidedAt} update either way. Never a copy.
+  async function runDecide(cfg, iref, item, body, budgetMs) {
+    const { drive, auth } = driveFullClient();
+    const started = Date.now();
+    const ctx = { cfg, drive, auth, deadline: () => budgetMs - (Date.now() - started) };
+    const out = await decide(ctx, item, body || {});
+    await iref.update({ status: out.status, decision: { ...(body || {}), note: out.note, at: nowIso() }, decidedAt: nowIso() });
+    return out;
+  }
+  // duetApi's door into the queue: the same mode-prefix rule, the same reads,
+  // the same open-only check and the same update as POST /decide — the only
+  // differences are a 100 s budget (duetApi's own limit is 120 s) and that the
+  // caller is Koy through Duet instead of the Routine. Throws {code: 404 | 409
+  // | 422 | 500} exactly like the route answers them.
+  async function decideById(itemId, body) {
+    const cfg = await loadConfig();
+    const p = prefixOf(cfg.mode);
+    const id = String(itemId || "");
+    if (!id || !id.startsWith(p) || (!p && /^(dry|test)_/.test(id))) throw Object.assign(new Error("no such item"), { code: 404 });
+    const iref = db.collection(QUEUE).doc(id);
+    const item = { id, ...((await iref.get()).data() || {}) };
+    if (!item.type) throw Object.assign(new Error("no such item"), { code: 404 });
+    if (item.status !== "open") throw Object.assign(new Error(`item is ${item.status}`), { code: 409 });
+    const out = await runDecide(cfg, iref, item, body, 100 * 1000);
+    return { ok: true, mode: cfg.mode, item: id, type: item.type, filename: item.filename || "", from: item.from || "", ...out };
+  }
+
   const planRoutineApi = functions
     // invoker "public": this deploy created planRoutineApi private (Google's own 403
     // page, 2026-10-04) while the older https functions are public. Google's door
@@ -964,11 +995,7 @@ module.exports = function makePlanIntake(deps) {
         }
         if (req.method === "POST" && route === "/decide") {
           if (item.status !== "open") { res.status(409).json({ error: `item is ${item.status}` }); return; }
-          const { drive, auth } = driveFullClient();
-          const started = Date.now();
-          const ctx = { cfg, drive, auth, deadline: () => 250 * 1000 - (Date.now() - started) };
-          const out = await decide(ctx, item, req.body || {});
-          await iref.update({ status: out.status, decision: { ...(req.body || {}), note: out.note, at: nowIso() }, decidedAt: nowIso() });
+          const out = await runDecide(cfg, iref, item, req.body || {}, 250 * 1000);
           res.json({ ok: true, ...out });
           return;
         }
@@ -1182,5 +1209,5 @@ module.exports = function makePlanIntake(deps) {
       return { linked: true, folderId: st.folderId, folderName };
     });
 
-  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, planDismissByHand, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide, _reopenUnmatched: reopenUnmatched, _reopenSiblings: reopenSiblings };
+  return { planIntakeWatcher, linkQuoteFolder, planRoutineApi, planIntakeDigest, planIntakeWalkPush, planFileByHand, planDismissByHand, decideById, _runOnce: runOnce, _folderIdOf: folderIdOf, _decide: decide, _runDecide: runDecide, _reopenUnmatched: reopenUnmatched, _reopenSiblings: reopenSiblings };
 };

@@ -172,6 +172,33 @@
 // building only. ensureJobDriveFolder (onWrite) only LINKS a Drive folder a
 // person already made — it never creates one — and the commercial Drive chain
 // is the app's own client-side follow-up, not run here.
+//
+// Ship 10 (office): broadcast.send runs the app's OWN sendBroadcastAs
+// (functions/index.js — the sendBroadcast callable's body factored out of its
+// onCall, two callers, never a copy) in-process as Koy's settings/users record
+// once ND.isBroadcaster says that record would pass requireBroadcaster; it
+// writes broadcasts/<id> and every recipient's notifications/<key>/items/<nid>
+// through deliver() exactly as the app's Send does — new collection rows:
+// broadcasts (create via that body only), notifications/*/items (via deliver
+// only). The audit keeps title length / kind / label / recipient count + ids /
+// delivery summary, never the message body; 10 sends per rolling hour.
+// autoTask.promote is My Day's Push: autoTaskDoc's literal (App.js's text,
+// pinned verbatim) with saveNeed's envelope through tx.create, or — when an
+// open need already carries that autoTaskId (autoDelegation's rule) —
+// pushTo's patch through the shared needPatch; the auto rows themselves are
+// App.js's computeTasks (not lifted), so Duet names the row's id suffix,
+// checked against the engine's id catalog (pinned to App.js). planIntake.decide
+// runs the plan-intake watcher's OWN decideById (the /decide route's body,
+// factored into one function with two callers) with the exact body the Routine
+// posts plus by: "Koy (via Duet)" — new rows: agentQueue (the item's status /
+// decision / decidedAt via that route only), agentFindings (decide()'s own
+// create / resolve), planIntakeState (decide()'s md5_ / sender_ / walk_ /
+// quote_ docs), plus the Drive move decide() makes. upcoming.add / .edit,
+// crewTeams.set, crewRoster.set are three more settings lists in
+// SETTINGS_DOCS (upcoming_jobs.items + the pipeline's updated_at,
+// crewTeams.teams — now written —, crewRoster.names), each ONE item changed
+// and the list written back whole with the settings stamp. No promote (a job
+// create with photos — out), no attachments on a send.
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -184,13 +211,15 @@ const PU = require("./punch.js");
 const SG = require("./stages.js");
 const MA = require("./materials.js");
 const JSU = require("./jobSetup.js");
+const OF = require("./office.js");
 const { matchUserByName } = require("../nameMatch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 608;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 609;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const SEND_PO_PER_HOUR = 10;       // ship 8: material.sendPo has its own, stricter counter on top of the 60
+const BROADCAST_PER_HOUR = 10;     // ship 10: broadcast.send too — a team-wide push is the loudest thing this door can do
 const AUDIT = "duet_writes";
 const QUESTION_ACTIONS = ["question.add", "question.answer", "question.reopen"];
 const NOTE_ACTIONS = ["note.add", "note.addLine", "note.editLine", "note.archive", "note.delete", "dailyUpdate.add"];
@@ -206,7 +235,8 @@ const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
 const TIMEOFF_ACTIONS = ["timeOff.decide"];
 const MATERIAL_PO_ACTIONS = ["material.previewPo", "material.sendPo"];   // ship 8: preview = read + audit; sendPo = the real sender, then ONE jobWrite()
 const JOB_SETUP_ACTIONS = ["job.createFromSimpro", "job.setInfo", "job.setSection", "job.archive", "project.create", "project.patch", "project.createBuilding", "project.join"];   // ship 9: jobSetup() — its own transaction (extra reads: candidates, projects, siblings, Simpro-# conflicts; tx.create for the creates)
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS];
+const OFFICE_ACTIONS = ["broadcast.send", "autoTask.promote", "planIntake.decide", "upcoming.add", "upcoming.edit", "crewTeams.set", "crewRoster.set"];   // ship 10: office() — the app's own sendBroadcastAs / decideById in-process, a needs create-or-patch, three settings lists
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -215,9 +245,12 @@ const SCHEDULE_DOC = /^schedule_\d{4}-\d{2}-\d{2}$/;
 // The ONLY settings docs this function may open, and the one field it may write
 // on each (plan §3 item 1, ship 5 rows; ship 9 adds simproCandidates — the
 // Simpro inbox list, read for the import and rewritten without the imported
-// one). Anything else — settings/users above all — is refused before any read.
-// Edited only with a row in the plan.
-const SETTINGS_DOCS = { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: [] /* read only */, simproCandidates: ["candidates"] };
+// one). Ship 10 adds the office lists: crewTeams now WRITES its `teams`
+// (crewTeams.set — one team added / edited / removed from the list),
+// crewRoster its `names` (one name), upcoming_jobs its `items` + the pipeline's
+// own `updated_at` (one row added / edited). Anything else — settings/users
+// above all — is refused before any read. Edited only with a row in the plan.
+const SETTINGS_DOCS = { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: ["teams"], simproCandidates: ["candidates"], crewRoster: ["names"], upcoming_jobs: ["items", "updated_at"] };
 function settingsDocFields(id) {
   const s = String(id || "");
   if (Object.prototype.hasOwnProperty.call(SETTINGS_DOCS, s)) return SETTINGS_DOCS[s];
@@ -848,6 +881,154 @@ async function jobSetup(io, requestId, action, args, ctx, finish, refused) {
   return { status: out.status, body: out.body };
 }
 
+// Ship 10: the office actions. Four shapes:
+//   broadcast.send     — NOT a transaction of its own: the app's OWN sendBroadcastAs
+//                        (index.js, factored out of the sendBroadcast callable — one
+//                        body, two callers) runs in-process as Koy's settings/users
+//                        record after ND.isBroadcaster says Koy's record would pass
+//                        requireBroadcaster; it writes broadcasts/<id> and every
+//                        recipient's bell copy through deliver() exactly as a tap on
+//                        Send does. The audit (its own write after the send) keeps
+//                        the title length, kind, label, recipient count + ids and the
+//                        delivery summary — never the message body. 10 / hour.
+//   autoTask.promote   — ONE transaction: the job, the needs carrying this autoTaskId
+//                        (query under the tx), then EITHER tx.create of autoTaskDoc's
+//                        literal with saveNeed's envelope (a second write to that id
+//                        fails) OR, when an open doc already carries the autoTaskId,
+//                        pushTo's onPatchNeed through the shared needPatch (patchNeed's
+//                        dotted keys + the stamp) — never a second doc.
+//   planIntake.decide  — NOT a transaction: the watcher's own decideById (the /decide
+//                        route's body — one function, two callers) runs the real
+//                        decide() with the exact body the Routine would post plus
+//                        by: "Koy (via Duet)"; its writes are the watcher's: the
+//                        agentQueue item (status / decision / decidedAt), the
+//                        agentFindings rows it creates / resolves, planIntakeState
+//                        (md5_, sender_, walk_, quote_ docs) and the Drive move. A
+//                        closed item is its 409, a bad body its 422 → 400.
+//   upcoming.add/edit, crewTeams.set, crewRoster.set — ONE transaction each on ONE
+//                        settings doc (SETTINGS_DOCS): the list read live, one item
+//                        changed, the list written back whole with the settings
+//                        stamp (upcoming_jobs with the pipeline's own updated_at
+//                        too); a missing doc is set with the fields + stamp as
+//                        mergeSaveSettingsFields does. A removed team / name leaves
+//                        the list — the doc is never deleted.
+async function office(io, requestId, action, args, ctx, finish, refused) {
+  const nowMs = Date.parse(ctx.nowIso);
+  const hourAgo = new Date(nowMs - 3600 * 1000).toISOString();
+
+  if (action === "broadcast.send") {
+    const koy = matchUserByName(ctx.users, "Koy");
+    const koyUser = koy.user && !koy.ambiguous ? koy.user : null;
+    const p = OF.planBroadcast(args, { users: ctx.users, koyUser, isBroadcaster: io.isBroadcaster, nowMs, rand: ctx.rand });
+    if (p.refused) return refused(/office broadcaster/.test(p.refused) ? 403 : 400, p.refused, { coll: "broadcasts" });
+    const auditBase = { coll: "broadcasts", docId: p.payload.id };
+    const recentSends = (await io.recentActions(hourAgo)).filter(a => a === "broadcast.send").length;
+    if (recentSends >= BROADCAST_PER_HOUR) throw new Refusal(429, `Duet has sent ${recentSends} team messages in the last hour — the limit is ${BROADCAST_PER_HOUR}. Try again later.`);
+    let res;
+    try {
+      res = await io.sendBroadcastAs(koyUser, p.payload);   // the app's own send, as Koy; attachments: [] always from here
+    } catch (e) {
+      const code = String((e && e.code) || "");
+      const msg = String((e && e.message) || "The send failed.").slice(0, 300);
+      const deterministic = ["invalid-argument", "permission-denied", "not-found", "failed-precondition"].includes(code);
+      return refused(deterministic ? 400 : 502, deterministic ? `${msg} Nothing was sent.` : `${msg} The message MAY have reached some people: check cc_list_announcements (and the bell) before sending again.`, { ...auditBase, senderCode: code, kind: p.kind, test: p.test, recipientCount: p.recipients.length });
+    }
+    const summary = res && res.summary && typeof res.summary === "object" ? res.summary : {};
+    const names = (k) => (Array.isArray(summary[k]) ? summary[k] : []);
+    const delivery = { total: Number(summary.total) || p.recipients.length, phone: Number(summary.phone) || 0, retrying: names("retrying"), bellOnly: names("bellOnly"), notSaved: names("notSaved") };
+    const note = p.test ? "TEST send: it went to Koy only and is not on record (the app's own rule for test sends)."
+      : `${p.kind === "important" ? "Important: each person taps Got it and it stays pinned on their My Day until they do." : p.kind === "discussion" ? "Discussion: every reply notifies the whole group." : "Announcement: one-way; the app shows who opened it."} ${delivery.phone} phone${delivery.phone === 1 ? "" : "s"} took it now${delivery.retrying.length ? `, ${delivery.retrying.length} retrying for 12 h` : ""}${delivery.bellOnly.length ? `, bell only for ${delivery.bellOnly.join(", ")}` : ""}${delivery.notSaved.length ? `; NOT saved for ${delivery.notSaved.join(", ")}` : ""}.`;
+    const body = { ok: true, requestId, action, broadcastId: res.id, kind: res.kind || p.kind, title: res.title || p.shownTitle, label: p.label, test: p.test, everyone: p.everyone, recipients: p.recipients.map(r => r.name), recipientCount: p.recipients.length, delivery, recorded: !p.test, by: koyUser.name, note, pushTo: p.recipients.map(r => r.name) };
+    const r = finish(200, body, { ok: true, ...auditBase, newDoc: !p.test, fields: p.test ? [] : ["broadcasts/" + res.id, "notifications/<recipient>/items/<nid> ×" + p.recipients.length], docs: p.test ? ["notifications/" + (koyUser.id || koyUser.name) + "/items/<nid> (test copy)"] : ["broadcasts/" + res.id, "notifications/*/items"], titleLength: p.payload.title.length, bodyLength: p.bodyLength, kind: p.kind, label: p.label, test: p.test, recipientCount: p.recipients.length, recipientIds: p.recipients.map(x => String(x.id || x.name)), delivery, attachments: 0 });
+    await io.runTx(async (tx) => { tx.set(io.auditRef(requestId), r.audit); });
+    return { status: 200, body };
+  }
+
+  if (action === "autoTask.promote") {
+    const jobId = String(args.jobId || "");
+    if (!JOB_ID.test(jobId)) return refused(400, "jobId must be the job's Command Center id (10–15 digits).", { coll: "needs" });
+    let out = null;
+    try {
+      await io.runTx(async (tx) => {
+        const s = await tx.get(io.jobRef(jobId));
+        const raw = s && s.exists ? s.data() : null;
+        const job = raw && raw.data ? { id: jobId, data: raw.data } : null;
+        const suffix = job ? OF.suffixOf(args.autoTaskId, jobId) : "";
+        const rows = job && suffix && OF.autoTaskKind(suffix) ? await io.needsByAutoTaskId(tx, jobId + suffix) : [];
+        const p = OF.planPromoteAutoTask(args, { ...ctx, nowMs, job, needs: rows.map(x => x.data) });
+        const auditBase = { coll: "needs", jobId, autoTaskId: p.autoTaskId || (job && suffix ? jobId + suffix : null) };
+        if (p.refused) { out = finish(job ? 400 : 404, { ok: false, refused: p.refused }, { ok: false, why: p.refused, ...auditBase, docId: null }); tx.set(io.auditRef(requestId), out.audit); return; }
+        const common = { requestId, action, jobId, jobName: job.data.name || "" };
+        if (p.noop) { out = finish(200, { ok: true, ...common, noop: true, message: p.result.message, ...p.result }, { ok: true, noop: true, ...auditBase, docId: p.needId, fields: [] }); tx.set(io.auditRef(requestId), out.audit); return; }
+        if (p.patch) {
+          const cur = rows.find(x => x.id === p.needId);
+          const upd = { ...stamp(requestId, freshIso(cur ? cur.updated_at : "")) };   // patchNeed: stampWrite({updated_at, saved_by, "data.<k>": v})
+          Object.keys(p.patch).forEach(k => { upd["data." + k] = p.patch[k]; });
+          tx.update(io.needRef(p.needId), upd);
+          out = finish(200, dropUndefined({ ok: true, ...common, ...p.result }), { ok: true, ...auditBase, docId: p.needId, fields: Object.keys(p.patch), before: p.before, after: p.after });
+          tx.set(io.auditRef(requestId), out.audit);
+          return;
+        }
+        tx.create(io.needRef(p.need.id), { data: p.need, ...stamp(requestId, ctx.nowIso) });   // saveNeed: stampWrite({data, updated_at, saved_by}) — create-only
+        out = finish(200, dropUndefined({ ok: true, ...common, ...p.result }), { ok: true, ...auditBase, docId: p.need.id, newDoc: true, fields: Object.keys(p.need), before: null, after: p.need, earlierDoneDoc: p.verifyDoc ? p.verifyDoc.id : null });
+        tx.set(io.auditRef(requestId), out.audit);
+      });
+    } catch (e) {
+      if (e && (e.code === 6 || /ALREADY_EXISTS|already exists/i.test(String(e.message || "")))) return refused(409, "That task id already exists. Nothing was written.", { coll: "needs" });
+      throw e;
+    }
+    return { status: out.status, body: out.body };
+  }
+
+  if (action === "planIntake.decide") {
+    const p = OF.planDecidePlanIntake(args);
+    const auditBase = { coll: "agentQueue", docId: p.item || null, docs: ["agentQueue/<item>", "agentFindings/*", "planIntakeState/*", "Drive: _Plan Inbox → the plan folder or Dismissed"] };
+    if (p.refused) return refused(400, p.refused, auditBase);
+    let res;
+    try {
+      res = await io.planDecide(p.item, p.body);   // the watcher's own decideById: queue read, open-only, decide(), the queue update
+    } catch (e) {
+      const code = Number(e && e.code) || 0;
+      const msg = String((e && e.message) || "").slice(0, 300);
+      if (code === 404) return refused(404, `No plan-intake item ${p.item} in the current mode (${msg}). Nothing was decided.`, auditBase);
+      if (code === 409) return refused(409, `That item was already decided (${msg}). Nothing was decided.`, auditBase);
+      if (code === 422) return refused(400, `${msg}. Nothing was decided.`, auditBase);
+      return refused(502, `${msg || "The decide failed."} The decision MAY have landed: check cc_list_plan_intake_queue before deciding again.`, { ...auditBase, code });
+    }
+    const body = { ok: true, requestId, action, item: p.item, decision: p.action, mode: res.mode, status: res.status, note: res.note || "", by: OF.PLAN_BY, type: res.type || "", filename: res.filename || "", from: res.from || "", dryRun: res.status === "decided_dry",
+      effect: res.status === "decided_dry" ? "Dry mode: the queue item is marked decided_dry and nothing moved in Drive." : p.action === "file" ? `Filed into ${res.note || "the plan folder"} (the PDF moved out of _Plan Inbox; the finding is resolved; the sender's history counts it).` : p.action === "dismiss" ? "Moved to _Plan Inbox/Dismissed (never deleted); the finding is resolved." : p.action === "unmatched" ? "An unmatched-plan finding is on the dashboard with the best guess." : "The walk is matched; the finding is resolved.", pushTo: [] };
+    const { item: _i, ...decision } = p.body;
+    const r = finish(200, body, { ok: true, ...auditBase, fields: ["status", "decision", "decidedAt"], decision, before: { status: "open" }, after: { status: res.status, note: res.note || "" }, mode: res.mode });
+    await io.runTx(async (tx) => { tx.set(io.auditRef(requestId), r.audit); });
+    return { status: 200, body };
+  }
+
+  // upcoming.add / upcoming.edit / crewTeams.set / crewRoster.set — one settings list each
+  const docId = action.startsWith("upcoming.") ? "upcoming_jobs" : action === "crewTeams.set" ? "crewTeams" : "crewRoster";
+  const listKey = docId === "upcoming_jobs" ? "items" : docId === "crewTeams" ? "teams" : "names";
+  let out = null;
+  await io.runTx(async (tx) => {
+    const s = await tx.get(io.settingsRef(docId));
+    const docData = s && s.exists ? s.data() : null;
+    const list = docData && Array.isArray(docData[listKey]) ? docData[listKey] : null;
+    const p = docId === "upcoming_jobs" ? OF.planUpcoming(action, args, { ...ctx, items: list, uid: () => String(nowMs) })
+      : docId === "crewTeams" ? OF.planCrewTeams(args, { ...ctx, teams: list, nowMs })
+      : OF.planCrewRoster(args, { ...ctx, names: list });
+    const auditBase = { coll: "settings", docId, itemId: p.itemId || p.teamId || (p.result && p.result.name) || null };
+    if (p.refused) { out = finish(400, { ok: false, refused: p.refused }, { ok: false, why: p.refused, ...auditBase }); tx.set(io.auditRef(requestId), out.audit); return; }
+    const common = { requestId, action, doc: "settings/" + docId };
+    if (p.noop) { out = finish(200, dropUndefined({ ok: true, ...common, noop: true, message: (p.result && p.result.message) || "Already that way — nothing to change.", ...p.result }), { ok: true, noop: true, ...auditBase, fields: [] }); tx.set(io.auditRef(requestId), out.audit); return; }
+    const st = settingsStamp(requestId, freshIso(docData ? docData.updatedAt : ""));
+    const fields = docId === "upcoming_jobs" ? { items: p.items, updated_at: ctx.nowIso } : docId === "crewTeams" ? { teams: p.teams } : { names: p.names };
+    if (docData) tx.update(io.settingsRef(docId), { ...dropUndefined(fields), ...st });   // mergeSaveSettingsFields: tx.update({...fields, ...stamp})
+    else tx.set(io.settingsRef(docId), { ...dropUndefined(fields), ...st });               // … or tx.set when the doc doesn't exist yet
+    const result = { ok: true, ...common, ...p.result, listNow: fields[listKey].length, newDoc: !docData, pushTo: [] };
+    out = finish(200, dropUndefined(result), { ok: true, ...auditBase, fields: Object.keys(fields).map(k => docId + "." + k), before: p.before, after: p.after, newDoc: !docData, listLength: fields[listKey].length });
+    tx.set(io.auditRef(requestId), out.audit);
+  });
+  return { status: out.status, body: out.body };
+}
+
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -938,6 +1119,11 @@ async function handle(body, io) {
     return { status: r.status, body: r.body };
   }
 
+  if (OFFICE_ACTIONS.includes(b.action)) {
+    const r = await office(io, requestId, b.action, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
   // task.update
   const needId = String(args.needId || "");
   if (!NEED_ID.test(needId)) return refused(400, "needId must be a task id like need_1730650000001_ab12c.", { coll: "needs" });
@@ -966,12 +1152,21 @@ async function handle(body, io) {
 // (code 6). Storage: the app's bucket (src/App.js storageBucket), objects saved
 // with a Firebase download token in their custom metadata so the URL the app
 // gets from getDownloadURL() and the one built here are the same string.
-function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps }) {
+function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps, officeDeps }) {
   const bucket = storage ? storage.bucket(PH.BUCKET) : null;
   const T = (v) => String(v == null ? "" : v).trim();
   const md = materialDeps || {};
+  const od = officeDeps || {};
   const R = require("../materialPO/rules.js");
   return {
+    // Ship 10: the app's OWN announcement sender (index.js sendBroadcastAs — the
+    // sendBroadcast callable's body, factored out, two callers), its gate, and
+    // the plan-intake watcher's own decideById (the /decide route's body).
+    sendBroadcastAs: async (user, payload) => { if (typeof od.sendBroadcastAs !== "function") throw new Error("Announcements are not wired into duetApi (officeDeps.sendBroadcastAs)."); return od.sendBroadcastAs(user, payload); },
+    isBroadcaster: (u) => (typeof od.isBroadcaster === "function" ? !!od.isBroadcaster(u) : false),
+    planDecide: async (itemId, body) => { if (typeof od.planDecide !== "function") throw Object.assign(new Error("Plan intake is not wired into duetApi (officeDeps.planDecide)."), { code: 500 }); return od.planDecide(itemId, body); },
+    // The needs carrying one autoTaskId (autoDelegation's input), read under the transaction's lock.
+    needsByAutoTaskId: async (tx, id) => { const s = await tx.get(db.collection("needs").where("data.autoTaskId", "==", String(id))); return s.docs.map(d => { const r = d.data() || {}; return { id: d.id, data: r.data || null, updated_at: r.updated_at || "" }; }).filter(x => x.data); },
     // Ship 8: the PO config the send factory's loadCfg reads — mode / testTo /
     // bids / liveAccess from gc_config/material_po, and from gc_config/mail ONLY
     // soakTo (the test inbox default). The mail key is never read into this.
@@ -1080,8 +1275,8 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
   };
 }
 
-module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps }) {
-  const io = firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps });
+module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps, officeDeps }) {
+  const io = firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps, officeDeps });
   const duetApi = functions
     // invoker "public" like planRoutineApi: Google's door stays open so Vercel
     // can reach it; the bearer-token check is the gate. 512 MB / 120 s since
@@ -1122,7 +1317,9 @@ module.exports.TIMEOFF_ACTIONS = TIMEOFF_ACTIONS;
 module.exports.MATERIAL_CARD_ACTIONS = MATERIAL_CARD_ACTIONS;
 module.exports.MATERIAL_PO_ACTIONS = MATERIAL_PO_ACTIONS;
 module.exports.JOB_SETUP_ACTIONS = JOB_SETUP_ACTIONS;
+module.exports.OFFICE_ACTIONS = OFFICE_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
+module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;
 module.exports.settingsDocAllowed = settingsDocAllowed;
 module.exports.settingsDocFields = settingsDocFields;

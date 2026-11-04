@@ -216,7 +216,7 @@ await ok("handle job.createFromSimpro: tx.create on jobs/<data.id> with the app'
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
   const created = writes(io, "create"); assert.strictEqual(created.length, 1); const [, pth, doc] = created[0];
   assert.strictEqual(pth, "jobs/" + r.body.jobId); assert.strictEqual(doc.data.id, r.body.jobId, "data.id === doc id (the loader keys by it)");
-  assert.deepStrictEqual(Object.keys(doc).sort(), CREATE_ENVELOPE); assert.strictEqual(doc.updated_at, NOW); assert.strictEqual(doc.saved_by, "Duet (Koy)"); assert.strictEqual(doc.app_build, 608); assert.ok(/^608\.duet/.test(doc.w));
+  assert.deepStrictEqual(Object.keys(doc).sort(), CREATE_ENVELOPE); assert.strictEqual(doc.updated_at, NOW); assert.strictEqual(doc.saved_by, "Duet (Koy)"); assert.ok(Number.isInteger(doc.app_build) && doc.app_build >= 608); assert.ok(new RegExp("^" + doc.app_build + "\\.duet").test(doc.w));
   const expect = JS.blankJob(mint(NOW_MS)); Object.assign(expect, { division: "commercial", name: "Battle Creek B", address: "88 Creek Rd, Alpine", simproNo: "1501", customer: "Creek LLC", simproBusinessGroup: "Commercial", foreman: "Unassigned", _importedFromSimpro: true, imported_at: NOW });
   assert.deepStrictEqual(doc.data, expect, "the written doc is blankJob() + the import fields, byte for byte");
   const cu = oneUpdate(io, "settings/simproCandidates"); assert.deepStrictEqual(Object.keys(cu).sort(), ["candidates", "updated_at"]); assert.deepStrictEqual(cu.candidates.map(c => c.simproId), ["1500", "1502", "1438"]); assert.strictEqual(cu.updated_at, NOW);
@@ -489,12 +489,12 @@ await ok("planJoinProject + handle project.join: the four-field patch; same divi
 await ok("api.js: the eight ship-9 actions are routed by jobSetup(), not jobWrite(); BUILD 608; SETTINGS_DOCS gains ONLY simproCandidates.candidates (settings/users still refused); still no tx.delete and exactly three .delete(; replay of a requestId answers the same without a second create", async () => {
   assert.deepStrictEqual(api.JOB_SETUP_ACTIONS, ["job.createFromSimpro", "job.setInfo", "job.setSection", "job.archive", "project.create", "project.patch", "project.createBuilding", "project.join"]);
   for (const a of api.JOB_SETUP_ACTIONS) assert.ok(api.ACTIONS.includes(a) && !api.JOB_WRITE_ACTIONS.includes(a));
-  assert.strictEqual(api.BUILD, 608);
-  assert.deepStrictEqual(api.SETTINGS_DOCS, { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: [], simproCandidates: ["candidates"] });
+  assert.ok(api.BUILD >= 608);   // ship 10 bumped it to 609
+  assert.deepStrictEqual(api.SETTINGS_DOCS, { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: ["teams"], simproCandidates: ["candidates"], crewRoster: ["names"], upcoming_jobs: ["items", "updated_at"] });   // ship 10: crewTeams now written (teams), crewRoster.names, upcoming_jobs.items (+ the pipeline's updated_at)
   assert.ok(api.settingsDocAllowed("simproCandidates") && !api.settingsDocAllowed("users") && !api.settingsDocAllowed("main"));
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
   assert.ok(!/tx\.delete\(/.test(src), "no tx.delete in api.js"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 3, "exactly three .delete( (Storage cleanup, versions prune, the planner cell sentinel)");
-  assert.strictEqual((src.match(/tx\.create\(/g) || []).length, 4, "four tx.create: the task, the import, the project, the building");
+  assert.strictEqual((src.match(/tx\.create\(/g) || []).length, 5, "five tx.create: the task, the import, the project, the building, the promoted auto task (ship 10)");
   assert.ok(!/require\((?!"\.\.\/jobShape\.js"|"\.\.\/punchTicks\.js"|"\.\/punch\.js"|"\.\/needs\.js")/.test(fs.readFileSync(path.join(root, "functions", "duetWrites", "jobSetup.js"), "utf8")), "jobSetup.js requires no Firebase");
   const io = fakeIo();
   const first = await api.handle({ requestId: RID(777), action: "job.createFromSimpro", args: { simproId: "1500" } }, io);
