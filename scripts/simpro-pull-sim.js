@@ -557,6 +557,22 @@ test("The hourly run rewrites the sheet: every PO, right status, Needs a look, s
   assert.deepEqual(fs.calls.clear[0].requestBody.ranges, [`Summary!A${3 + sum.length}:J`, `'All POs'!A${2 + all.length}:L`, `'Needs a look'!A${2 + needs.length}:G`], "old rows below get cleared, after the write");
   const cfg = ctx.db.store.get("settings/simproPoSync");
   assert.equal(cfg.totals.pos, 6); assert.equal(cfg.totals.needsLook, 3); assert.equal(cfg.sheetError, ""); assert(cfg.sheetAt);
+  // 2026-11-04: the dashboard's own copy of Needs a look and Summary, on the same doc.
+  assert.equal(cfg.view.needs.length, 3); assert.equal(cfg.sheetOff, false);
+  assert.deepEqual(Object.keys(cfg.view.needs[0]).sort(), ["date", "job", "jobNo", "po", "todo", "vendor", "what"]);
+  assert.equal(cfg.view.jobs.length, sum.length - 1, "per-job rows, the All jobs total left out");
+  assert.equal(cfg.view.jobs.find((r) => r.job === "Stratton Residence").pos, 4);
+});
+
+test("Sheet switched off: the dashboard copy still updates, the sheet is not touched", async () => {
+  const ctx = setup({ s: STRATTON() });
+  ctx.db.store.set("settings/simproPoSync", { mode: "live", sheet: "off" });
+  ctx.sim.pos = [PO(7302, 959, "Residential (Finish)"), PO(7345, 1460, "Residential (Finish)")];
+  const fs = fakeSheets();
+  await withSheets(ctx, fs).run({ full: true });
+  assert.equal(fs.calls.update.length, 0); assert.equal(fs.calls.clear.length, 0);
+  const cfg = ctx.db.store.get("settings/simproPoSync");
+  assert.equal(cfg.sheetOff, true); assert.equal(cfg.view.needs.length, 1); assert(cfg.viewAt); assert.equal(cfg.sheetAt, undefined);
 });
 
 test("A sheet failure changes nothing else, is logged, and old rows stay", async () => {

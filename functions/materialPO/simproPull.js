@@ -295,6 +295,14 @@ function buildSheetRows({ pos, ledger, jobs, logNos, nowIso, startDate }) {
   };
 }
 
+// The dashboard's copy of the sheet's Needs a look and Summary tabs, as small objects
+// (no dollar field exists in either). Capped so the settings doc stays far under 1 MB.
+function poView(built, nowIso) {
+  const needs = (built.needs || []).slice(0, 150).map((r) => ({ what: r[0], po: r[1], date: r[2], jobNo: r[3], job: r[4], vendor: r[5], todo: r[6] }));
+  const jobs = (built.summary || []).slice(1, 301).map((r) => ({ job: r[0], jobNo: r[1], pos: r[2], created: r[3], typed: r[4], linked: r[5], fromApp: r[6], orderSent: r[7], pickedUp: r[8], needsLook: r[9] }));
+  return { at: nowIso, needs, needsMore: Math.max(0, (built.needs || []).length - needs.length), jobs };
+}
+
 const patchCard = (arr, id, patch) => (arr || []).map((c) => (c && c.id === id ? { ...c, ...patch } : c));
 
 module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, requireAppKey, getSheets = null }) {
@@ -316,7 +324,7 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
     let c = {};
     try { const d = await CFG().get(); c = d.exists ? (d.data() || {}) : {}; } catch (e) {}
     const mode = ["off", "dry", "live"].includes(T(c.mode)) ? T(c.mode) : "dry";
-    return { mode, startDate: T(c.startDate) || START_DATE, waiting: (c.waiting || []).map(String), sheetId: T(c.sheetId) || SHEET_ID };
+    return { mode, startDate: T(c.startDate) || START_DATE, waiting: (c.waiting || []).map(String), sheetId: T(c.sheetId) || SHEET_ID, sheet: T(c.sheet) === "off" ? "off" : "on" };
   }
 
   async function fetchPos({ start, jobNo }) {
@@ -477,13 +485,14 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
   // Values only (RAW, so a PO's notes can't become a formula): the look of the sheet was
   // set once by hand. New rows go in first and old ones are cleared after, so a failed
   // write leaves the last good sheet.
-  async function refreshSheet(cfg) {
-    if (!getSheets) return null;
+  async function buildPoRows(cfg) {
     const pos = await fetchPos({ start: cfg.startDate });
     const [ledSnap, jobSnap, logNos] = [await LEDGER().where("dateIssued", ">=", cfg.startDate).get(), await JOBS().get(), await logNumbers()];
     const jobs = [];
     jobSnap.forEach((d) => jobs.push({ id: d.id, data: (d.data() || {}).data }));
-    const built = buildSheetRows({ pos, ledger: ledSnap.docs.map((d) => ({ id: d.id, ...d.data() })), jobs, logNos, nowIso: new Date().toISOString(), startDate: cfg.startDate });
+    return buildSheetRows({ pos, ledger: ledSnap.docs.map((d) => ({ id: d.id, ...d.data() })), jobs, logNos, nowIso: new Date().toISOString(), startDate: cfg.startDate });
+  }
+  async function refreshSheet(cfg, built) {
     const sheets = getSheets();
     await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: cfg.sheetId, requestBody: { valueInputOption: "RAW", data: [
       { range: "Summary!A1", values: [[built.note]] },
@@ -574,11 +583,23 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
     const counts = { listed: listed.length, fromApp: fromApp.length, typed: 0, linked: 0, created: 0, waiting: skips.length, errors: errors.length, picked: extra.picked, folded: extra.folded, voided: extra.voided };
     rows.forEach((r) => { counts[r.how]++; });
     let sheetInfo = {};
+    // 2026-11-04 (Koy, "that works"): the same rows also land on this doc as `view`, so the
+    // dashboard shows Needs a look and the per-job counts itself. settings/simproPoSync.sheet
+    // = "off" then stops the hourly sheet rewrite; the sheet stays as it was (an archive).
     if (full && !jobNo && getSheets) {
-      try { const b = await refreshSheet(cfg); sheetInfo = { sheetId: cfg.sheetId, sheetAt: new Date().toISOString(), totals: b.totals, sheetError: "" }; }
+      let b = null;
+      const nowV = new Date().toISOString();
+      try { b = await buildPoRows(cfg); sheetInfo = { totals: b.totals, view: poView(b, nowV), viewAt: nowV, sheetOff: cfg.sheet === "off" }; }
       catch (e) {
         sheetInfo = { sheetError: String(e.message || e).slice(0, 200) };
-        functions.logger.error("[simproPull] sheet failed", { error: String(e.message || e) });
+        functions.logger.error("[simproPull] PO list failed", { error: String(e.message || e) });
+      }
+      if (b && cfg.sheet !== "off") {
+        try { await refreshSheet(cfg, b); Object.assign(sheetInfo, { sheetId: cfg.sheetId, sheetAt: new Date().toISOString(), sheetError: "" }); }
+        catch (e) {
+          sheetInfo.sheetError = String(e.message || e).slice(0, 200);
+          functions.logger.error("[simproPull] sheet failed", { error: String(e.message || e) });
+        }
       }
     }
     if (!jobNo) {
@@ -607,4 +628,4 @@ module.exports = function makeSimproPull({ functions, db, simproReqWithRetry, re
 
   return { scheduledSimproPOSync, syncSimproPOsForJob, run, refreshSheet, loadCfg };
 };
-Object.assign(module.exports, { START_DATE, LIST_MATCH, plainLines, listScore, typedNumbers, isFromApp, sourceFor, listFor, planPo, planFold, buildCard, mdy, buildSheetRows, sheetDate, SHEET_ID });
+Object.assign(module.exports, { START_DATE, LIST_MATCH, plainLines, listScore, typedNumbers, isFromApp, sourceFor, listFor, planPo, planFold, buildCard, mdy, buildSheetRows, poView, sheetDate, SHEET_ID });

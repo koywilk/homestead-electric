@@ -46,8 +46,8 @@ const app = fs.readFileSync(path.join(__dirname, "..", "src", "App.js"), "utf8")
 const grab = (name) => { const i = app.indexOf(`function ${name}(`); assert.ok(i >= 0, name); let depth = 0, j = app.indexOf("{", i);
   for (; j < app.length; j++) { if (app[j] === "{") depth++; else if (app[j] === "}" && --depth === 0) break; } return app.slice(i, j + 1); };
 const sb = {}; vm.createContext(sb);
-vm.runInContext(["odClaudeJobLabel", "odClaudeFold", "odClaudeSample"].map(grab).join("\n") + "\n;globalThis.__x = { odClaudeJobLabel, odClaudeFold, odClaudeSample };", sb);
-const { odClaudeJobLabel, odClaudeFold, odClaudeSample } = sb.__x;
+vm.runInContext(["odClaudeJobLabel", "odClaudeFold", "odClaudeSample", "odPoSample"].map(grab).join("\n") + "\n;globalThis.__x = { odClaudeJobLabel, odClaudeFold, odClaudeSample, odPoSample };", sb);
+const { odClaudeJobLabel, odClaudeFold, odClaudeSample, odPoSample } = sb.__x;
 const jobsX = [{ id: "1773670526965", simproNo: "989", name: "Bohannan" }, { id: "2", simproNo: "1443", name: "1443 Koplin Residence" }];
 assert.strictEqual(odClaudeJobLabel({ jobId: "1773670526965" }, jobsX).label, "989 Bohannan");
 assert.strictEqual(odClaudeJobLabel({ jobId: "2" }, jobsX).label, "1443 Koplin Residence", "a name that already starts with its number is not doubled");
@@ -60,4 +60,6 @@ const smp = odClaudeSample(jobsX, [{ name: "Gage Lund" }], false);
 assert.strictEqual(smp.sample, true); assert.strictEqual(smp.watch, undefined, "sample owners' view has no message list either");
 assert.ok(odClaudeSample(jobsX, [], true).watch.length > 0);
 assert.ok(odClaudeSample([], [], true).changes.length > 0, "no jobs loaded yet: still draws");
+const ps = odPoSample(jobsX); assert.strictEqual(ps.sample, true); assert.ok(ps.needs.length && ps.jobs.length);
+assert.ok(odPoSample([]).needs.length, "draws with no jobs loaded");
 console.log("claude-activity-test: ok");

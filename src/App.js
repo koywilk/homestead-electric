@@ -49407,6 +49407,18 @@ function odClaudeSample(jobs, users, full) {
     kindLabel: { flagged: "Flagged to Koy", handled: "Already handled", acted: "Acted on", dismissed: "Nothing needed" }, ...(full ? { watch } : {}) };
 }
 
+// Preview only: the Automations tab's PO list before the updated PO function has written
+// settings/simproPoSync.view. Built in the browser from today's jobs; marked as sample.
+function odPoSample(jobs) {
+  const live = (jobs || []).filter(j => j && j.simproNo && !j.archived).slice(0, 6);
+  const J = (i) => live[i % Math.max(1, live.length)] || { simproNo: "1000", name: "Sample job" };
+  const need = (i, po, what, todo) => ({ what, po, jobNo: J(i).simproNo, job: J(i).name, vendor: "CED", todo });
+  return { sample: true, needsMore: 0,
+    needs: [need(0, 7345, "No open job has this Simpro #", "Add the job to the app, or fix its Simpro #. The PO comes in by itself."),
+      need(1, 7384, "Sent from the app, but no card has the number", "Type the PO number on the card it belongs to.")],
+    jobs: live.slice(0, 5).map((j, i) => ({ job: j.name, jobNo: j.simproNo, pos: 6 - i, created: 2, typed: 1, linked: 0, fromApp: 3 - (i % 3), orderSent: 2, pickedUp: 4 - i > 0 ? 4 - i : 0, needsLook: i < 2 ? 1 : 0 })) };
+}
+
 // The app has no error boundary, so a throw here would blank every screen.
 // This keeps a dashboard bug inside the Dashboard tab.
 class OdBoundary extends Component {
@@ -51001,6 +51013,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           : odClaudeSample(jobs, users, identity && identity.id === "koy" && !claudeOwners)); });
     return () => { dead = true; };
   }, [tab, claudeTick, claudeOwners]); // eslint-disable-line
+  // The Appliance Loads routine's own Run Log tab (one row a night), read the same way the
+  // Home Runs import reads that sheet's Master tab (public CSV, no sign-in). Read-only.
+  const [claudeRuns, setClaudeRuns] = useState(undefined);  // undefined = loading, null = could not read
+  useEffect(() => {
+    if (tab !== "claude") return undefined;
+    let dead = false;
+    fetch(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent("Run Log")}`)
+      .then(r => r.ok ? r.text() : Promise.reject(new Error(String(r.status))))
+      .then(t => { if (dead) return; const rows = parseCSVText(t).filter(r => /^\d{4}-\d{2}-\d{2}$/.test(String(r[0] || "").trim()));
+        setClaudeRuns(rows.map(r => ({ date: r[0].trim(), read: r[1] || "", jobs: r[2] || "", tbd: r[3] || "", notInCC: r[5] || "", added: r[8] || "", errors: r[9] || "" })).reverse()); })
+      .catch(() => { if (!dead) setClaudeRuns(null); });
+    return () => { dead = true; };
+  }, [tab, claudeTick]);
   const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
   useEffect(() => {
     if (tab !== "costs" || costShard == null || costsCc[costShard]) return undefined;
@@ -52015,7 +52040,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         {(() => {
           if (simproPo === undefined) return <div className="od-status"><span>reading…</span></div>;
           if (simproPo === null) return <div className="od-status"><span className="bad">The PO pull's status could not be read.</span></div>;
-          const lastAt = odDate(simproPo.sheetAt || (simproPo.lastRun && simproPo.lastRun.at));
+          const lastAt = odDate(simproPo.viewAt || simproPo.sheetAt || (simproPo.lastRun && simproPo.lastRun.at));
           const t = simproPo.totals || null;
           const errs = (simproPo.lastRun && simproPo.lastRun.errors) || [];
           return (<>
@@ -52024,9 +52049,31 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               <span>Last hourly check {lastAt ? <b>{odDow(lastAt)} {odTime(lastAt)}</b> : "—"}</span>
               {t && <span>{odPlural(t.pos, "PO")} · {t.created} new from Simpro · {t.linked} filled in · {t.typed} typed · {t.fromApp} from the app · {t.orderSent} open · {t.pickedUp} picked up</span>}
               {errs.length > 0 && <span className="bad">{odPlural(errs.length, "job")} failed on the last run</span>}
-              {simproPo.sheetError ? <span className="bad">The sheet didn't update: {simproPo.sheetError}</span> : null}
+              {simproPo.sheetOff ? <span>The sheet is off and kept as an archive</span> : simproPo.sheetError ? <span className="bad">The sheet didn't update: {simproPo.sheetError}</span> : null}
             </div>
-            {t && t.needsLook > 0 && <div className="od-warn wide">{odPlural(t.needsLook, "PO")} on the Needs a look tab. <button type="button" className="od-inlink" onClick={() => go(`https://docs.google.com/spreadsheets/d/${OD_SIMPRO_PO_SHEET}/edit`)}>Open sheet</button></div>}
+            {(() => {
+              // 2026-11-04 (Koy: "that works"): the sheet's Needs a look and Summary tabs, here.
+              // Until the updated PO function runs, a preview shows sample rows built from today's jobs.
+              const v = simproPo.view || odPoSample(jobs);
+              const jobRows = (v.jobs || []).slice().sort((a, b) => (b.needsLook - a.needsLook) || (b.pos - a.pos));
+              const byNo = (no) => d.allLive.find(j => isSimproJoinable(j) && String(j.simproNo || "").trim() === String(no || "").trim()) || null;
+              return (<>
+                {v.sample ? <div className="od-warn wide">Sample rows, so you can see the layout. The real list shows here after the first hourly check once the update is live.</div> : null}
+                <Sec right={`${(v.needs || []).length + (v.needsMore || 0)}`}>Needs a look</Sec>
+                <div className="od-list">
+                  {(v.needs || []).map((n, i) => { const j = byNo(n.jobNo); return (
+                    <OdItem key={`${n.po}-${i}`} color={OD_R} icon="alertTriangle" tag={`PO ${n.po}${n.vendor ? ` · ${n.vendor}` : ""}`}
+                      title={[n.jobNo, n.job].filter(Boolean).join(" ") || "No job"} sub={`${n.what}. ${n.todo}`} onClick={j ? () => openJob(j) : null}/>); })}
+                  {!(v.needs || []).length && <div className="od-empty">Nothing needs a look.</div>}
+                </div>
+                {jobRows.length > 0 && <details className="od-fold">
+                  <summary className="od-ct">POs by job<small>{odPlural(jobRows.length, "job")} · since 10/3 · tap a job to open it</small></summary>
+                  <div className="od-list">{jobRows.map(r => { const j = byNo(r.jobNo); return (
+                    <OdItem key={`${r.jobNo}-${r.job}`} color={r.needsLook ? OD_R : OD_B} icon="package" tag={r.needsLook ? `${r.needsLook} need a look` : ""}
+                      title={[r.jobNo, r.job].filter(Boolean).join(" ")} sub={`${odPlural(r.pos, "PO")} · ${r.orderSent} open · ${r.pickedUp} picked up · ${r.fromApp} from the app · ${r.created} new from Simpro`} onClick={j ? () => openJob(j) : null}/>); })}</div>
+                </details>}
+              </>);
+            })()}
           </>);
         })()}
       </div>
@@ -52377,6 +52424,14 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           {shown.length ? byDay(shown).map(g => <div key={g.k}><div className="od-sec"><span>{dayName(g.at)}</span><small>{odPlural(g.rows.length, "change")}</small></div><div className="od-list">{g.rows.map(changeItem)}</div></div>)
             : <div className="od-empty">No changes{cq || claudeApp !== "all" ? " match" : " in the last 14 days"}.</div>}
         </div>
+        <div className="od-white od-pad">
+          <div className="od-ct">Appliance Loads, nightly run<small>{full ? "my" : "Claude's"} 1:00 AM pass over every job's appliance list · from the sheet's Run Log</small>
+            <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => { try { window.open(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`, "_blank", "noopener,noreferrer"); } catch (e) {} }}>Open sheet</button></div></div>
+          {claudeRuns === undefined ? <div className="od-empty">Reading the Run Log…</div> : claudeRuns === null ? <div className="od-empty">The Run Log couldn't be read just now.</div> : !claudeRuns.length ? <div className="od-empty">No runs logged yet.</div> :
+            <div className="od-list">{claudeRuns.slice(0, 7).map(r => { const bad = r.errors && r.errors !== "0"; return (
+              <OdItem key={r.date} color={bad ? OD_R : OD_G} icon={bad ? "alertTriangle" : "checkCircle"} tag={bad ? `${r.errors} errors` : "Ran clean"}
+                title={dayName(D(r.date + "T12:00:00"))} sub={[`${r.jobs} jobs`, `rows read ${r.read}`, r.added && r.added !== "0" ? `${r.added} rows added` : "no new rows", `${r.notInCC} not in Home Runs yet`, `${r.tbd} with no amps`].join(" · ")}/>); })}</div>}
+        </div>
         {full ? <div className="od-white od-pad">
           <div className="od-ct">What I checked<small>every message I read and what I did with it · only you see this</small></div>
           <div className="od-chips">
@@ -52397,6 +52452,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-list">
         <OdItem color={OD_G} icon="pencil" tag="Command Center" title="Every change Claude makes here" sub="logged by the app itself, with undo"/>
         <OdItem color={OD_B} icon="calendar" tag="Simpro" title="Every schedule entry Claude writes" sub="logged by the connector as it writes"/>
+        <OdItem color={OD_G} icon="zap" tag="Appliance Loads" title="The nightly routine's Run Log" sub="read from the sheet, which stays a sheet"/>
         <OdItem color={OD_SLATE} icon={full ? "mail" : "lock"} tag="Messages" title={full ? "Texts, chat and email Claude checks" : "Counts only"} sub={full ? "only Koy sees the words" : "the messages themselves stay with Koy"}/>
       </div>
     </>);
