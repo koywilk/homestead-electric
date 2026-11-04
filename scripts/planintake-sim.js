@@ -15,7 +15,7 @@ const { planDocPull } = require("../functions/docPull.js");
 const PARENT = "PARENT";
 const eq = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b), m);
 
-function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], groups = {}, unconverted = false } = {}) {
+function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], groups = {}, unconverted = false, chat = { spaces: [], messages: {}, media: {} }, chatSignIn = null } = {}) {
   // ── Firestore ──
   const store = new Map();               // "coll/id" → object
   const writes = [];
@@ -118,8 +118,20 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], 
     { id: "ev2", summary: "Weekly Scramble", location: "974 S Main St", recurringEventId: "r", creator: { email: "josh@homesteadelectric.net" }, start: { dateTime: "2026-07-07T09:00:00-06:00" } },
     { id: "ev3", summary: "Lot 91 - Redline Walk", creator: { email: "brady@homesteadelectric.net" }, start: { dateTime: "2026-08-03T09:00:00-06:00" } },
   ];
-  process.env.PLAN_INTAKE_GOOGLE_OAUTH = JSON.stringify({ client_id: "c", client_secret: "s", refresh_token: "r" });
+  process.env.PLAN_INTAKE_GOOGLE_OAUTH = JSON.stringify({ client_id: "c", client_secret: "s", refresh_token: "r", ...(chatSignIn ? { chat: chatSignIn } : {}) });
+  const chatCalls = [];
   const google = {
+    chat: () => ({
+      spaces: {
+        list: async () => { chatCalls.push("spaces.list"); return { data: { spaces: chat.spaces } }; },
+        messages: { list: async ({ parent, filter }) => {
+          chatCalls.push(`messages.list ${parent}`);
+          const after = (filter.match(/createTime > "([^"]+)"/) || [])[1] || "";
+          return { data: { messages: (chat.messages[parent] || []).filter(m => m.createTime > after) } };
+        } },
+      },
+      media: { download: async ({ resourceName }) => { chatCalls.push(`media ${resourceName}`); if (!chat.media[resourceName]) throw new Error("403 refused"); return { data: chat.media[resourceName] }; } },
+    }),
     auth: { GoogleAuth: function () {}, OAuth2: class { constructor(id, sec) { this.id = id; } setCredentials(c) { this.c = c; } } },
     calendar: () => ({ events: { list: async () => ({ data: { items: events } }) } }),
     gmail: () => ({ users: { messages: {
@@ -143,7 +155,7 @@ function world({ ccJobs = {}, appQuoteFolder = null, seedFiles = [], mail = [], 
   });
   const setMode = (mode, extra = {}) => store.set("planIntakeState/config", { ...(get("planIntakeState/config") || {}), mode, ...extra });
   const docs = (coll) => [...store.keys()].filter(k => k.startsWith(`${coll}/`)).map(k => ({ id: k.slice(coll.length + 1), ...get(k) }));
-  return { pi, store, get, writes, files, driveLog, setMode, docs, pushes, mails, simproCalls: () => simproCalls };
+  return { pi, store, get, writes, files, driveLog, setMode, docs, pushes, mails, simproCalls: () => simproCalls, chatCalls };
 }
 const jobWrites = (w) => w.writes.filter(x => x.path.startsWith("jobs/"));
 const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueue|agentFindings|jobs)\//.test(x.path));
@@ -429,5 +441,114 @@ const outsideAllowed = (w) => w.writes.filter(x => !/^(planIntakeState|agentQueu
   eq([...w.files.values()].filter(f => /^Quote #2299/.test(f.name)).length, 1, "still exactly one folder for the quote");
 }
 
-console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only / quote-folder-name scenarios passed");
+// 14 ── texted plans (Koy 2026-11-03): the Mac drops PDF + note into _Plan Inbox/_From Texts
+{
+  const FOLDER = "application/vnd.google-apps.folder";
+  const hourAgo = new Date(Date.now() - 3600e3).toISOString(), justNow = new Date(Date.now() - 600e3).toISOString();
+  const note = (o) => Buffer.from(JSON.stringify(o));
+  const seed = () => [
+    { id: "INBOX0000000", name: "_Plan Inbox", mimeType: FOLDER, parents: [PARENT] },
+    { id: "DROP00000000", name: "_From Texts", mimeType: FOLDER, parents: ["INBOX0000000"] },
+    { id: "TXT1", name: "ab12cd34 - Tolbert Appliance Specs.pdf", parents: ["DROP00000000"], md5Checksum: "m-new", size: "9", createdTime: hourAgo, content: Buffer.from("%PDF-appl") },
+    { id: "TXT1N", name: "ab12cd34 - Tolbert Appliance Specs.pdf.json", mimeType: "application/json", parents: ["DROP00000000"], createdTime: hourAgo,
+      content: note({ filename: "Tolbert Appliance Specs.pdf", from: "Jeran Rybal", conversation: "Jeran Rybal", date: "2026-11-02", texts: [{ who: "Jeran Rybal", text: "Tolbert appliance package, final" }] }) },
+    { id: "TXT2", name: "ffff0000 - no note yet.pdf", parents: ["DROP00000000"], md5Checksum: "m-wait", size: "9", createdTime: justNow, content: Buffer.from("%PDF-wait") },
+    { id: "TXT3", name: "eeee1111 - Already Filed.pdf", parents: ["DROP00000000"], md5Checksum: "m-dup", size: "9", createdTime: hourAgo, content: Buffer.from("%PDF-dup") },
+    { id: "TXT3N", name: "eeee1111 - Already Filed.pdf.json", mimeType: "application/json", parents: ["DROP00000000"], createdTime: hourAgo, content: note({ filename: "Already Filed.pdf", from: "Josh" }) },
+    { id: "TXT4", name: "dddd2222 - still uploading.pdf", parents: ["DROP00000000"], size: "9", createdTime: hourAgo, content: Buffer.from("%PDF-up") },
+    { id: "TXT4N", name: "dddd2222 - still uploading.pdf.json", mimeType: "application/json", parents: ["DROP00000000"], createdTime: hourAgo, content: note({ filename: "still uploading.pdf" }) },
+  ];
+  // dry never touches the drop folder
+  const d = world({ seedFiles: seed() });
+  await (d.pi._runOnce());
+  eq(d.files.get("TXT1").parents, ["DROP00000000"], "dry: texted PDF left where the Mac put it");
+  eq(d.docs("agentQueue").filter(x => x.via === "text").length, 0, "dry: nothing queued from texts");
+
+  const w = world({ ccJobs: { j1407: { name: "Tolbert Residence", simproNo: "1407", driveFolderId: "" } }, seedFiles: seed() });
+  w.store.set("planIntakeState/md5_m-dup", { type: "md5", fileId: "SOMEWHERE_ELSE", where: "filed" });
+  w.setMode("live");
+  const c = await (w.pi._runOnce());
+  eq([c.text.queued, c.text.duplicate, c.text.waiting], [1, 1, 2], "one queued, one already filed, two waiting (no note yet / no checksum yet)");
+  const it = w.get("agentQueue/text_TXT1");
+  eq([it.type, it.via, it.from, it.filename, it.inboxFileId, it.date], ["email_pdf", "text", "Jeran Rybal (text)", "Tolbert Appliance Specs.pdf", "TXT1", "2026-11-02"], "queued like an emailed plan, marked as a text");
+  assert(/Tolbert appliance package/.test(it.body), "the texts around it go to the Routine");
+  eq([w.files.get("TXT1").parents, w.files.get("TXT1").name], [["INBOX0000000"], "2026-11-02 – Tolbert Appliance Specs.pdf"], "PDF moved up into _Plan Inbox, same id, dated name");
+  const done = [...w.files.values()].find(f => f.name === "Done" && f.parents[0] === "DROP00000000");
+  eq(["TXT1N", "TXT3", "TXT3N"].map(id => w.files.get(id).parents[0]), [done.id, done.id, done.id], "note + already-filed PDF moved to _From Texts/Done");
+  eq(["TXT2", "TXT4"].map(id => w.files.get(id).parents[0]), ["DROP00000000", "DROP00000000"], "waiting PDFs untouched");
+  eq(w.get("planIntakeState/md5_m-new").fileId, "TXT1", "checksum recorded so an emailed copy is a duplicate");
+  w.store.set("planIntakeState/config", { ...w.get("planIntakeState/config"), runLockAt: "" });
+  const again = await (w.pi._runOnce());
+  eq([again.text.queued, w.docs("agentQueue").filter(x => x.via === "text").length], [0, 1], "a second run queues nothing new");
+
+  const TOKEN = "e".repeat(64);
+  process.env.PLAN_ROUTINE_TOKEN = TOKEN;
+  const res = { code: 200, status(x) { this.code = x; return this; }, json(o) { this.body = o; return this; }, set() { return this; }, send(x) { this.body = x; return this; } };
+  await w.pi.planRoutineApi({ method: "POST", path: "/decide", query: {}, get: (h) => (h.toLowerCase() === "authorization" ? `Bearer ${TOKEN}` : ""),
+    body: { item: "text_TXT1", action: "file", kind: "job", number: "1407", category: "appliance", reason: "texted by Jeran: Tolbert appliance package" } }, res);
+  if (!(res.body && res.body.ok)) console.log("DECIDE:", res.code, JSON.stringify(res.body));
+  eq(res.body && res.body.ok, true, "the Routine files a texted plan the same way");
+  eq(w.files.get(w.files.get("TXT1").parents[0]).name, "APPLIANCE SPECS", "lands in MOST UPDATED / APPLIANCE SPECS, where the appliance pull reads");
+  const f = w.docs("agentFindings").find(x => x.type === "plans_filed" && /Tolbert Appliance Specs/.test(x.summary));
+  assert(f && f.links.every(l => l.url), "no blank Email link on a texted plan");
+  eq(w.driveLog.filter(x => x[0] === "delete").length, 0, "nothing deleted");
+}
+
+// 15 ── Google Chat plans (Koy 2026-11-03, "yes, reuse it" = the connector's read-only Chat sign-in)
+{
+  const KOY = "users/118138567027707443539";
+  const chat = {
+    spaces: [
+      { name: "spaces/AAA", displayName: "Tolbert Residence", spaceType: "SPACE", lastActiveTime: "2026-11-03T18:00:00Z" },
+      { name: "spaces/QUIET", displayName: "Old space", spaceType: "SPACE", lastActiveTime: "2026-10-01T00:00:00Z" },
+    ],
+    messages: { "spaces/AAA": [
+      { name: "spaces/AAA/messages/m0", createTime: "2026-11-03T16:50:00Z", sender: { name: "users/9", displayName: "Jeran Rybal" }, text: "Final Tolbert appliance package coming" },
+      { name: "spaces/AAA/messages/m1", createTime: "2026-11-03T17:00:00Z", sender: { name: "users/9", displayName: "Jeran Rybal" }, text: "here",
+        attachment: [{ contentName: "Tolbert Appliances.pdf", contentType: "application/pdf", attachmentDataRef: { resourceName: "spaces/AAA/attachments/r1" } },
+                     { contentName: "site photo.jpg", contentType: "image/jpeg", attachmentDataRef: { resourceName: "spaces/AAA/attachments/img" } }] },
+      { name: "spaces/AAA/messages/m2", createTime: "2026-11-03T17:05:00Z", sender: { name: KOY, displayName: "Koy" },
+        attachment: [{ contentName: "my own.pdf", contentType: "application/pdf", attachmentDataRef: { resourceName: "spaces/AAA/attachments/mine" } }] },
+      { name: "spaces/AAA/messages/m3", createTime: "2026-11-03T17:10:00Z", sender: { name: "users/7" },
+        attachment: [{ contentName: "Shared Set.pdf", contentType: "application/pdf", driveDataRef: { driveFileId: "PRIVATE_DRIVE_FILE" } }] },
+      { name: "spaces/AAA/messages/old", createTime: "2026-11-01T10:00:00Z", sender: { name: "users/9" },
+        attachment: [{ contentName: "before go-live.pdf", contentType: "application/pdf", attachmentDataRef: { resourceName: "spaces/AAA/attachments/old" } }] },
+    ] },
+    media: { "spaces/AAA/attachments/r1": Buffer.from("%PDF-chat-appliances"), "spaces/AAA/attachments/mine": Buffer.from("%PDF-mine"), "spaces/AAA/attachments/old": Buffer.from("%PDF-old") },
+  };
+  // switched off (no chatSince): Chat isn't even read
+  const off = world({ chat, chatSignIn: { client_id: "cc", client_secret: "cs", refresh_token: "cr", my_user: KOY } });
+  off.setMode("live");
+  await (off.pi._runOnce());
+  eq(off.chatCalls, [], "no chatSince: Chat is never read");
+  // switched on without the sign-in: one plain error, nothing else breaks
+  const nosign = world({ chat });
+  nosign.setMode("live", { chatSince: "2026-11-02T00:00:00Z" });
+  const cn = await (nosign.pi._runOnce());
+  assert(cn.errors.some(e => /^chat: Chat sign-in missing/.test(e)), "missing sign-in is reported");
+  assert(nosign.docs("agentFindings").some(f => f.type === "watcher_error"), "…as a watcher error finding");
+
+  const w = world({ ccJobs: { j1407: { name: "Tolbert Residence", simproNo: "1407", driveFolderId: "" } }, chat,
+    chatSignIn: { client_id: "cc", client_secret: "cs", refresh_token: "cr", my_user: KOY } });
+  w.setMode("live", { chatSince: "2026-11-02T00:00:00Z" });
+  const c = await (w.pi._runOnce());
+  eq([c.chatRead.spaces, c.chatRead.pdfs, c.chatRead.links], [1, 1, 1], "one active space read; one PDF dropped, one Drive file queued as a link");
+  assert(!w.chatCalls.includes("messages.list spaces/QUIET"), "a space quiet since the cursor isn't read");
+  assert(!w.chatCalls.some(x => /attachments\/(mine|img|old)$/.test(x)), "Koy's own PDF, the photo and pre-go-live posts are never downloaded");
+  const q = w.docs("agentQueue").filter(x => x.via === "chat");
+  const pdf = q.find(x => x.inboxFileId);
+  eq([pdf.from, pdf.subject, pdf.filename, pdf.date], ["Jeran Rybal (chat)", "Tolbert Residence", "Tolbert Appliances.pdf", "2026-11-03"], "the Chat PDF is queued like a texted plan");
+  assert(/Final Tolbert appliance package/.test(pdf.body), "the messages before it go to the Routine");
+  const inbox = [...w.files.values()].find(f => f.name === "_Plan Inbox");
+  eq(w.files.get(pdf.inboxFileId).parents, [inbox.id], "moved up into _Plan Inbox in the same run");
+  const link = q.find(x => !x.inboxFileId);
+  eq([link.from, link.link], ["users/7 (chat)", "https://drive.google.com/file/d/PRIVATE_DRIVE_FILE/view"], "a Drive file it can't open goes to the Routine as a link");
+  assert(w.get("planIntakeState/config").chatCursor, "the cursor moves on");
+  w.store.set("planIntakeState/config", { ...w.get("planIntakeState/config"), runLockAt: "", chatCursor: "" });
+  await (w.pi._runOnce());
+  eq(w.docs("agentQueue").filter(x => x.via === "chat").length, 2, "read again from chatSince: nothing queued twice");
+  eq(w.driveLog.filter(x => x[0] === "delete").length, 0, "nothing deleted");
+}
+
+console.log("planintake-sim: dry / live / idempotent / conflict / import-link / adopt / sign-in-alert / layout / hand-filed / from-here-on / email+routine-api / phase-4 delivery / residential-only / quote-folder-name / texted-plans / chat-plans scenarios passed");
 })().catch((e) => { console.error(e); process.exit(1); });
