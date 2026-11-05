@@ -62,6 +62,7 @@ assert.strictEqual(didKind("Flagged to Koy"), "flagged");
 assert.strictEqual(didKind("Already handled"), "handled");
 assert.strictEqual(didKind("Scheduled it"), "acted");
 assert.strictEqual(didKind("Nothing needed"), "dismissed");
+assert.strictEqual(didKind("CO proposed"), "flagged"); assert.strictEqual(didKind("Inspection proposed"), "flagged"); assert.strictEqual(didKind("Ready to book"), "flagged"); assert.strictEqual(didKind("Already on Simpro"), "handled");
 
 // The tab's browser helpers, compiled out of src/App.js as shipped (no JSX in them).
 const fs = require("fs"), path = require("path"), vm = require("vm");

@@ -48,7 +48,7 @@ const ACTION_LABEL = {
 // How the Watch tab's "What I did" column reads, folded to four kinds.
 function didKind(s) {
   const t = String(s || "").toLowerCase();
-  if (/flag|asked koy|to koy|needs koy/.test(t)) return "flagged";
+  if (/flag|propos|ready to book|asked koy|to koy|needs koy/.test(t)) return "flagged";   // "CO proposed", "Inspection proposed", "Ready to book" wait on Koy too
   if (/already|handled|done/.test(t)) return "handled";
   if (/schedul|wrote|added|logged|updated/.test(t)) return "acted";
   return "dismissed";
