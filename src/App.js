@@ -50939,6 +50939,64 @@ function odCostsCoHours(goalsDoc) {
   const m = new Map(); Object.keys(by).forEach(k => m.set(String(k), Number(by[k]) || 0)); return m;
 }
 
+// v616 Finish margin watch (Koy, 2026-11-05: "we need a job margin tracker, flagging finishes getting
+// close to 15 percent, and giving recomendations on how to hit margin"). Active jobs (Simpro status not
+// Invoiced; a job Josh's rule already counts as fully invoiced stays in, marked, since its CO and warranty
+// fixes still apply) whose finish has spending: ACTUAL finish net margin so far (sell − spent ÷ sell,
+// every cost center, the same numbers as the table), never a projection. Levels: under 15% · near
+// (15% up to 20%, picked because finish margin only drops as the work goes on) · at bid (margin still
+// above 20% but finish hours or material at 90%+ of the bid, Koy: "flag anything close to over or over").
+// Each job gets up to two fixes drawn from its own numbers; no dollar figure appears anywhere in it, so
+// the foreman view can show it as is. `jobs` gives pending COs, `ccByNo` (the cost-center shards, when
+// read) gives warranty hours. Pure: tested by scripts/finish-watch-test.js.
+const OD_FW_NEAR = 0.20;
+const odFwHrs = (t) => { const m = String(t || "").match(/(\d+(?:\.\d+)?)/); return m ? Number(m[1]) : 0; };
+function odCostsFinishWatch(rows, jobs, ccByNo) {
+  const board = {};
+  (jobs || []).forEach(j => { const sn = String((j && j.simproNo) || "").trim(); if (!sn || j.deleted || j.type === "quote") return;
+    if (!board[sn] || (board[sn].archived && !j.archived)) board[sn] = j; });
+  const r0 = (x) => Math.round(x);
+  const closing = (st) => ["Punch List", "Ready to Invoice"].includes(st);
+  const all = [];
+  (rows || []).forEach(j => {
+    if (!j || j.status === "Invoiced") return;
+    const billed = !!(j.josh && j.josh.counts);
+    const sell = j.finish_sell || 0, spent = (j.finish_matAct || 0) + (j.finish_labAct || 0);
+    if (!(sell > 0) || !(spent > 0)) return;
+    const m = (sell - spent) / sell;
+    const hU = j.finish_hrsUsed || 0, hE = j.finish_hrsEst || 0, mU = j.finish_matAct || 0, mE = j.finish_matEst || 0;
+    const hp = hE > 0 ? hU / hE : null, mp = mE > 0 ? mU / mE : null;
+    const level = m < OD_COST_GOAL ? "under" : m < OD_FW_NEAR ? "near" : ((hp != null && hp >= 0.9) || (mp != null && mp >= 0.9)) ? "bid" : null;
+    if (!level) return;
+    const rate = hU > 0 && (j.finish_labAct || 0) > 0 ? j.finish_labAct / hU : hE > 0 && (j.finish_labEst || 0) > 0 ? j.finish_labEst / hE : null;
+    const room = rate ? Math.max(0, ((1 - OD_COST_GOAL) * sell - spent) / rate) : null;   // hours of finish labor left before it drops under 15%
+    const left = Math.max(0, hE - hU);
+    const b = board[String(j.no)] || null;
+    const pend = ((b && b.changeOrders) || []).filter(c => c && c.coStatus && !["completed", "denied", "converted", "approved", "scheduled"].includes(c.coStatus));
+    const pendHrs = pend.reduce((a, c) => a + odFwHrs(c.time), 0);
+    const ccs = ccByNo && Array.isArray(ccByNo[String(j.no)]) ? ccByNo[String(j.no)] : null;
+    const warr = ccs ? ccs.filter(c => /warranty/i.test(String(c.type || ""))).reduce((a, c) => a + (c.finish_hrsUsed || 0), 0) : 0;   // only warranty hours that land on finish
+    const tm = /T\s*&\s*M/i.test(String(j.name || "")) || (ccs || []).some(c => /T\s*&\s*M/i.test(String(c.cc || "")) && (c.finish_sell || 0) > 0);
+    const recs = [];   // [priority, text]: the job-specific fixes first, the two lowest numbers are shown
+    if (tm) recs.push([0, "T&M job: the margin is set by how it is billed. Check every finish hour and part made it onto the invoice."]);
+    if (pend.length) recs.push([1, `${pend.length} CO${pend.length === 1 ? "" : "s"} still not approved${pendHrs ? ` (${r0(pendHrs * 10) / 10} h)` : ""}. Get ${pend.length === 1 ? "it" : "them"} signed before that work is done${billed ? "; the job is fully invoiced, so a CO is the only way to add sell now" : ", so the hours have sell behind them"}.`]);
+    if (warr >= 5) recs.push([2, `${r0(warr)} finish hours are booked to a warranty cost center, which has no sell. If any of it was added work, write a CO for it.`]);
+    if (hp != null && hp > 1) recs.push([3, `Finish hours are ${r0(hU - hE)} h over bid (${r0(hU)} of ${r0(hE)}). ${closing(j.status) || m < OD_COST_GOAL ? "Every hour from here comes off margin: send the smallest crew that can close it out." : `Finish it with the smallest crew that can${room != null && room >= 1 ? `; about ${r0(room)} h are left before it drops under 15%` : ""}.`}`]);
+    else if (hp != null && hp >= 0.9) recs.push([3, left < 1 ? `Finish hours are at ${r0(hp * 100)}% of bid. Any more come straight off margin.` : `Finish hours are at ${r0(hp * 100)}% of bid with ${r0(left)} h left on it. Keep the crew small${m >= OD_COST_GOAL && room != null && room >= 1 && room < left ? `: only about ${r0(room)} h are left before it drops under 15%` : ""}.`]);
+    else if (room != null && room < left && m >= OD_COST_GOAL) recs.push([3, `About ${r0(room)} h of finish are left before it drops under 15%, and the bid still has ${r0(left)} h. Plan the rest to fit.`]);
+    if (mp != null && mp > 1) recs.push([4, `Finish material is at ${r0(mp * 100)}% of bid. Check for parts to return to CED, and finish POs that belong to a CO or another job.`]);
+    else if (mp != null && mp >= 0.9) recs.push([4, `Finish material is at ${r0(mp * 100)}% of bid${hp != null && hp < 0.5 ? ` with finish hours only ${r0(hp * 100)}% used` : ""}. Check what is left is already bought, and return extras.`]);
+    if (billed && !pend.length) recs.push([5, "Fully invoiced already: only a new signed CO adds sell now, so check for added work that was never written up."]);
+    if (!recs.length) recs.push([6, closing(j.status) ? "Finish is closing under goal. Bill any open CO work before the final invoice, and return leftover material." : "Watch finish hours against the bid each week."]);
+    recs.sort((x, y) => x[0] - y[0]);
+    all.push({ no: String(j.no), name: j.name || "", jobId: j.jobId || null, status: j.status || "", foreman: j.boardForeman || j.foreman || "", lead: j.lead || "",
+      level, billed, m, hp, mp, hrsUsed: hU, hrsEst: hE, room: room == null ? null : r0(room), tm, recs: recs.slice(0, 2).map(x => x[1]) });
+  });
+  const rank = { under: 0, near: 1, bid: 2 };
+  all.sort((a, b) => rank[a.level] - rank[b.level] || (a.level === "bid" ? Math.max(b.hp || 0, b.mp || 0) - Math.max(a.hp || 0, a.mp || 0) : a.m - b.m) || a.name.localeCompare(b.name));
+  return { all, under: all.filter(x => x.level === "under").length, near: all.filter(x => x.level === "near").length, bid: all.filter(x => x.level === "bid").length };
+}
+
 function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -51192,6 +51250,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       .catch(() => { if (!dead) setClaudeRuns(null); });
     return () => { dead = true; };
   }, [tab, claudeTick]);
+  // v616 Finish margin watch: when its fold opens, read the cost-center shards it needs (warranty hours) —
+  // the same settings/phaseCostsCc<N> docs a tapped job reads. Read-only.
+  const [fwOpen, setFwOpen] = useState(false);
+  useEffect(() => {
+    if (tab !== "costs" || !fwOpen || !costsDoc) return undefined;
+    const n = Number(costsDoc.shardCount) || 0, want = [];
+    for (let i = 0; i < n; i++) if (!costsCc[i]) want.push(i);
+    if (!want.length) return undefined;
+    let dead = false;
+    want.forEach(i => getDoc(doc(db, "settings", "phaseCostsCc" + i)).then(snap => { if (!dead) setCostsCc(m => m[i] ? m : ({ ...m, [i]: snap.exists() ? ((snap.data() || {}).jobs || {}) : "err" })); },
+      () => { if (!dead) setCostsCc(m => m[i] ? m : ({ ...m, [i]: "err" })); }));
+    return () => { dead = true; };
+  }, [tab, fwOpen, costsDoc]); // eslint-disable-line
   const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
   useEffect(() => {
     if (tab !== "costs" || costShard == null || costsCc[costShard]) return undefined;
@@ -52441,6 +52512,30 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               </div>
             </details>);
         })()}
+        {(() => {   // v616 Finish margin watch: active finishes under 15%, near it (under 20%), or at 90%+ of bid hours / material
+          const ccByNo = {}; Object.keys(costsCc).forEach(k => { const sh = costsCc[k]; if (sh && sh !== "err") Object.assign(ccByNo, sh); });
+          const fw = odCostsFinishWatch(v.rows, jobs, ccByNo), team = (users || []).filter(u => u && u.active !== false);
+          if (!fw.all.length) return null;
+          const who = (r) => odCostsOwners(r, team, d.owns).map(odFirst).join(" · ") || "No one on the board";
+          const LV = { under: ["Under 15%", "bad"], near: ["Near 15%", "near"], bid: ["At bid", "near"] };
+          const pc = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+          return (
+            <details className="jc-fold warn jc-fw" open={fwOpen} onToggle={(e) => setFwOpen(e.currentTarget.open)}>
+              <summary><b>Finish margin watch</b><span className="jc-cnt">{fw.all.length}</span><small>{fw.under} under 15% · {fw.near} near (15 to 20%) · {fw.bid} at 90%+ of bid hours or material · actual finish margin so far, active jobs · tap a job for its cost centers</small></summary>
+              <div className="jc-fold-b"><div className="jc-scroll"><table className="jc-tbl jc-ov"><thead><tr><th className="l">Job</th><th className="l n">Foreman · lead</th><th className="r">Finish margin</th><th className="r">Hours of bid</th><th className="r">Material of bid</th><th className="l">How to hit margin</th></tr></thead>
+                <tbody>{fw.all.map(r => (
+                  <tr key={r.no} className="jc-ovr" onClick={() => { setCm("margin"); openFromChart(r.no); }}>
+                    <td className="l job"><b>{r.no} {r.name}</b><small>{r.status || "—"}{r.billed ? " · fully invoiced" : ""}{r.tm ? " · T&M" : ""}</small></td>
+                    <td className="l n">{who(r)}</td>
+                    <td className="r"><span className={`jc-fwm ${LV[r.level][1]}`}>{pc(r.m)}</span><small className="jc-fwl">{LV[r.level][0]}</small></td>
+                    <td className="r"><span className={r.hp != null && r.hp > 1 ? "jc-pct over" : ""}>{pc(r.hp)}</span><small className="dim"> {Math.round(r.hrsUsed)} / {Math.round(r.hrsEst)} h</small></td>
+                    <td className="r"><span className={r.mp != null && r.mp > 1 ? "jc-pct over" : ""}>{pc(r.mp)}</span></td>
+                    <td className="l jc-fwr"><ul>{r.recs.map((t, i) => <li key={i}>{t}</li>)}</ul></td>
+                  </tr>))}</tbody></table></div>
+                <p className="jc-cap">Finish margin is what finish has made so far: finish sell minus finish hours and material spent (committed included), every cost center. Near is 15 to 20% because finish margin only drops as the work goes on. Warranty hours show once the cost centers are read.</p>
+              </div>
+            </details>);
+        })()}
         {cWho ? <div className="jc-spot"><div><small>{cWho.role === "crew" ? "Crew, every job its people are credited with" : cWho.role === "person" ? "On the crew, their credited jobs" : "Credited jobs, Simpro technician"}</small><b>{cWho.person}</b></div>
           <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
           <button type="button" className="jc-btn hv" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
@@ -53318,6 +53413,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .jc-cnt{font:800 14px var(--jc-cond);background:var(--jc-char);color:#F2F4F6;padding:1px 8px;border-radius:999px}
         .odash .jc-fold.warn .jc-cnt{background:var(--jc-hv);color:var(--jc-ink)}
         .odash .jc-ov tr.jc-ovr{cursor:pointer}
+        .odash .jc-fw .jc-fwm{font:800 18px var(--jc-cond);font-variant-numeric:tabular-nums;padding:1px 7px;border-radius:4px}
+        .odash .jc-fw .jc-fwm.bad{background:var(--jc-red);color:#fff}.odash .jc-fw .jc-fwm.near{background:var(--jc-hv);color:var(--jc-ink)}
+        .odash .jc-fw .jc-fwl{display:block;font:600 12px var(--jc-body);color:var(--jc-dim);margin-top:2px}
+        .odash .jc-fw td.jc-fwr{min-width:320px;white-space:normal}.odash .jc-fw td.jc-fwr ul{margin:0;padding-left:16px}.odash .jc-fw td.jc-fwr li{margin:0 0 4px;font:500 13px/1.35 var(--jc-body)}
         .odash .jc-ov td.r,.odash .jc-ov th.r{text-align:right;white-space:nowrap}
         .odash .jc-hero{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
         .odash .jc-lbl{position:relative;background:var(--jc-cover);border:1px solid var(--jc-steel2);border-radius:8px;padding:12px 16px 12px 22px;box-shadow:0 1px 0 #fff inset,0 2px 0 rgba(20,24,28,.06)}
@@ -62117,9 +62216,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-04 · App SW version: v615
+**Last manifest update:** 2026-11-05 · App SW version: v616
 ---
 
+- **Job Costs: Finish margin watch — active finishes under or near 15%, or close to their bid, each with how to hit margin** · 'in-flight 2026-11-05' · 'SW v616' · 'odCostsFinishWatch' · 'OD_FW_NEAR' · 'fwOpen' · Koy: *"we need a job margin tracker, flagging finishes getting close to 15 percent, and giving recomendations on how to hit margin"*. A folded section on Job Costs under *Open jobs already past rough hours*, from the same nightly rows: every active job (Simpro status not Invoiced; one Josh's rule already counts as fully invoiced stays in, marked *fully invoiced*) whose finish has spending. **Finish margin = actual so far**: finish sell − finish hours and material spent (committed included) ÷ finish sell, every cost center — never projected. **Levels:** *Under 15%* (red), *Near 15%* = 15 to 20% (finish margin only drops as the work goes on), *At bid* = margin above 20% but finish hours or material at 90%+ of the bid. Order: under (worst first), near, at bid. **How to hit margin:** up to two lines per job from its own numbers, job-specific first: COs not yet approved on the Command Center job (count and hours: get them signed before the work), finish hours on a warranty cost center (write a CO if it was added work; read from the cost-center shards when the fold opens), finish hours over or at 90% of bid (smallest crew; hours left before it drops under 15% = (85% of finish sell − spent) ÷ the job's own finish labor rate), material over or at 90% (returns to CED, POs that belong to a CO), T&M jobs (check it was all billed), fully invoiced (only a new CO adds sell). Columns: job number and name, foreman · lead, finish margin, hours of bid, material of bid, how to hit margin; tap a row for its cost centers. **No dollar figure** anywhere in the section (a test asserts it), so the foreman view shows it as is. Test 'scripts/finish-watch-test.js' in prebuild. Guide 'dashboard.html' Job Costs. **Why it won't lose data:** read-only: the same settings docs the tab already reads ('settings/phaseCosts', 'settings/phaseCostsCc*', 'settings/goalsSimpro') and the jobs already loaded; no write, field, loader, function or rule change.
 - **Claude tab: every section folds and starts folded; proposed COs and bookings count as flagged to Koy** · 'shipped 2026-11-04' · 'SW v615' · 'claudeOpen' · 'didKind' · Koy: *"the sections in the claude section should probably all be collapsable and start collapsed, you have to scroll pretty far to get to them now"*. Flagged to you, Changes, Plan Intake, Appliance Loads and What I checked are each one tap-to-open panel with its count on the header (open state lasts only for the visit, so every visit starts folded); tapping a number tile at the top opens its panel. 'didKind' (functions/claudeActivity.js) now reads the watches' own words "CO proposed", "Inspection proposed" and "Ready to book" as flagged to Koy instead of Nothing needed. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity --project homestead-electric'** (Koy) for the counting fix; the folding is the app alone. **Why it won't lose data:** display only; nothing reads or writes anything new.
 - **Cut Sheets on every job's Plans & Links: the shop's spec-sheet library, searchable by part** · 'shipped 2026-11-04' · 'SW v614' · 'CutSheetsSection' · 'loadCutSheets' · 'filterCutSheets' · 'scripts/cutsheets-test.js' · Koy: *"where would be a good place to link this in the app so it's easily accessible by everybody?"* The Shared Drive › Homestead Job Organization › **Cut sheets** folder (built 2026-11-04 from the parts on the most Simpro POs since April 2023: 157 manufacturer sheets in category › brand folders, plus the **Cut Sheet Index** Google Sheet) now shows as a folded **Cut Sheets** block right under Drive Plans on every job, so office, foremen, leads and crew all reach it from a tab they already use (the Tools tab was ruled out because 'tools.view' is granted per person). It starts folded with *shop library · search by part* and loads on the first open, then shows the sheet count. A search box matches every word typed with punctuation ignored (*HOM120*, *wfrx 2*, *4in wafer*, *RAB gimbal*) and lists each match with its brand and category. With nothing typed the sheets sit in category groups (01–08 folder order), folded with brand names and a count, then by brand inside. **View** opens the sheet in an in-app viewer (Drive's preview, the same as Drive Plans) and **Open ↗** opens it in Drive to download, print or send to a GC; header links open the Cut Sheet Index and the folder. The listing uses the same API-key Drive read as Drive Plans (the folder is "anyone with the link — Viewer"), walks category › brand (plus one deeper level), skips '_Archive', and is cached once per app session for 10 minutes and shared by every job; a failed read shows the error with Try again. Counts 'cut_sheet_opened' (brand) in PostHog. Gate: 'scripts/cutsheets-test.js' (14 checks in prebuild on the live 'cutSheetRow' / 'filterCutSheets'). Guide: 'planslinks.html' (new step 5 + a quick answer). Hosting deploy only. **Why it won't lose data:** read-only. It lists one Drive folder and never writes a job, a Firestore document or a Drive file; no loader, rules or function change.
 - **Claude tab on the dashboard: every change Claude made in Simpro, Command Center and Plan Intake, and (Koy only) every message it checked; Needs a look and POs by job on Automations** · 'shipped 2026-11-04' · 'SW v613' · 'claudeActivity' · 'functions/claudeActivity.js' · 'odClaudeFold' · 'odClaudeJobLabel' · 'poView' · 'settings/simproPoSync.view' · Koy: *"one that's for me specifically, but also one that Josh and Brady can view on the dashboard"*, and on the sheets: one place, so the Claude Scheduling Write Log stops getting rows and the hourly Simpro POs - Master sheet can be switched off ("that works"), then *"Add plan intake"*. **Claude tab** (tenth tab, admins, after Automations): changes this week, messages checked, flagged to Koy, plans filed this week; Flagged to you (3 days); Changes by day from 'duet_writes' (Command Center writes, refused calls left off, same action on one job within 10 min folded: "Added 13 photos"), 'claude_activity' kind 'simpro' (Simpro schedule writes, logged by the connector) and 'agentQueue' decisions (filed / set aside / walk matched, the Routine's and Koy's own, dry_/test_ left off), chips per app and a filter, tap opens the job; Plan Intake live from 'agentFindings'; Appliance Loads nightly run from that sheet's Run Log tab (public CSV); What I checked from 'claude_activity' kind 'watch'. **Two cuts, made server-side** in the new admin-PIN callable 'claudeActivity' (requireAdmin, then admin only): Koy's record gets everything; every other admin, and Koy's own *Owners' view* switch, gets the changes and counts with no message list and no emailed plan file names (a test asserts no message words anywhere in that answer). 'duet_writes', 'claude_activity' and 'agentQueue' stay server-only under the rules' catch-all, so no rules change. **Automations › Simpro POs**: the hourly PO run also saves the sheet's Needs a look and Summary rows as 'view' on 'settings/simproPoSync' (no dollar field in either; 150 / 300 rows max) even if the sheet write fails; the card lists Needs a look (what to do, tap opens the job) and a folded POs by job. 'settings/simproPoSync.sheet = "off"' stops the hourly sheet rewrite and leaves the sheet as an archive (the card says so). Tests: new 'scripts/claude-activity-test.js' (owners' cut, refused writes, folding, job and quote labels, plan rows, samples, the two log actions) in prebuild; 'scripts/simpro-pull-sim.js' +1 scenario (sheet off) and view checks. Guide 'dashboard.html' (new Claude step, Simpro POs). **duetApi log actions** ('functions/duetWrites/activity.js'): 'activity.simpro' and 'activity.watch' take 1–50 rows and write 'claude_activity/<sim_|wat_><hash or key>' docs (same row twice → same doc; links stripped, control characters out, unknown fields refused, at within 400 days); a log, not a Command Center change, so no 'duet_writes' audit, no undo, not in the hourly limit — the connector calls them after each Simpro schedule write and from its new 'cc_log_activity' tool (Watch rows, the sheet backfill). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity,functions:scheduledSimproPOSync,functions:duetApi --project homestead-electric'** (Koy); until then the tab and the PO list show sample rows marked as such. **Why it won't lose data:** the tab and the PO list only read; the callable only reads; the PO run's only new write is one field on its own settings doc; the log actions write only 'claude_activity'; no job field, loader or rules change.
