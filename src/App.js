@@ -51165,6 +51165,9 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const [claudeApp, setClaudeApp] = useState("all");        // all | Simpro | Command Center
   const [claudeKind, setClaudeKind] = useState("all");      // all | flagged | handled | acted | dismissed
   const [claudeQ, setClaudeQ] = useState("");
+  // Koy, 2026-11-04: "the sections in the claude section should probably all be collapsable and start
+  // collapsed". Open state lives only for this visit, so every visit starts collapsed.
+  const [claudeOpen, setClaudeOpen] = useState({});
   useEffect(() => {
     if (tab !== "claude") return undefined;
     let dead = false;
@@ -52544,6 +52547,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const byDay = (rows) => { const g = []; rows.forEach(r => { const k = localYmd(D(r.at)); const last = g[g.length - 1]; if (last && last.k === k) last.rows.push(r); else g.push({ k, at: D(r.at), rows: [r] }); }); return g; };
     const dayName = (at) => localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`;
     const KCOLOR = { flagged: OD_R, handled: OD_G, acted: OD_B, dismissed: OD_GREY };
+    // One collapsible panel: the header row is the button, the count shows while closed.
+    const fold = (key, title, small, count, body, color) => { const open = !!claudeOpen[key]; return (
+      <div className="od-white od-pad" key={key}>
+        <button type="button" className="od-ct od-fold" aria-expanded={open} onClick={() => setClaudeOpen(o => ({ ...o, [key]: !o[key] }))}>
+          <Icon name={open ? "chevronDown" : "chevronRight"} size={14} stroke={2.5}/>{title}<small>{small}</small>
+          {count != null ? <span className="od-fold-n" style={color ? { "--c": color } : undefined}>{count}</span> : null}
+        </button>
+        {open ? <div className="od-fold-body">{body}</div> : null}
+      </div>); };
     const KICON = { flagged: "flag", handled: "checkCircle", acted: "calendar", dismissed: "eyeOff" };
     const ACOLOR = { "Simpro": OD_B, "Command Center": OD_G, "Plan Intake": OD_P }, AICON = { "Simpro": "calendar", "Command Center": "pencil", "Plan Intake": "fileText" };
     const changeItem = (c) => (
@@ -52575,17 +52587,14 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
       {cd === undefined ? <div className="od-white od-pad">Loading…</div> : cd && cd.ok === false ? <div className="od-white od-pad">Couldn't load this: {cd.err || "try Refresh"}</div> : <>
         <div className="od-minis">
-          <OdMini title="Changes this week" color={OD_B} icon="pencil" value={thisWeek.length} sub={`${nSim} Simpro · ${nCC} Command Center · ${nPlan} plans`} onClick={() => { setClaudeApp("all"); setClaudeQ(""); }}/>
+          <OdMini title="Changes this week" color={OD_B} icon="pencil" value={thisWeek.length} sub={`${nSim} Simpro · ${nCC} Command Center · ${nPlan} plans`} onClick={() => { setClaudeApp("all"); setClaudeQ(""); setClaudeOpen(o => ({ ...o, changes: true })); }}/>
           <OdMini title="Messages checked" color={OD_SLATE} icon="mail" value={wc.checked} sub="texts, chat and email"/>
-          <OdMini title={full ? "Flagged to you" : "Flagged to Koy"} color={OD_R} icon="flag" value={wc.flagged} sub="needed a call from Koy" onClick={full ? () => setClaudeKind("flagged") : undefined}/>
-          <OdMini title="Plans filed this week" color={OD_P} icon="fileText" value={findings === undefined ? "…" : planFiled.length} sub={`${planWait.length} waiting on ${full ? "you" : "Koy"}`} onClick={full ? () => setClaudeApp("Plan Intake") : undefined}/>
+          <OdMini title={full ? "Flagged to you" : "Flagged to Koy"} color={OD_R} icon="flag" value={wc.flagged} sub="needed a call from Koy" onClick={full ? () => { setClaudeKind("flagged"); setClaudeOpen(o => ({ ...o, watch: true })); } : undefined}/>
+          <OdMini title="Plans filed this week" color={OD_P} icon="fileText" value={findings === undefined ? "…" : planFiled.length} sub={`${planWait.length} waiting on ${full ? "you" : "Koy"}`} onClick={full ? () => { setClaudeApp("Plan Intake"); setClaudeOpen(o => ({ ...o, changes: true })); } : undefined}/>
         </div>
-        {full && flaggedNow.length ? <div className="od-white od-pad">
-          <div className="od-ct">Flagged to you<small>last 3 days · newest first</small></div>
-          <div className="od-list">{flaggedNow.map(watchItem)}</div>
-        </div> : null}
-        <div className="od-white od-pad">
-          <div className="od-ct">Changes<small>newest first · tap one to open the job</small></div>
+        {full && flaggedNow.length ? fold("flagged", "Flagged to you", "last 3 days · newest first", flaggedNow.length,
+          <div className="od-list">{flaggedNow.map(watchItem)}</div>, OD_R) : null}
+        {fold("changes", "Changes", "newest first · tap one to open the job", all.length, <>
           <div className="od-chips">
             {[["all", "All", all.length], ...["Simpro", "Command Center", "Plan Intake"].map(k => [k, k, all.filter(c => c.app === k).length])].map(([k, l, n]) =>
               <button type="button" key={k} aria-pressed={claudeApp === k} onClick={() => setClaudeApp(k)} style={{ "--c": ACOLOR[k] || OD_G }}>{k !== "all" ? <i/> : null}{l} <span>{n}</span></button>)}
@@ -52593,9 +52602,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <input className="od-q" type="search" value={claudeQ} onChange={e => setClaudeQ(e.target.value)} placeholder="Filter by job number, job name or person" aria-label="Filter Claude's changes"/>
           {shown.length ? byDay(shown).map(g => <div key={g.k}><div className="od-sec"><span>{dayName(g.at)}</span><small>{odPlural(g.rows.length, "change")}</small></div><div className="od-list">{g.rows.map(changeItem)}</div></div>)
             : <div className="od-empty">No changes{cq || claudeApp !== "all" ? " match" : " in the last 14 days"}.</div>}
-        </div>
-        <div className="od-white od-pad">
-          <div className="od-ct">Plan Intake<small>{full ? "my" : "Claude's"} runs at 7 AM, noon, 4 PM and 9 PM file emailed plans into job folders · live</small></div>
+        </>)}
+        {fold("plans", "Plan Intake", `${full ? "my" : "Claude's"} runs at 7 AM, noon, 4 PM and 9 PM file emailed plans into job folders · live`, findings === undefined ? null : `${planFiled.length} filed · ${planWait.length} waiting`, <>
           <div className="od-stats">
             <div><b>{findings === undefined ? "…" : planFiled.length}</b><small>Filed this week</small></div>
             <div><b>{pc ? pc.setAside : "–"}</b><small>Set aside, not plans</small></div>
@@ -52611,24 +52619,23 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
               <OdItem key={f.id} color={OD_P} icon="fileText" tag={planNum(f.number)} title={j ? odClaudeJobLabel({ jobId: j.id }, jobs).label : planNum(f.number)} sub={odText(f.summary)} when={dayName(f._at)} onClick={j ? () => openJob(j) : null}/>); })}
               {!planFiled.length && <div className="od-empty">{findings === undefined ? "Loading…" : "Nothing filed this week."}</div>}</div>
           </> : null}
-        </div>
-        <div className="od-white od-pad">
-          <div className="od-ct">Appliance Loads, nightly run<small>{full ? "my" : "Claude's"} 1:00 AM pass over every job's appliance list · from the sheet's Run Log</small>
-            <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => { try { window.open(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`, "_blank", "noopener,noreferrer"); } catch (e) {} }}>Open sheet</button></div></div>
+        </>)}
+        {fold("loads", "Appliance Loads, nightly run", `${full ? "my" : "Claude's"} 1:00 AM pass over every job's appliance list · from the sheet's Run Log`,
+          Array.isArray(claudeRuns) && claudeRuns.length ? (claudeRuns[0].errors && claudeRuns[0].errors !== "0" ? `${claudeRuns[0].errors} errors last run` : "last run clean") : null, <>
+          <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => { try { window.open(`https://docs.google.com/spreadsheets/d/${APPL_SHEET_ID}/edit`, "_blank", "noopener,noreferrer"); } catch (e) {} }}>Open sheet</button></div>
           {claudeRuns === undefined ? <div className="od-empty">Reading the Run Log…</div> : claudeRuns === null ? <div className="od-empty">The Run Log couldn't be read just now.</div> : !claudeRuns.length ? <div className="od-empty">No runs logged yet.</div> :
             <div className="od-list">{claudeRuns.slice(0, 7).map(r => { const bad = r.errors && r.errors !== "0"; return (
               <OdItem key={r.date} color={bad ? OD_R : OD_G} icon={bad ? "alertTriangle" : "checkCircle"} tag={bad ? `${r.errors} errors` : "Ran clean"}
                 title={dayName(D(r.date + "T12:00:00"))} sub={[`${r.jobs} jobs`, `rows read ${r.read}`, r.added && r.added !== "0" ? `${r.added} rows added` : "no new rows", `${r.notInCC} not in Home Runs yet`, `${r.tbd} with no amps`].join(" · ")}/>); })}</div>}
-        </div>
-        {full ? <div className="od-white od-pad">
-          <div className="od-ct">What I checked<small>every message I read and what I did with it · only you see this</small></div>
+        </>)}
+        {full ? fold("watch", "What I checked", "every message I read and what I did with it · only you see this", wc.checked, <>
           <div className="od-chips">
             {[["all", "All", wc.checked], ["flagged", "Flagged to you", wc.flagged], ["acted", "Acted on", wc.acted], ["handled", "Already handled", wc.handled], ["dismissed", "Nothing needed", wc.dismissed]].map(([k, l, n]) =>
               <button type="button" key={k} aria-pressed={claudeKind === k} onClick={() => setClaudeKind(k)} style={{ "--c": KCOLOR[k] || OD_GREY }}>{k !== "all" ? <i/> : null}{l} <span>{n || 0}</span></button>)}
           </div>
           {watchShown.length ? byDay(watchShown).map(g => <div key={g.k}><div className="od-sec"><span>{dayName(g.at)}</span><small>{odPlural(g.rows.length, "message")}</small></div><div className="od-list">{g.rows.map(watchItem)}</div></div>)
             : <div className="od-empty">Nothing here{claudeKind !== "all" || cq ? " for this filter" : ""}.</div>}
-        </div> : null}
+        </>) : null}
       </>}
     </>);
     right = (<>
@@ -52944,6 +52951,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-row2{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
         .odash .od-ct{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:14px}
         .odash .od-ct small{font-weight:500;color:var(--cdim);font-size:12px}
+        .odash .od-fold{width:100%;background:none;border:0;padding:0;margin:0;color:inherit;font:inherit;font-weight:700;font-size:14px;text-align:left;cursor:pointer;min-height:32px}
+        .odash .od-fold small{flex:1;min-width:0}
+        .odash .od-fold-n{margin-left:auto;font-size:12px;font-weight:700;color:var(--c,var(--cdim));background:var(--cbg2,rgba(127,127,127,.12));border-radius:999px;padding:2px 9px;white-space:nowrap}
+        .odash .od-fold-body{margin-top:10px}
         .odash .od-svg{width:100%;height:auto;display:block}
         .odash .od-hint{font-size:11.5px;color:var(--cdim)}
         .odash .od-daysum{display:flex;align-items:center;gap:10px;background:var(--hov);border-radius:12px;padding:9px 12px}
@@ -62106,9 +62117,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-04 · App SW version: v614
+**Last manifest update:** 2026-11-04 · App SW version: v615
 ---
 
+- **Claude tab: every section folds and starts folded; proposed COs and bookings count as flagged to Koy** · 'shipped 2026-11-04' · 'SW v615' · 'claudeOpen' · 'didKind' · Koy: *"the sections in the claude section should probably all be collapsable and start collapsed, you have to scroll pretty far to get to them now"*. Flagged to you, Changes, Plan Intake, Appliance Loads and What I checked are each one tap-to-open panel with its count on the header (open state lasts only for the visit, so every visit starts folded); tapping a number tile at the top opens its panel. 'didKind' (functions/claudeActivity.js) now reads the watches' own words "CO proposed", "Inspection proposed" and "Ready to book" as flagged to Koy instead of Nothing needed. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity --project homestead-electric'** (Koy) for the counting fix; the folding is the app alone. **Why it won't lose data:** display only; nothing reads or writes anything new.
 - **Cut Sheets on every job's Plans & Links: the shop's spec-sheet library, searchable by part** · 'shipped 2026-11-04' · 'SW v614' · 'CutSheetsSection' · 'loadCutSheets' · 'filterCutSheets' · 'scripts/cutsheets-test.js' · Koy: *"where would be a good place to link this in the app so it's easily accessible by everybody?"* The Shared Drive › Homestead Job Organization › **Cut sheets** folder (built 2026-11-04 from the parts on the most Simpro POs since April 2023: 157 manufacturer sheets in category › brand folders, plus the **Cut Sheet Index** Google Sheet) now shows as a folded **Cut Sheets** block right under Drive Plans on every job, so office, foremen, leads and crew all reach it from a tab they already use (the Tools tab was ruled out because 'tools.view' is granted per person). It starts folded with *shop library · search by part* and loads on the first open, then shows the sheet count. A search box matches every word typed with punctuation ignored (*HOM120*, *wfrx 2*, *4in wafer*, *RAB gimbal*) and lists each match with its brand and category. With nothing typed the sheets sit in category groups (01–08 folder order), folded with brand names and a count, then by brand inside. **View** opens the sheet in an in-app viewer (Drive's preview, the same as Drive Plans) and **Open ↗** opens it in Drive to download, print or send to a GC; header links open the Cut Sheet Index and the folder. The listing uses the same API-key Drive read as Drive Plans (the folder is "anyone with the link — Viewer"), walks category › brand (plus one deeper level), skips '_Archive', and is cached once per app session for 10 minutes and shared by every job; a failed read shows the error with Try again. Counts 'cut_sheet_opened' (brand) in PostHog. Gate: 'scripts/cutsheets-test.js' (14 checks in prebuild on the live 'cutSheetRow' / 'filterCutSheets'). Guide: 'planslinks.html' (new step 5 + a quick answer). Hosting deploy only. **Why it won't lose data:** read-only. It lists one Drive folder and never writes a job, a Firestore document or a Drive file; no loader, rules or function change.
 - **Claude tab on the dashboard: every change Claude made in Simpro, Command Center and Plan Intake, and (Koy only) every message it checked; Needs a look and POs by job on Automations** · 'shipped 2026-11-04' · 'SW v613' · 'claudeActivity' · 'functions/claudeActivity.js' · 'odClaudeFold' · 'odClaudeJobLabel' · 'poView' · 'settings/simproPoSync.view' · Koy: *"one that's for me specifically, but also one that Josh and Brady can view on the dashboard"*, and on the sheets: one place, so the Claude Scheduling Write Log stops getting rows and the hourly Simpro POs - Master sheet can be switched off ("that works"), then *"Add plan intake"*. **Claude tab** (tenth tab, admins, after Automations): changes this week, messages checked, flagged to Koy, plans filed this week; Flagged to you (3 days); Changes by day from 'duet_writes' (Command Center writes, refused calls left off, same action on one job within 10 min folded: "Added 13 photos"), 'claude_activity' kind 'simpro' (Simpro schedule writes, logged by the connector) and 'agentQueue' decisions (filed / set aside / walk matched, the Routine's and Koy's own, dry_/test_ left off), chips per app and a filter, tap opens the job; Plan Intake live from 'agentFindings'; Appliance Loads nightly run from that sheet's Run Log tab (public CSV); What I checked from 'claude_activity' kind 'watch'. **Two cuts, made server-side** in the new admin-PIN callable 'claudeActivity' (requireAdmin, then admin only): Koy's record gets everything; every other admin, and Koy's own *Owners' view* switch, gets the changes and counts with no message list and no emailed plan file names (a test asserts no message words anywhere in that answer). 'duet_writes', 'claude_activity' and 'agentQueue' stay server-only under the rules' catch-all, so no rules change. **Automations › Simpro POs**: the hourly PO run also saves the sheet's Needs a look and Summary rows as 'view' on 'settings/simproPoSync' (no dollar field in either; 150 / 300 rows max) even if the sheet write fails; the card lists Needs a look (what to do, tap opens the job) and a folded POs by job. 'settings/simproPoSync.sheet = "off"' stops the hourly sheet rewrite and leaves the sheet as an archive (the card says so). Tests: new 'scripts/claude-activity-test.js' (owners' cut, refused writes, folding, job and quote labels, plan rows, samples, the two log actions) in prebuild; 'scripts/simpro-pull-sim.js' +1 scenario (sheet off) and view checks. Guide 'dashboard.html' (new Claude step, Simpro POs). **duetApi log actions** ('functions/duetWrites/activity.js'): 'activity.simpro' and 'activity.watch' take 1–50 rows and write 'claude_activity/<sim_|wat_><hash or key>' docs (same row twice → same doc; links stripped, control characters out, unknown fields refused, at within 400 days); a log, not a Command Center change, so no 'duet_writes' audit, no undo, not in the hourly limit — the connector calls them after each Simpro schedule write and from its new 'cc_log_activity' tool (Watch rows, the sheet backfill). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity,functions:scheduledSimproPOSync,functions:duetApi --project homestead-electric'** (Koy); until then the tab and the PO list show sample rows marked as such. **Why it won't lose data:** the tab and the PO list only read; the callable only reads; the PO run's only new write is one field on its own settings doc; the log actions write only 'claude_activity'; no job field, loader or rules change.
 - **New order from the bid: a pasted list keeps its lines** · 'shipped 2026-11-03' · 'SW v612' · 'poSplitTyped' · 'scripts/po-paste-test.js' · Koy: *"when i paste a list into the type in more parts or notes on a po order it pastes it all as one line, so it doesnt appear right on the po card or the pdf attachment"*. The **Type in parts or notes** box is a one-line input, so the browser turned a pasted list's line breaks into spaces and the whole list became ONE typed row (and the server's 'cleanOrderGroups' squashes any break inside a row too). Now a paste that has line breaks is split into one typed row per line (what was already in the box joins the first line), and typing a line and tapping Add is unchanged; bullets ('- ', '• ', '* ', '– ', '· ') come off the front of a line, spreadsheet tabs become spaces, blank lines drop, a part that starts with a dash and no space ('-48 V') or a numbered line keeps it. Each row is already its own line on the card's list and its own row on the PO PDF. Over 60 typed rows on one cost center shows a red note (the server keeps the first 60, 'cleanOrderGroups'). The card's own **Send to CED** list box was already multi-line and is not touched. Gate: 'scripts/po-paste-test.js' (10 checks in prebuild, runs the live 'poSplitTyped' from App.js and pins the 60 to the server's slice). Guide: 'rough.html'. Hosting deploy only. **Why it won't lose data:** client-only, inside the order draft before anything is sent; the draft shape ('typed[ccId]' = array of strings) is the same, there are just more rows; no function, rules, loader or saved-field change.
