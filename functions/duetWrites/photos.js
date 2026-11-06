@@ -5,7 +5,8 @@
 // the app's own uploaders in src/App.js: ReturnTrips.addPhotos (rt-photos/,
 // entry {id, name, url, storagePath}), PhotoAttacher on a change order
 // (co-photos/, {id, name, url, storagePath, type}), PunchList.handlePhotoUpload
-// (punch-photos/, same shape as the CO), and addNeedPhotos (task-photos/,
+// (punch-photos/, same shape as the CO — a phase-tree item or an entry on a
+// return trip's own punch list), and addNeedPhotos (task-photos/,
 // {id, name, url, storagePath, by, at}, ONE arrayUnion on data.photos). No
 // Firestore or Storage here: api.js uploads the object and runs the
 // transaction, scripts/duet-photo-test.js drives these with fixtures.
@@ -99,6 +100,18 @@ function findPunch(data, itemId) {
   return null;
 }
 
+// A punch entry on a return trip's own list (data.returnTrips[].punch[]).
+function findTripPunch(data, itemId) {
+  const trips = Array.isArray(data.returnTrips) ? data.returnTrips : [];
+  for (let i = 0; i < trips.length; i++) {
+    const t = trips[i];
+    if (!t || !Array.isArray(t.punch)) continue;
+    const k = byId(t.punch, itemId);
+    if (k >= 0) return { trip: t, number: i + 1, item: t.punch[k] };
+  }
+  return null;
+}
+
 // Where the photo goes, and whether it may: the item (by id) on the live doc,
 // the Storage folder the app's own uploader uses for that item, and the field
 // the write lands in. `doc` is { id, data } for a job, { id, data } for a need.
@@ -127,7 +140,14 @@ function locate(target, itemId, doc) {
     return { kind: "job", field: "changeOrders", item: orders[i], photos: Array.isArray(orders[i].photos) ? orders[i].photos : [], folder: `jobs/${doc.id}/co-photos/${id}`, label: `change order #${i + 1}`, number: i + 1 };
   }
   const hit = findPunch(data, id);
-  if (!hit) return refuse(`No punch item with id ${id} on ${name} (rough, finish or QC). Nothing was written.`);
+  if (!hit) {
+    // Not on a phase tree: a return trip's own punch list (the trip card's
+    // PunchItems, same punch-photos/ folder — App.js ~L18690 passes jobId).
+    const t = findTripPunch(data, id);
+    if (!t) return refuse(`No punch item with id ${id} on ${name} (rough, finish, QC or a return trip's punch list). Nothing was written.`);
+    if (t.trip.signedOff) return refuse(`That punch item is on return trip #${t.number}, which is signed off — it's closed. Nothing was written.`);
+    return { kind: "job", field: "returnTrips", tripPunch: true, trip: t.trip, item: t.item, photos: Array.isArray(t.item.photos) ? t.item.photos : [], folder: `jobs/${doc.id}/punch-photos/${id}`, label: `the punch item on return trip #${t.number}`, number: t.number };
+  }
   if (hit.item.voided) return refuse(`That punch item is voided. Nothing was written.`);
   return { kind: "job", field: hit.tree, item: hit.item, photos: Array.isArray(hit.item.photos) ? hit.item.photos : [], folder: `jobs/${doc.id}/punch-photos/${id}`, label: `the ${hit.tree.replace("Punch", "")} punch item`, tree: hit.tree };
 }
@@ -160,7 +180,8 @@ function planAttach(target, itemId, entry, doc) {
   const data = doc.data;
   const nextItem = { ...loc.item, photos: [...loc.photos, entry] };
   let value;
-  if (loc.field === "returnTrips" || loc.field === "changeOrders") value = data[loc.field].map(x => x === loc.item ? nextItem : x);
+  if (loc.tripPunch) value = data.returnTrips.map(t => (t === loc.trip ? { ...t, punch: t.punch.map(p => (p === loc.item ? nextItem : p)) } : t));
+  else if (loc.field === "returnTrips" || loc.field === "changeOrders") value = data[loc.field].map(x => x === loc.item ? nextItem : x);
   else if (Array.isArray(data[loc.field])) value = data[loc.field].map(x => x === loc.item ? nextItem : x);
   else {
     // Punch tree: copy, then swap the one item where it sits (floor / room).
@@ -174,4 +195,4 @@ function planAttach(target, itemId, entry, doc) {
   return { kind: "job", fields: { [loc.field]: value }, before, after, itemId: String(itemId), number: loc.number, photosNow: loc.photos.length + 1, label: loc.label, field: loc.field };
 }
 
-module.exports = { MAX_BYTES, TARGETS, BUCKET, sniffImage, cleanFileName, decodePhoto, downloadUrl, locate, findPunch, newPhotoId, photoEntry, planAttach };
+module.exports = { MAX_BYTES, TARGETS, BUCKET, sniffImage, cleanFileName, decodePhoto, downloadUrl, locate, findPunch, findTripPunch, newPhotoId, photoEntry, planAttach };

@@ -16,7 +16,9 @@
 //     ship 6; the phase status / stage / schedule-date scalars, the two
 //     inspection results + attempts + items (+ linked returnTrips entries), the
 //     QC status / date + qcRtChoice stamps (+ the QC return trip), the prep
-//     checklist maps — ship 7), needs (create + update; a photo — ship 3),
+//     checklist maps — ship 7; a return trip's OWN punch list — rtPunch.add
+//     appends a batch of 1–25 trip-only entries, rtPunch.setDone / waiting /
+//     editText change ONE entry, all in data.returnTrips — tripPunch.js), needs (create + update; a photo — ship 3),
 //     homeowner_requests/<jobId> (ship 4: the questionThreads.<key> field
 //     ONLY — one appended message — plus its versions subcollection, where
 //     the writer's own snapshot is added and pruned to 10 exactly as the
@@ -239,6 +241,7 @@ const JSU = require("./jobSetup.js");
 const OF = require("./office.js");
 const FP = require("./fieldPolicy.js");
 const UN = require("./undo.js");
+const TP = require("./tripPunch.js");
 const { matchUserByName } = require("../nameMatch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
@@ -252,11 +255,12 @@ const QUESTION_ACTIONS = ["question.add", "question.answer", "question.reopen"];
 const NOTE_ACTIONS = ["note.add", "note.addLine", "note.editLine", "note.archive", "note.delete", "dailyUpdate.add"];
 const PEOPLE_ACTIONS = ["job.setPeople"];
 const PUNCH_ACTIONS = ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"];
+const RT_PUNCH_ACTIONS = ["rtPunch.add", "rtPunch.setDone", "rtPunch.waiting", "rtPunch.editText"];   // a return trip's own punch list (tripPunch.js): ONE jobWrite() on data.returnTrips
 const STAGE_ACTIONS = ["phase.setStatus", "phase.setStage", "inspection.setResult", "inspection.items", "inspection.createTrip", "qc.setStatus", "prep.tick", "phase.setDates"];
 const JOB_ACTIONS = ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"];
 const MATERIAL_CARD_ACTIONS = ["material.addCard", "material.editCard", "material.tick"];
 const FIELD_ACTIONS = ["job.setField"];   // ship 11: ONE allowed scalar (fieldPolicy.js) through jobWrite()
-const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...STAGE_ACTIONS, ...MATERIAL_CARD_ACTIONS, ...FIELD_ACTIONS];   // every action that is ONE jobWrite() transaction
+const JOB_WRITE_ACTIONS = [...JOB_ACTIONS, ...QUESTION_ACTIONS, ...NOTE_ACTIONS, ...PEOPLE_ACTIONS, ...PUNCH_ACTIONS, ...RT_PUNCH_ACTIONS, ...STAGE_ACTIONS, ...MATERIAL_CARD_ACTIONS, ...FIELD_ACTIONS];   // every action that is ONE jobWrite() transaction
 const PHOTO_ACTIONS = ["photo.add"];
 const THREAD_ACTIONS = ["question.reply"];
 const CREW_ACTIONS = ["crew.assign", "crew.unassign", "crew.setLead"];
@@ -468,6 +472,15 @@ function planJobAction(action, args, ctx) {
       case "punch.void": return PU.planVoid(args, c);
       case "punch.restore": return PU.planRestore(args, c);
       case "punch.editText": return PU.planEditText(args, c);
+      // ── A return trip's own punch list ─────────────────────────────────────
+      // data.returnTrips written back whole with ONE trip's punch array changed
+      // (the trip card's upd(t.id, {punch})). rtPunch.add: a batch appended in
+      // one transaction, the trip before / after in the audit + addedIds (the
+      // undo's material). The other three: ONE entry before / after.
+      case "rtPunch.add": return TP.planAdd(args, c);
+      case "rtPunch.setDone": return TP.planSetDone(args, c);
+      case "rtPunch.waiting": return TP.planWaiting(args, c);
+      case "rtPunch.editText": return TP.planEditText(args, c);
       // ── Ship 7 ─────────────────────────────────────────────────────────────
       // Scalar fields on the job (status / stage / inspection / QC / prep /
       // dates) in the app's own patch shapes, plus returnTrips when an
