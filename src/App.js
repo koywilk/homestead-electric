@@ -14,6 +14,7 @@ import NeedShape from "./needShape";
 import JobNotesShape from "./jobNotesShape";
 import StageChange from "./stageChange";
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
+import inspAtt from "./inspAttempts";
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
 import { syncPostHogIdentity, trackDash, heTrack, heCaptureError } from "./posthog";
 import { readableInk } from "./a11y";
@@ -33897,10 +33898,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                 const now = new Date();
                                 const ymd = `${now.getMonth()+1}/${now.getDate()}/${now.getFullYear()}`;
                                 const snapshot = (job.roughInspectionItems||[]).map(x=>({text:x.text||""}));
-                                patch.roughInspectionAttempts = [
-                                  ...(job.roughInspectionAttempts||[]),
-                                  { id:uid(), date:ymd, result:newResult, items:snapshot, by:who?.name||"" },
-                                ];
+                                patch.roughInspectionAttempts = inspAtt.inspLogTap(job.roughInspectionAttempts,
+                                  { id:uid(), date:ymd, result:newResult, items:snapshot, by:who?.name||"" });
                               }
                               u(patch);
                             }}
@@ -33912,6 +33911,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           ))}
                           <InspFailAgain result={job.roughInspectionResult} attempts={job.roughInspectionAttempts} items={job.roughInspectionItems} what="rough (4-way) inspection" onLog={a=>u({roughInspectionAttempts:[...(job.roughInspectionAttempts||[]),a]})}/>
                           <InspNoShow date={job.fourWayTargetDate} result={job.roughInspectionResult} what="rough (4-way) inspection" onClear={()=>u({fourWayTargetDate:""})}/>
+                          <InspHistory attempts={job.roughInspectionAttempts} what="rough (4-way) inspection" onChange={list=>u({roughInspectionAttempts:list})}/>
                         </div>
                       </div>
 
@@ -34284,10 +34284,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                 const now = new Date();
                                 const ymd = `${now.getMonth()+1}/${now.getDate()}/${now.getFullYear()}`;
                                 const snapshot = (job.finalInspectionItems||[]).map(x=>({text:x.text||""}));
-                                patch.finalInspectionAttempts = [
-                                  ...(job.finalInspectionAttempts||[]),
-                                  { id:uid(), date:ymd, result:newResult, items:snapshot, by:who?.name||"" },
-                                ];
+                                patch.finalInspectionAttempts = inspAtt.inspLogTap(job.finalInspectionAttempts,
+                                  { id:uid(), date:ymd, result:newResult, items:snapshot, by:who?.name||"" });
                               }
                               u(patch);
                             }}
@@ -34299,6 +34297,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           ))}
                           <InspFailAgain result={job.finalInspectionResult} attempts={job.finalInspectionAttempts} items={job.finalInspectionItems} what="final inspection" onLog={a=>u({finalInspectionAttempts:[...(job.finalInspectionAttempts||[]),a]})}/>
                           <InspNoShow date={job.finalInspectionTargetDate} result={job.finalInspectionResult} what="final inspection" onClear={()=>u({finalInspectionTargetDate:""})}/>
+                          <InspHistory attempts={job.finalInspectionAttempts} what="final inspection" onChange={list=>u({finalInspectionAttempts:list})}/>
                         </div>
                       </div>
 
@@ -48948,6 +48947,47 @@ function InspFailAgain({ result, attempts, items, what, onLog }) {
     </button>
   );
 }
+// Every Pass / Fail logged on this inspection, each with Remove. The attempt
+// count on the job's inspection tile is this list, so a mistaken tap is fixed
+// here (Koy 2026-11-05: Kweller read 7 attempts at 4-way from mis-taps). It
+// starts folded with the count; Remove asks first and leaves the Pass / Fail
+// result and the failed items alone.
+function InspHistory({ attempts, what, onChange }) {
+  const [open, setOpen] = useState(false);
+  const list = Array.isArray(attempts) ? attempts : [];
+  const n = list.filter(Boolean).length;
+  if (!n) return null;
+  const remove = async (a, i) => {
+    const label = `${a.result === "fail" ? "Fail" : "Pass"} on ${a.date || "no date"}${a.by ? ` by ${a.by}` : ""}`;
+    if (!await showConfirm({ title: "Remove this attempt?", message: `${label}. The ${what} goes from ${n} ${n === 1 ? "attempt" : "attempts"} to ${n - 1}. The Pass / Fail result and the failed items stay as they are.`, confirmLabel: "Remove", cancelLabel: "Keep it" })) return;
+    const before = list;
+    onChange(inspAtt.inspRemoveAttempt(list, i));
+    heUndo("Attempt removed", () => onChange(inspAtt.inspRestoreAttempt(before, a)));
+  };
+  return (
+    <>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open}
+        style={{ padding: "3px 9px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${C.border}`, background: C.card, color: C.dim, fontFamily: "inherit" }}>
+        History · {n} {open ? "▴" : "▾"}
+      </button>
+      {open && (
+        <HeUnfold style={{ flexBasis: "100%", display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
+          {list.map((a, i) => a && (
+            <div key={a.id || i} data-hekey={"inspatt_" + (a.id || i)} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: C.text, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 8px" }}>
+              <span style={{ fontWeight: 700, color: a.result === "fail" ? C.red : C.green, minWidth: 44 }}>{a.result === "fail" ? "✗ Fail" : "✓ Pass"}</span>
+              <span>{a.date || "No date"}</span>
+              <span style={{ color: C.faint, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{[a.by, a.repeat ? "failed again" : ""].filter(Boolean).join(" · ")}</span>
+              <button onClick={() => remove(a, i)} aria-label={`Remove the ${a.result === "fail" ? "fail" : "pass"} on ${a.date || "no date"}`}
+                style={{ padding: "2px 8px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", border: `1px solid ${C.border}`, background: C.card, color: C.red, fontFamily: "inherit", minHeight: "var(--he-tap, 28px)" }}>
+                Remove
+              </button>
+            </div>
+          ))}
+        </HeUnfold>
+      )}
+    </>
+  );
+}
 // Failed items typed after the open return trip was built never reach it, so a
 // repeat fail would sit behind a chip saying it is on the trip. Matched by the
 // source item's id where the trip keeps one, and by text where it doesn't.
@@ -62204,9 +62244,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-06 · App SW version: v616
+**Last manifest update:** 2026-11-06 · App SW version: v617
 ---
 
+- **Inspection attempts can be corrected: a same-day re-tap fixes that day's attempt, and History lists every attempt with Remove** · 'shipped 2026-11-06' · 'SW v617' · 'InspHistory' · 'src/inspAttempts.js' · 'inspLogTap' · 'inspRemoveAttempt' · 'inspRestoreAttempt' · 'newAttempts' · Koy: *"noticing jobs like kweller with 7 attempts at 4 way. thats not right ive just hit fail on accident multiple times. that number needs to be easily adjustable."* Kweller's seven rough attempts were Pass / Fail mis-taps (pass, fail, pass on 8/7; fail, pass on 8/11), because every tap appended one. Now a Pass / Fail tap on the same day by the same person replaces that day's attempt instead of adding one ('inspLogTap'; a Failed again 'repeat' attempt is never replaced). The tap path is otherwise unchanged. A **History · N** button next to Pass / Fail on both the rough (4-way) and final rows starts folded and lists each attempt (result, date, who, failed again) with **Remove**. Remove asks first, takes out that one attempt and offers Undo. It never touches the result or the failed items, and the tile count follows the list. Server: 'functions/gcNotify.js' 'newAttempts' finds new attempts by id. A pass corrected to fail the same day (the list keeps the same length) still sends the failed-inspection push and GC notice, a Remove sends nothing, and an attempt put back by Undo is marked 'restored' so it doesn't push again. 'onJobUpdate''s '_newFail' uses it, so this needs a functions deploy. Lists without ids keep the old tail rule. Duet's 'cc_set_inspection' still appends as before. Tests: 'scripts/insp-attempts-test.js' (22 checks in prebuild, including a replay of Kweller's real taps). Help guides: 'rough.html', 'finish.html'. **Why it won't lose data:** attempts are only removed by a person tapping Remove and confirming, one at a time, with a 10-second Undo. Nothing is removed automatically, and the same-day replace only touches the last attempt when it is that person's own tap that day. No other field, loader or rules change.
 - **Reports in the Claude tab: every report Claude makes for Koy, by job number and name, then type, newest first; dollar reports for admins only** · 'in-flight 2026-11-06' · 'SW v616' · 'claudeReports' · 'functions/duetWrites/reports.js' · 'src/reportMd.js' · 'OdReport' · 'claude_reports' · Koy: *"as long as it can be easily accessable from the claude section in dashboard"*, *"from here on any reports will go there as well organized neatly"*, *"Skip Drive"*, then *"Yes, build it"*. **Reports** is the first folded section on the Claude tab: one heading per job (job number and name), under it the report types (Game plan, Material report, Margin math, Forecast, Other), each report newest first with who it's for, Filed / Updated date and version; tap one to read it right there (headings, lists, tables and bold, drawn as plain text, never HTML, links shown as words). A filter box shows past four reports. **Storage:** 'claude_reports/<rep_…>', server-only (an explicit 'allow read, write: if false' block in the rules, the same as the catch-all, so it needs no rules deploy). **Read:** the new live-PIN callable 'claudeReports' (requireMember): the list without bodies, or one report by id; owners-only reports go to the admin tier alone and read as not found for anyone else (title never sent). **Write:** two new duetApi actions, 'report.file' and 'report.archive', used by the connector's new 'cc_file_report' / 'cc_archive_report' tools after Koy's OK in chat. The job's number and name are read from 'jobs/<jobId>' (never the caller's words); a report with a dollar figure is refused unless owners-only; the same job + type + title replaces that report (version +1, first filed date kept), so a retry never makes a copy; archive only flips 'archived' (never a delete). Like the Claude tab's log, no 'duet_writes' audit, no undo, not in the hourly limit: the report doc is the record. Test: new 'scripts/claude-reports-test.js' in prebuild (dollar guard, job from Command Center, replace, archive, the owners-only cut in both modes, duetApi through a fake io, the rules block, the text-only reader). Guide 'dashboard.html' (Reports). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeReports,functions:duetApi --project homestead-electric'** (Koy) and the connector deploy; until then the section says reports show once it's deployed. **Why it won't lose data:** a new collection only; the app only reads it through the callable; the two actions write 'claude_reports' and nothing else (no job, need or settings doc, no loader change); the rules block adds no access anywhere.
 - **Claude tab: every section folds and starts folded; proposed COs and bookings count as flagged to Koy** · 'shipped 2026-11-04' · 'SW v615' · 'claudeOpen' · 'didKind' · Koy: *"the sections in the claude section should probably all be collapsable and start collapsed, you have to scroll pretty far to get to them now"*. Flagged to you, Changes, Plan Intake, Appliance Loads and What I checked are each one tap-to-open panel with its count on the header (open state lasts only for the visit, so every visit starts folded); tapping a number tile at the top opens its panel. 'didKind' (functions/claudeActivity.js) now reads the watches' own words "CO proposed", "Inspection proposed" and "Ready to book" as flagged to Koy instead of Nothing needed. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity --project homestead-electric'** (Koy) for the counting fix; the folding is the app alone. **Why it won't lose data:** display only; nothing reads or writes anything new.
 - **Cut Sheets on every job's Plans & Links: the shop's spec-sheet library, searchable by part** · 'shipped 2026-11-04' · 'SW v614' · 'CutSheetsSection' · 'loadCutSheets' · 'filterCutSheets' · 'scripts/cutsheets-test.js' · Koy: *"where would be a good place to link this in the app so it's easily accessible by everybody?"* The Shared Drive › Homestead Job Organization › **Cut sheets** folder (built 2026-11-04 from the parts on the most Simpro POs since April 2023: 157 manufacturer sheets in category › brand folders, plus the **Cut Sheet Index** Google Sheet) now shows as a folded **Cut Sheets** block right under Drive Plans on every job, so office, foremen, leads and crew all reach it from a tab they already use (the Tools tab was ruled out because 'tools.view' is granted per person). It starts folded with *shop library · search by part* and loads on the first open, then shows the sheet count. A search box matches every word typed with punctuation ignored (*HOM120*, *wfrx 2*, *4in wafer*, *RAB gimbal*) and lists each match with its brand and category. With nothing typed the sheets sit in category groups (01–08 folder order), folded with brand names and a count, then by brand inside. **View** opens the sheet in an in-app viewer (Drive's preview, the same as Drive Plans) and **Open ↗** opens it in Drive to download, print or send to a GC; header links open the Cut Sheet Index and the folder. The listing uses the same API-key Drive read as Drive Plans (the folder is "anyone with the link — Viewer"), walks category › brand (plus one deeper level), skips '_Archive', and is cached once per app session for 10 minutes and shared by every job; a failed read shows the error with Try again. Counts 'cut_sheet_opened' (brand) in PostHog. Gate: 'scripts/cutsheets-test.js' (14 checks in prebuild on the live 'cutSheetRow' / 'filterCutSheets'). Guide: 'planslinks.html' (new step 5 + a quick answer). Hosting deploy only. **Why it won't lose data:** read-only. It lists one Drive folder and never writes a job, a Firestore document or a Drive file; no loader, rules or function change.

@@ -203,7 +203,7 @@ function detectTriggers(before, after) {
   // A repeat fail leaves the result on "fail", so only the attempts list grows.
   [["rough", "Rough"], ["final", "Final"]].forEach(([k, phase]) => {
     const rk = k + "InspectionResult", ak = k + "InspectionAttempts";
-    const added = (Array.isArray(a[ak]) ? a[ak] : []).slice((Array.isArray(b[ak]) ? b[ak] : []).length);
+    const added = newAttempts(b[ak], a[ak]);
     if (a[rk] === "fail" && !changed(rk) && added.some((x) => x && x.result === "fail")) out.push({ type: "inspection", payload: { jobName: name, phase, result: "fail" } });
   });
 
@@ -293,8 +293,22 @@ function verifySvixSignature(secret, msgId, timestamp, rawBody, sigHeader, nowMs
   }
 }
 
+// Inspection attempts in `a` that weren't in `b`. By id when every attempt has
+// one: a same-day Pass / Fail re-tap now replaces the last attempt with a fresh
+// id (v617), so the list doesn't grow, and History's Remove shrinks it. Older
+// lists without ids fall back to the tail past the old length. An attempt put
+// back by Undo is marked restored and never counts as new, so it can't send a
+// second failed-inspection alert. Shared with onJobUpdate's foreman push.
+function newAttempts(b, a) {
+  const bb = Array.isArray(b) ? b : [], aa = Array.isArray(a) ? a : [];
+  const had = bb.map((x) => x && x.id);
+  const fresh = had.every(Boolean) && aa.every((x) => x && x.id) ? aa.filter((x) => !had.includes(x.id)) : aa.slice(bb.length);
+  return fresh.filter((x) => x && !x.restored);
+}
+
 module.exports = {
   renderGcEmail,
+  newAttempts,
   digestSections,
   instantContent,
   detectTriggers,

@@ -1465,11 +1465,9 @@ exports.onJobUpdate = functions.firestore
         title: "⏸️ Job on hold", body: `${name} is on hold / waiting on something.`, jobId,
       }));
     }
-    const _newFail = (b, a) => {
-      const bb = Array.isArray(b) ? b : [], aa = Array.isArray(a) ? a : [];
-      if (aa.length <= bb.length) return false;
-      return aa.slice(bb.length).some(x => /fail/i.test((x && x.result) || ""));
-    };
+    // By id, so a same-day re-tap from pass to fail (the list stays the same
+    // length) still pushes, and a Remove or its Undo never does (v617).
+    const _newFail = (b, a) => gcNotify.newAttempts(b, a).some(x => /fail/i.test((x && x.result) || ""));
     if (_newFail(before.roughInspectionAttempts, after.roughInspectionAttempts) ||
         _newFail(before.finalInspectionAttempts, after.finalInspectionAttempts)) {
       tasks.push(sendToNameIfWanted(after.foreman, "failed_inspection", {
