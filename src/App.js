@@ -13,6 +13,7 @@ import PunchTicks from "./punchTicks";
 import NeedShape from "./needShape";
 import JobNotesShape from "./jobNotesShape";
 import StageChange from "./stageChange";
+import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
 import { syncPostHogIdentity, trackDash, heTrack, heCaptureError } from "./posthog";
 import { readableInk } from "./a11y";
@@ -49519,6 +49520,24 @@ function odClaudeJobLabel(r, jobs) {
   if (!j && !no && r.quoteNo) return { job: null, label: `Quote #${String(r.quoteNo).replace(/^Q/i, "")}` };
   return { job: j || null, label: [no, name.replace(new RegExp(`^#?${no}\\s*[-·]?\\s*`), "")].filter(Boolean).join(" ") || "No job" };
 }
+// One report, read inside the Claude tab (SW v616). The body is markdown drawn as plain React
+// text by src/reportMd.js: headings, paragraphs, lists, tables and bold. No HTML, no links.
+function OdReport({ body }) {
+  if (!body || body === "loading") return <div className="od-rep-body od-empty">Opening…</div>;
+  if (body.err) return <div className="od-rep-body od-empty">{body.err}</div>;
+  const blocks = ReportMd.parseReportMd(body.content);
+  const R = (rs) => (rs || []).map((x, i) => x.b ? <b key={i}>{x.text}</b> : <Fragment key={i}>{x.text}</Fragment>);
+  return (
+    <div className="od-rep-body">
+      {blocks.map((b, i) => b.t === "h" ? (b.level === 1 ? <h3 key={i}>{R(b.runs)}</h3> : b.level === 2 ? <h4 key={i}>{R(b.runs)}</h4> : <h5 key={i}>{R(b.runs)}</h5>)
+        : b.t === "p" ? <p key={i}>{R(b.runs)}</p>
+        : b.t === "ul" ? <ul key={i}>{b.items.map((it, k) => <li key={k}>{R(it)}</li>)}</ul>
+        : b.t === "ol" ? <ol key={i}>{b.items.map((it, k) => <li key={k}>{R(it)}</li>)}</ol>
+        : <div className="od-rep-tw" key={i}><table><thead><tr>{b.head.map((c, k) => <th key={k}>{R(c)}</th>)}</tr></thead>
+            <tbody>{b.rows.map((row, k) => <tr key={k}>{row.map((c, m) => <td key={m}>{R(c)}</td>)}</tr>)}</tbody></table></div>)}
+      <div className="od-rep-foot">{body.ownersOnly ? "Owners only: has dollar figures" : "No dollar figures"}{body.forWho ? ` · for ${body.forWho}` : ""} · version {body.version || 1}</div>
+    </div>);
+}
 // Same action on the same job within 10 minutes reads as one row ("Added 13 photos").
 function odClaudeFold(changes) {
   const out = [];
@@ -51168,6 +51187,34 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   // Koy, 2026-11-04: "the sections in the claude section should probably all be collapsable and start
   // collapsed". Open state lives only for this visit, so every visit starts collapsed.
   const [claudeOpen, setClaudeOpen] = useState({});
+  // Reports (SW v616; Koy: "from here on any reports will go there as well organized neatly").
+  // claude_reports is server-only; the live-PIN callable claudeReports lists them (no bodies) and
+  // opens one by id. Owners-only reports (dollar figures) reach admins alone. Nothing here writes.
+  const [claudeReports, setClaudeReports] = useState(undefined); // undefined = loading · null = not deployed yet · { ok, reports } · { ok:false, err }
+  const [reportOpen, setReportOpen] = useState(null);            // the open report's id
+  const [reportBody, setReportBody] = useState({});              // id → "loading" | report | { err }
+  const [reportQ, setReportQ] = useState("");
+  useEffect(() => {
+    if (tab !== "claude") return undefined;
+    let dead = false;
+    setClaudeReports(undefined);
+    setReportBody({});
+    memberCallable("claudeReports", identity)({}).then(
+      r => { if (!dead) setClaudeReports((r && r.data) || { ok: false, err: "try Refresh" }); },
+      e => { if (dead) return; const code = String((e && e.code) || "");
+        setClaudeReports(/permission-denied/.test(code) ? { ok: false, err: (e && e.message) || "Not allowed" } : /invalid-argument|failed-precondition/.test(code) ? { ok: false, err: (e && e.message) || "try Refresh" } : null); });
+    return () => { dead = true; };
+  }, [tab, claudeTick]); // eslint-disable-line
+  const openReport = (id) => {
+    if (reportOpen === id) { setReportOpen(null); return; }
+    setReportOpen(id);
+    const have = reportBody[id];
+    if (have && have !== "loading" && !have.err) return;
+    setReportBody(m => ({ ...m, [id]: "loading" }));
+    memberCallable("claudeReports", identity)({ id }).then(
+      r => { const x = r && r.data; setReportBody(m => ({ ...m, [id]: x && x.ok && x.report ? x.report : { err: "This report isn't there any more." } })); },
+      e => setReportBody(m => ({ ...m, [id]: { err: (e && e.message) || "Couldn't open it. Try again." } })));
+  };
   useEffect(() => {
     if (tab !== "claude") return undefined;
     let dead = false;
@@ -52575,6 +52622,22 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const planFiled = plan.fl.filter(f => f.type === "plans_filed" && f._at >= weekAgo).sort((a, b) => b._at - a._at);
     const planFolders = plan.fl.filter(f => OD_PLAN_FOLDER.includes(f.type) && f._at >= weekAgo);
     const pc = (cd && cd.planCounts) || null;
+    // Reports (SW v616): grouped by job (number + name), then by type, newest first throughout.
+    const rd = claudeReports;
+    const rq = reportQ.trim().toLowerCase();
+    const reps = rd && rd.ok ? (rd.reports || []).map(r => ({ ...r, ...odClaudeJobLabel(r, jobs) })) : [];
+    const repShown = reps.filter(r => !rq || `${r.label} ${r.title} ${r.typeLabel} ${r.forWho}`.toLowerCase().includes(rq));
+    const repJobs = [];
+    repShown.forEach(r => { const k = r.jobNo || r.jobId; let g = repJobs.find(x => x.k === k); if (!g) { g = { k, label: r.label, job: r.job, n: 0, types: [] }; repJobs.push(g); }
+      g.n++; let t = g.types.find(x => x.type === r.type); if (!t) { t = { type: r.type, label: r.typeLabel, rows: [] }; g.types.push(t); } t.rows.push(r); });
+    const repItem = (r) => (
+      <Fragment key={r.id}>
+        <OdItem color={r.ownersOnly ? OD_SLATE : OD_P} icon={r.ownersOnly ? "lock" : "fileText"}
+          tag={[r.forWho && `For ${r.forWho}`, r.ownersOnly && "Owners only"].filter(Boolean).join(" · ") || r.typeLabel}
+          title={r.title} sub={r.version > 1 ? `Updated ${odShort(D(r.updatedAt))} · version ${r.version} · first filed ${odShort(D(r.filedAt))}` : `Filed ${odShort(D(r.filedAt))}`}
+          when={reportOpen === r.id ? "Close" : dayName(D(r.updatedAt))} onClick={() => openReport(r.id)}/>
+        {reportOpen === r.id ? <OdReport body={reportBody[r.id]}/> : null}
+      </Fragment>);
     main = (<>
       <div className="od-head"><div><h1>Claude</h1><p>{full ? "Every change I made in Simpro and Command Center, and every message I checked" : "Every change Claude made in Simpro and Command Center for Koy"} · last 14 days</p></div>
         <div className="od-ct-actions">
@@ -52592,6 +52655,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           <OdMini title={full ? "Flagged to you" : "Flagged to Koy"} color={OD_R} icon="flag" value={wc.flagged} sub="needed a call from Koy" onClick={full ? () => { setClaudeKind("flagged"); setClaudeOpen(o => ({ ...o, watch: true })); } : undefined}/>
           <OdMini title="Plans filed this week" color={OD_P} icon="fileText" value={findings === undefined ? "…" : planFiled.length} sub={`${planWait.length} waiting on ${full ? "you" : "Koy"}`} onClick={full ? () => { setClaudeApp("Plan Intake"); setClaudeOpen(o => ({ ...o, changes: true })); } : undefined}/>
         </div>
+        {fold("reports", "Reports", "by job, then type · newest first · tap one to read it", rd && rd.ok ? reps.length : null,
+          rd === undefined ? <div className="od-empty">Loading…</div>
+          : rd === null ? <div className="od-empty">Reports show here once the new reports function is deployed.</div>
+          : rd.ok === false ? <div className="od-empty">Couldn't load reports: {rd.err || "try Refresh"}</div> : <>
+            {reps.length > 4 ? <input className="od-q" type="search" value={reportQ} onChange={e => setReportQ(e.target.value)} placeholder="Filter by job number, job name or title" aria-label="Filter reports"/> : null}
+            {repJobs.length ? repJobs.map(g => <div key={g.k}>
+              <div className="od-sec"><span>{g.label}</span><small>{odPlural(g.n, "report")}</small></div>
+              {g.types.map(t => <div key={t.type}><div className="od-rep-tl">{t.label}</div><div className="od-list">{t.rows.map(repItem)}</div></div>)}
+            </div>) : <div className="od-empty">{rq ? "No reports match." : "No reports yet. Claude files them here as it makes them."}</div>}
+          </>, OD_P)}
         {full && flaggedNow.length ? fold("flagged", "Flagged to you", "last 3 days · newest first", flaggedNow.length,
           <div className="od-list">{flaggedNow.map(watchItem)}</div>, OD_R) : null}
         {fold("changes", "Changes", "newest first · tap one to open the job", all.length, <>
@@ -52647,6 +52720,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <div className="od-list">
         <OdItem color={OD_G} icon="pencil" tag="Command Center" title="Every change Claude makes here" sub="logged by the app itself, with undo"/>
         <OdItem color={OD_B} icon="calendar" tag="Simpro" title="Every schedule entry Claude writes" sub="logged by the connector as it writes"/>
+        <OdItem color={OD_P} icon="fileText" tag="Reports" title="Every report Claude makes for Koy" sub="filed by the connector after Koy's OK · dollar reports for admins only"/>
         <OdItem color={OD_G} icon="zap" tag="Appliance Loads" title="The nightly routine's Run Log" sub="read from the sheet, which stays a sheet"/>
         <OdItem color={OD_SLATE} icon={full ? "mail" : "lock"} tag="Messages" title={full ? "Texts, chat and email Claude checks" : "Counts only"} sub={full ? "only Koy sees the words" : "the messages themselves stay with Koy"}/>
       </div>
@@ -52955,6 +53029,19 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-fold small{flex:1;min-width:0}
         .odash .od-fold-n{margin-left:auto;font-size:12px;font-weight:700;color:var(--c,var(--cdim));background:var(--cbg2,rgba(127,127,127,.12));border-radius:999px;padding:2px 9px;white-space:nowrap}
         .odash .od-fold-body{margin-top:10px}
+        .odash .od-rep-tl{font-size:11.5px;font-weight:700;color:var(--cdim);text-transform:uppercase;letter-spacing:.04em;margin:8px 2px 4px}
+        .odash .od-rep-body{border:1px solid var(--cline);border-radius:12px;padding:12px 14px;margin:6px 0 10px;background:var(--card);font-size:13.5px;line-height:1.5;color:var(--cink);overflow-wrap:anywhere}
+        .odash .od-rep-body h3{font-size:16px;margin:2px 0 8px}
+        .odash .od-rep-body h4{font-size:14.5px;margin:14px 0 6px}
+        .odash .od-rep-body h5{font-size:13.5px;margin:12px 0 4px}
+        .odash .od-rep-body p{margin:6px 0}
+        .odash .od-rep-body ul,.odash .od-rep-body ol{margin:6px 0;padding-left:20px}
+        .odash .od-rep-body li{margin:3px 0}
+        .odash .od-rep-tw{overflow-x:auto;margin:8px 0;-webkit-overflow-scrolling:touch}
+        .odash .od-rep-body table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+        .odash .od-rep-body th,.odash .od-rep-body td{border-bottom:1px solid var(--cline);padding:6px 8px;text-align:left;vertical-align:top}
+        .odash .od-rep-body th{font-weight:700;color:var(--cdim);white-space:nowrap}
+        .odash .od-rep-foot{margin-top:10px;font-size:11.5px;color:var(--cdim)}
         .odash .od-svg{width:100%;height:auto;display:block}
         .odash .od-hint{font-size:11.5px;color:var(--cdim)}
         .odash .od-daysum{display:flex;align-items:center;gap:10px;background:var(--hov);border-radius:12px;padding:9px 12px}
@@ -62117,9 +62204,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-04 · App SW version: v615
+**Last manifest update:** 2026-11-06 · App SW version: v616
 ---
 
+- **Reports in the Claude tab: every report Claude makes for Koy, by job number and name, then type, newest first; dollar reports for admins only** · 'in-flight 2026-11-06' · 'SW v616' · 'claudeReports' · 'functions/duetWrites/reports.js' · 'src/reportMd.js' · 'OdReport' · 'claude_reports' · Koy: *"as long as it can be easily accessable from the claude section in dashboard"*, *"from here on any reports will go there as well organized neatly"*, *"Skip Drive"*, then *"Yes, build it"*. **Reports** is the first folded section on the Claude tab: one heading per job (job number and name), under it the report types (Game plan, Material report, Margin math, Forecast, Other), each report newest first with who it's for, Filed / Updated date and version; tap one to read it right there (headings, lists, tables and bold, drawn as plain text, never HTML, links shown as words). A filter box shows past four reports. **Storage:** 'claude_reports/<rep_…>', server-only (an explicit 'allow read, write: if false' block in the rules, the same as the catch-all, so it needs no rules deploy). **Read:** the new live-PIN callable 'claudeReports' (requireMember): the list without bodies, or one report by id; owners-only reports go to the admin tier alone and read as not found for anyone else (title never sent). **Write:** two new duetApi actions, 'report.file' and 'report.archive', used by the connector's new 'cc_file_report' / 'cc_archive_report' tools after Koy's OK in chat. The job's number and name are read from 'jobs/<jobId>' (never the caller's words); a report with a dollar figure is refused unless owners-only; the same job + type + title replaces that report (version +1, first filed date kept), so a retry never makes a copy; archive only flips 'archived' (never a delete). Like the Claude tab's log, no 'duet_writes' audit, no undo, not in the hourly limit: the report doc is the record. Test: new 'scripts/claude-reports-test.js' in prebuild (dollar guard, job from Command Center, replace, archive, the owners-only cut in both modes, duetApi through a fake io, the rules block, the text-only reader). Guide 'dashboard.html' (Reports). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeReports,functions:duetApi --project homestead-electric'** (Koy) and the connector deploy; until then the section says reports show once it's deployed. **Why it won't lose data:** a new collection only; the app only reads it through the callable; the two actions write 'claude_reports' and nothing else (no job, need or settings doc, no loader change); the rules block adds no access anywhere.
 - **Claude tab: every section folds and starts folded; proposed COs and bookings count as flagged to Koy** · 'shipped 2026-11-04' · 'SW v615' · 'claudeOpen' · 'didKind' · Koy: *"the sections in the claude section should probably all be collapsable and start collapsed, you have to scroll pretty far to get to them now"*. Flagged to you, Changes, Plan Intake, Appliance Loads and What I checked are each one tap-to-open panel with its count on the header (open state lasts only for the visit, so every visit starts folded); tapping a number tile at the top opens its panel. 'didKind' (functions/claudeActivity.js) now reads the watches' own words "CO proposed", "Inspection proposed" and "Ready to book" as flagged to Koy instead of Nothing needed. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity --project homestead-electric'** (Koy) for the counting fix; the folding is the app alone. **Why it won't lose data:** display only; nothing reads or writes anything new.
 - **Cut Sheets on every job's Plans & Links: the shop's spec-sheet library, searchable by part** · 'shipped 2026-11-04' · 'SW v614' · 'CutSheetsSection' · 'loadCutSheets' · 'filterCutSheets' · 'scripts/cutsheets-test.js' · Koy: *"where would be a good place to link this in the app so it's easily accessible by everybody?"* The Shared Drive › Homestead Job Organization › **Cut sheets** folder (built 2026-11-04 from the parts on the most Simpro POs since April 2023: 157 manufacturer sheets in category › brand folders, plus the **Cut Sheet Index** Google Sheet) now shows as a folded **Cut Sheets** block right under Drive Plans on every job, so office, foremen, leads and crew all reach it from a tab they already use (the Tools tab was ruled out because 'tools.view' is granted per person). It starts folded with *shop library · search by part* and loads on the first open, then shows the sheet count. A search box matches every word typed with punctuation ignored (*HOM120*, *wfrx 2*, *4in wafer*, *RAB gimbal*) and lists each match with its brand and category. With nothing typed the sheets sit in category groups (01–08 folder order), folded with brand names and a count, then by brand inside. **View** opens the sheet in an in-app viewer (Drive's preview, the same as Drive Plans) and **Open ↗** opens it in Drive to download, print or send to a GC; header links open the Cut Sheet Index and the folder. The listing uses the same API-key Drive read as Drive Plans (the folder is "anyone with the link — Viewer"), walks category › brand (plus one deeper level), skips '_Archive', and is cached once per app session for 10 minutes and shared by every job; a failed read shows the error with Try again. Counts 'cut_sheet_opened' (brand) in PostHog. Gate: 'scripts/cutsheets-test.js' (14 checks in prebuild on the live 'cutSheetRow' / 'filterCutSheets'). Guide: 'planslinks.html' (new step 5 + a quick answer). Hosting deploy only. **Why it won't lose data:** read-only. It lists one Drive folder and never writes a job, a Firestore document or a Drive file; no loader, rules or function change.
 - **Claude tab on the dashboard: every change Claude made in Simpro, Command Center and Plan Intake, and (Koy only) every message it checked; Needs a look and POs by job on Automations** · 'shipped 2026-11-04' · 'SW v613' · 'claudeActivity' · 'functions/claudeActivity.js' · 'odClaudeFold' · 'odClaudeJobLabel' · 'poView' · 'settings/simproPoSync.view' · Koy: *"one that's for me specifically, but also one that Josh and Brady can view on the dashboard"*, and on the sheets: one place, so the Claude Scheduling Write Log stops getting rows and the hourly Simpro POs - Master sheet can be switched off ("that works"), then *"Add plan intake"*. **Claude tab** (tenth tab, admins, after Automations): changes this week, messages checked, flagged to Koy, plans filed this week; Flagged to you (3 days); Changes by day from 'duet_writes' (Command Center writes, refused calls left off, same action on one job within 10 min folded: "Added 13 photos"), 'claude_activity' kind 'simpro' (Simpro schedule writes, logged by the connector) and 'agentQueue' decisions (filed / set aside / walk matched, the Routine's and Koy's own, dry_/test_ left off), chips per app and a filter, tap opens the job; Plan Intake live from 'agentFindings'; Appliance Loads nightly run from that sheet's Run Log tab (public CSV); What I checked from 'claude_activity' kind 'watch'. **Two cuts, made server-side** in the new admin-PIN callable 'claudeActivity' (requireAdmin, then admin only): Koy's record gets everything; every other admin, and Koy's own *Owners' view* switch, gets the changes and counts with no message list and no emailed plan file names (a test asserts no message words anywhere in that answer). 'duet_writes', 'claude_activity' and 'agentQueue' stay server-only under the rules' catch-all, so no rules change. **Automations › Simpro POs**: the hourly PO run also saves the sheet's Needs a look and Summary rows as 'view' on 'settings/simproPoSync' (no dollar field in either; 150 / 300 rows max) even if the sheet write fails; the card lists Needs a look (what to do, tap opens the job) and a folded POs by job. 'settings/simproPoSync.sheet = "off"' stops the hourly sheet rewrite and leaves the sheet as an archive (the card says so). Tests: new 'scripts/claude-activity-test.js' (owners' cut, refused writes, folding, job and quote labels, plan rows, samples, the two log actions) in prebuild; 'scripts/simpro-pull-sim.js' +1 scenario (sheet off) and view checks. Guide 'dashboard.html' (new Claude step, Simpro POs). **duetApi log actions** ('functions/duetWrites/activity.js'): 'activity.simpro' and 'activity.watch' take 1–50 rows and write 'claude_activity/<sim_|wat_><hash or key>' docs (same row twice → same doc; links stripped, control characters out, unknown fields refused, at within 400 days); a log, not a Command Center change, so no 'duet_writes' audit, no undo, not in the hourly limit — the connector calls them after each Simpro schedule write and from its new 'cc_log_activity' tool (Watch rows, the sheet backfill). **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeActivity,functions:scheduledSimproPOSync,functions:duetApi --project homestead-electric'** (Koy); until then the tab and the PO list show sample rows marked as such. **Why it won't lose data:** the tab and the PO list only read; the callable only reads; the PO run's only new write is one field on its own settings doc; the log actions write only 'claude_activity'; no job field, loader or rules change.

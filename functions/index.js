@@ -7687,6 +7687,32 @@ exports.claudeActivity = functions.https.onCall(async (data) => {
   });
 });
 
+// ─── Reports in the Claude tab (SW v616) ─────────────────────────────────────
+// Koy, 2026-11-05: reports "easily accessable from the claude section in
+// dashboard", "from here on any reports will go there as well organized
+// neatly". claude_reports is server-only (rules: no client access), written
+// only by duetApi's report.file / report.archive (functions/duetWrites/reports.js).
+// This callable is the only way to read one. Gate: a live team PIN
+// (requireMember). Owners-only reports (any with dollar figures) go to the
+// ADMIN tier alone; to anyone else they don't exist (not found, title never
+// sent). List mode sends no report bodies; { id } sends that one report.
+// Read-only: no write anywhere. Deploy ONLY this one:
+//   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeReports,functions:duetApi --project homestead-electric
+const _claudeReports = require("./duetWrites/reports.js");
+exports.claudeReports = functions.https.onCall(async (data) => {
+  const user = await requireMember(data);
+  const isAdmin = gcAdminAccessOf(user) === "admin";
+  const id = String((data && data.id) || "");
+  if (id) {
+    if (!/^rep_[A-Za-z0-9_-]{6,48}$/.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad report id.");
+    const s = await db.collection("claude_reports").doc(id).get();
+    return _claudeReports.buildOne(id, s.exists ? s.data() : null, { isAdmin });
+  }
+  const snap = await db.collection("claude_reports").orderBy("updatedAt", "desc").limit(1000)
+    .select("jobId", "jobNo", "jobName", "type", "title", "forWho", "ownersOnly", "filedAt", "updatedAt", "version", "chars", "archived").get();
+  return { ok: true, isAdmin, reports: _claudeReports.buildList(snap.docs.map(d => [d.id, d.data()]), { isAdmin, includeArchived: false }) };
+});
+
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────
 // Send on a Material Tracking card creates the PO in Simpro and emails it
 // (functions/materialPO/, rules tested by scripts/materialpo-test.js). Mode on

@@ -271,7 +271,9 @@ const OFFICE_ACTIONS = ["broadcast.send", "autoTask.promote", "planIntake.decide
 const UNDO_ACTIONS = ["undo.apply"];   // ship 11: undoApply() — an earlier duet_writes doc replayed from its `before` through the same writers
 const AC = require("./activity.js");
 const ACTIVITY_ACTIONS = AC.ACTIVITY_ACTIONS;   // v613: the Claude tab's log (claude_activity) — not a Command Center change: no duet_writes audit, no undo, not in the hourly limit
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS];
+const RP = require("./reports.js");
+const REPORT_ACTIONS = RP.REPORT_ACTIONS;       // v616: Reports in the Claude tab (claude_reports) — like the log: no duet_writes audit, no undo, not in the hourly limit; the report doc itself is the record
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -1197,6 +1199,31 @@ async function handle(body, io) {
     return { status: 200, body: { ok: true, requestId, action: b.action, logged: p.docs.length, ids: p.docs.map(d => d.id), ...(p.skipped.length ? { skipped: p.skipped } : {}) } };
   }
 
+  // Reports (v616): one doc in claude_reports, server-only. The job's number and
+  // name are read from jobs/<jobId> here, never taken from the caller. Filing the
+  // same job + type + title again replaces that report (same id), so a retry
+  // never makes a second copy; archive only flips archived (never a delete).
+  if (REPORT_ACTIONS.includes(b.action)) {
+    const nowIso = io.nowIso();
+    if (b.action === "report.file") {
+      const jobId = String(args.jobId || "");
+      const job = /^[A-Za-z0-9_-]{1,80}$/.test(jobId) ? await io.getJobData(jobId) : null;
+      const fid = RP.fileId(args);
+      if (fid.refused) return { status: 400, body: { ok: false, refused: fid.refused } };
+      const p = RP.planFile(args, job, await io.getReport(fid.id), nowIso);
+      if (p.refused) return { status: 400, body: { ok: false, refused: p.refused } };
+      await io.setReport(p.id, p.doc);
+      return { status: 200, body: { ok: true, requestId, action: b.action, reportId: p.id, jobId: p.doc.jobId, simproNo: p.doc.jobNo, jobName: p.doc.jobName, type: p.doc.type, title: p.doc.title, ownersOnly: p.doc.ownersOnly, version: p.doc.version, replaced: p.replaced } };
+    }
+    const id = String(args.id || "");
+    const prior = /^rep_[A-Za-z0-9_-]{6,48}$/.test(id) ? await io.getReport(id) : null;
+    const p = RP.planArchive(args, prior, nowIso);
+    if (p.refused) return { status: 400, body: { ok: false, refused: p.refused } };
+    if (p.noop) return { status: 200, body: { ok: true, requestId, action: b.action, reportId: p.id, archived: !!prior.archived, noop: true } };
+    await io.patchReport(p.id, p.patch);
+    return { status: 200, body: { ok: true, requestId, action: b.action, reportId: p.id, archived: p.patch.archived } };
+  }
+
   // Same requestId → same answer, nothing written twice.
   const prior = await io.getAudit(requestId);
   if (prior && prior.response) return { status: prior.response.status || 200, body: { ...prior.response.body, replayed: true } };
@@ -1450,6 +1477,25 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
       docs.forEach(({ id, doc }) => { if (!/^(sim|wat)_[A-Za-z0-9_-]{6,40}$/.test(id)) throw new Refusal(400, "bad activity id"); batch.set(db.collection("claude_activity").doc(id), doc); });
       await batch.commit();
     },
+    // v616: Reports. claude_reports/<rep_…> only; ids come from reports.js.
+    getJobData: async (jobId) => {
+      const s = await db.collection("jobs").doc(jobId).get();
+      const raw = s.exists ? s.data() : null;
+      return raw && raw.data && typeof raw.data === "object" ? raw.data : null;
+    },
+    getReport: async (id) => {
+      if (!/^rep_[A-Za-z0-9_-]{6,48}$/.test(id)) throw new Refusal(400, "bad report id");
+      const s = await db.collection("claude_reports").doc(id).get();
+      return s.exists ? s.data() : null;
+    },
+    setReport: async (id, doc) => {
+      if (!/^rep_[A-Za-z0-9_-]{6,48}$/.test(id)) throw new Refusal(400, "bad report id");
+      await db.collection("claude_reports").doc(id).set(dropUndefined(doc));
+    },
+    patchReport: async (id, patch) => {
+      if (!/^rep_[A-Za-z0-9_-]{6,48}$/.test(id)) throw new Refusal(400, "bad report id");
+      await db.collection("claude_reports").doc(id).update(dropUndefined(patch));
+    },
     arrayUnion: (...x) => FieldValue.arrayUnion(...x),
     serverTimestamp: () => FieldValue.serverTimestamp(),
     tz: TZ,
@@ -1502,6 +1548,7 @@ module.exports.OFFICE_ACTIONS = OFFICE_ACTIONS;
 module.exports.FIELD_ACTIONS = FIELD_ACTIONS;
 module.exports.UNDO_ACTIONS = UNDO_ACTIONS;
 module.exports.ACTIVITY_ACTIONS = ACTIVITY_ACTIONS;
+module.exports.REPORT_ACTIONS = REPORT_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;

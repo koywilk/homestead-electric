@@ -278,6 +278,17 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── CLAUDE REPORTS (SW v616) ──────────────────────────────────────────────
+    // claude_reports/{id}: reports Claude files for Koy (game plans, material
+    // reports, margin math). Some carry dollar figures, so the app gets NO
+    // access at all: duetApi (admin SDK) writes them and the live-PIN callable
+    // claudeReports reads them, sending owners-only reports to admins alone.
+    // This block says the same thing as the catch-all below; it is written out
+    // so nobody opens the collection by accident when the job rules change.
+    match /claude_reports/{id} {
+      allow read, write: if false;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
