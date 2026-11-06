@@ -25,10 +25,15 @@
 //            the app's soft delete; a note line → cleared to ""; a crew team →
 //            removed; a roster name → removed / re-added; an imported job or a
 //            building → archived (Duet's reversible shape). No take-back
-//            exists for: a question, a daily update, a punch item (mark it
-//            done), a material card (mark it ordered / picked up), a CO → trip
+//            exists for: a question, a daily update, a punch item on a phase
+//            tree (mark it done), a material card (mark it ordered / picked up), a CO → trip
 //            conversion, an Upcoming row, a project, a removed team → refused
 //            with the reason.
+//   TRIP PUNCH (Koy 2026-11-06, "undo on") — rtPunch.add: the added entries
+//            taken back off that trip, only while EVERY one still reads what
+//            the add left; one touched → refused, naming which. The app removes
+//            trip entries the same way when a promotion is undone. The one-entry
+//            trip punch writes (done / waiting / edit) put the entry back.
 //   SENDS  — refused ("already left the building"): a PO send, a team
 //            announcement, a plan-intake decision, a thread reply (the message
 //            stays), a photo (the entry and the bytes stay).
@@ -43,6 +48,7 @@ const TO = require("./timeOff.js");
 const JSU = require("./jobSetup.js");
 const QS = require("./questions.js");
 const NS = require("../needShape.js");
+const TP = require("./tripPunch.js");
 
 const ME = "Koy";
 const UNDO_REASON = "undone by Koy via Duet";
@@ -126,6 +132,8 @@ function classify(audit) {
     case "timeOff.decide": return { ...base, mode: "timeOff", reads: ["settings/timeOffRequests", "needs/toneed_" + String(a.itemId || ""), "settings/crewPTO"] };
     case "crew.assign": case "crew.unassign": case "crew.setLead": return { ...base, mode: "edit" };   // a planner cell: before null = the cell was empty (an empty cell is the planner's own delete of the key)
     case "punch.setDone": return { ...base, mode: "setDone" };
+    case "rtPunch.add": return { ...base, mode: "tripPunchAdd", closing: "the added trip punch items taken back off the trip (only while every one is untouched — Koy's call, 2026-11-06)" };
+    case "rtPunch.setDone": case "rtPunch.waiting": case "rtPunch.editText": return { ...base, mode: "tripPunchItem" };
     case "punch.void": return { ...base, mode: "voidRestore", closing: "item restored (cc_void_punch_item restore:true — the app's own pair; stripped QC-Fail trip clones are not re-added, as the app's restore doesn't)" };
     case "punch.restore": return { ...base, mode: "voidRestore", closing: "item voided again with its old reason (cc_void_punch_item)" };
     default:
@@ -161,6 +169,12 @@ function planUndo(audit, cls, live, ctx) {
     if ((d.archived || d.archivedAt) && a.action !== "job.archive" && !(cls.mode === "closing" && /archived/.test(cls.closing || ""))) return refuse(`${d.name || "That job"} is archived — bring it back first (cc_archive_job archived:false). Nothing was written.`);
     const c = { ...ctx, job };
     const jobPatch = (fields) => ({ kind: "jobPatch", jobId: job.id, fields });
+
+    if (cls.mode === "tripPunchAdd" || cls.mode === "tripPunchItem") {
+      const p = cls.mode === "tripPunchAdd" ? TP.planUndoAdd(a, d, same) : TP.planUndoItem(a, d, same);
+      if (p.refused) return p;
+      return out([jobPatch(p.fields)], Object.keys(p.fields), p.before, p.after, { itemId: p.itemId, result: p.result });
+    }
 
     if (cls.mode === "closing") {
       switch (a.action) {
