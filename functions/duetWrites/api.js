@@ -1576,7 +1576,7 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
     // settings/users, used by team.edit (and its undo) only.
     anyRef: (coll, id) => {
       const c = String(coll || ""), d = String(id || "");
-      if (!/^[a-z_]{2,40}$/.test(c) || !/^[A-Za-z0-9_-]{1,128}$/.test(d)) throw new Refusal(400, "coll / docId must name a top-level document. Nothing was read or written.");
+      if (!/^[A-Za-z_]{2,40}$/.test(c) || !/^[A-Za-z0-9_-]{1,128}$/.test(d)) throw new Refusal(400, "coll / docId must name a top-level document. Nothing was read or written.");
       const why = AD.neverReason(c, d);
       if (why) throw new Refusal(400, why);
       return db.collection(c).doc(d);

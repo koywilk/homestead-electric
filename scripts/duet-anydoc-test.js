@@ -100,7 +100,7 @@ await ok("anyDoc: DOC_ACTIONS is the spec's eight; kindOf sorts jobs / needs / p
 
 // ── 2. checkTarget — before any read ─────────────────────────────────────────
 await ok("checkTarget: ids and paths — bad coll / docId / path regexes refuse; a subcollection refuses with top-level only; a numeric path segment refuses naming patch_item; > 8 segments refuses; data-rooted paths never start with data. and never touch id", () => {
-  assert.match(check("doc.set", { coll: "Jobs", docId: FORTH, path: "flagNote", value: "x" }).refused, /coll/);
+  assert.match(check("doc.set", { coll: "jobs!", docId: FORTH, path: "flagNote", value: "x" }).refused, /coll/);
   assert.match(check("doc.set", { coll: "jobs", docId: "bad id!", path: "flagNote", value: "x" }).refused, /docId/);
   assert.match(check("doc.set", { coll: "jobs", docId: FORTH + "/versions/1", path: "flagNote", value: "x" }).refused, /top-level documents only/);
   assert.match(check("doc.set", { coll: "jobs/" + FORTH + "/versions", docId: "1", path: "flagNote", value: "x" }).refused, /top-level documents only/);
@@ -668,6 +668,13 @@ await ok("undo team.edit: the person's before fields go back through usersRef wi
   io.store["settings/users"].list = io.store["settings/users"].list.map(x => (x.id === "u3" ? { ...x, title: "super" } : x));
   const chg = await undoOf(io, "s12-team-chg"); assert.strictEqual(chg.status, 400); assert.match(chg.body.refused, /Changed since/);
   for (const w of upd(io, "settings/users")) assert.ok(w.list.length >= USERS.length);
+});
+
+// agentQueue / planIntakeState have capitals: the door must take them (the connector's coll regex allows them too).
+await ok("checkTarget: a camel-case collection name (agentQueue, planIntakeState) passes; a bad character still refuses naming coll", async () => {
+  assert.ok(!AD.checkTarget("doc.set", { coll: "agentQueue", docId: "item_1", path: "status", value: "dismissed" }).refused);
+  assert.ok(!AD.checkTarget("doc.set", { coll: "planIntakeState", docId: "config", path: "mode", value: "on" }).refused);
+  assert.match(AD.checkTarget("doc.set", { coll: "agent-queue", docId: "item_1", path: "status", value: "x" }).refused, /coll/);
 });
 
 console.log(`\n${n} checks passed — duet-anydoc-test`);
