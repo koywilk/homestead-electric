@@ -486,15 +486,15 @@ await ok("planJoinProject + handle project.join: the four-field patch; same divi
 });
 
 // ── 7. api.js wiring ────────────────────────────────────────────────────────
-await ok("api.js: the eight ship-9 actions are routed by jobSetup(), not jobWrite(); BUILD 608; SETTINGS_DOCS gains ONLY simproCandidates.candidates (settings/users still refused); still no tx.delete and exactly three .delete(; replay of a requestId answers the same without a second create", async () => {
+await ok("api.js: the eight ship-9 actions are routed by jobSetup(), not jobWrite(); BUILD 608; SETTINGS_DOCS gains ONLY simproCandidates.candidates (settings/users still refused); the door's tx.delete is the only one and exactly four .delete(; replay of a requestId answers the same without a second create", async () => {
   assert.deepStrictEqual(api.JOB_SETUP_ACTIONS, ["job.createFromSimpro", "job.setInfo", "job.setSection", "job.archive", "project.create", "project.patch", "project.createBuilding", "project.join"]);
   for (const a of api.JOB_SETUP_ACTIONS) assert.ok(api.ACTIONS.includes(a) && !api.JOB_WRITE_ACTIONS.includes(a));
   assert.ok(api.BUILD >= 608);   // ship 10 bumped it to 609
   assert.deepStrictEqual(api.SETTINGS_DOCS, { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: ["teams"], simproCandidates: ["candidates"], crewRoster: ["names"], upcoming_jobs: ["items", "updated_at"] });   // ship 10: crewTeams now written (teams), crewRoster.names, upcoming_jobs.items (+ the pipeline's updated_at)
   assert.ok(api.settingsDocAllowed("simproCandidates") && !api.settingsDocAllowed("users") && !api.settingsDocAllowed("main"));
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-  assert.ok(!/tx\.delete\(/.test(src), "no tx.delete in api.js"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 3, "exactly three .delete( (Storage cleanup, versions prune, the planner cell sentinel)");
-  assert.strictEqual((src.match(/tx\.create\(/g) || []).length, 5, "five tx.create: the task, the import, the project, the building, the promoted auto task (ship 10)");
+  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete in api.js is the door's doc.delete (ship 12, confirm word = the docId)"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 4, "exactly four .delete( (Storage cleanup, versions prune, the planner cell sentinel, the door's tx.delete — ship 12)");
+  assert.strictEqual((src.match(/tx\.create\(/g) || []).length, 7, "seven tx.create: the task, the import, the project, the building, the promoted auto task (ship 10), the door's data + plain creates (ship 12)");
   assert.ok(!/require\((?!"\.\.\/jobShape\.js"|"\.\.\/punchTicks\.js"|"\.\/punch\.js"|"\.\/needs\.js")/.test(fs.readFileSync(path.join(root, "functions", "duetWrites", "jobSetup.js"), "utf8")), "jobSetup.js requires no Firebase");
   const io = fakeIo();
   const first = await api.handle({ requestId: RID(777), action: "job.createFromSimpro", args: { simproId: "1500" } }, io);

@@ -252,13 +252,13 @@ await ok("photo: cc_add_photo's punch target finds an entry on a trip's own list
   assert.deepStrictEqual(trips[1].punch.slice(0, 2), RT_LINKED.punch.slice(0, 2)); assert.deepStrictEqual(trips[0], RT_MADDOX); assert.deepStrictEqual(trips[1].photos, []);
 });
 
-await ok("handle: the four rtPunch actions are job writes; no remove / move / sign-off action exists; tripPunch.js imports no Firebase; api.js still has exactly three .delete( and no tx.delete", () => {
+await ok("handle: the four rtPunch actions are job writes; no remove / move / sign-off action exists; tripPunch.js imports no Firebase; api.js has exactly four .delete( and one tx.delete (the door's, ship 12)", () => {
   ["rtPunch.add", "rtPunch.setDone", "rtPunch.waiting", "rtPunch.editText"].forEach(a => assert.ok(api.ACTIONS.includes(a), a));
   assert.ok(!api.ACTIONS.some(a => /^rtPunch\.(remove|delete|move|signOff|assign|void)/.test(a)));
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "tripPunch.js"), "utf8");
   assert.ok(!/firebase|firestore/i.test(src.replace(/\/\/.*$/gm, "")), "no Firebase in tripPunch.js");
   const apiSrc = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-  assert.strictEqual((apiSrc.match(/\.delete\(/g) || []).length, 3); assert.ok(!/tx\.delete\(/.test(apiSrc));
+  assert.strictEqual((apiSrc.match(/\.delete\(/g) || []).length, 4); assert.strictEqual((apiSrc.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete is the door's doc.delete (ship 12)");
 });
 
 console.log(`duet-trippunch-test: ${n} checks passed`);

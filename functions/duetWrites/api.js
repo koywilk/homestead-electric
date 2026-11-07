@@ -226,6 +226,37 @@
 // `undoes` and stamps the original with {undoneBy, undoneAt} in the SAME
 // transaction — the only write ever made to an existing duet_writes doc, and
 // never a delete. Archived jobs refuse unless the original was the archive.
+//
+// Ship 12 (the any-document door — Koy 2026-11-06: "I just want it to be able
+// to do anything that I say to do"): eight DOC_ACTIONS (anyDoc.js) reach any
+// top-level Command Center document by collection and id — doc.set ONE dotted
+// path, doc.append / patchItem / removeItem ONE list item by id (the whole
+// array written back, as every ship does), doc.create (tx.create; a jobs doc
+// starts from the shared blankJob() defaults), doc.markDeleted (the three
+// keys), doc.delete (tx.delete — the FIRST hard delete of a document in this
+// file, jobs / needs / suggestions only, the typed docId as the confirm word,
+// refused above 900 KB, the whole doc kept in the audit so undo can create it
+// back), and team.edit (ONE person in settings/users.list, patched or
+// appended, never a shorter list, through usersRef() — the only path to that
+// doc — with the app's saveUsers envelope {list, updated_at, saved_by,
+// device:"duet"} so open tabs' stale guard sees a real edit). The target check
+// runs BEFORE any read: the NEVER list (duet_writes, recovery_ledger,
+// claude_activity, claude_reports, errors, material_po_log, orgauth,
+// crewtokens, crewroster, crewdevices, gc_config/mail, settings/users outside
+// team.edit), subcollections, bad ids / paths, non-JSON values, the confirm
+// words (doc.delete → the docId; gc_config/material_po, settings/appGate,
+// config/app → the docId on every op; team.edit → the person's name after the
+// edit). On jobs a doc.set whose top key a named tool owns (fieldPolicy.js)
+// refuses naming that tool; the id / cache keys stay denied; the rest of the
+// DENY list is reachable. Envelope by collection kind: jobs → jobWrite's;
+// needs / projects → stamp(); settings / plain → whichever stamp key the doc
+// already carries (anyDoc.stampFor). homeowner_requests writes snapshot the
+// prior doc (snapshotHrVersion) as question.reply does. Same transaction,
+// same audit doc, same 60 / hour, undo through undo.apply (undo.js's anyDoc
+// classes: put back while the doc still reads the audit's after; a hard
+// delete is created back from `before` while the id is free; a plain create
+// is deleted while the doc still equals `after`; a data create is marked
+// deleted; a team add is deactivated).
 const crypto = require("crypto");
 const { planCreateTask, planUpdateTask, isDuplicate } = require("./needs.js");
 const JI = require("./jobItems.js");
@@ -242,10 +273,11 @@ const OF = require("./office.js");
 const FP = require("./fieldPolicy.js");
 const UN = require("./undo.js");
 const TP = require("./tripPunch.js");
+const AD = require("./anyDoc.js");
 const { matchUserByName } = require("../nameMatch.js");
 
 const SECRET = "DUET_WRITE_TOKEN";
-const BUILD = 610;                 // SW version this shipped with; integer for the version-lock stamp
+const BUILD = 618;                 // SW version this shipped with; integer for the version-lock stamp
 const SAVED_BY = "Duet (Koy)";
 const RATE_PER_HOUR = 60;
 const SEND_PO_PER_HOUR = 10;       // ship 8: material.sendPo has its own, stricter counter on top of the 60
@@ -273,7 +305,8 @@ const AC = require("./activity.js");
 const ACTIVITY_ACTIONS = AC.ACTIVITY_ACTIONS;   // v613: the Claude tab's log (claude_activity) — not a Command Center change: no duet_writes audit, no undo, not in the hourly limit
 const RP = require("./reports.js");
 const REPORT_ACTIONS = RP.REPORT_ACTIONS;       // v616: Reports in the Claude tab (claude_reports) — like the log: no duet_writes audit, no undo, not in the hourly limit; the report doc itself is the record
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS];
+const DOC_ACTIONS = AD.DOC_ACTIONS;             // ship 12: anyDocWrite() — any top-level document through the one door (anyDoc.js: the policy + the planners)
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS, ...DOC_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -1181,6 +1214,70 @@ async function undoApply(io, requestId, action, args, ctx, finish, refused) {
   return { status: out.status, body: out.body };
 }
 
+// Ship 12: the any-document door. checkTarget refuses before any read (the
+// refusal is audited like every deterministic one); then ONE transaction:
+// read the live doc, plan (anyDoc.js), write by kind with the envelope the
+// app's own writer for that collection uses, audit in the same transaction.
+// Audit extra: {coll, docId, fields:[path], path, itemId, index, before, after,
+// confirmed}. A hard delete keeps the WHOLE doc under `before` (undo's
+// material); a create is marked newDoc.
+async function anyDocWrite(io, requestId, action, args, ctx, finish, refused) {
+  const t = AD.checkTarget(action, args);
+  if (t.refused) return refused(t.status || 400, t.refused, { coll: typeof args.coll === "string" ? String(args.coll).slice(0, 40) : null, docId: args.docId == null ? null : String(args.docId).slice(0, 128) });
+  const { coll, docId, kind } = t;
+  const isTeam = action === "team.edit";
+  const ref = isTeam ? io.usersRef() : (action === "doc.create" && !docId ? null : io.anyRef(coll, docId));
+  const val = (v) => (v && typeof v === "object" && v.__delete === true ? io.deleteField() : v);
+  let out = null, prevHr = null, wroteHr = false;
+  try {
+    await io.runTx(async (tx) => {
+      let live = null, liveRef = ref;
+      if (liveRef) { const s = await tx.get(liveRef); live = s && s.exists ? s.data() : null; }
+      const p = isTeam ? AD.planTeamEdit(args, live, ctx) : AD.planDoc(action, args, live, ctx);
+      const auditBase = { coll, docId: p.docId || docId || null, confirmed: !!t.confirmWord, ...(t.path ? { path: t.path } : {}) };
+      if (p.refused) { out = finish(p.status || 400, { ok: false, refused: p.refused }, { ok: false, why: p.refused, ...auditBase }); tx.set(io.auditRef(requestId), out.audit); return; }
+      if (p.noop) { out = finish(200, { ok: true, requestId, action, noop: true, message: "Already that way — nothing to change.", ...(p.result || {}) }, { ok: true, noop: true, ...auditBase, fields: [] }); tx.set(io.auditRef(requestId), out.audit); return; }
+      if (isTeam) {
+        // saveUsers' envelope, so every open tab's stale-write guard (keyed on updated_at) sees a real team edit; the list is never shorter.
+        tx.update(liveRef, { list: dropUndefined(p.list), updated_at: freshIso(live.updated_at), saved_by: SAVED_BY, device: "duet" });
+        const result = { ok: true, requestId, action, ...p.result, pushTo: [] };
+        out = finish(200, result, { ok: true, ...auditBase, fields: ["list"], itemId: p.userId, before: p.before, after: p.after });
+        tx.set(io.auditRef(requestId), out.audit);
+        return;
+      }
+      const w = p.write;
+      const fieldNames = w.kind === "update" ? Object.keys(w.fields).map(k => (kind === "data" ? k.replace(/^data\./, "") : k)) : [];
+      if (w.kind === "update") {
+        let upd;
+        if (coll === "jobs") upd = { ...stamp(requestId, freshIso(live.updated_at)), lastActivityAt: io.serverTimestamp(), merged: false };   // jobWrite's envelope
+        else if (kind === "data") upd = { ...stamp(requestId, freshIso(live.updated_at)) };                                                   // patchNeed / patchProject's write
+        else upd = AD.stampFor(kind, live, ctx, requestId);                                                                                 // whichever stamp key the doc carries
+        Object.keys(w.fields).forEach(k => { upd[k] = val(dropUndefined(w.fields[k])); });
+        if (coll === "homeowner_requests") { prevHr = live; wroteHr = true; }
+        tx.update(liveRef, upd);
+      } else if (w.kind === "create") {
+        liveRef = io.anyRef(coll, p.docId);
+        if (kind === "data") tx.create(liveRef, { data: dropUndefined(w.doc.data), ...stamp(requestId, ctx.nowIso) });   // the app's {data, updated_at, saved_by} envelope — create-only
+        else tx.create(liveRef, { ...dropUndefined(w.doc), ...AD.stampFor(kind, null, ctx, requestId) });
+      } else if (w.kind === "delete") {
+        tx.delete(liveRef);   // the typed docId was checked before the read; the whole doc rides in the audit's before
+      } else throw new Error("unknown door write " + w.kind);
+      const result = { ok: true, requestId, action, ...p.result, pushTo: [] };
+      out = finish(200, result, { ok: true, ...auditBase, fields: fieldNames.length ? fieldNames : (w.kind === "create" ? (kind === "data" ? Object.keys(w.doc.data) : Object.keys(w.doc)) : []), itemId: p.itemId || null, index: p.index === undefined ? null : p.index, before: p.before, after: p.after, ...(w.kind === "create" ? { newDoc: true } : {}), ...(w.kind === "delete" ? { hardDelete: true } : {}) });
+      tx.set(io.auditRef(requestId), out.audit);
+    });
+  } catch (e) {
+    if (e && (e.code === 6 || /ALREADY_EXISTS|already exists/i.test(String(e.message || "")))) return refused(409, "That id already exists — the create was refused rather than overwrite anything. Nothing was written.", { coll, docId: docId || null });
+    throw e;
+  }
+  if (wroteHr) {
+    let snapped = false;
+    try { snapped = await io.snapshotHrVersion(docId, prevHr, "duet", ctx.nowIso); } catch (e) { snapped = false; }
+    out.body.versionSnapshot = snapped;
+  }
+  return { status: out.status, body: out.body };
+}
+
 async function handle(body, io) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
@@ -1233,7 +1330,7 @@ async function handle(body, io) {
   if (recent >= RATE_PER_HOUR) throw new Refusal(429, `Duet has made ${recent} changes in the last hour — the limit is ${RATE_PER_HOUR}. Try again later.`);
 
   const todayYmd = io.todayYmd();
-  const ctx = { nowIso, todayYmd, bucketNow: `${todayYmd}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz };
+  const ctx = { nowIso, todayYmd, bucketNow: `${todayYmd}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz, email };
   const base = { at: nowIso, action: b.action, by: SAVED_BY, email, requestId, expireAt: new Date(Date.parse(nowIso) + 90 * 86400 * 1000).toISOString() };
   // Every answer and every audit doc goes through here, so this is the one
   // place to drop `undefined` (Firestore refuses a document holding one;
@@ -1322,6 +1419,11 @@ async function handle(body, io) {
 
   if (UNDO_ACTIONS.includes(b.action)) {
     const r = await undoApply(io, requestId, b.action, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
+  if (DOC_ACTIONS.includes(b.action)) {
+    const r = await anyDocWrite(io, requestId, b.action, args, ctx, finish, refused);
     return { status: r.status, body: r.body };
   }
 
@@ -1449,6 +1551,17 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
     runTx: (fn) => db.runTransaction(fn),
     needRef: (id) => db.collection("needs").doc(id),
     jobRef: (id) => db.collection("jobs").doc(id),
+    // Ship 12: the door's refs. anyRef refuses the NEVER list and settings/users
+    // before any read (anyDoc.neverReason); usersRef is the ONE path to
+    // settings/users, used by team.edit (and its undo) only.
+    anyRef: (coll, id) => {
+      const c = String(coll || ""), d = String(id || "");
+      if (!/^[a-z_]{2,40}$/.test(c) || !/^[A-Za-z0-9_-]{1,128}$/.test(d)) throw new Refusal(400, "coll / docId must name a top-level document. Nothing was read or written.");
+      const why = AD.neverReason(c, d);
+      if (why) throw new Refusal(400, why);
+      return db.collection(c).doc(d);
+    },
+    usersRef: () => db.collection("settings").doc("users"),
     // Ship 9: projects/<prj_…> (create + dotted update, never delete) and the
     // three transactional queries the job-setup planners need — read under the
     // transaction's lock, trimmed to the fields the app's helpers look at.
@@ -1549,6 +1662,7 @@ module.exports.FIELD_ACTIONS = FIELD_ACTIONS;
 module.exports.UNDO_ACTIONS = UNDO_ACTIONS;
 module.exports.ACTIVITY_ACTIONS = ACTIVITY_ACTIONS;
 module.exports.REPORT_ACTIONS = REPORT_ACTIONS;
+module.exports.DOC_ACTIONS = DOC_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;

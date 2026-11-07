@@ -488,13 +488,13 @@ ok("findTeam: \"Keegan's crew\" → his team; a team id; a member's name → the
       await assert.rejects(run({ requestId: RID, action: a, args: {} }, fakeIo({ docs: DOCS() })), (e) => e.status === 400 && /action must be/.test(e.message), a);
     }
     const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-    assert.ok(!/tx\.delete\(/.test(src), "no tx.delete anywhere in api.js");
-    assert.strictEqual((src.match(/\.delete\(/g) || []).length, 3, "exactly three deletes in api.js: the ship-3 Storage cleanup, the versions prune, and FieldValue.delete() for an emptied planner cell (a map key, never a doc)");
+    assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete in api.js is the door's doc.delete (ship 12, confirm word = the docId)");
+    assert.strictEqual((src.match(/\.delete\(/g) || []).length, 4, "exactly four deletes in api.js: the ship-3 Storage cleanup, the versions prune, and FieldValue.delete() for an emptied planner cell (a map key, never a doc) — plus (ship 12) the door's tx.delete, the only document delete");
     assert.ok(/new FieldPath\(/.test(src) && /io\.fieldPath\("assignments", p\.key\)/.test(src), "the cell write goes through FieldPath(assignments, key)");
     assert.ok(/settingsRef: \(id\) => \{\s*if \(!settingsDocAllowed\(id\)\) throw/.test(src), "settingsRef is the only way in and it guards");
-    assert.strictEqual((src.match(/collection\("settings"\)/g) || []).length, 1, "settings is opened in exactly one place");
-    assert.ok(!/collection\("users"\)|doc\("users"\)|settings\/users/.test(src.replace(/\/\/[^\n]*/g, "")), "no code path names settings/users");
-    n++; console.log("ok   handle: no hours / clear-day / team-save / time-off-create / remove action exists; BUILD is the ship-5 SW version; api.js has no tx.delete and opens settings in one guarded place");
+    assert.strictEqual((src.match(/collection\("settings"\)/g) || []).length, 2, "settings is opened in exactly two places: settingsRef (guarded) and usersRef (ship 12, team.edit only)");
+    assert.strictEqual((src.replace(/\/\/[^\n]*/g, "").match(/doc\("users"\)/g) || []).length, 1, "exactly one code path names settings/users: usersRef"); assert.ok(/usersRef: \(\) => db\.collection\("settings"\)\.doc\("users"\)/.test(src), "and that path is usersRef");
+    n++; console.log("ok   handle: no hours / clear-day / team-save / time-off-create / remove action exists; BUILD is the ship-5 SW version; api.js has one tx.delete (the door's, ship 12) and opens settings in two places: settingsRef (guarded) + usersRef (team.edit only)");
   })();
   console.log(`duet-crew-test: ${n} checks passed`);
 })().catch((e) => { console.error("FAIL", e && e.stack || e); process.exit(1); });

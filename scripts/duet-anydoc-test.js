@@ -358,5 +358,188 @@ await ok("stampFor: a doc with updatedAt gets the settings stamp {updatedAt, tab
   assert.deepStrictEqual(AD.stampFor("settings", null, c, "rid-12345678-x"), { updated_at: NOW, saved_by: "Duet (Koy)" });
 });
 
+// ── 8. handle() end to end: ONE transaction, the envelope by kind, the audit in-tx ──
+function fakeIo({ docs = DOCS(), users = USERS, recent = 0 } = {}) {
+  const log = [];
+  const store = clone(docs);
+  const ref = (coll, id) => ({ coll, id, path: coll + "/" + id });
+  const setPath = (obj, dotted, v) => { const parts = dotted.split("."); let cur = obj; for (let i = 0; i < parts.length - 1; i++) { if (!(cur[parts[i]] && typeof cur[parts[i]] === "object" && !Array.isArray(cur[parts[i]]))) cur[parts[i]] = {}; cur = cur[parts[i]]; } if (v && v.__delete) delete cur[parts[parts.length - 1]]; else cur[parts[parts.length - 1]] = v; };
+  const tx = {
+    get: async (r) => { log.push(["get", r.path]); const d = store[r.path]; return { exists: !!d, data: () => d }; },
+    create: (r, d) => { assertNoUndefined(d, ""); log.push(["create", r.path, d]); if (store[r.path]) { const e = new Error("6 ALREADY_EXISTS"); e.code = 6; throw e; } store[r.path] = clone(d); },
+    update: (r, d) => { assertNoUndefined(d, ""); log.push(["update", r.path, d]); if (!store[r.path]) throw new Error("update on a missing doc: " + r.path); const cur = clone(store[r.path]); Object.keys(d).forEach(k => { const v = d[k]; if (v && v.__serverTimestamp) setPath(cur, k, "<server-ts>"); else setPath(cur, k, v); }); store[r.path] = cur; },
+    set: (r, d) => { assertNoUndefined(d, ""); log.push(["set", r.path, d]); store[r.path] = clone(d); },
+    delete: (r) => { log.push(["delete", r.path]); delete store[r.path]; },
+  };
+  const snaps = [];
+  return {
+    log, store, snaps, nowIso: () => NOW, todayYmd: () => TODAY, rand: () => "abcde", tz: TZ,
+    getAudit: async (id) => store["duet_writes/" + id] || null, countRecent: async () => recent, recentActions: async () => [],
+    getJob: async () => null, getUsers: async () => users, openNeeds: async () => [],
+    runTx: async (fn) => fn(tx), needRef: (id) => ref("needs", id), jobRef: (id) => ref("jobs", id), auditRef: (id) => ref("duet_writes", id), projectRef: (id) => ref("projects", id),
+    settingsRef: (id) => { log.push(["settingsRef", id]); if (!api.settingsDocAllowed(id)) throw new api.Refusal(400, "settings/" + id + " is not a document Duet may touch."); return ref("settings", id); },
+    anyRef: (coll, id) => { log.push(["anyRef", coll + "/" + id]); const why = AD.neverReason(coll, id); if (why) throw new api.Refusal(400, why); return ref(coll, id); },
+    usersRef: () => { log.push(["usersRef"]); return ref("settings", "users"); },
+    snapshotHrVersion: async (jobId, prev, tag, at) => { snaps.push({ jobId, prev, tag, at }); return !!prev; },
+    deleteField: () => ({ __delete: true }), arrayUnion: (...x) => ({ __arrayUnion: x }), serverTimestamp: () => ({ __serverTimestamp: true }), fieldPath: (...s) => ({ __fieldPath: s }),
+  };
+}
+let seq = 0;
+const rid = () => "ship12-test-" + String(++seq).padStart(4, "0");
+const run = (io, action, args, id) => api.handle({ requestId: id || rid(), action, email: "koy@homesteadelectric.net", args }, io);
+const writes = (io) => io.log.filter(l => ["create", "update", "set", "delete"].includes(l[0]));
+const upd = (io, p) => io.log.filter(l => l[0] === "update" && l[1] === p).map(l => l[2]);
+const JOB_ENV = ["app_build", "device", "lastActivityAt", "merged", "saved_by", "tab", "updated_at", "w"];
+
+await ok("api: DOC_ACTIONS are in ACTIONS and exported; BUILD is 618", () => {
+  assert.deepStrictEqual(api.DOC_ACTIONS, AD.DOC_ACTIONS);
+  for (const a of AD.DOC_ACTIONS) assert.ok(api.ACTIONS.includes(a), a);
+  assert.strictEqual(api.BUILD, 618);
+});
+let io = fakeIo();
+await ok("handle doc.set on a job: ONE jobs update {jobWrite's envelope + data.flagNote} and the audit {coll, docId, fields:[\"flagNote\"], path, before, after, confirmed:false} in the SAME transaction; read → write → audit; result names from / to", async () => {
+  const r = await run(io, "doc.set", { coll: "jobs", docId: FORTH, path: "flagNote", value: "GC wants the panel north" }, "ship12-set-0001");
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.from, ""); assert.strictEqual(r.body.to, "GC wants the panel north"); assert.strictEqual(r.body.coll, "jobs"); assert.strictEqual(r.body.docId, FORTH);
+  const u = upd(io, "jobs/" + FORTH)[0];
+  assert.deepStrictEqual(Object.keys(u).sort(), [...JOB_ENV, "data.flagNote"].sort());
+  assert.strictEqual(u.app_build, 618); assert.strictEqual(u.saved_by, "Duet (Koy)"); assert.strictEqual(u.device, "duet"); assert.ok(u.updated_at > "2026-11-05T20:00:00.000Z"); assert.strictEqual(u.merged, false); assert.deepStrictEqual(u.lastActivityAt, { __serverTimestamp: true });
+  const audit = io.store["duet_writes/ship12-set-0001"];
+  assert.strictEqual(audit.action, "doc.set"); assert.strictEqual(audit.coll, "jobs"); assert.strictEqual(audit.docId, FORTH); assert.deepStrictEqual(audit.fields, ["flagNote"]); assert.strictEqual(audit.path, "flagNote");
+  assert.strictEqual(audit.before, ""); assert.strictEqual(audit.after, "GC wants the panel north"); assert.strictEqual(audit.confirmed, false); assert.strictEqual(audit.by, "Duet (Koy)"); assert.strictEqual(audit.ok, true);
+  assert.deepStrictEqual(io.log.filter(l => l[0] !== "anyRef").map(l => l[0]), ["get", "update", "set"], "read, write, audit — one transaction");
+  assert.strictEqual(io.store["jobs/" + FORTH].data.flagNote, "GC wants the panel north"); assert.strictEqual(io.store["jobs/" + FORTH].data.name, "Forth", "nothing else moved");
+  const noop = await run(io, "doc.set", { coll: "jobs", docId: FORTH, path: "flagNote", value: "GC wants the panel north" }, "ship12-set-0002");
+  assert.strictEqual(noop.body.noop, true); assert.strictEqual(io.store["duet_writes/ship12-set-0002"].noop, true); assert.strictEqual(upd(io, "jobs/" + FORTH).length, 1);
+  const owned = await run(io, "doc.set", { coll: "jobs", docId: FORTH, path: "roughStatus", value: "complete" });
+  assert.strictEqual(owned.status, 400); assert.match(owned.body.refused, /cc_set_phase_status/); assert.strictEqual(upd(io, "jobs/" + FORTH).length, 1);
+  const missing = await run(io, "doc.set", { coll: "jobs", docId: "1700000000000", path: "flagNote", value: "x" });
+  assert.strictEqual(missing.status, 404);
+});
+await ok("handle doc.set by kind: needs / projects get stamp() only (no lastActivityAt / merged); settings/appGate (confirm) gets {updatedAt, tab, merged:false}; gc_config/material_po (confirm) gets {updated_at, saved_by}; suggestions gets no stamp at all; the audit says confirmed:true for a confirm doc", async () => {
+  const rn = await run(io, "doc.set", { coll: "needs", docId: NEED1.id, path: "priority", value: "urgent" }, "ship12-need-0001");
+  assert.strictEqual(rn.status, 200, JSON.stringify(rn.body));
+  assert.deepStrictEqual(Object.keys(upd(io, "needs/" + NEED1.id)[0]).sort(), ["app_build", "data.priority", "device", "saved_by", "tab", "updated_at", "w"]);
+  const rp = await run(io, "doc.set", { coll: "projects", docId: "prj_1762000000000", path: "notes", value: "Four buildings" });
+  assert.strictEqual(rp.status, 200); assert.deepStrictEqual(Object.keys(upd(io, "projects/prj_1762000000000")[0]).sort(), ["app_build", "data.notes", "device", "saved_by", "tab", "updated_at", "w"]);
+  const rg = await run(io, "doc.set", { coll: "settings", docId: "appGate", path: "minBuild", value: 618, confirm: "appGate" }, "ship12-gate-0001");
+  assert.strictEqual(rg.status, 200, JSON.stringify(rg.body));
+  const ug = upd(io, "settings/appGate")[0];
+  assert.deepStrictEqual(ug, { minBuild: 618, updatedAt: NOW, tab: "duet-ship12-g", merged: false });
+  assert.strictEqual(io.store["duet_writes/ship12-gate-0001"].confirmed, true); assert.deepStrictEqual(io.log.filter(l => l[0] === "settingsRef"), [], "never through settingsRef");
+  const rm = await run(io, "doc.set", { coll: "gc_config", docId: "material_po", path: "mode", value: "live", confirm: "material_po" }, "ship12-po-0001");
+  assert.strictEqual(rm.status, 200, JSON.stringify(rm.body)); assert.match(rm.body.warning, /real vendors/);
+  assert.deepStrictEqual(upd(io, "gc_config/material_po")[0], { mode: "live", updated_at: NOW, saved_by: "Duet (Koy)" });
+  const rs = await run(io, "doc.set", { coll: "suggestions", docId: "sug_1", path: "text", value: "Add a dark mode please" });
+  assert.strictEqual(rs.status, 200); assert.deepStrictEqual(upd(io, "suggestions/sug_1")[0], { text: "Add a dark mode please" });
+  const no = await run(io, "doc.set", { coll: "settings", docId: "appGate", path: "minBuild", value: 619 }, "ship12-gate-0002");
+  assert.strictEqual(no.status, 400); assert.strictEqual(no.body.refused, CONFIRM("appGate")); assert.strictEqual(io.store["duet_writes/ship12-gate-0002"].ok, false); assert.strictEqual(upd(io, "settings/appGate").length, 1);
+});
+await ok("handle: a NEVER collection / settings/users / gc_config/mail never reaches tx.get (refused + audited before any read); a subcollection and a bad path too", async () => {
+  const before = io.log.length;
+  for (const [coll, docId] of [["duet_writes", "x"], ["recovery_ledger", "x"], ["orgauth", "x"], ["settings", "users"], ["gc_config", "mail"], ["claude_activity", "x"]]) {
+    const r = await run(io, "doc.set", { coll, docId, path: "a", value: 1 });
+    assert.strictEqual(r.status, 400, coll); assert.match(r.body.refused, /never|team\.edit|mail key/i, coll);
+  }
+  const r2 = await run(io, "doc.delete", { coll: "duet_writes", docId: "x", confirm: "x" }); assert.strictEqual(r2.status, 400);
+  const r3 = await run(io, "doc.create", { coll: "crewtokens", data: { a: 1 } }); assert.strictEqual(r3.status, 400);
+  const r4 = await run(io, "doc.set", { coll: "jobs", docId: FORTH + "/versions/1", path: "a", value: 1 }); assert.match(r4.body.refused, /top-level/);
+  const fresh = io.log.slice(before);
+  assert.deepStrictEqual(fresh.filter(l => l[0] === "get" || l[0] === "anyRef" || l[0] === "usersRef"), [], "nothing read, no ref opened");
+  assert.strictEqual(fresh.filter(l => l[0] === "set" && l[1].startsWith("duet_writes/")).length, 9, "every refusal audited");
+});
+await ok("handle doc.append / patchItem / removeItem on a job: the whole array written back as ONE dotted key with jobWrite's envelope; the audit keeps the ONE item (+ itemId, index)", async () => {
+  const io2 = fakeIo();
+  const ra = await run(io2, "doc.append", { coll: "jobs", docId: FORTH, path: "finishUpdates", item: { date: "11/7/2026", text: "Punch walk", by: "Koy" }, position: "start" }, "ship12-app-0001");
+  assert.strictEqual(ra.status, 200, JSON.stringify(ra.body)); const newId = ra.body.itemId; assert.ok(/^jobs_\d+_abcde$/.test(newId));
+  const ua = upd(io2, "jobs/" + FORTH)[0]; assert.deepStrictEqual(Object.keys(ua).sort(), [...JOB_ENV, "data.finishUpdates"].sort()); assert.strictEqual(ua["data.finishUpdates"].length, 3); assert.strictEqual(ua["data.finishUpdates"][0].id, newId);
+  const aa = io2.store["duet_writes/ship12-app-0001"]; assert.strictEqual(aa.itemId, newId); assert.strictEqual(aa.index, 0); assert.strictEqual(aa.before, null); assert.deepStrictEqual(aa.after, { id: newId, date: "11/7/2026", text: "Punch walk", by: "Koy" }); assert.deepStrictEqual(aa.fields, ["finishUpdates"]);
+  const rp = await run(io2, "doc.patchItem", { coll: "jobs", docId: FORTH, path: "finishUpdates", itemId: "fu1", patch: { text: "Trim started upstairs (fixed)" } }, "ship12-pat-0001");
+  assert.strictEqual(rp.status, 200, JSON.stringify(rp.body)); assert.deepStrictEqual(rp.body.changed, ["text"]);
+  assert.strictEqual(io2.store["jobs/" + FORTH].data.finishUpdates.find(x => x.id === "fu1").text, "Trim started upstairs (fixed)");
+  const ap = io2.store["duet_writes/ship12-pat-0001"]; assert.deepStrictEqual(ap.before, FU1); assert.strictEqual(ap.after.text, "Trim started upstairs (fixed)"); assert.strictEqual(ap.index, 1);
+  const rr = await run(io2, "doc.removeItem", { coll: "jobs", docId: FORTH, path: "finishUpdates", itemId: "fu2" }, "ship12-rem-0001");
+  assert.strictEqual(rr.status, 200, JSON.stringify(rr.body)); assert.strictEqual(rr.body.length, 2);
+  assert.deepStrictEqual(io2.store["jobs/" + FORTH].data.finishUpdates.map(x => x.id), [newId, "fu1"]);
+  const ar = io2.store["duet_writes/ship12-rem-0001"]; assert.deepStrictEqual(ar.before, FU2); assert.strictEqual(ar.after, null); assert.strictEqual(ar.index, 2); assert.strictEqual(ar.itemId, "fu2");
+  assert.deepStrictEqual(io2.log.filter(l => l[0] === "delete"), [], "never a delete");
+});
+await ok("handle doc.create: needs → tx.create(needs/need_<ms>_abcde, {data:{…, id}, …stamp()}); a plain coll → tx.create with {updated_at, saved_by}; jobs start from blankJob and refuse a blank name; an existing id → 409, never overwritten", async () => {
+  const io3 = fakeIo();
+  const ms = Date.parse(NOW);
+  const rn = await run(io3, "doc.create", { coll: "needs", data: { kind: "need", text: "Call the GC", assignedTo: "Koy", status: "open" } }, "ship12-cre-0001");
+  assert.strictEqual(rn.status, 200, JSON.stringify(rn.body)); assert.strictEqual(rn.body.docId, `need_${ms}_abcde`); assert.strictEqual(rn.body.created, true);
+  const c = io3.log.find(l => l[0] === "create"); assert.strictEqual(c[1], `needs/need_${ms}_abcde`);
+  assert.deepStrictEqual(Object.keys(c[2]).sort(), ["app_build", "data", "device", "saved_by", "tab", "updated_at", "w"]); assert.strictEqual(c[2].data.id, `need_${ms}_abcde`); assert.strictEqual(c[2].data.text, "Call the GC");
+  const an = io3.store["duet_writes/ship12-cre-0001"]; assert.strictEqual(an.before, null); assert.deepStrictEqual(an.after, c[2].data); assert.strictEqual(an.docId, `need_${ms}_abcde`); assert.strictEqual(an.newDoc, true);
+  const rs = await run(io3, "doc.create", { coll: "suggestions", docId: "sug_2", data: { text: "Dark mode", by: "Koy" } });
+  assert.strictEqual(rs.status, 200, JSON.stringify(rs.body));
+  assert.deepStrictEqual(io3.store["suggestions/sug_2"], { text: "Dark mode", by: "Koy", updated_at: NOW, saved_by: "Duet (Koy)" });
+  const rj = await run(io3, "doc.create", { coll: "jobs", data: { name: "Miller shop", foreman: "Colby" } });
+  assert.strictEqual(rj.status, 200, JSON.stringify(rj.body)); assert.strictEqual(rj.body.docId, String(ms));
+  const j = io3.store["jobs/" + ms]; assert.strictEqual(j.data.id, String(ms)); assert.strictEqual(j.data.name, "Miller shop"); assert.strictEqual(j.data.homeRuns.main.length, 10); assert.strictEqual(j.saved_by, "Duet (Koy)");
+  const blank = await run(io3, "doc.create", { coll: "jobs", data: { address: "x" } }); assert.strictEqual(blank.status, 400); assert.match(blank.body.refused, /name/);
+  const dup = await run(io3, "doc.create", { coll: "suggestions", docId: "sug_2", data: { text: "again" } });
+  assert.strictEqual(dup.status, 409); assert.strictEqual(io3.store["suggestions/sug_2"].text, "Dark mode");
+  const tooBig = await run(io3, "doc.create", { coll: "suggestions", data: { text: "x".repeat(100 * 1024 + 1) } }); assert.strictEqual(tooBig.status, 400);
+});
+await ok("handle doc.markDeleted + doc.delete: markDeleted writes the three keys (data.* on a job, top-level on a plain doc); delete with the typed id calls tx.delete and the audit's before is the whole doc; without the word → refused, audited, nothing read", async () => {
+  const io4 = fakeIo();
+  const rm = await run(io4, "doc.markDeleted", { coll: "jobs", docId: FORTH }, "ship12-md-0001");
+  assert.strictEqual(rm.status, 200, JSON.stringify(rm.body));
+  const um = upd(io4, "jobs/" + FORTH)[0]; assert.strictEqual(um["data.deleted"], true); assert.strictEqual(um["data.deletedAt"], NOW); assert.strictEqual(um["data.deletedBy"], "Koy");
+  assert.deepStrictEqual(io4.store["duet_writes/ship12-md-0001"].fields, ["deleted", "deletedAt", "deletedBy"]);
+  const rs = await run(io4, "doc.markDeleted", { coll: "suggestions", docId: "sug_1" });
+  assert.strictEqual(rs.status, 200); assert.deepStrictEqual(upd(io4, "suggestions/sug_1")[0], { deleted: true, deletedAt: NOW, deletedBy: "Koy" });
+  const raw = clone(io4.store["needs/" + NEED1.id]);
+  const noWord = await run(io4, "doc.delete", { coll: "needs", docId: NEED1.id }, "ship12-del-0000");
+  assert.strictEqual(noWord.status, 400); assert.strictEqual(noWord.body.refused, CONFIRM(NEED1.id)); assert.ok(io4.store["needs/" + NEED1.id]); assert.strictEqual(io4.store["duet_writes/ship12-del-0000"].ok, false);
+  assert.deepStrictEqual(io4.log.filter(l => l[0] === "get" && l[1] === "needs/" + NEED1.id), [], "nothing read without the word");
+  const rd = await run(io4, "doc.delete", { coll: "needs", docId: NEED1.id, confirm: NEED1.id }, "ship12-del-0001");
+  assert.strictEqual(rd.status, 200, JSON.stringify(rd.body)); assert.strictEqual(rd.body.hard, true);
+  assert.deepStrictEqual(io4.log.filter(l => l[0] === "delete"), [["delete", "needs/" + NEED1.id]]); assert.strictEqual(io4.store["needs/" + NEED1.id], undefined);
+  const ad = io4.store["duet_writes/ship12-del-0001"]; assert.deepStrictEqual(ad.before, raw); assert.strictEqual(ad.after, null); assert.strictEqual(ad.confirmed, true); assert.strictEqual(ad.hardDelete, true);
+  const proj = await run(io4, "doc.delete", { coll: "projects", docId: "prj_1762000000000", confirm: "prj_1762000000000" });
+  assert.strictEqual(proj.status, 400); assert.match(proj.body.refused, /jobs, needs, suggestions/); assert.ok(io4.store["projects/prj_1762000000000"]);
+});
+await ok("handle team.edit: ONE tx.update(settings/users, {list, updated_at, saved_by:\"Duet (Koy)\", device:\"duet\"}) — the app's saveUsers envelope — through usersRef only; the list never shrinks; the audit keeps the ONE person without pin / tokens; wrong confirm → refused + audited", async () => {
+  const io5 = fakeIo();
+  const r = await run(io5, "team.edit", { userId: "u2", patch: { title: "office" }, confirm: "Josh Miller" }, "ship12-team-0001");
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.userId, "u2"); assert.deepStrictEqual(r.body.changed, ["title"]);
+  const u = upd(io5, "settings/users")[0];
+  assert.deepStrictEqual(Object.keys(u).sort(), ["device", "list", "saved_by", "updated_at"]);
+  assert.strictEqual(u.saved_by, "Duet (Koy)"); assert.strictEqual(u.device, "duet"); assert.ok(u.updated_at > "2026-11-04T10:00:00.000Z"); assert.strictEqual(u.list.length, USERS.length);
+  assert.deepStrictEqual(u.list[1], { ...USERS[1], title: "office" }); assert.strictEqual(u.list[0].pin, "1111", "the live list keeps every pin");
+  assert.deepStrictEqual(io5.log.filter(l => l[0] === "settingsRef" || l[0] === "anyRef"), [], "only usersRef opens the roster");
+  const a = io5.store["duet_writes/ship12-team-0001"];
+  assert.strictEqual(a.coll, "settings"); assert.strictEqual(a.docId, "users"); assert.strictEqual(a.itemId, "u2"); assert.deepStrictEqual(a.fields, ["list"]);
+  assert.deepStrictEqual(a.before, { id: "u2", name: "Josh Miller", title: "admin", access: "admin" }); assert.deepStrictEqual(a.after, { id: "u2", name: "Josh Miller", title: "office", access: "admin" });
+  assert.ok(!JSON.stringify(a).includes("2222") && !JSON.stringify(a).includes("tokJosh") && !JSON.stringify(a).includes("1111"), "no PIN or token in the audit");
+  const add = await run(io5, "team.edit", { patch: { name: "New Guy", title: "crew", access: "limited" }, confirm: "New Guy" }, "ship12-team-0002");
+  assert.strictEqual(add.status, 200, JSON.stringify(add.body)); assert.strictEqual(upd(io5, "settings/users")[1].list.length, USERS.length + 1); assert.strictEqual(io5.store["duet_writes/ship12-team-0002"].before, null);
+  const wrong = await run(io5, "team.edit", { userId: "u3", patch: { title: "lead" }, confirm: "keegan" }, "ship12-team-0003");
+  assert.strictEqual(wrong.status, 400); assert.strictEqual(wrong.body.refused, CONFIRM("Keegan")); assert.strictEqual(io5.store["duet_writes/ship12-team-0003"].ok, false); assert.strictEqual(upd(io5, "settings/users").length, 2);
+  const self = await run(io5, "team.edit", { userId: "u1", patch: { active: false }, confirm: "Koy" });
+  assert.strictEqual(self.status, 400); assert.match(self.body.refused, /Koy's own record/);
+  const opens = io5.log.filter(l => l[0] === "usersRef").length;
+  const tok = await run(io5, "team.edit", { userId: "u3", patch: { fcmTokens: [] }, confirm: "Keegan" });
+  assert.strictEqual(tok.status, 400); assert.match(tok.body.refused, /fcmTokens/); assert.strictEqual(io5.log.filter(l => l[0] === "usersRef").length, opens, "a never-key patch is refused before the roster is opened");
+  for (const w of upd(io5, "settings/users")) assert.ok(w.list.length >= USERS.length, "never shorter");
+});
+await ok("handle: homeowner_requests writes snapshot the prior doc first (io.snapshotHrVersion, the funnel's rule) and the answer says so; same requestId → replayed; the 61st call in an hour → 429; a refusal mid-way writes nothing", async () => {
+  const io6 = fakeIo();
+  const prev = clone(io6.store["homeowner_requests/" + FORTH]);
+  const r = await run(io6, "doc.set", { coll: "homeowner_requests", docId: FORTH, path: "notes", value: "Homeowner picked the pendants" }, "ship12-hr-0001");
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.versionSnapshot, true);
+  assert.deepStrictEqual(io6.snaps, [{ jobId: FORTH, prev, tag: "duet", at: NOW }]);
+  assert.deepStrictEqual(upd(io6, "homeowner_requests/" + FORTH)[0], { notes: "Homeowner picked the pendants", updated_at: NOW, saved_by: "Duet (Koy)" });
+  const again = await run(io6, "doc.set", { coll: "homeowner_requests", docId: FORTH, path: "notes", value: "something else" }, "ship12-hr-0001");
+  assert.strictEqual(again.body.replayed, true); assert.strictEqual(again.body.to, "Homeowner picked the pendants"); assert.strictEqual(upd(io6, "homeowner_requests/" + FORTH).length, 1); assert.strictEqual(io6.snaps.length, 1);
+  const full = fakeIo({ recent: 60 });
+  await assert.rejects(run(full, "doc.set", { coll: "jobs", docId: FORTH, path: "flagNote", value: "x" }), (e) => e instanceof api.Refusal && e.status === 429);
+  assert.deepStrictEqual(writes(full), []);
+  const fifty = fakeIo({ recent: 59 });
+  assert.strictEqual((await run(fifty, "doc.set", { coll: "jobs", docId: FORTH, path: "flagNote", value: "x" })).status, 200);
+});
+
 console.log(`\n${n} checks passed — duet-anydoc-test`);
 })().catch(e => { console.error("FAIL duet-anydoc-test:", e && e.stack || e); process.exit(1); });

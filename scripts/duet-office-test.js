@@ -506,7 +506,7 @@ await ok("handle crewRoster.set: add appends the team spelling (_saveRoster([...
 });
 
 // ── allowlist / api.js pins ──────────────────────────────────────────────────
-await ok("api.js: the seven office actions are routed by office(); BUILD 609; SETTINGS_DOCS = the ship-5/9 rows + crewTeams.teams (now written) + crewRoster.names + upcoming_jobs.items/updated_at and NOTHING else (settings/users, main, appGate still refused before any read); still no tx.delete, exactly three .delete(, five tx.create; the sender and the decider are called through io, never required as copies", async () => {
+await ok("api.js: the seven office actions are routed by office(); BUILD 609; SETTINGS_DOCS = the ship-5/9 rows + crewTeams.teams (now written) + crewRoster.names + upcoming_jobs.items/updated_at and NOTHING else (settings/users, main, appGate still refused before any read); the door's tx.delete is the only one, exactly four .delete(, seven tx.create; the sender and the decider are called through io, never required as copies", async () => {
   assert.deepStrictEqual(api.OFFICE_ACTIONS, ["broadcast.send", "autoTask.promote", "planIntake.decide", "upcoming.add", "upcoming.edit", "crewTeams.set", "crewRoster.set"]);
   for (const a of api.OFFICE_ACTIONS) assert.ok(api.ACTIONS.includes(a) && !api.JOB_WRITE_ACTIONS.includes(a) && !api.JOB_SETUP_ACTIONS.includes(a), a);
   assert.ok(api.BUILD >= 609);   // ship 11 bumped it to 610 assert.strictEqual(api.BROADCAST_PER_HOUR, 10);
@@ -517,7 +517,7 @@ await ok("api.js: the seven office actions are routed by office(); BUILD 609; SE
   await call(io, "upcoming.edit", { id: "1761000000001", notes: "x" }); await call(io, "crewTeams.set", { op: "remove", teamId: "t1abc" }); await call(io, "crewRoster.set", { op: "add", name: "Koy" });
   assert.deepStrictEqual([...new Set(io.log.filter(l => l[0] === "settingsRef").map(l => l[1]))], ["upcoming_jobs", "crewTeams", "crewRoster"], "each action opens its own doc only (once to read, once to write)");
   assert.ok(!io.log.some(l => l[0] === "get" && l[1] === "settings/main"), "settings/main never read");
-  assert.ok(!/tx\.delete\(/.test(apiSrc), "no tx.delete"); assert.strictEqual((apiSrc.match(/\.delete\(/g) || []).length, 3); assert.strictEqual((apiSrc.match(/tx\.create\(/g) || []).length, 5, "the task, the import, the project, the building, the promoted auto task");
+  assert.strictEqual((apiSrc.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete in api.js is the door's doc.delete (ship 12, confirm word = the docId)"); assert.strictEqual((apiSrc.match(/\.delete\(/g) || []).length, 4); assert.strictEqual((apiSrc.match(/tx\.create\(/g) || []).length, 7, "the task, the import, the project, the building, the promoted auto task, the door's two (ship 12)");
   assert.ok(!/require\("\.\.\/index\.js"\)/.test(apiSrc) && !/require\("\.\.\/planIntake\/watcher\.js"\)/.test(apiSrc), "api.js never requires index.js / watcher.js — the real functions arrive through officeDeps");
   assert.ok(/od\.sendBroadcastAs\(user, payload\)/.test(apiSrc) && /od\.planDecide\(itemId, body\)/.test(apiSrc), "called through officeDeps");
   assert.ok(!/broadcasts"\)/.test(apiSrc) && !/collection\("agentQueue"\)|collection\("planIntakeState"\)|collection\("agentFindings"\)|collection\("notifications"\)/.test(apiSrc), "api.js opens none of broadcasts / notifications / agentQueue / planIntakeState / agentFindings itself");

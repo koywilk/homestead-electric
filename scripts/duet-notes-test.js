@@ -515,9 +515,9 @@ const checkEnvelope = (upd) => {
       await assert.rejects(run({ requestId: RID, action: a, args: {} }, jobIo()), (e) => e.status === 400 && /action must be/.test(e.message), a);
     }
     const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-    assert.ok(!/tx\.delete\(/.test(src), "no tx.delete anywhere in api.js");
-    assert.strictEqual((src.match(/\.delete\(/g) || []).length, 3, "exactly three deletes in api.js: the ship-3 Storage cleanup, the versions prune, and (ship 5) FieldValue.delete() on an emptied planner cell — a map key, never a doc");
-    n++; console.log("ok   handle: no hard-delete / edit-update action exists; BUILD is the ship-4 SW version; api.js has no tx.delete");
+    assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete in api.js is the door's doc.delete (ship 12, confirm word = the docId)");
+    assert.strictEqual((src.match(/\.delete\(/g) || []).length, 4, "exactly four deletes in api.js: the ship-3 Storage cleanup, the versions prune, and (ship 5) FieldValue.delete() on an emptied planner cell — a map key, never a doc — plus (ship 12) the door's tx.delete, the only document delete");
+    n++; console.log("ok   handle: no hard-delete / edit-update action exists; BUILD is the ship-4 SW version; api.js has one tx.delete (the door's, ship 12)");
   })();
   console.log(`duet-notes-test: ${n} checks passed`);
 })().catch((e) => { console.error("FAIL", e && e.stack || e); process.exit(1); });
