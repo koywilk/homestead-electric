@@ -40,7 +40,24 @@
 // Never: an undo of an undo, of a refused or no-op call, of a call already
 // undone, of a preview (a read). Deleted jobs refuse; archived jobs refuse
 // unless the original was the archive itself (that undo IS the reversal).
+//   THE DOOR (ship 12, anyDoc.js — mode "anyDoc" / "teamEdit"): doc.set →
+//            the path's `before` put back while it still reads `after` (an
+//            absent before = the key removed); doc.append → the item taken
+//            off while it still equals `after`; doc.patchItem → the item's
+//            `before` back while it still equals `after`; doc.removeItem →
+//            re-inserted at its index (or the end) while no item has that id;
+//            doc.create → a data-rooted doc marked deleted (the three keys),
+//            a plain doc deleted while it still equals `after`; doc.delete →
+//            tx.create back from the whole `before` while the id is free;
+//            doc.markDeleted → the three keys back; team.edit → the person's
+//            `before` fields back (an add → active:false, the roster never
+//            shrinks) while the person still reads `after` — pin / tokens on
+//            the live record are never touched (they were never audited).
+//            The door's docs are opened through io.anyRef / io.usersRef (the
+//            NEVER list refuses there too); archived jobs are NOT a gate for
+//            the door's undos (the door itself has none).
 const JI = require("./jobItems.js");
+const AD = require("./anyDoc.js");
 const NU = require("./notesUpdates.js");
 const PU = require("./punch.js");
 const OF = require("./office.js");
@@ -106,6 +123,7 @@ function classify(audit) {
   const coll = String(a.coll || ""), docId = String(a.docId || "");
   if (!coll || !docId) return refuse("That audit record names no document — nothing to put back.");
   const base = { coll, docId, reads: [coll + "/" + docId] };
+  if (AD.DOC_ACTIONS.includes(a.action)) return { ...base, mode: a.action === "team.edit" ? "teamEdit" : "anyDoc" };   // ship 12: the door's own classes (planUndoAnyDoc / planUndoTeam)
   switch (a.action) {
     case "task.create": return { ...base, mode: "closing", closing: "task voided (done + voided, the app's own void)" };
     case "autoTask.promote": return a.newDoc ? { ...base, mode: "closing", closing: "task voided (done + voided, the app's own void)" } : { ...base, mode: "edit" };
@@ -154,9 +172,15 @@ function classify(audit) {
 //         {kind:"settingsCell", docId, key, cell|null, missing}
 //         {kind:"settingsList", docId, listKey, list, pipelineStamp}
 //         {kind:"timeOff", plan}                      (api replays timeOffDecide's three writes)
+//         {kind:"docPatch", coll, docId, fields}      (ship 12: fields relative to data for data-rooted colls; api adds the envelope by kind)
+//         {kind:"docCreate", coll, docId, doc}         (ship 12: the whole doc back, verbatim)
+//         {kind:"docDelete", coll, docId}              (ship 12: a plain create taken back)
+//         {kind:"usersPatch", list}                    (ship 12: settings/users.list through usersRef with saveUsers' envelope)
 function planUndo(audit, cls, live, ctx) {
   const a = audit;
   const raw = live[cls.coll + "/" + cls.docId] || null;
+  if (cls.mode === "anyDoc") return planUndoAnyDoc(a, cls, raw, ctx);
+  if (cls.mode === "teamEdit") return planUndoTeam(a, cls, raw, ctx);
   const notes = [];
   const out = (writes, fields, before, after, extra) => ({ writes, fields, before, after, itemId: a.itemId || null, closing: cls.closing || null, notes, ...(extra || {}) });
 
@@ -404,6 +428,96 @@ function planUndo(audit, cls, live, ctx) {
   return refuse(`${cls.coll} isn't a collection Duet puts back from here. Nothing was written.`);
 }
 
+// ── ship 12: the door's undos ────────────────────────────────────────────────
+const findById = (list, id) => list.findIndex(x => x && typeof x === "object" && String(x.id) === String(id));
+const DELETED_KEYS = ["deleted", "deletedAt", "deletedBy"];
+function planUndoAnyDoc(a, cls, raw, ctx) {
+  const { coll, docId } = cls;
+  const kind = AD.kindOf(coll);
+  const where = `${coll}/${docId}`;
+  const root = kind === "data" ? (raw && raw.data && typeof raw.data === "object" ? raw.data : null) : raw;
+  const path = a.path || (Array.isArray(a.fields) ? a.fields[0] : "") || "";
+  const out = (writes, fields, before, after, extra) => ({ writes, fields, before, after, itemId: a.itemId || null, closing: null, notes: [], ...(extra || {}) });
+  const patch = (fields) => ({ kind: "docPatch", coll, docId, fields });
+  const gone = () => refuse(`${where} is no longer in Command Center. Nothing was written.`);
+  const listAt = () => { const cur = getPath(root, path); return Array.isArray(cur) ? cur : cur === undefined || cur === null ? [] : null; };
+
+  if (a.action === "doc.delete") {
+    if (raw) return refuse(`A document with id ${docId} exists again in ${coll} — the deleted one can't be created back over it. Nothing was written.`);
+    if (!a.before || typeof a.before !== "object") return refuse("That audit record kept no copy of the deleted document. Nothing was written.");
+    return out([{ kind: "docCreate", coll, docId, doc: a.before }], Object.keys(a.before), null, a.before, { closing: "document created back from the audit's copy, verbatim", result: { coll, docId, restored: true, pushTo: [] } });
+  }
+  if (!root) return gone();
+
+  if (a.action === "doc.set") {
+    if (!path) return refuse("That audit record names no path. Nothing was written.");
+    const cur = getPath(root, path);
+    if (!same(cur, a.after)) return changedSince([diffOf(path, cur, a.after)]);
+    const prev = a.before === undefined ? null : a.before;
+    return out([patch({ [path]: put(prev) })], [path], { [path]: cur === undefined ? null : cur }, { [path]: prev }, { result: { coll, docId, path, pushTo: [] } });
+  }
+  if (a.action === "doc.append") {
+    const list = listAt(); if (!list) return refuse(`${path} no longer holds a list. Nothing was written.`);
+    const i = findById(list, a.itemId);
+    if (i < 0) return refuse(`No item with id ${a.itemId} in ${path} any more — already gone. Nothing was written.`);
+    if (!same(list[i], a.after)) return changedSince([diffOf(`${path} item ${a.itemId}`, list[i], a.after)]);
+    return out([patch({ [path]: list.filter((x, j) => j !== i) })], [path], { [path]: list[i] }, { [path]: null }, { closing: "the added item taken back off the list (it was untouched since)", result: { coll, docId, path, itemId: a.itemId, removed: true, pushTo: [] } });
+  }
+  if (a.action === "doc.patchItem") {
+    const list = listAt(); if (!list) return refuse(`${path} no longer holds a list. Nothing was written.`);
+    const i = findById(list, a.itemId);
+    if (i < 0) return refuse(`No item with id ${a.itemId} in ${path} any more. Nothing was written.`);
+    if (!same(list[i], a.after)) return changedSince([diffOf(`${path} item ${a.itemId}`, list[i], a.after)]);
+    if (!a.before || typeof a.before !== "object") return refuse("That audit record has no earlier item to put back. Nothing was written.");
+    return out([patch({ [path]: list.map((x, j) => (j === i ? a.before : x)) })], [path], { [path]: list[i] }, { [path]: a.before }, { result: { coll, docId, path, itemId: a.itemId, pushTo: [] } });
+  }
+  if (a.action === "doc.removeItem") {
+    const list = listAt(); if (!list) return refuse(`${path} no longer holds a list. Nothing was written.`);
+    if (!a.before || typeof a.before !== "object") return refuse("That audit record has no earlier item to put back. Nothing was written.");
+    if (findById(list, a.itemId) >= 0) return refuse(`There is already an item with id ${a.itemId} in ${path} (someone put one back). Nothing was written.`);
+    const at = Number.isInteger(a.index) && a.index >= 0 && a.index <= list.length ? a.index : list.length;
+    const next = [...list.slice(0, at), a.before, ...list.slice(at)];
+    return out([patch({ [path]: next })], [path], { [path]: null }, { [path]: a.before }, { result: { coll, docId, path, itemId: a.itemId, index: at, pushTo: [] } });
+  }
+  if (a.action === "doc.create") {
+    if (kind === "data") {
+      if (root.deleted === true) return refuse(`${where} already reads deleted. Nothing was written.`);
+      const after = { deleted: true, deletedAt: ctx.nowIso, deletedBy: ME };
+      const before = {}; DELETED_KEYS.forEach(k => { before[k] = root[k] === undefined ? null : root[k]; });
+      return out([patch(after)], DELETED_KEYS, before, after, { closing: "the created document marked deleted (the three keys; the doc itself stays)", result: { coll, docId, ...after, pushTo: [] } });
+    }
+    const current = { ...raw }; ["updated_at", "saved_by"].forEach(k => { delete current[k]; });   // the door's own create stamp isn't part of what was audited
+    if (!same(current, a.after)) return changedSince([diffOf(where, current, a.after)]);
+    return out([{ kind: "docDelete", coll, docId }], Object.keys(raw), raw, null, { closing: "the created document deleted again (it was untouched since)", result: { coll, docId, deleted: true, hard: true, pushTo: [] } });
+  }
+  if (a.action === "doc.markDeleted") {
+    const diffs = DELETED_KEYS.filter(k => !same(root[k], a.after && a.after[k])).map(k => diffOf(k, root[k], a.after && a.after[k]));
+    if (diffs.length) return changedSince(diffs);
+    const fields = {}, before = {}, after = {};
+    DELETED_KEYS.forEach(k => { const prev = a.before ? a.before[k] : undefined; fields[k] = put(prev); before[k] = root[k] === undefined ? null : root[k]; after[k] = prev === undefined ? null : prev; });
+    return out([patch(fields)], DELETED_KEYS, before, after, { result: { coll, docId, deleted: after.deleted === true, pushTo: [] } });
+  }
+  return refuse("No undo is defined for that door action. Nothing was written.");
+}
+function planUndoTeam(a, cls, raw, ctx) {
+  const list = raw && Array.isArray(raw.list) ? raw.list : null;
+  if (!list) return refuse("settings/users (the Team roster) isn't loaded or holds no list. Nothing was written.");
+  const i = findById(list, a.itemId);
+  if (i < 0) return refuse(`No team member with id ${a.itemId} any more. Nothing was written.`);
+  const cur = list[i];
+  if (!same(AD.redact(cur), a.after)) return changedSince([diffOf("settings/users.list#" + a.itemId, AD.redact(cur), a.after)]);
+  const out = (person, closing, result) => ({ writes: [{ kind: "usersPatch", list: list.map((u, j) => (j === i ? person : u)) }], fields: ["list"], before: AD.redact(cur), after: AD.redact(person), itemId: a.itemId, closing, notes: [], result: { coll: "settings", docId: "users", userId: a.itemId, name: person.name, ...result, pushTo: [] } });
+  if (a.before === null || a.before === undefined) {
+    if (cur.active === false) return refuse(`${cur.name || a.itemId} already reads active:false. Nothing was written.`);
+    return out({ ...cur, active: false }, "the added person set to active:false (the roster never shrinks — the app's own remove)", { deactivated: true });
+  }
+  if (typeof a.before !== "object") return refuse("That audit record has no earlier record to put back. Nothing was written.");
+  const person = { ...cur };
+  const keys = new Set([...Object.keys(a.after || {}), ...Object.keys(a.before)]);
+  for (const k of keys) { if (AD.TEAM_REDACT.includes(k)) continue; if (Object.prototype.hasOwnProperty.call(a.before, k)) person[k] = a.before[k]; else delete person[k]; }
+  return out(person, null, { changed: [...keys].filter(k => !same(cur[k], person[k])) });
+}
+
 // ONE array item by id must still read what the audit's `after` says.
 function itemCheck(arr, itemId, expected, field) {
   const list = Array.isArray(arr) ? arr : [];
@@ -413,4 +527,4 @@ function itemCheck(arr, itemId, expected, field) {
   return { item };
 }
 
-module.exports = { UNDO_REASON, SENDS, NO_TAKE_BACK, TREE_KEYS, ITEM_ARRAYS, QUESTION_MAPS, same, norm, getPath, classify, planUndo, itemCheck };
+module.exports = { UNDO_REASON, SENDS, NO_TAKE_BACK, TREE_KEYS, ITEM_ARRAYS, QUESTION_MAPS, same, norm, getPath, classify, planUndo, itemCheck, planUndoAnyDoc, planUndoTeam };

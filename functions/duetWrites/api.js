@@ -1164,6 +1164,24 @@ function applyUndoWrite(tx, io, requestId, ctx, w, live) {
       if (doc) tx.update(io.settingsRef(w.docId), { ...dropUndefined(fields), ...st }); else tx.set(io.settingsRef(w.docId), { ...dropUndefined(fields), ...st });
       return;
     }
+    // ── ship 12: the door's undos — the same envelope by kind that anyDocWrite uses ──
+    case "docPatch": {
+      const raw = live[w.coll + "/" + w.docId];
+      const kind = AD.kindOf(w.coll);
+      const upd = w.coll === "jobs" ? { ...stamp(requestId, freshIso(raw.updated_at)), lastActivityAt: io.serverTimestamp(), merged: false }
+        : kind === "data" ? { ...stamp(requestId, freshIso(raw.updated_at)) }
+        : AD.stampFor(kind, raw, ctx, requestId);
+      Object.keys(w.fields).forEach(k => { upd[(kind === "data" ? "data." : "") + k] = val(dropUndefined(w.fields[k])); });
+      tx.update(io.anyRef(w.coll, w.docId), upd);
+      return;
+    }
+    case "docCreate": { tx.create(io.anyRef(w.coll, w.docId), dropUndefined(w.doc)); return; }   // the deleted doc back, verbatim (create-only: a doc that exists again fails the transaction)
+    case "docDelete": { tx.delete(io.anyRef(w.coll, w.docId)); return; }                           // a plain create taken back while it still equals the audit's after
+    case "usersPatch": {
+      const raw = live["settings/users"];
+      tx.update(io.usersRef(), { list: dropUndefined(w.list), updated_at: freshIso(raw.updated_at), saved_by: SAVED_BY, device: "duet" });   // saveUsers' envelope
+      return;
+    }
     case "timeOff": {
       const p = w.plan;
       tx.update(io.settingsRef("timeOffRequests"), { list: p.requestsList, ...settingsStamp(requestId, freshIso(w.reqDoc.updatedAt)) });
@@ -1197,7 +1215,9 @@ async function undoApply(io, requestId, action, args, ctx, finish, refused) {
     const live = {};
     for (const path of cls.reads) {
       const i = path.indexOf("/"), coll = path.slice(0, i), id = path.slice(i + 1);
-      const ref = coll === "jobs" ? io.jobRef(id) : coll === "needs" ? io.needRef(id) : coll === "projects" ? io.projectRef(id) : coll === "settings" ? io.settingsRef(id) : null;
+      // Ship 12: the door's audits open their doc through anyRef (the NEVER list refuses there) / usersRef (team.edit) — never settingsRef, which only knows SETTINGS_DOCS.
+      const ref = cls.mode === "teamEdit" ? io.usersRef() : cls.mode === "anyDoc" ? io.anyRef(coll, id)
+        : coll === "jobs" ? io.jobRef(id) : coll === "needs" ? io.needRef(id) : coll === "projects" ? io.projectRef(id) : coll === "settings" ? io.settingsRef(id) : null;
       if (!ref) throw new Refusal(400, `${coll} isn't a collection Duet reads for an undo. Nothing was written.`);
       const s = await tx.get(ref);
       live[path] = s && s.exists ? s.data() : null;

@@ -541,5 +541,134 @@ await ok("handle: homeowner_requests writes snapshot the prior doc first (io.sna
   assert.strictEqual((await run(fifty, "doc.set", { coll: "jobs", docId: FORTH, path: "flagNote", value: "x" })).status, 200);
 });
 
+// ── 9. undo for the door ─────────────────────────────────────────────────────
+const undoOf = (io, target, id) => run(io, "undo.apply", { requestId: target }, id);
+await ok("undo.js: every DOC_ACTIONS audit classifies as the door's own mode (anyDoc / teamEdit) reading its one doc; a refused / noop / already-undone one refuses as before", () => {
+  const base = { ok: true, coll: "jobs", docId: FORTH, fields: ["flagNote"], path: "flagNote", before: "", after: "x" };
+  for (const action of AD.DOC_ACTIONS.filter(x => x !== "team.edit")) { const c = UN.classify({ ...base, action }); assert.strictEqual(c.mode, "anyDoc", action); assert.deepStrictEqual(c.reads, ["jobs/" + FORTH]); }
+  const t = UN.classify({ ok: true, action: "team.edit", coll: "settings", docId: "users", fields: ["list"], itemId: "u2", before: {}, after: {} });
+  assert.strictEqual(t.mode, "teamEdit"); assert.deepStrictEqual(t.reads, ["settings/users"]);
+  assert.match(UN.classify({ ...base, action: "doc.set", ok: false, why: "nope" }).refused, /was refused/);
+  assert.match(UN.classify({ ...base, action: "doc.set", noop: true }).refused, /noop/);
+  assert.match(UN.classify({ ...base, action: "doc.set", undoneBy: "r1" }).refused, /already undone/);
+  assert.match(UN.classify({ ...base, action: "doc.create", coll: "", docId: "" }).refused, /names no document/);
+});
+await ok("undo doc.set: the path goes back to the audit's before through the collection's envelope (jobs: jobWrite's; needs: stamp(); settings/plain: the mirrored stamp); the undo is its own audit with undoes and the original is stamped undoneBy / undoneAt in the SAME transaction; changed since → refused with current vs expected and the original left un-stamped", async () => {
+  const io = fakeIo();
+  await run(io, "doc.set", { coll: "jobs", docId: FORTH, path: "flagNote", value: "GC wants the panel north" }, "s12-set-job");
+  const r = await undoOf(io, "s12-set-job", "s12-undo-job");
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.undoes, "s12-set-job"); assert.strictEqual(r.body.undoneAction, "doc.set"); assert.deepStrictEqual(r.body.fields, ["flagNote"]);
+  const u = upd(io, "jobs/" + FORTH)[1];
+  assert.deepStrictEqual(Object.keys(u).sort(), [...JOB_ENV, "data.flagNote"].sort()); assert.strictEqual(u["data.flagNote"], ""); assert.strictEqual(u.app_build, 618);
+  assert.strictEqual(io.store["jobs/" + FORTH].data.flagNote, "");
+  const ua = io.store["duet_writes/s12-undo-job"]; assert.strictEqual(ua.undoes, "s12-set-job"); assert.deepStrictEqual(ua.before, { flagNote: "GC wants the panel north" }); assert.deepStrictEqual(ua.after, { flagNote: "" });
+  assert.strictEqual(io.store["duet_writes/s12-set-job"].undoneBy, "s12-undo-job"); assert.strictEqual(io.store["duet_writes/s12-set-job"].undoneAt, NOW);
+  const twice = await undoOf(io, "s12-set-job"); assert.strictEqual(twice.status, 400); assert.match(twice.body.refused, /already undone/);
+  // a nested map key, absent before → put back as a delete
+  await run(io, "doc.set", { coll: "jobs", docId: FORTH, path: "panelizedLighting.extraFlag", value: true }, "s12-set-nested");
+  assert.strictEqual(io.store["jobs/" + FORTH].data.panelizedLighting.extraFlag, true);
+  const rn = await undoOf(io, "s12-set-nested"); assert.strictEqual(rn.status, 200, JSON.stringify(rn.body));
+  assert.ok(!("extraFlag" in io.store["jobs/" + FORTH].data.panelizedLighting), "the absent key is removed again");
+  // needs → stamp() only; settings/appGate → the settings stamp; gc_config → updated_at / saved_by
+  await run(io, "doc.set", { coll: "needs", docId: NEED1.id, path: "priority", value: "urgent" }, "s12-set-need");
+  const rne = await undoOf(io, "s12-set-need"); assert.strictEqual(rne.status, 200, JSON.stringify(rne.body));
+  const un = upd(io, "needs/" + NEED1.id)[1]; assert.deepStrictEqual(Object.keys(un).sort(), ["app_build", "data.priority", "device", "saved_by", "tab", "updated_at", "w"]); assert.strictEqual(un["data.priority"], "");
+  await run(io, "doc.set", { coll: "settings", docId: "appGate", path: "minBuild", value: 618, confirm: "appGate" }, "s12-set-gate");
+  const rg = await undoOf(io, "s12-set-gate"); assert.strictEqual(rg.status, 200, JSON.stringify(rg.body));
+  const ug = upd(io, "settings/appGate")[1]; assert.deepStrictEqual(Object.keys(ug).sort(), ["merged", "minBuild", "tab", "updatedAt"]); assert.strictEqual(ug.minBuild, 600); assert.ok(ug.updatedAt > NOW, "strictly newer than the door's own stamp");
+  await run(io, "doc.set", { coll: "gc_config", docId: "material_po", path: "mode", value: "live", confirm: "material_po" }, "s12-set-po");
+  const rp = await undoOf(io, "s12-set-po"); assert.strictEqual(rp.status, 200, JSON.stringify(rp.body));
+  assert.deepStrictEqual(Object.keys(upd(io, "gc_config/material_po")[1]).sort(), ["mode", "saved_by", "updated_at"]); assert.strictEqual(io.store["gc_config/material_po"].mode, "test");
+  // changed since
+  await run(io, "doc.set", { coll: "jobs", docId: FORTH, path: "roughNotes", value: "first" }, "s12-set-chg");
+  io.store["jobs/" + FORTH].data.roughNotes = "someone else's edit";
+  const chg = await undoOf(io, "s12-set-chg", "s12-undo-chg");
+  assert.strictEqual(chg.status, 400); assert.match(chg.body.refused, /Changed since/); assert.deepStrictEqual(chg.body.diff, [{ field: "roughNotes", current: "someone else's edit", expected: "first" }]);
+  assert.ok(!io.store["duet_writes/s12-set-chg"].undoneBy, "the original stays un-stamped"); assert.strictEqual(io.store["jobs/" + FORTH].data.roughNotes, "someone else's edit");
+  assert.deepStrictEqual(io.log.filter(l => l[0] === "settingsRef"), [], "undo opens the door's docs through anyRef, never settingsRef");
+});
+await ok("undo doc.append / patchItem / removeItem: the item taken back off while it still equals after; the item put back; the removed item re-inserted at its index (or the end when the list is shorter) while no item has that id", async () => {
+  const io = fakeIo();
+  const ra = await run(io, "doc.append", { coll: "jobs", docId: FORTH, path: "finishUpdates", item: { text: "Punch walk", by: "Koy" }, position: "start" }, "s12-app-1");
+  const newId = ra.body.itemId;
+  const ua = await undoOf(io, "s12-app-1"); assert.strictEqual(ua.status, 200, JSON.stringify(ua.body));
+  assert.deepStrictEqual(io.store["jobs/" + FORTH].data.finishUpdates, [FU1, FU2]); assert.deepStrictEqual(io.store["duet_writes/" + ua.body.requestId].before, { finishUpdates: { id: newId, text: "Punch walk", by: "Koy" } });
+  await run(io, "doc.append", { coll: "jobs", docId: FORTH, path: "finishUpdates", item: { id: "fu9", text: "x" } }, "s12-app2");
+  io.store["jobs/" + FORTH].data.finishUpdates = io.store["jobs/" + FORTH].data.finishUpdates.map(x => (x.id === "fu9" ? { ...x, text: "edited" } : x));
+  const ca = await undoOf(io, "s12-app2"); assert.strictEqual(ca.status, 400); assert.match(ca.body.refused, /Changed since/); assert.ok(io.store["jobs/" + FORTH].data.finishUpdates.some(x => x.id === "fu9"));
+  await run(io, "doc.patchItem", { coll: "jobs", docId: FORTH, path: "finishUpdates", itemId: "fu1", patch: { text: "changed", by: { __delete: true } } }, "s12-pat-1");
+  const up = await undoOf(io, "s12-pat-1"); assert.strictEqual(up.status, 200, JSON.stringify(up.body));
+  assert.deepStrictEqual(io.store["jobs/" + FORTH].data.finishUpdates.find(x => x.id === "fu1"), FU1, "the whole earlier item is back, by included");
+  await run(io, "doc.removeItem", { coll: "jobs", docId: FORTH, path: "finishUpdates", itemId: "fu1" }, "s12-rem-1");
+  assert.deepStrictEqual(io.store["jobs/" + FORTH].data.finishUpdates.map(x => x.id), ["fu2", "fu9"]);
+  const ur = await undoOf(io, "s12-rem-1"); assert.strictEqual(ur.status, 200, JSON.stringify(ur.body));
+  assert.deepStrictEqual(io.store["jobs/" + FORTH].data.finishUpdates.map(x => x.id), ["fu1", "fu2", "fu9"], "back at index 0");
+  const again = await undoOf(io, "s12-rem-1"); assert.strictEqual(again.status, 400);
+  await run(io, "doc.removeItem", { coll: "jobs", docId: FORTH, path: "finishUpdates", itemId: "fu9" }, "s12-rem2");
+  io.store["jobs/" + FORTH].data.finishUpdates = [FU1];
+  const ur2 = await undoOf(io, "s12-rem2"); assert.strictEqual(ur2.status, 200, JSON.stringify(ur2.body));
+  assert.deepStrictEqual(io.store["jobs/" + FORTH].data.finishUpdates.map(x => x.id), ["fu1", "fu9"], "index 2 is past the end → appended");
+  await run(io, "doc.removeItem", { coll: "jobs", docId: FORTH, path: "finishUpdates", itemId: "fu1" }, "s12-rem3");
+  io.store["jobs/" + FORTH].data.finishUpdates.push({ id: "fu1", text: "someone re-added it" });
+  const taken = await undoOf(io, "s12-rem3"); assert.strictEqual(taken.status, 400); assert.match(taken.body.refused, /already an item with id fu1/);
+});
+await ok("undo doc.create: a needs create → the three markDeleted keys through stamp(); a plain create → tx.delete only while the doc still equals after (a changed one refuses); a jobs create → marked deleted", async () => {
+  const io = fakeIo();
+  const rn = await run(io, "doc.create", { coll: "needs", data: { kind: "need", text: "Call the GC", status: "open" } }, "s12-cre-need");
+  const un = await undoOf(io, "s12-cre-need"); assert.strictEqual(un.status, 200, JSON.stringify(un.body));
+  const d = io.store["needs/" + rn.body.docId].data; assert.strictEqual(d.deleted, true); assert.strictEqual(d.deletedBy, "Koy"); assert.strictEqual(d.deletedAt, NOW); assert.strictEqual(d.text, "Call the GC", "the doc stays");
+  assert.deepStrictEqual(Object.keys(upd(io, "needs/" + rn.body.docId)[0]).sort(), ["app_build", "data.deleted", "data.deletedAt", "data.deletedBy", "device", "saved_by", "tab", "updated_at", "w"]);
+  assert.match(un.body.closing, /marked deleted/);
+  const twice = await undoOf(io, "s12-cre-need"); assert.strictEqual(twice.status, 400);
+  const rs = await run(io, "doc.create", { coll: "suggestions", data: { text: "Dark mode", by: "Koy" } }, "s12-cre-sug");
+  const us = await undoOf(io, "s12-cre-sug"); assert.strictEqual(us.status, 200, JSON.stringify(us.body));
+  assert.strictEqual(io.store["suggestions/" + rs.body.docId], undefined); assert.deepStrictEqual(io.log.filter(l => l[0] === "delete"), [["delete", "suggestions/" + rs.body.docId]]);
+  const rs2 = await run(io, "doc.create", { coll: "suggestions", data: { text: "Light mode" } }, "s12-cre-sug2");
+  io.store["suggestions/" + rs2.body.docId].text = "edited since";
+  const chg = await undoOf(io, "s12-cre-sug2"); assert.strictEqual(chg.status, 400); assert.match(chg.body.refused, /Changed since/); assert.ok(io.store["suggestions/" + rs2.body.docId]);
+  const rj = await run(io, "doc.create", { coll: "jobs", data: { name: "Miller shop" } }, "s12-cre-job");
+  const uj = await undoOf(io, "s12-cre-job"); assert.strictEqual(uj.status, 200, JSON.stringify(uj.body));
+  assert.strictEqual(io.store["jobs/" + rj.body.docId].data.deleted, true); assert.ok("lastActivityAt" in upd(io, "jobs/" + rj.body.docId)[0], "jobWrite's envelope");
+});
+await ok("undo doc.delete: the doc is created back from the audit's before, verbatim, while the id is free; refused when a doc with that id exists again", async () => {
+  const io = fakeIo();
+  const raw = clone(io.store["needs/" + NEED1.id]);
+  await run(io, "doc.delete", { coll: "needs", docId: NEED1.id, confirm: NEED1.id }, "s12-del-1");
+  assert.strictEqual(io.store["needs/" + NEED1.id], undefined);
+  const r = await undoOf(io, "s12-del-1", "s12-undo-del"); assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.deepStrictEqual(io.store["needs/" + NEED1.id], raw, "back exactly as it was, old envelope included");
+  assert.deepStrictEqual(io.log.filter(l => l[0] === "create").map(l => l[1]), ["needs/" + NEED1.id]);
+  assert.strictEqual(io.store["duet_writes/s12-undo-del"].before, null); assert.deepStrictEqual(io.store["duet_writes/s12-undo-del"].after, raw);
+  await run(io, "doc.delete", { coll: "suggestions", docId: "sug_1", confirm: "sug_1" }, "s12-del2");
+  io.store["suggestions/sug_1"] = { text: "a new one with the old id" };
+  const taken = await undoOf(io, "s12-del2"); assert.strictEqual(taken.status, 400); assert.match(taken.body.refused, /exists again/); assert.strictEqual(io.store["suggestions/sug_1"].text, "a new one with the old id");
+});
+await ok("undo doc.markDeleted: the three keys go back (absent before → removed); changed since refuses", async () => {
+  const io = fakeIo();
+  await run(io, "doc.markDeleted", { coll: "jobs", docId: FORTH }, "s12-md-1");
+  const r = await undoOf(io, "s12-md-1"); assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  const d = io.store["jobs/" + FORTH].data; assert.ok(!("deleted" in d) && !("deletedAt" in d) && !("deletedBy" in d));
+  await run(io, "doc.markDeleted", { coll: "suggestions", docId: "sug_1" }, "s12-md-2");
+  io.store["suggestions/sug_1"].deletedBy = "Josh";
+  const chg = await undoOf(io, "s12-md-2"); assert.strictEqual(chg.status, 400); assert.match(chg.body.refused, /Changed since/);
+});
+await ok("undo team.edit: the person's before fields go back through usersRef with saveUsers' envelope (pin / tokens on the live record untouched, the list never shorter); an add is undone as active:false; changed since refuses", async () => {
+  const io = fakeIo();
+  await run(io, "team.edit", { userId: "u2", patch: { title: "office", phone: "801-555-0100" }, confirm: "Josh Miller" }, "s12-team");
+  const r = await undoOf(io, "s12-team", "s12-undo-team"); assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  const u = upd(io, "settings/users")[1]; assert.deepStrictEqual(Object.keys(u).sort(), ["device", "list", "saved_by", "updated_at"]); assert.strictEqual(u.device, "duet"); assert.strictEqual(u.saved_by, "Duet (Koy)");
+  assert.deepStrictEqual(io.store["settings/users"].list[1], USERS[1], "phone removed again, title back, pin and token kept");
+  assert.strictEqual(io.store["settings/users"].list.length, USERS.length);
+  assert.ok(!JSON.stringify(io.store["duet_writes/s12-undo-team"]).includes("2222"), "no PIN in the undo audit");
+  assert.deepStrictEqual(io.log.filter(l => l[0] === "settingsRef" || l[0] === "anyRef"), [], "only usersRef");
+  const add = await run(io, "team.edit", { patch: { name: "New Guy", title: "crew" }, confirm: "New Guy" }, "s12-team-add");
+  const ua = await undoOf(io, "s12-team-add"); assert.strictEqual(ua.status, 200, JSON.stringify(ua.body));
+  const ng = io.store["settings/users"].list.find(x => x.id === add.body.userId); assert.strictEqual(ng.active, false); assert.strictEqual(io.store["settings/users"].list.length, USERS.length + 1); assert.match(ua.body.closing, /active:false/);
+  await run(io, "team.edit", { userId: "u3", patch: { title: "lead" }, confirm: "Keegan" }, "s12-team-chg");
+  io.store["settings/users"].list = io.store["settings/users"].list.map(x => (x.id === "u3" ? { ...x, title: "super" } : x));
+  const chg = await undoOf(io, "s12-team-chg"); assert.strictEqual(chg.status, 400); assert.match(chg.body.refused, /Changed since/);
+  for (const w of upd(io, "settings/users")) assert.ok(w.list.length >= USERS.length);
+});
+
 console.log(`\n${n} checks passed — duet-anydoc-test`);
 })().catch(e => { console.error("FAIL duet-anydoc-test:", e && e.stack || e); process.exit(1); });

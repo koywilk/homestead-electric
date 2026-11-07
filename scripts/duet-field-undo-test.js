@@ -441,13 +441,13 @@ await ok("across every scenario: only jobs / needs / settings (allowed docs) / d
   assert.ok(io13.log.filter(l => l[0] === "settingsRef").every(l => api.settingsDocAllowed(l[1])));
   assert.strictEqual(io13.store["jobs/" + FORTH].data.flagged, false);
 });
-await ok("api.js: job.setField rides JOB_WRITE_ACTIONS (one jobWrite transaction), undo.apply is its own; BUILD 610; SETTINGS_DOCS unchanged; exactly four .delete( and seven tx.create( (ship 12 added the door's), one tx.delete (the door's); fieldPolicy.js / undo.js import no Firebase", () => {
+await ok("api.js: job.setField rides JOB_WRITE_ACTIONS (one jobWrite transaction), undo.apply is its own; BUILD 610; SETTINGS_DOCS unchanged; exactly five .delete( and eight tx.create( (ship 12 added the door's), two tx.delete (the door's doc.delete + its undo); fieldPolicy.js / undo.js import no Firebase", () => {
   assert.deepStrictEqual(api.FIELD_ACTIONS, ["job.setField"]); assert.deepStrictEqual(api.UNDO_ACTIONS, ["undo.apply"]);
   assert.ok(api.JOB_WRITE_ACTIONS.includes("job.setField") && !api.JOB_WRITE_ACTIONS.includes("undo.apply") && api.ACTIONS.includes("undo.apply"));
   assert.ok(api.BUILD >= 610 && Number.isInteger(api.BUILD));
   assert.deepStrictEqual(api.SETTINGS_DOCS, { timeOffRequests: ["list"], crewPTO: ["list"], crewTeams: ["teams"], simproCandidates: ["candidates"], crewRoster: ["names"], upcoming_jobs: ["items", "updated_at"] });
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete is the door's doc.delete (ship 12)"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 4); assert.strictEqual((src.match(/tx\.create\(/g) || []).length, 7);
+  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 2, "exactly two tx.delete, both the door's (ship 12): doc.delete and its undo's docDelete"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 5); assert.strictEqual((src.match(/tx\.create\(/g) || []).length, 8);
   assert.strictEqual((src.match(/tx\.update\(io\.auditRef\(/g) || []).length, 1, "the undoneBy stamp is the only write to an existing audit doc");
   for (const f of ["fieldPolicy.js", "undo.js"]) { const t = fs.readFileSync(path.join(root, "functions", "duetWrites", f), "utf8"); assert.ok(!/require\(["']firebase|from ["']firebase/i.test(t), f + " imports no Firebase"); }
   assert.ok(!api.ACTIONS.includes("job.deleteField") && !api.ACTIONS.includes("undo.all"));

@@ -563,7 +563,7 @@ await ok("all seven actions in a row touch only jobs/<id> and duet_writes — ev
   assert.deepStrictEqual(Object.keys(after.punchTicks).sort(), [PU1.id, PU2.id, PQ1.id].sort());
   assert.deepStrictEqual(after.changeOrders, [{ id: "c1" }]); assert.strictEqual(after.roughStatus, "inprogress"); assert.strictEqual(after.foreman, "Keegan");
 });
-await ok("handle: the seven actions exist and nothing like a delete / move / add-floor does; BUILD is the ship-6 SW version; api.js has exactly four .delete( and one tx.delete (the door's, ship 12); punch.js imports no Firebase", async () => {
+await ok("handle: the seven actions exist and nothing like a delete / move / add-floor does; BUILD is the ship-6 SW version; api.js has exactly five .delete( and two tx.delete (the door's, ship 12); punch.js imports no Firebase", async () => {
   assert.deepStrictEqual(api.PUNCH_ACTIONS, ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"]);
   assert.ok(api.PUNCH_ACTIONS.every(a => api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a)));
   assert.deepStrictEqual(api.JOB_ACTIONS, ["co.create", "co.edit", "co.setStatus", "co.convert", "rt.create", "rt.update", "job.setStatusUpdate"], "the ship-2 list is untouched");
@@ -572,7 +572,7 @@ await ok("handle: the seven actions exist and nothing like a delete / move / add
     await assert.rejects(run({ requestId: RID(900), action: a, args: {} }, fakeIo({ docs: DOCS() })), (e) => e.status === 400 && /action must be/.test(e.message), a);
   }
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete is the door's doc.delete (ship 12)"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 4, "the door's tx.delete (ship 12) is the only delete added since");
+  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 2, "exactly two tx.delete, both the door's (ship 12): doc.delete and its undo's docDelete"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 5, "the door's two tx.delete (ship 12: doc.delete + its undo) are the only deletes added since");
   const pu = fs.readFileSync(path.join(root, "functions", "duetWrites", "punch.js"), "utf8");
   assert.ok(!/firebase|require\("firebase-admin"\)|\.delete\(|FieldValue/.test(pu), "punch.js is pure");
   assert.ok(/require\("\.\.\/punchTicks\.js"\)/.test(pu) && /require\("\.\.\/escapeHtml\.js"\)/.test(pu), "the slot and the escape come from the app's own shared modules");

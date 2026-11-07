@@ -528,7 +528,7 @@ await ok("handle: stage, inspection (fail → failedAgain → trip), QC fail →
   await assert.rejects(call(busy, "prep.tick", { key: "redlinePlans", state: "done" }), (e) => e.status === 429);
   assert.strictEqual(busy.log.filter(l => l[0] === "update").length, 0);
 });
-await ok("handle: the eight actions exist, nothing like a delete does (job.archive became a real action in ship 9 — its own reversible shape); BUILD is 606; the ship-6 and ship-2 lists are untouched; api.js has exactly four .delete( and one tx.delete (the door's, ship 12); stages.js is pure", async () => {
+await ok("handle: the eight actions exist, nothing like a delete does (job.archive became a real action in ship 9 — its own reversible shape); BUILD is 606; the ship-6 and ship-2 lists are untouched; api.js has exactly five .delete( and two tx.delete (the door's, ship 12); stages.js is pure", async () => {
   assert.deepStrictEqual(api.STAGE_ACTIONS, ["phase.setStatus", "phase.setStage", "inspection.setResult", "inspection.items", "inspection.createTrip", "qc.setStatus", "prep.tick", "phase.setDates"]);
   assert.ok(api.STAGE_ACTIONS.every(a => api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a)));
   assert.deepStrictEqual(api.PUNCH_ACTIONS, ["punch.setDone", "punch.add", "punch.assign", "punch.waiting", "punch.void", "punch.restore", "punch.editText"]);
@@ -538,7 +538,7 @@ await ok("handle: the eight actions exist, nothing like a delete does (job.archi
     await assert.rejects(api.handle({ requestId: RID(900), action: a, args: {} }, fakeIo()), (e) => e.status === 400 && /action must be/.test(e.message), a);
   }
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete is the door's doc.delete (ship 12)"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 4, "the door's tx.delete (ship 12) is the only delete added since");
+  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 2, "exactly two tx.delete, both the door's (ship 12): doc.delete and its undo's docDelete"); assert.strictEqual((src.match(/\.delete\(/g) || []).length, 5, "the door's two tx.delete (ship 12: doc.delete + its undo) are the only deletes added since");
   const sg = fs.readFileSync(path.join(root, "functions", "duetWrites", "stages.js"), "utf8");
   assert.ok(!/firebase|require\("firebase-admin"\)|\.delete\(|FieldValue/.test(sg), "stages.js is pure");
   assert.ok(/require\("\.\.\/stageChange\.js"\)/.test(sg) && /require\("\.\.\/punchTicks\.js"\)/.test(sg), "the stage plan and the slot overlay come from the app's own shared modules");

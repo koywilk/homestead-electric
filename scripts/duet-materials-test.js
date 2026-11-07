@@ -483,14 +483,14 @@ await ok("material.sendPo: its own 10 / hour counter (429, nothing sent) on top 
   const g = fakeIo({ mode: "test", recent: 60 });
   await assert.rejects(call(g, "material.previewPo", { cardId: CED_OPEN.id }), (e) => e instanceof api.Refusal && e.status === 429, "the global 60 still applies");
 });
-await ok("api.js: the action lists and allowlist hold the five ship-8 actions; BUILD 607; the only tx.delete is the door's (ship 12)", () => {
+await ok("api.js: the action lists and allowlist hold the five ship-8 actions; BUILD 607; the only tx.delete are the door's two (ship 12)", () => {
   assert.deepStrictEqual(api.MATERIAL_CARD_ACTIONS, ["material.addCard", "material.editCard", "material.tick"]);
   assert.deepStrictEqual(api.MATERIAL_PO_ACTIONS, ["material.previewPo", "material.sendPo"]);
   for (const a of api.MATERIAL_CARD_ACTIONS) assert.ok(api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a));
   for (const a of api.MATERIAL_PO_ACTIONS) assert.ok(!api.JOB_WRITE_ACTIONS.includes(a) && api.ACTIONS.includes(a));
   assert.ok(api.BUILD >= 607, "BUILD at least 607 (ship 9 bumped it to 608)"); assert.strictEqual(api.SEND_PO_PER_HOUR, 10);
   const src = fs.readFileSync(path.join(root, "functions", "duetWrites", "api.js"), "utf8");
-  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 1, "the ONLY tx.delete in api.js is the door's doc.delete (ship 12, confirm word = the docId)");
+  assert.strictEqual((src.match(/tx\.delete\(/g) || []).length, 2, "exactly two tx.delete in api.js, both the door's (ship 12): doc.delete (confirm word = the docId) and its undo's docDelete (a plain create taken back)");
   assert.ok(/clientTest: cfg\.mode === "live" \? false : true/.test(src), "clientTest false only when live");
   assert.ok(/soakTo/.test(src) && !/mail\.key|\.key\b/.test(src.split("loadPoCfg")[1].split("readPoLog")[0]), "loadPoCfg never touches the key");
   const idx = fs.readFileSync(path.join(root, "functions", "index.js"), "utf8");
