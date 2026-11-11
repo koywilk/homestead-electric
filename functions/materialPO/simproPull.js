@@ -98,6 +98,7 @@ function sourceFor(vendor) {
   if (v === "amazon") return "Amazon";
   if (v === "platt") return "Platt";
   if (v === "ace hardware") return "ACE";
+  if (v === "lowes" || v === "lowe's") return "Lowe's";
   return "Other";
 }
 

@@ -206,7 +206,8 @@ await ok("material.addCard: comm only on commercial jobs; source from the card's
   assert.ok(/isn't a commercial job/.test(MA.planAddCard({ phase: "comm", items: ["x"] }, J()).refused));
   const c = MA.planAddCard({ phase: "comm", source: "CED", items: ["x"] }, jobCtx(COMM));
   assert.strictEqual(fields(c).commMaterials.length, 2);
-  assert.ok(/source must be one of/.test(MA.planAddCard({ phase: "rough", source: "Lowes", items: ["x"] }, J()).refused));
+  assert.ok(/source must be one of/.test(MA.planAddCard({ phase: "rough", source: "Graybar", items: ["x"] }, J()).refused));
+  assert.ok(!MA.planAddCard({ phase: "rough", source: "lowe's", items: ["x"] }, J()).refused, "Lowe's is a card source (SW v621)");
   assert.ok(/phase must be/.test(MA.planAddCard({ phase: "qc", items: ["x"] }, J()).refused));
   assert.ok(/at least one line/.test(MA.planAddCard({ phase: "rough", items: ["", "  "] }, J()).refused));
   assert.ok(/list of plain text lines/.test(MA.planAddCard({ phase: "rough", items: "20x cans" }, J()).refused));
@@ -248,7 +249,7 @@ await ok("material.editCard: source / date / pickupDate (YYYY-MM-DD → M/D/YYYY
   assert.ok(/Nothing to change/.test(MA.planEditCard({ cardId: CED_OPEN.id }, J()).refused));
   assert.ok(/must be YYYY-MM-DD/.test(MA.planEditCard({ cardId: CED_OPEN.id, date: "Nov 5" }, J()).refused));
   assert.ok(/No material card/.test(MA.planEditCard({ cardId: "nope" }, J()).refused));
-  assert.ok(/source must be/.test(MA.planEditCard({ cardId: CED_OPEN.id, source: "Lowes" }, J()).refused));
+  assert.ok(/source must be/.test(MA.planEditCard({ cardId: CED_OPEN.id, source: "Graybar" }, J()).refused));
   assert.ok(/needsOrder must be/.test(MA.planEditCard({ cardId: CED_OPEN.id, needsOrder: "yes" }, J()).refused));
 });
 await ok("material.tick: the checkbox literals (on → By Koy + At Mountain M/D/YYYY, off → \"\"), every field, noop when already so, never a receipt", () => {

@@ -13,6 +13,10 @@ const SUPPLIERS = {
   "amazon":       { kind: "number", simproName: "Amazon" },
   "ace hardware": { kind: "number", simproName: "ACE Hardware" },
   "ace":          { kind: "number", simproName: "ACE Hardware" },
+  // SW v621: Lowe's. Simpro's supplier is spelled "Lowes" (vendor 92, no apostrophe).
+  "lowe's":       { kind: "number", simproName: "Lowes" },
+  "lowe’s":       { kind: "number", simproName: "Lowes" },
+  "lowes":        { kind: "number", simproName: "Lowes" },
 };
 function supplierRule(source) {
   return SUPPLIERS[String(source || "").trim().toLowerCase()] || null;
@@ -249,10 +253,10 @@ function logKey(jobId, phase, orderId) {
 }
 
 // ── Store-run receipts (SW v548) ─────────────────────────────────────────────
-// A crew member snaps the Home Depot / ACE / Amazon receipt on a store-run card
+// A crew member snaps the Home Depot / ACE / Lowe's / Amazon receipt on a store-run card
 // and it lands on that PO's Attachments in Simpro (receipt.js). These rules
 // decide whether the number on the card really is a store PO on this job.
-const STORE_VENDORS = ["home depot", "ace hardware", "amazon"];
+const STORE_VENDORS = ["home depot", "ace hardware", "amazon", "lowes"];
 const RECEIPT_MAX_BYTES = 6 * 1024 * 1024;   // decoded; the app shrinks to ~1 MB, the callable limit is 10 MB
 
 // "7024", "PO 7024", "PO-7024", "#7024" → "7024". Anything else → "".
@@ -286,7 +290,7 @@ function checkStorePo({ po, typed, poNo, jobNo, source }) {
   if (!STORE_VENDORS.includes(vendor.toLowerCase())) {
     return { ok: false, badPo: true, error: looksLikeJob
       ? `${poNo} isn't a ${store} PO on this job. It looks like the job number. ${fix}`
-      : `PO ${poNo} is ${vendor ? `a ${vendor}` : "not a store"} PO, not a Home Depot, ACE or Amazon run. ${fix}` };
+      : `PO ${poNo} is ${vendor ? `a ${vendor}` : "not a store"} PO, not a Home Depot, ACE, Lowe's or Amazon run. ${fix}` };
   }
   const onJob = poJobNo(po);
   if (onJob !== String(jobNo)) {

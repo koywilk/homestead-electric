@@ -8,7 +8,7 @@
 //     (comm = the commercial Materials tab, v539 — commercial jobs only).
 //   • + Add PO (MaterialOrders ~L15176): the card literal
 //     {id:uid(), date:"", po:"", pickupDate:"", source:"", items:"", pickedUp:false, needsOrder:true}
-//     appended; SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","ACE","Other"].
+//     appended; SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","ACE","Lowe's","Other"].
 //   • the add-material helpers (onAddMaterial ~L33973, onAddToPO ~L34053): the
 //     NEWEST open card with the same source — needsOrder && !ordered &&
 //     !pickedUp — gets `items ? items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text
@@ -48,7 +48,7 @@ const { toMdy } = require("./stages.js");
 const refuse = (why) => ({ refused: why });
 const LISTS = { rough: "roughMaterials", finish: "finishMaterials", comm: "commMaterials" };
 const PHASES = Object.keys(LISTS);
-const SOURCES = ["", "Shop", "Home Depot", "CED", "Platt", "Amazon", "ACE", "Other"];   // MaterialOrders ~L15175
+const SOURCES = ["", "Shop", "Home Depot", "CED", "Platt", "Amazon", "ACE", "Lowe's", "Other"];   // MaterialOrders ~L15175
 const TICK_FIELDS = ["ordered", "pickedUp", "deliveredToShop"];
 const MAX_LINES = 200;
 const PREVIEW_TTL_MS = 15 * 60e3;
@@ -201,7 +201,7 @@ function planTick(args, ctx) {
 // extra: { koyAccess, vendorEmail? (live only, one Simpro GET), senderEmail?, log? (material_po_log doc, trimmed) }
 function cleanSendArgs(args, card, phase) {
   const rule = R.supplierRule(card.source);
-  if (!rule) return refuse(`The app can't send to ${String(card.source || "").trim() || "that supplier"} yet. Pick CED, Home Depot, ACE or Amazon on the card first. Nothing was sent.`);
+  if (!rule) return refuse(`The app can't send to ${String(card.source || "").trim() || "that supplier"} yet. Pick CED, Home Depot, ACE, Lowe's or Amazon on the card first. Nothing was sent.`);
   const lines = R.itemsToLines(card.items);
   if (rule.kind === "email" && !lines.length) return refuse("Add the material list to the card first. Nothing was sent.");
   const get = R.getMode(args.get);

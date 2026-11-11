@@ -13,6 +13,16 @@ t("suppliers", () => {
   eq(R.supplierRule("Amazon").kind, "number", "Amazon is a store run");
   eq(R.supplierRule("ACE").simproName, "ACE Hardware", "ACE alias");
   for (const s of ["Shop", "Platt", "Other", "", null]) eq(R.supplierRule(s), null, `${s} can't be sent`);
+  // SW v621: Lowe's is a store run; Simpro spells the supplier "Lowes"
+  for (const s of ["Lowe's", "Lowe’s", "lowes", " LOWE'S "]) eq(R.supplierRule(s), { kind: "number", simproName: "Lowes" }, `${s} is a Lowe's run`);
+});
+
+t("Lowe's finds Simpro's Lowes supplier (vendor 92)", () => {
+  const vendors = [{ ID: 30, Name: "Home Depot" }, { ID: 92, Name: "Lowes" }];
+  eq(R.vendorFor(R.supplierRule("Lowe's"), vendors).ID, 92, "Lowe's → Lowes");
+  eq(R.STORE_VENDORS.includes("lowes"), true, "Lowe's receipts are allowed");
+  const po = { ID: 7400, Vendor: { ID: 92, Name: "Lowes" }, Stage: "Approved", AssignedTo: { Job: 1417 } };
+  eq(R.checkStorePo({ po, typed: "7400", poNo: "7400", jobNo: "1417", source: "Lowe's" }), { ok: true, vendor: "Lowes" }, "a Lowes PO on the job takes a receipt");
 });
 
 t("vendor match never grabs Ace Rentals", () => {

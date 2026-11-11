@@ -11092,7 +11092,7 @@ function JobNoteDestinationPO({ note, selectedLines, selectedLineIds, job, onPat
   const [newPoNum, setNewPoNum]   = useState('');
   const [targetPoId, setTargetPoId] = useState(null);
 
-  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
+  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Lowe's","Other"];
 
   const phaseMaterialsField = phase === 'rough' ? 'roughMaterials' : 'finishMaterials';
   const phaseMaterials = Array.isArray(job?.[phaseMaterialsField]) ? job[phaseMaterialsField] : [];
@@ -14882,7 +14882,8 @@ function poItemsPreview(items) {
 // v525: LIVE (Koy, 2026-10-08: "do those 5 steps and lets do it"). A copy of the
 // app that still says test is refused by the server once the switch is live.
 const MATERIAL_PO_TEST = false;
-const PO_SEND_KIND = { "ced":"email", "home depot":"number", "amazon":"number", "ace hardware":"number", "ace":"number" };
+// SW v621: Lowe's gets a store-run PO # like Home Depot (Simpro supplier "Lowes"; functions/materialPO/rules.js).
+const PO_SEND_KIND = { "ced":"email", "home depot":"number", "amazon":"number", "ace hardware":"number", "ace":"number", "lowe's":"number", "lowe’s":"number", "lowes":"number" };
 const poSendKind = (source) => PO_SEND_KIND[String(source||"").trim().toLowerCase()] || "";
 const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").replace(/<\/(p|div|li)>/gi,"\n")
   .replace(/<[^>]+>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
@@ -14891,7 +14892,7 @@ const poTodayMDY = () => new Date().toLocaleDateString("en-US");
 const poTomorrowMDY = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toLocaleDateString("en-US"); };
 
 // v548 Store-run receipts (vault: Crew POs from the App › Receipt photo on store runs).
-// A Home Depot / ACE / Amazon card with a PO # gets "Add receipt photo": the photo is
+// A Home Depot / ACE / Lowe's / Amazon card with a PO # gets "Add receipt photo": the photo is
 // shrunk here to about 1 MB and attachStoreReceipt puts it on that PO in Simpro. The
 // card keeps receipts:[{id,name,by,at,simproFileId,po,thumb}] INSIDE the order object.
 // STORE_RECEIPT_HELPERS_START (scripts/receipt-sim.js extracts this block)
@@ -15079,7 +15080,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
   // so a card can appear while this list is open. Those start folded like the rest.
   const isFolded = (o) => (collapsed[o.id] === undefined ? !!(o.simproPulled || o.simproLinked) : !!collapsed[o.id]);
 
-  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","ACE","Other"];
+  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","ACE","Lowe's","Other"];
   const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:true}]);
 
   const upd = (id, p) => {
@@ -15215,6 +15216,10 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                     whose email failed offers a resend of the same PO. */}
                 {(() => {
                   const kind = poSendKind(o.source);
+                  // SW v621: "Other" names no Simpro supplier, so the app can't make a PO for it — say so
+                  // instead of showing nothing (Braden 2026-11-11: "if I click on other it doesn't give a PO#").
+                  if (!kind && o.source === "Other" && !o.po && !o.pickedUp && !o.deliveredToShop && onPatchOrder && can(getIdentity(), "materials.sendPO"))
+                    return <div style={{marginTop:8,fontSize:12.5,color:C.dim}}>No PO number for Other: Simpro needs the store's name. Pick the store in Source (Home Depot, Lowe's, ACE, Amazon), or ask the office for a PO.</div>;
                   if (!kind || !onPatchOrder || !can(getIdentity(), "materials.sendPO")) return null;
                   if (o.pickedUp || o.deliveredToShop) return null;
                   // v524: a PO from an order from the bid is resent from the order screen, never re-sent here
@@ -16986,7 +16991,7 @@ function JobOrdersSummary({job, onOrder, phases = ["rough","finish"]}) {
               {o.po ? `PO ${o.po}` : "No PO # yet"}{o.source ? ` · ${o.source}` : ""}
             </span>
             <span style={{display:"inline-flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end",alignItems:"center"}}>
-              {/* v548: Receipt column for store runs (Home Depot / ACE / Amazon with a PO #) */}
+              {/* v548: Receipt column for store runs (Home Depot / ACE / Lowe's / Amazon with a PO #) */}
               {rs === "have" && <StatusPill variant="done">{receiptList(o).length > 1 ? `${receiptList(o).length} receipts` : "Receipt"}</StatusPill>}
               {rs === "missing" && <StatusPill variant="needs">No receipt</StatusPill>}
               {rs === "badpo" && <StatusPill variant="inprogress">Not a PO #</StatusPill>}
@@ -21574,7 +21579,7 @@ function HomeRunsTab({jobNumber, homeRuns, panelCounts, onHRChange, onCountChang
                           style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,
                             padding:'4px 6px',fontSize:12.5,color:addingPO[p]?C.text:C.dim,fontFamily:'inherit',marginBottom:6}}>
                           <option value="">— choose supplier —</option>
-                          {["Shop","Home Depot","CED","Platt","Amazon","Other"].map(s=>(
+                          {["Shop","Home Depot","CED","Platt","Amazon","Lowe's","Other"].map(s=>(
                             <option key={s} value={s}>{s}</option>
                           ))}
                         </select>
@@ -62284,8 +62289,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v620
+**Last manifest update:** 2026-11-11 · App SW version: v621
 ---
+
+- **Lowe's is a store on the Material Tracking card: Get a PO number, receipt photo and the Simpro pull all treat it like Home Depot; an "Other" card says why it has no PO number** · 'in-flight 2026-11-11' · 'SW v621' · 'PO_SEND_KIND' · 'poSendKind' · 'MaterialOrders' · 'functions/materialPO/rules.js SUPPLIERS' · 'STORE_VENDORS' · 'simproPull sourceFor' · 'functions/duetWrites/materials.js SOURCES' · Braden (My Day need): *"Add a place for Lowe's in the app in PO's. Right now if I click on other it doesn't give a PO#."* Lowe's maps to Simpro supplier "Lowes" (vendor 92, no apostrophe); "Lowe's", "Lowe’s" and "Lowes" all match. A Lowes PO made in Simpro now arrives on the card as Lowe's, not Other. "Other" still gets no PO number on purpose: every Simpro PO needs a named supplier and Simpro has no catch-all one, so the card now says to pick the store or ask the office. Not changed: the Goals "Home Depot / ACE runs a week" count (Josh's rule) and the Duet connector's own send-kind list (homestead-connector repo). Server side needs 'firebase deploy --only functions:sendMaterialPO,functions:attachStoreReceipt,functions:scheduledSimproPOSync,functions:syncSimproPOsForJob,functions:duetApi'.
 
 - **Every plan file shows the day it was added (Resi and Commercial)** · 'in-flight 2026-11-11' · 'SW v620' · 'planAddedLabel' · 'FileUploadSection' · 'DriveFilesSection' · 'fetchDriveFilesRecursive' · Koy: *"can we add to any plans added what day they were uploaded? both commercial and resi"*. Every plan file now has an **Added Nov 10** line (the year shows only for files from another year), next to the size on documents and under the name on images. **Uploaded Files** on Plans & Links (Resi and Commercial use the same tab) and the quick job Plans section read the 'uploadedAt' every upload has saved. Files from before that field existed get the date from Storage's own created time ('getMetadata'), looked up for display and never written back. **Drive Plans** now asks Drive for 'createdTime' along with the fields it already fetched. That is when the file was first put in Drive, so a file moved in from elsewhere in Drive keeps its original date. FieldInk live plans keep their existing "updated … ago". **Why it won't lose data:** read-only. Nothing writes a job, a Storage file or a Drive file. The only new reads are one Drive field on the existing listing call and a Storage metadata read for older uploads with no saved date.
 

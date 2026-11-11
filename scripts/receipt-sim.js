@@ -159,7 +159,7 @@ let n = 0; const t = async (name, fn) => { skew = 0; try { await fn(); } catch (
     const other = await rejects(call({ po: "7300" }), "failed-precondition", "another job");
     assert.strictEqual(other.message, "PO 7300 is on job 1155, not this job (1417). Fix the PO number on the card, then add the photo.");
     const ced = await rejects(call({ po: "7250" }), "failed-precondition", "CED PO");
-    assert(/is a CED PO, not a Home Depot, ACE or Amazon run/.test(ced.message), ced.message);
+    assert(/is a CED PO, not a Home Depot, ACE, Lowe's or Amazon run/.test(ced.message), ced.message);
     const none = await rejects(call({ po: "9999" }), "failed-precondition", "no PO");
     assert(/Simpro has no PO 9999/.test(none.message), none.message);
     const job2 = setup();
@@ -264,6 +264,9 @@ let n = 0; const t = async (name, fn) => { skew = 0; try { await fn(); } catch (
     assert.strictEqual(app.receiptState({ ...card, source: "CED" }), "none", "CED cards have no receipt box");
     assert.strictEqual(app.receiptState({ ...card, po: "" }), "none", "no PO # yet → no box");
     assert.strictEqual(app.receiptState({ ...card, source: "Amazon" }), "missing");
+    assert.strictEqual(app.receiptState({ ...card, source: "Lowe's" }), "missing", "Lowe's cards take a receipt (SW v621)");
+    assert.strictEqual(app.poSendKind("Lowe's"), "number", "Lowe's gets a PO number");
+    assert.strictEqual(app.poSendKind("Other"), "", "Other still has no supplier to send to");
     const asked = new Set();
     assert(app.receiptNudgeFor(card, asked)); asked.add("c1");
     assert(!app.receiptNudgeFor(card, asked), "asks once");
