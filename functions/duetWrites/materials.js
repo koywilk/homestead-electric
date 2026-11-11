@@ -200,8 +200,10 @@ function planTick(args, ctx) {
 // cfg:  { mode, testTo, bids, liveAccess } (api.js's io.loadPoCfg — soakTo only from gc_config/mail)
 // extra: { koyAccess, vendorEmail? (live only, one Simpro GET), senderEmail?, log? (material_po_log doc, trimmed) }
 function cleanSendArgs(args, card, phase) {
-  const rule = R.supplierRule(card.source);
-  if (!rule) return refuse(`The app can't send to ${String(card.source || "").trim() || "that supplier"} yet. Pick CED, Home Depot, ACE, Lowe's or Amazon on the card first. Nothing was sent.`);
+  const rule = R.cardSupplierRule(card);
+  if (!rule) return refuse(card.simproSupplier && String(card.source || "").trim().toLowerCase() === "other"
+    ? `That card is a ${String(card.simproSupplier).trim()} PO made in Simpro; the app doesn't send to that supplier. Nothing was sent.`
+    : `The app can't send to ${String(card.source || "").trim() || "that supplier"} yet. Pick CED, Home Depot, ACE, Lowe's, Amazon or Other on the card first. Nothing was sent.`);
   const lines = R.itemsToLines(card.items);
   if (rule.kind === "email" && !lines.length) return refuse("Add the material list to the card first. Nothing was sent.");
   const get = R.getMode(args.get);

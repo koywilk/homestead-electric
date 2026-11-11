@@ -14882,9 +14882,18 @@ function poItemsPreview(items) {
 // v525: LIVE (Koy, 2026-10-08: "do those 5 steps and lets do it"). A copy of the
 // app that still says test is refused by the server once the switch is live.
 const MATERIAL_PO_TEST = false;
-// SW v621: Lowe's gets a store-run PO # like Home Depot (Simpro supplier "Lowes"; functions/materialPO/rules.js).
-const PO_SEND_KIND = { "ced":"email", "home depot":"number", "amazon":"number", "ace hardware":"number", "ace":"number", "lowe's":"number", "lowe’s":"number", "lowes":"number" };
+// SW v621: Lowe's gets a store-run PO # like Home Depot (Simpro supplier "Lowes"), and "Other"
+// gets one on Simpro's catch-all supplier "Misc Store" (functions/materialPO/rules.js).
+const PO_SEND_KIND = { "ced":"email", "home depot":"number", "amazon":"number", "ace hardware":"number", "ace":"number", "lowe's":"number", "lowe’s":"number", "lowes":"number", "other":"number" };
+const PO_MISC_SUPPLIER = "Misc Store";
 const poSendKind = (source) => PO_SEND_KIND[String(source||"").trim().toLowerCase()] || "";
+// A card the Simpro pull filed as "Other" (a Codale, White Cap… PO) is that supplier's PO, not a
+// Misc Store run: no Get a PO number, no receipt nag. Mirrors rules.js cardSupplierRule.
+const poSendKindOf = (o) => {
+  const sup = String((o && o.simproSupplier) || "").trim().toLowerCase();
+  if (String((o && o.source) || "").trim().toLowerCase() === "other" && sup && sup !== PO_MISC_SUPPLIER.toLowerCase()) return "";
+  return poSendKind(o && o.source);
+};
 const poPlainLines = (items) => String(items||"").replace(/<br\s*\/?>/gi,"\n").replace(/<\/(p|div|li)>/gi,"\n")
   .replace(/<[^>]+>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
   .replace(/&quot;/g,'"').replace(/&#39;|&rsquo;|&lsquo;/g,"'").split("\n").map(l=>l.trim()).filter(Boolean);
@@ -14902,7 +14911,7 @@ const RECEIPT_SEND_MAX = 5.5 * 1024 * 1024;       // the server refuses over 6 M
 const receiptList = (o) => (o && Array.isArray(o.receipts) ? o.receipts.filter(r => r && r.id) : []);
 // "none" = not a store card with a PO # · "have" · "badpo" (the server said the # is wrong) · "missing"
 function receiptState(o) {
-  if (!o || poSendKind(o.source) !== "number" || !String(o.po || "").trim()) return "none";
+  if (!o || poSendKindOf(o) !== "number" || !String(o.po || "").trim()) return "none";
   if (receiptList(o).length) return "have";
   if (o.receiptBadPo && String(o.receiptBadPo).trim() === String(o.po).trim()) return "badpo";
   return "missing";
@@ -15215,11 +15224,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                     (number only) until the card is ordered/picked up; a send
                     whose email failed offers a resend of the same PO. */}
                 {(() => {
-                  const kind = poSendKind(o.source);
-                  // SW v621: "Other" names no Simpro supplier, so the app can't make a PO for it — say so
-                  // instead of showing nothing (Braden 2026-11-11: "if I click on other it doesn't give a PO#").
-                  if (!kind && o.source === "Other" && !o.po && !o.pickedUp && !o.deliveredToShop && onPatchOrder && can(getIdentity(), "materials.sendPO"))
-                    return <div style={{marginTop:8,fontSize:12.5,color:C.dim}}>No PO number for Other: Simpro needs the store's name. Pick the store in Source (Home Depot, Lowe's, ACE, Amazon), or ask the office for a PO.</div>;
+                  const kind = poSendKindOf(o);
                   if (!kind || !onPatchOrder || !can(getIdentity(), "materials.sendPO")) return null;
                   if (o.pickedUp || o.deliveredToShop) return null;
                   // v524: a PO from an order from the bid is resent from the order screen, never re-sent here
@@ -15249,7 +15254,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
 
                 {/* v570: the PO form CED got (also on the PO in Simpro). Every PO
                     the app emailed, from a card or an order from the bid. */}
-                {o.poSentVia === "app" && poSendKind(o.source) === "email" && o.po && o.poEmailOk
+                {o.poSentVia === "app" && poSendKindOf(o) === "email" && o.po && o.poEmailOk
                   && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) && can(getIdentity(), "materials.sendPO") && (
                   <button disabled={formBusy===o.id} onClick={()=>openPoForm(o)}
                     style={{marginTop:8,width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:7,
@@ -15605,7 +15610,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
       {sendSheet && (() => {
         const o = safeOrders.find(x => x.id === sendSheet.id);
         if (!o) return null;
-        const kind = poSendKind(o.source);
+        const kind = poSendKindOf(o);
         const lines = poPlainLines(o.items);
         const busy = !!sendSheet.busy, done = sendSheet.done;
         const close = () => { if (!busy) setSendSheet(null); };
@@ -15741,7 +15746,7 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                 </>)}
                 {kind !== "email" && (
                   <div style={{fontSize:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px"}}>
-                    No email for store runs. You get a PO number to give at the {o.source} counter, saved on this card.
+                    No email for store runs. You get a PO number to give at the {o.source === "Other" ? "store" : o.source} counter, saved on this card.{o.source === "Other" ? " Simpro files it under Misc Store, so put the store's name in the material list." : ""}
                   </div>
                 )}
                 {sendSheet.error && (
@@ -62292,7 +62297,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 **Last manifest update:** 2026-11-11 · App SW version: v621
 ---
 
-- **Lowe's is a store on the Material Tracking card: Get a PO number, receipt photo and the Simpro pull all treat it like Home Depot; an "Other" card says why it has no PO number** · 'in-flight 2026-11-11' · 'SW v621' · 'PO_SEND_KIND' · 'poSendKind' · 'MaterialOrders' · 'functions/materialPO/rules.js SUPPLIERS' · 'STORE_VENDORS' · 'simproPull sourceFor' · 'functions/duetWrites/materials.js SOURCES' · Braden (My Day need): *"Add a place for Lowe's in the app in PO's. Right now if I click on other it doesn't give a PO#."* Lowe's maps to Simpro supplier "Lowes" (vendor 92, no apostrophe); "Lowe's", "Lowe’s" and "Lowes" all match. A Lowes PO made in Simpro now arrives on the card as Lowe's, not Other. "Other" still gets no PO number on purpose: every Simpro PO needs a named supplier and Simpro has no catch-all one, so the card now says to pick the store or ask the office. Not changed: the Goals "Home Depot / ACE runs a week" count (Josh's rule) and the Duet connector's own send-kind list (homestead-connector repo). Server side needs 'firebase deploy --only functions:sendMaterialPO,functions:attachStoreReceipt,functions:scheduledSimproPOSync,functions:syncSimproPOsForJob,functions:duetApi'.
+- **Lowe's and Other get a PO number on the Material Tracking card: Get a PO number, receipt photo and the Simpro pull treat them like Home Depot; Other goes on Simpro's catch-all supplier Misc Store** · 'in-flight 2026-11-11' · 'SW v621' · 'PO_SEND_KIND' · 'poSendKindOf' · 'PO_MISC_SUPPLIER' · 'MaterialOrders' · 'functions/materialPO/rules.js SUPPLIERS' · 'MISC_SUPPLIER' · 'cardSupplierRule' · 'STORE_VENDORS' · 'simproPull sourceFor' · 'functions/duetWrites/materials.js SOURCES' · Braden (My Day need): *"Add a place for Lowe's in the app in PO's. Right now if I click on other it doesn't give a PO#."* Koy: *"Yes, add Misc"*. Lowe's maps to Simpro supplier "Lowes" (vendor 92, no apostrophe); "Lowe's", "Lowe’s" and "Lowes" all match. Other maps to Simpro supplier "Misc Store", which the office adds in Simpro (until it exists a send stops with "Couldn't find Misc Store in Simpro's suppliers." and no PO is made). The send sheet tells the crew to put the store's name in the material list. A card the Simpro pull filed as Other because its PO is from an unlisted supplier (Codale, White Cap…) keeps simproSupplier and never gets Get a PO number or a receipt nag (app poSendKindOf, server cardSupplierRule for Duet). A Lowes PO made in Simpro now arrives as Lowe's. Not changed: the Goals "Home Depot / ACE runs a week" count (Josh's rule) and the Duet connector's own send-kind list (homestead-connector repo). Server side needs 'firebase deploy --only functions:sendMaterialPO,functions:attachStoreReceipt,functions:scheduledSimproPOSync,functions:syncSimproPOsForJob,functions:duetApi'.
 
 - **Every plan file shows the day it was added (Resi and Commercial)** · 'in-flight 2026-11-11' · 'SW v620' · 'planAddedLabel' · 'FileUploadSection' · 'DriveFilesSection' · 'fetchDriveFilesRecursive' · Koy: *"can we add to any plans added what day they were uploaded? both commercial and resi"*. Every plan file now has an **Added Nov 10** line (the year shows only for files from another year), next to the size on documents and under the name on images. **Uploaded Files** on Plans & Links (Resi and Commercial use the same tab) and the quick job Plans section read the 'uploadedAt' every upload has saved. Files from before that field existed get the date from Storage's own created time ('getMetadata'), looked up for display and never written back. **Drive Plans** now asks Drive for 'createdTime' along with the fields it already fetched. That is when the file was first put in Drive, so a file moved in from elsewhere in Drive keeps its original date. FieldInk live plans keep their existing "updated … ago". **Why it won't lose data:** read-only. Nothing writes a job, a Storage file or a Drive file. The only new reads are one Drive field on the existing listing call and a Storage metadata read for older uploads with no saved date.
 
