@@ -62301,8 +62301,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v622
+**Last manifest update:** 2026-11-11 · App SW version: v623
 ---
+
+- **Job Prep shows every job: Commercial in its own lane, quick jobs with a job #** · 'in-flight 2026-11-11' · 'SW v623' · 'jobPrepIncluded' · 'JobPrepTracker' · Koy: *"i need all jobs, inlcuding commercial to show up in the job prep tab on resi, just haver a seperarte drop down or something for commercial. This includes quick jobs that have a job number attached to them."* Before this, Job Prep (a Resi-only tab) got only the current mode's jobs and 'jobPrepIncluded' dropped every quick job, so Commercial jobs and quick jobs never showed. Now the tab gets 'allJobs' (every division) and 'jobPrepIncluded' keeps full jobs until finish is complete, plus quick jobs that carry a 'simproNo' until 'quickJobStatus' is complete or invoice. Temp ped cards, temp ped pickup/install runs ('quickJobType: "tempped"') and quotes stay out. **Resi full jobs** run every lane as before, and every header count (held / override / cleared) is still over them. **Resi quick jobs** join the **Office Admin** lane only (the prep checklist doesn't fit a service call). **Commercial jobs** get a new folded **Commercial** lane at the bottom with the same Office Admin rows (ACCOUNT / PRE-LIEN / TEMP PED chips, ▾ menu, Ped #, ✓ complete strip) and no prep checklist, since their prep is Job Start. The header line adds "· N quick jobs · N commercial". Search and the foreman filter (its list now includes every division's foremen) cover the new lane; Show complete opens it. Tapping a Commercial job's name opens it from Resi mode. The Temp Peds Out lane now sees Commercial peds too, since it reads the same job list. Tests: new 'scripts/jobprep-included-test.js' (in prebuild). Guide 'jobprep.html' updated. **Why it won't lose data:** display-only. The rows reuse 'JobPrepAdminRow' and the same 'onUpdateJob' funnel the Office Admin lane already uses, so a chip tap writes exactly the fields it wrote before. No new field, loader, rules or function change.
 
 - **Job Prep: add a temp ped that's already out, with the day it went in** · 'in-flight 2026-11-11' · 'SW v622' · 'tpWentInPatch' · 'JobPrepTracker' · 'adminItemPatch' · Koy: *"also need to be able to add temp peds that are already done easily in the temp ped drop down of job prep tab."* Asked first which "done" he meant; he picked **still out, real date** (the ped went in earlier and is still on the job). Before this, the only way to tick a ped from Job Prep was **Mark done**, which starts the Temp Peds Out clock at today, so a ped that had been out for weeks showed 0 days, and nothing in the app could fix that date once set. The **▾ menu on the TEMP PED chip** (Office Admin lane) now ends with **Already out? Went in on** and a date box. Picking a day ticks the chip exactly like Mark done ('hasTempPed', 'adminNA.tempPed: false', clears an old pickup stamp, same fields, nothing else) but sets 'tempPedOutAt' to that day, so the ped lands in **Temp Peds Out** with the right days-out count, and the Ped # picker shows next to the chip as before. On a chip that's already done the same box reads **Went in on**, shows the current date and only changes 'tempPedOutAt'. A blank, half-typed (year before 2000) or future date writes nothing and the menu stays open. **Mark done** is unchanged and still one tap from the menu. Tests: 'scripts/office-msgs-peds-test.js' §4 (same fields as Mark done, lane counts days from the picked day, already-ticked only gets its date, bad dates write nothing). Guide 'jobprep.html' updated. **Why it won't lose data:** one patch through the existing 'onUpdateJob' funnel, only after a full valid date is picked; it writes the same fields Mark done already writes plus 'tempPedOutAt', a field the app already writes; on an already-ticked ped it changes only that date; the Ped #, the other chips' N/A flags and every other field are left alone. No new field, loader, rules or function change.
 
@@ -65103,11 +65105,16 @@ const adminItemState = (job, item) =>
   job[item.boolKey] ? "done"
     : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && isSectionHidden(job, "tempPed")) ? "na" : "todo");
 const adminAllHandled = (job) => JOBPREP_ADMIN_ITEMS.every(it => adminItemState(job, it) !== "todo");
-// The tab's job universe: full jobs only, until finish completes; next start on top.
+// The tab's job universe: full jobs until finish completes, plus (v623) quick jobs that
+// carry a Simpro job # until they're done — both divisions; JobPrepTracker splits
+// Commercial into its own lane. Temp ped runs (quickJobType "tempped") stay in the
+// Temp Peds lane only. Next start on top.
 // roughProjectedStart is M/D/YYYY (DateInp storage) with legacy YYYY-MM-DD mixed in —
 // parseAnyDate handles both; NEVER string-compare these.
 const jobPrepIncluded = (jobs) => (jobs||[])
-  .filter(j => j && !j.tempPed && !j.quickJob && j.type !== "quote" && effFS(j) !== "complete")
+  .filter(j => j && !j.tempPed && j.type !== "quote" && (j.quickJob
+    ? (j.quickJobType !== "tempped" && !!String(j.simproNo || "").trim() && !["complete", "invoice"].includes(j.quickJobStatus || ""))
+    : effFS(j) !== "complete"))
   .sort((a,b) => {
     const da = parseAnyDate(a.roughProjectedStart), db = parseAnyDate(b.roughProjectedStart);
     if (!da && !db) return (a.name||"").localeCompare(b.name||"");
@@ -66324,10 +66331,10 @@ function CommRfisTab({ job, u, identity }) {
 
 function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSchedulePickup, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [menu, setMenu] = useState(null);          // {jobId, itemKey, x, y}
-  const [stripOpen, setStripOpen] = useState({ admin:false, prep:false });
+  const [stripOpen, setStripOpen] = useState({ admin:false, prep:false, comm:false });
   // Lanes start collapsed (Koy 2026-08-28) — header pills keep the counts visible;
   // an active search/foreman filter force-shows both lanes so results never hide.
-  const [laneOpen, setLaneOpen] = useState({ admin:false, prep:false, peds:false });
+  const [laneOpen, setLaneOpen] = useState({ admin:false, prep:false, peds:false, comm:false });
   // Sub-dropdown inside Pre-Job Prep for override-cleared jobs (Koy 2026-08-28:
   // "different drop downs for cleared to start w/outstanding items ... to organize better")
   const [ovrOpen, setOvrOpen] = useState(false);
@@ -66372,7 +66379,16 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           y: Math.min(r.bottom + 4, window.innerHeight - (lane === "admin" && itemKey === "tempPed" ? 190 : 110)) });
   };
 
-  const included = useMemo(() => jobPrepIncluded(jobs), [jobs]);
+  // v623 (Koy 2026-11-11: "i need all jobs, inlcuding commercial to show up in the job prep tab on resi,
+  // just have a separate drop down ... This includes quick jobs that have a job number"). `jobs` is now
+  // every division. Resi full jobs run both lanes as before (`included`, which every header count still
+  // uses). Resi quick jobs with a job # join the Office Admin lane only — the Resi prep checklist
+  // (cabinet plans, appliance specs…) doesn't fit a service call. Commercial jobs get their own folded
+  // Commercial lane with the Office Admin items only — their prep is the Job Start tab.
+  const allIncluded = useMemo(() => jobPrepIncluded(jobs), [jobs]);
+  const adminJobs = useMemo(() => allIncluded.filter(j => !isCommercial(j)), [allIncluded]);
+  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob), [adminJobs]);
+  const commJobs  = useMemo(() => allIncluded.filter(isCommercial), [allIncluded]);
   const pedGroups = useMemo(() => tempPedGroups(jobs), [jobs]);
   const pedSuggest = useMemo(() => tpLinkSuggestions(pedGroups, jobs), [pedGroups, jobs]);
   const pedsOut = pedGroups.filter(g => !g.returned).length;
@@ -66382,17 +66398,19 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
   const [showComplete, setShowComplete] = useState(false);
 
   const foremenList = useMemo(() => {
-    const s = new Set(); included.forEach(j => { if (j.foreman) s.add(j.foreman); });
+    const s = new Set(); allIncluded.forEach(j => { if (j.foreman) s.add(j.foreman); });
     return Array.from(s).sort();
-  }, [included]);
+  }, [allIncluded]);
 
   const q = search.trim().toLowerCase();
   const filtered = !!(q || foremanFilter);
-  const vis = included.filter(j =>
+  const matches = j =>
     (!q || `${j.name||""} ${j.gc||""} ${j.simproNo||""} ${j.foreman||""}`.toLowerCase().includes(q)) &&
-    (!foremanFilter || j.foreman === foremanFilter));
+    (!foremanFilter || j.foreman === foremanFilter);
+  const vis = included.filter(matches), aVis = adminJobs.filter(matches), cVis = commJobs.filter(matches);
 
-  const aOpen = vis.filter(j => !adminAllHandled(j)), aDone = vis.filter(adminAllHandled);
+  const aOpen = aVis.filter(j => !adminAllHandled(j)), aDone = aVis.filter(adminAllHandled);
+  const cOpen = cVis.filter(j => !adminAllHandled(j)), cDone = cVis.filter(adminAllHandled);
   const pOpen = vis.filter(j => !allPrepChecked(j)), pDone = vis.filter(allPrepChecked);
   // Prep lane organizes into two groups: still held vs cleared-on-override (outstanding items).
   const pOvr  = pOpen.filter(j => j.prepOverride && j.prepOverride.on);
@@ -66413,6 +66431,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           </div>
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
             {included.length} active jobs
+            {adminJobs.length > included.length && <span> · {adminJobs.length - included.length} quick job{adminJobs.length - included.length===1?"":"s"}</span>}
+            {commJobs.length > 0 && <span> · {commJobs.length} commercial</span>}
             {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
             {onOvr > 0 && <span style={{color:C.slate,fontWeight:700}}> · {onOvr} started on override</span>}
             <span style={{color:"#1F7A3F",fontWeight:700}}> · {cleared} cleared to start</span>
@@ -66430,8 +66450,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
             <option value="">All foremen</option>
             {foremenList.map(f=><option key={f} value={f}>{f}</option>)}
           </select>
-          <button onClick={()=>{ const v=!showComplete; setShowComplete(v); setStripOpen({admin:v,prep:v});
-              if(v) setLaneOpen({admin:true,prep:true}); }}
+          <button onClick={()=>{ const v=!showComplete; setShowComplete(v); setStripOpen({admin:v,prep:v,comm:v});
+              if(v) setLaneOpen(o=>({...o,admin:true,prep:true,comm:true})); }}
             style={{padding:"6px 12px",borderRadius:7,fontSize:13,border:`1px solid ${C.border}`,
               background: showComplete ? C.accent : "#fff", color: showComplete ? "#fff" : C.dim,
               cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{showComplete?"Hide complete":"Show complete"}</button>
@@ -66446,9 +66466,9 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           <div style={{...GROUP_TITLE,color:C.blue}}>Office Admin</div>
           <span style={{borderRadius:99,padding:"2px 10px",fontSize:12.5,fontWeight:700,whiteSpace:"nowrap",
             background:"#C6282814",border:"1px solid #C6282833",color:"#C62828"}}>
-            {vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[0])==="todo").length} no account
-            {" · "}{vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[1])==="todo").length} no pre-lien
-            {" · "}{vis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[2])==="todo").length} no ped
+            {aVis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[0])==="todo").length} no account
+            {" · "}{aVis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[1])==="todo").length} no pre-lien
+            {" · "}{aVis.filter(j=>adminItemState(j,JOBPREP_ADMIN_ITEMS[2])==="todo").length} no ped
           </span>
           <div style={{marginLeft:"auto",fontSize:12,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase"}}>Justin's lane</div>
           <span style={{fontSize:12.5,color:C.blue,opacity:0.6}}>{(laneOpen.admin || filtered)?"▾":"▸"}</span>
@@ -66456,7 +66476,7 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
         {(laneOpen.admin || filtered) && (<>
         {aOpen.length === 0
           ? <div style={{fontSize:13,color:C.dim,textAlign:"center",padding:"18px 0"}}>
-              {filtered && vis.length===0 ? "No jobs match the search / filter" : "✓ Every job has account, pre-lien, and ped handled"}
+              {filtered && aVis.length===0 ? "No jobs match the search / filter" : "✓ Every job has account, pre-lien, and ped handled"}
             </div>
           : aOpen.map(j => <JobPrepAdminRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu}/>)}
         <JobPrepCompleteStrip open={stripOpen.admin} onToggle={()=>setStripOpen(s=>({...s,admin:!s.admin}))} count={aDone.length}>
@@ -66499,6 +66519,32 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
         </JobPrepCompleteStrip>
         <JobPrepCompleteStrip open={stripOpen.prep} onToggle={()=>setStripOpen(s=>({...s,prep:!s.prep}))} count={pDone.length}>
           {pDone.map(j => <JobPrepPrepRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu} canOverride={canOverride} onStartOverride={()=>setOvr({ jobId:j.id, note:"" })} onUndoOverride={()=>undoOverride(j)} walk={walksByJob.get(j.id)||null} onAddRedline={onAddRedline} onUpdateRedline={onUpdateRedline} onDeleteRedline={onDeleteRedline}/>)}
+        </JobPrepCompleteStrip>
+        </>)}
+      </div>
+
+      {/* ══ COMMERCIAL (v623) — every commercial job, Office Admin items only (their prep is Job Start) ══ */}
+      <div style={{marginBottom:28}}>
+        <div onClick={()=>setLaneOpen(o=>({...o,comm:!o.comm}))}
+          style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,
+          borderBottom:"2px solid #56657A22",flexWrap:"wrap",cursor:"pointer",userSelect:"none"}}>
+          <div style={{...GROUP_TITLE,color:C.slate}}>Commercial</div>
+          <span style={{borderRadius:99,padding:"2px 10px",fontSize:12.5,fontWeight:700,whiteSpace:"nowrap",
+            background:"#56657A14",border:"1px solid #56657A33",color:C.slate}}>
+            {cVis.length} job{cVis.length===1?"":"s"}{" · "}{cOpen.length} admin open
+          </span>
+          <div style={{marginLeft:"auto",fontSize:12,fontWeight:700,letterSpacing:"0.06em",color:C.dim,textTransform:"uppercase"}}>Account · pre-lien · ped</div>
+          <span style={{fontSize:12.5,color:C.slate,opacity:0.6}}>{(laneOpen.comm || filtered)?"▾":"▸"}</span>
+        </div>
+        {(laneOpen.comm || filtered) && (<>
+        {cOpen.length === 0
+          ? <div style={{fontSize:13,color:C.dim,textAlign:"center",padding:"18px 0"}}>
+              {cVis.length===0 ? (filtered ? "No commercial jobs match the search / filter" : "No active commercial jobs")
+                : "✓ Every commercial job has account, pre-lien, and ped handled"}
+            </div>
+          : cOpen.map(j => <JobPrepAdminRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu}/>)}
+        <JobPrepCompleteStrip open={stripOpen.comm} onToggle={()=>setStripOpen(s=>({...s,comm:!s.comm}))} count={cDone.length}>
+          {cDone.map(j => <JobPrepAdminRow key={j.id} job={j} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} onOpenMenu={openMenu}/>)}
         </JobPrepCompleteStrip>
         </>)}
       </div>
@@ -78048,13 +78094,13 @@ function App() {
 
       {view==="jobprep"&&can(identity,"jobprep.view")&&(
         <JobPrepTracker
-          jobs={jobs}
+          jobs={allJobs}
           identity={identity}
           redlineWalks={redlineWalks}
           onAddRedline={addRedlineWalk}
           onUpdateRedline={updateRedlineWalk}
           onDeleteRedline={deleteRedlineWalk}
-          onSelectJob={(j)=>{ const full = jobs.find(x => x.id === j.id); if (full) setSelected(full); }}
+          onSelectJob={(j)=>{ const full = allJobs.find(x => x.id === j.id); if (full) setSelected(full); }}
           onUpdateJob={(jobId,patch)=>{ const job=allJobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           onSchedulePickup={(g)=>{
             // A Temp Ped Pickup quick job linked to this ped (pickupPedFor): completing
