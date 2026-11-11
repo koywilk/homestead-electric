@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, arrayRemove, query, where, orderBy, limit, serverTimestamp, runTransaction, Timestamp, deleteField, increment } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject, getMetadata } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
@@ -28474,7 +28474,7 @@ function extractDriveFolderId(input) {
 async function fetchDriveFilesRecursive(folderId, folderName, depth, _folderIds) {
   if (depth > 3) return []; // safety limit
   if (_folderIds) _folderIds.add(folderId);
-  const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
+  const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,createdTime,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
   const resp = await fetch(url);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message || "Could not load Drive files");
@@ -29204,6 +29204,7 @@ function DriveFilesSection({ job, onUpdate, onCount = null }) {
                             border: `1px solid ${C.border}`, background: C.surface }} />
                         <div style={{ fontSize: 11, color: C.dim, marginTop: 3, overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        {planAddedLabel(f.createdTime) && <div style={{ fontSize: 11, color: C.faint }}>{planAddedLabel(f.createdTime)}</div>}
                       </div>
                     ))}
                   </div>
@@ -29222,7 +29223,7 @@ function DriveFilesSection({ job, onUpdate, onCount = null }) {
                         <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
                         <div style={{ fontSize: 12, color: C.faint }}>
-                          {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                          {[planAddedLabel(f.createdTime), f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""].filter(Boolean).join(" · ")}
                         </div>
                       </div>
                       {(isPDF(f) || isImage(f)) && (
@@ -29304,11 +29305,37 @@ const LINK_FIELDS = [
 ];
 
 
+// "Added Nov 10" for a plan file's upload / Drive-created time (ISO string or
+// ms); the year only when it isn't this year. "" for missing or bad input.
+const planAddedLabel = (at, now = new Date()) => {
+  if (at == null || at === "") return "";
+  const d = new Date(typeof at === "number" ? at : String(at));
+  if (isNaN(d.getTime())) return "";
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return `Added ${d.toLocaleDateString("en-US", opts)}`;
+};
+
 // ── File Upload Section (Firebase Storage) ────────────────────
 function FileUploadSection({ jobId, files, onChange }) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const [viewFile, setViewFile] = useState(null);
+
+  // Uploads since this box was built carry uploadedAt. Older ones don't, so
+  // ask Storage when the file was created. Display only: never written back.
+  const [storageDates, setStorageDates] = useState({});
+  const undatedKey = (files || []).filter(f => !f.uploadedAt && f.storagePath).map(f => f.id).join(",");
+  useEffect(() => {
+    let live = true;
+    (files || []).filter(f => !f.uploadedAt && f.storagePath && !storageDates[f.id]).forEach(f => {
+      getMetadata(ref(storage, f.storagePath))
+        .then(m => { if (live && m && m.timeCreated) setStorageDates(s => ({ ...s, [f.id]: m.timeCreated })); })
+        .catch(() => {});
+    });
+    return () => { live = false; };
+  }, [undatedKey]); // eslint-disable-line
+  const addedLabel = (f) => planAddedLabel(f.uploadedAt || storageDates[f.id]);
 
   const handleUpload = async (inputFiles) => {
     if (!inputFiles || inputFiles.length === 0) return;
@@ -29422,6 +29449,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                     justifyContent: "center", lineHeight: 1 }}>✕</button>
                 <div style={{ fontSize: 11, color: C.dim, marginTop: 3, overflow: "hidden",
                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                {addedLabel(f) && <div style={{ fontSize: 11, color: C.faint }}>{addedLabel(f)}</div>}
               </div>
             ))}
           </div>
@@ -29440,7 +29468,7 @@ function FileUploadSection({ jobId, files, onChange }) {
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: "hidden",
                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
                 <div style={{ fontSize: 12, color: C.faint }}>
-                  {f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                  {[addedLabel(f), f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""].filter(Boolean).join(" · ")}
                 </div>
               </div>
               <a href={safeUrl(f.url)} target="_blank" rel="noreferrer"
@@ -62256,10 +62284,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-10 · App SW version: v619
+**Last manifest update:** 2026-11-11 · App SW version: v620
 ---
 
-- **Quick jobs get a Plans section: upload, open and delete plan files right on the quick job** · 'in-flight 2026-11-10' · 'SW v619' · 'QuickJobDetail' · 'QuickJobCard' · 'FileUploadSection' · 'planFiles' · Koy: *"there is nowhere to put a file for plans in the quick jobs cards"*. The opened quick job has a folded **Plans** section between Photos and Job details, with the file count and names on its header. Inside is the same upload box as Uploaded Files on a full job's Plans & Links tab: Upload Files (PDF, image, Word, Excel, DWG/DXF), Take Photo, Open ↗ and delete with a confirm. The card shows a "N plan files" line when a job has any. Tapping it opens the job like the rest of the card, so no new tap was added. Files go to Storage 'jobs/<id>/plans/' and the job's existing 'planFiles' list, the same as full jobs, so the GC portal's Plans links show them with no change there. **Why it won't lose data:** it writes only 'planFiles', a field every full job already uses, through the quick job's normal patch save. No loader, rules or function change. Delete works the same as a full job's: it asks first and removes only the one file.
+- **Every plan file shows the day it was added (Resi and Commercial)** · 'in-flight 2026-11-11' · 'SW v620' · 'planAddedLabel' · 'FileUploadSection' · 'DriveFilesSection' · 'fetchDriveFilesRecursive' · Koy: *"can we add to any plans added what day they were uploaded? both commercial and resi"*. Every plan file now has an **Added Nov 10** line (the year shows only for files from another year), next to the size on documents and under the name on images. **Uploaded Files** on Plans & Links (Resi and Commercial use the same tab) and the quick job Plans section read the 'uploadedAt' every upload has saved. Files from before that field existed get the date from Storage's own created time ('getMetadata'), looked up for display and never written back. **Drive Plans** now asks Drive for 'createdTime' along with the fields it already fetched. That is when the file was first put in Drive, so a file moved in from elsewhere in Drive keeps its original date. FieldInk live plans keep their existing "updated … ago". **Why it won't lose data:** read-only. Nothing writes a job, a Storage file or a Drive file. The only new reads are one Drive field on the existing listing call and a Storage metadata read for older uploads with no saved date.
+
+- **Quick jobs get a Plans section: upload, open and delete plan files right on the quick job** · 'shipped 2026-11-10' · 'SW v619' · 'QuickJobDetail' · 'QuickJobCard' · 'FileUploadSection' · 'planFiles' · Koy: *"there is nowhere to put a file for plans in the quick jobs cards"*. The opened quick job has a folded **Plans** section between Photos and Job details, with the file count and names on its header. Inside is the same upload box as Uploaded Files on a full job's Plans & Links tab: Upload Files (PDF, image, Word, Excel, DWG/DXF), Take Photo, Open ↗ and delete with a confirm. The card shows a "N plan files" line when a job has any. Tapping it opens the job like the rest of the card, so no new tap was added. Files go to Storage 'jobs/<id>/plans/' and the job's existing 'planFiles' list, the same as full jobs, so the GC portal's Plans links show them with no change there. **Why it won't lose data:** it writes only 'planFiles', a field every full job already uses, through the quick job's normal patch save. No loader, rules or function change. Delete works the same as a full job's: it asks first and removes only the one file.
 
 - **Duet can change any Command Center document through the one door: set a field, add / change / remove a list item, create, mark deleted, hard-delete with a typed confirm, edit one Team member — audited and undoable** · 'shipped 2026-11-06' · 'SW v618' · 'duetApi' · 'functions/duetWrites/anyDoc.js' · 'DOC_ACTIONS' · 'anyDocWrite' · 'checkTarget' · 'planDoc' · 'planTeamEdit' · 'stampFor' · 'anyRef' · 'usersRef' · Koy: *"I just want it to be able to do anything that I say to do."* Eleven Duet ships added named buttons and every button left a wall behind it ("no tool for that"). This ship adds ONE general door instead of more buttons: eight 'duetApi' actions ('doc.set', 'doc.append', 'doc.patchItem', 'doc.removeItem', 'doc.create', 'doc.markDeleted', 'doc.delete', 'team.edit') that reach any top-level Command Center document by collection and id, with the same guard rails every ship already has — one transaction on the live copy, the Duet envelope stamp the app's own writer for that collection uses (jobs: the job envelope with 'lastActivityAt'; needs / projects: the task stamp; settings and everything else: whichever stamp key the doc already carries), the 'duet_writes/<requestId>' audit doc with before / after written in the SAME transaction, idempotent on requestId, counted in the 60 / hour, undo through 'cc_undo_write'. **What it refuses before reading anything:** the never-list ('duet_writes', 'recovery_ledger', 'claude_activity', 'claude_reports', 'errors', 'material_po_log', the four device-key collections, 'gc_config/mail', and 'settings/users' outside 'team.edit'), subcollections ("top-level documents only"), a list item named by position (name it by id), non-JSON or over-100 KB values, and on a job any key a named tool already owns (refused naming that tool, so status flows stay on the rails) plus the id / cache keys. **Confirm words Koy types:** a hard delete needs the document's id (and only 'jobs', 'needs', 'suggestions' — the collections the app itself deletes; over 900 KB refuses: "too big to keep a copy — archive or mark deleted instead"); the three all-phones switches ('gc_config/material_po', 'settings/appGate', 'config/app') need their id on every change, and flipping the PO mode answers what it does to the crew's own PO sends; a Team edit needs the person's exact name after the edit. A wrong or missing word is refused with the exact word to type and nothing written. **Team edits** patch or add ONE person in 'settings/users' through the app's own 'saveUsers' envelope ('list', 'updated_at', 'saved_by', 'device') so open tabs' stale-write guard sees a real edit; the list never shrinks (remove = 'active:false'), Koy can't deactivate himself, and 'id', 'pin', device tokens and the stand-in flag can't be set — the audited person never carries a PIN or token. **Undo** ('functions/duetWrites/undo.js'): each op is put back only while the document still reads what the call left (otherwise refused with current vs expected); a hard delete is created back from the audit's copy while the id is free; a new document is marked deleted (data-rooted) or deleted again (plain) while untouched; a Team add becomes 'active:false'. Connector side (separate repo): 'cc_read_doc', 'cc_list_docs', 'cc_list_team', 'cc_write_doc', 'cc_create_doc', 'cc_delete_doc', 'cc_edit_team_member', all deny-by-default reads and ask-Koy-first writes. Tests: 'scripts/duet-anydoc-test.js' (33 checks in prebuild: policy, every op, every envelope, the confirm words, every undo, fakes that refuse 'undefined' like Firestore). Spec: homestead-connector 'docs/superpowers/specs/2026-11-06-duet-any-doc-design.md'. **Needs 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric'** (Koy) and the connector deploy. **Why it won't lose data:** nothing in the app's own code paths changes (no loader, no rules, no client write); the function only writes one field, one item, or one new document per call, never a whole-document replace; the two things that can't be taken back (a hard delete, a Team change) need a word Koy typed, the hard delete keeps the whole document in the audit and undo creates it back, and every other change is undoable from its audit while the document still reads what Duet left.
 - **Inspection attempts can be corrected: a same-day re-tap fixes that day's attempt, and History lists every attempt with Remove** · 'shipped 2026-11-06' · 'SW v617' · 'InspHistory' · 'src/inspAttempts.js' · 'inspLogTap' · 'inspRemoveAttempt' · 'inspRestoreAttempt' · 'newAttempts' · Koy: *"noticing jobs like kweller with 7 attempts at 4 way. thats not right ive just hit fail on accident multiple times. that number needs to be easily adjustable."* Kweller's seven rough attempts were Pass / Fail mis-taps (pass, fail, pass on 8/7; fail, pass on 8/11), because every tap appended one. Now a Pass / Fail tap on the same day by the same person replaces that day's attempt instead of adding one ('inspLogTap'; a Failed again 'repeat' attempt is never replaced). The tap path is otherwise unchanged. A **History · N** button next to Pass / Fail on both the rough (4-way) and final rows starts folded and lists each attempt (result, date, who, failed again) with **Remove**. Remove asks first, takes out that one attempt and offers Undo. It never touches the result or the failed items, and the tile count follows the list. Server: 'functions/gcNotify.js' 'newAttempts' finds new attempts by id. A pass corrected to fail the same day (the list keeps the same length) still sends the failed-inspection push and GC notice, a Remove sends nothing, and an attempt put back by Undo is marked 'restored' so it doesn't push again. 'onJobUpdate''s '_newFail' uses it, so this needs a functions deploy. Lists without ids keep the old tail rule. Duet's 'cc_set_inspection' still appends as before. Tests: 'scripts/insp-attempts-test.js' (22 checks in prebuild, including a replay of Kweller's real taps). Help guides: 'rough.html', 'finish.html'. **Why it won't lose data:** attempts are only removed by a person tapping Remove and confirming, one at a time, with a 10-second Undo. Nothing is removed automatically, and the same-day replace only touches the last attempt when it is that person's own tap that day. No other field, loader or rules change.
