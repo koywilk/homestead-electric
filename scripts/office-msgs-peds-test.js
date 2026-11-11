@@ -9,6 +9,8 @@
 //     from a completed pickup quick job, Undo, duplicates, days out.
 //  3. Temp ped card → job card link (ask first): who's suggested, Link merges the
 //     rows and ticks the job card, Not this one / Unlink never re-suggest.
+//  4. v622 went-in date: a ped that's already out, logged from the TEMP PED chip
+//     menu with the day it went in — ticks like Mark done, lane counts from that day.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -30,7 +32,8 @@ function extract(name) {
 const names = ["parseAnyDate", "bcGroupMessages", "bcTabOrder", "bcNeedLabel",
   "tpToday", "tpAddrKey", "tpLive", "tpOnJob", "tpPickupDone", "tempPedGroups", "tpNeedsLook",
   "TP_NAME_SKIP", "tpNameWords", "tpIdMs", "tpLinkWhy", "tpLinkSuggestions", "tpLinkSuggestionsForJob",
-  "tpLinkPatches", "tpUnlinkPatches", "tpSkipPatch"];
+  "tpLinkPatches", "tpUnlinkPatches", "tpSkipPatch",
+  "JOBPREP_ADMIN_ITEMS", "adminItemPatch", "tpWentInPatch"];
 const body = [
   'const BC_KINDS = { announcement: {}, important: {}, discussion: {} };',
   'const bcKindOf = (k) => (BC_KINDS[k] ? k : "announcement");',
@@ -237,6 +240,33 @@ t("Unlink puts the job card back and never suggests it again; Not this one adds 
   assert.strictEqual(F.tempPedGroups([iu, fu], NOW).length, 1, "the ped is still out on its install card");
   assert.deepStrictEqual(F.tpSkipPatch({ tempPedLinkSkip: ["a"] }, "b"), { tempPedLinkSkip: ["a", "b"] });
   assert.strictEqual(F.tpUnlinkPatches(undefined, fl).install, null, "install card deleted: job card still unlinks");
+});
+
+// ── 4. v622: already-out ped with the day it went in (TEMP PED chip ▾ menu) ──
+t("Went in on: an un-ticked job gets the same patch as Mark done, but out since that day", () => {
+  const j = job({ id: "w1", name: "Hansen", adminNA: { jobAccount: true } });
+  const done = F.adminItemPatch(j, F.JOBPREP_ADMIN_ITEMS[2], "done");
+  const p = F.tpWentInPatch(j, "8/15/2026", NOW);
+  assert.deepStrictEqual(Object.keys(p).sort(), Object.keys(done).sort(), "same fields Mark done writes, nothing else");
+  assert.strictEqual(p.hasTempPed, true);
+  assert.deepStrictEqual(p.adminNA, { jobAccount: true, tempPed: false }, "other N/A flags kept");
+  assert.strictEqual(p.tempPedOutAt, "8/15/2026");
+  assert.strictEqual(p.tempPedReturnedAt, "");
+  const g = F.tempPedGroups([{ ...j, ...p, tempPedNumber: "7" }], NOW);
+  assert.strictEqual(g.length, 1);
+  assert.strictEqual(g[0].returned, null, "it's out, in the lane");
+  assert.strictEqual(g[0].days, 52, "days out counted from 8/15, not today");
+});
+t("Went in on: a ped already ticked only gets its date fixed (number and N/A untouched)", () => {
+  const j = job({ id: "w2", hasTempPed: true, tempPedNumber: "22", tempPedOutAt: "10/6/2026" });
+  assert.deepStrictEqual(F.tpWentInPatch(j, "7/1/2026", NOW), { tempPedOutAt: "7/1/2026" });
+});
+t("Went in on: blank, half-typed year, or future dates write nothing", () => {
+  const j = job({ id: "w3" });
+  assert.strictEqual(F.tpWentInPatch(j, "", NOW), null);
+  assert.strictEqual(F.tpWentInPatch(j, "8/15/0002", NOW), null, "Chrome fires change mid-year-typing");
+  assert.strictEqual(F.tpWentInPatch(j, "10/7/2026", NOW), null, "tomorrow");
+  assert.notStrictEqual(F.tpWentInPatch(j, "10/6/2026", NOW), null, "today is fine");
 });
 
 console.log(`\n${pass} passed`);
