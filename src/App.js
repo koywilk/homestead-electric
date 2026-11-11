@@ -62284,8 +62284,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v620
+**Last manifest update:** 2026-11-11 · App SW version: v622
 ---
+
+- **Job Prep: add a temp ped that's already out, with the day it went in** · 'in-flight 2026-11-11' · 'SW v622' · 'tpWentInPatch' · 'JobPrepTracker' · 'adminItemPatch' · Koy: *"also need to be able to add temp peds that are already done easily in the temp ped drop down of job prep tab."* Asked first which "done" he meant; he picked **still out, real date** (the ped went in earlier and is still on the job). Before this, the only way to tick a ped from Job Prep was **Mark done**, which starts the Temp Peds Out clock at today, so a ped that had been out for weeks showed 0 days, and nothing in the app could fix that date once set. The **▾ menu on the TEMP PED chip** (Office Admin lane) now ends with **Already out? Went in on** and a date box. Picking a day ticks the chip exactly like Mark done ('hasTempPed', 'adminNA.tempPed: false', clears an old pickup stamp, same fields, nothing else) but sets 'tempPedOutAt' to that day, so the ped lands in **Temp Peds Out** with the right days-out count, and the Ped # picker shows next to the chip as before. On a chip that's already done the same box reads **Went in on**, shows the current date and only changes 'tempPedOutAt'. A blank, half-typed (year before 2000) or future date writes nothing and the menu stays open. **Mark done** is unchanged and still one tap from the menu. Tests: 'scripts/office-msgs-peds-test.js' §4 (same fields as Mark done, lane counts days from the picked day, already-ticked only gets its date, bad dates write nothing). Guide 'jobprep.html' updated. **Why it won't lose data:** one patch through the existing 'onUpdateJob' funnel, only after a full valid date is picked; it writes the same fields Mark done already writes plus 'tempPedOutAt', a field the app already writes; on an already-ticked ped it changes only that date; the Ped #, the other chips' N/A flags and every other field are left alone. No new field, loader, rules or function change.
 
 - **Every plan file shows the day it was added (Resi and Commercial)** · 'in-flight 2026-11-11' · 'SW v620' · 'planAddedLabel' · 'FileUploadSection' · 'DriveFilesSection' · 'fetchDriveFilesRecursive' · Koy: *"can we add to any plans added what day they were uploaded? both commercial and resi"*. Every plan file now has an **Added Nov 10** line (the year shows only for files from another year), next to the size on documents and under the name on images. **Uploaded Files** on Plans & Links (Resi and Commercial use the same tab) and the quick job Plans section read the 'uploadedAt' every upload has saved. Files from before that field existed get the date from Storage's own created time ('getMetadata'), looked up for display and never written back. **Drive Plans** now asks Drive for 'createdTime' along with the fields it already fetched. That is when the file was first put in Drive, so a file moved in from elsewhere in Drive keeps its original date. FieldInk live plans keep their existing "updated … ago". **Why it won't lose data:** read-only. Nothing writes a job, a Storage file or a Drive file. The only new reads are one Drive field on the existing listing call and a Storage metadata read for older uploads with no saved date.
 
@@ -65107,6 +65109,18 @@ const adminItemPatch = (job, item, target) => {
     ...(item.key === "tempPed" && target === "done" && !job.hasTempPed ? { tempPedOutAt: tpToday(), tempPedReturnedAt: "", tempPedReturnedBy: "" } : {}),
   };
 };
+// v622 (Koy 2026-11-11: "add temp peds that are already done easily"): a ped that
+// went in earlier and is still out gets logged with the day it went in, from the
+// TEMP PED chip's ▾ menu — ticks the chip exactly like Mark done, but the Temp
+// Peds Out clock starts on that day instead of today. On a chip that's already
+// done it only fixes the date. null = not a usable date (blank, before 2000 — a
+// half-typed year — or in the future); the menu ignores it and stays open.
+const tpWentInPatch = (job, date, nowMs) => {
+  const d = parseAnyDate(date);
+  if (!d || d.getFullYear() < 2000 || d.getTime() > (nowMs || Date.now())) return null;
+  if (job.hasTempPed) return { tempPedOutAt: date };
+  return { ...adminItemPatch(job, JOBPREP_ADMIN_ITEMS[2], "done"), tempPedOutAt: date };
+};
 
 const JOBPREP_CHIP_STATES = {
   todo: { border:"#C6282855", bg:"#C628280A", fg:"#C62828", mark:"○ " },
@@ -66334,8 +66348,9 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
     const r = e.currentTarget.getBoundingClientRect();
     setMenu(m => (m && m.jobId===jobId && m.itemKey===itemKey) ? null   // re-tap same caret = close
       : { jobId, itemKey, lane,
-          x: Math.min(r.left, window.innerWidth - 180),
-          y: Math.min(r.bottom + 4, window.innerHeight - 110) });      // clamp so a bottom-row menu stays on-screen
+          x: Math.min(r.left, window.innerWidth - 200),
+          // clamp so a bottom-row menu stays on-screen (the TEMP PED menu is taller: v622 went-in date)
+          y: Math.min(r.bottom + 4, window.innerHeight - (lane === "admin" && itemKey === "tempPed" ? 190 : 110)) });
   };
 
   const included = useMemo(() => jobPrepIncluded(jobs), [jobs]);
@@ -66487,10 +66502,24 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
         );
         return (
           <div data-jobprep-menu style={{position:"fixed", left:menu.x, top:menu.y, zIndex:60, background:"#fff",
-            border:`1px solid ${C.border}`, borderRadius:9, boxShadow:"0 8px 28px rgba(15,31,61,0.16)", padding:4, minWidth:150}}>
+            border:`1px solid ${C.border}`, borderRadius:9, boxShadow:"0 8px 28px rgba(15,31,61,0.16)", padding:4, minWidth:(!isPrep && item.key==="tempPed") ? 190 : 150}}>
             {state !== "done" && opt("✓ Mark done", "done")}
             {state !== "todo" && opt("○ Mark outstanding", "todo")}
             {state !== "na" && opt("— Not needed (N/A)", "na")}
+            {!isPrep && item.key === "tempPed" && (
+              <div data-tp-wentin style={{borderTop:`1px solid ${C.border}`, marginTop:4, padding:"8px 12px 6px"}}>
+                <div style={{fontSize:12, fontWeight:700, color:C.dim, marginBottom:5}}>
+                  {job.hasTempPed ? "Went in on" : "Already out? Went in on"}</div>
+                <DateInp value={job.hasTempPed ? (job.tempPedOutAt||"") : ""}
+                  onChange={e=>{
+                    const p = tpWentInPatch(job, e.target.value);
+                    if (!p) return;              // half-typed or future date: keep the menu open
+                    onUpdateJob(job.id, p); setMenu(null);
+                    toast.success(`${job.name||"Job"}: temp ped out since ${e.target.value}`);
+                  }}
+                  style={{fontSize:13, padding:"5px 8px"}}/>
+              </div>
+            )}
           </div>
         );
       })()}
