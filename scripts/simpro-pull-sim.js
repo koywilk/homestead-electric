@@ -265,7 +265,21 @@ test("no list in the notes: uses the PO's lines, or leaves it blank", async () =
   const f = job("s").finishMaterials;
   assert.equal(f.find((c) => c.po === "7383").items, "2 x FG RANGE/DRYER BOX 42 CU IN");
   const h = f.find((c) => c.po === "7350");
-  assert.equal(h.items, ""); assert.equal(h.source, "Other"); assert.equal(h.simproSupplier, "Hansen Lighting");
+  assert.equal(h.items, ""); assert.equal(h.source, "Hansen Lighting", "a listed Simpro supplier keeps its name (SW v621)"); assert.equal(h.simproSupplier, "Hansen Lighting");
+});
+
+test("sourceFor: every Simpro supplier keeps its name; an unlisted one is Other (SW v621)", async () => {
+  const sp = require(path.join(__dirname, "..", "functions", "materialPO", "simproPull.js"));
+  assert.equal(sp.sourceFor("Lowes"), "Lowe's");
+  assert.equal(sp.sourceFor("ACE Hardware"), "ACE");
+  assert.equal(sp.sourceFor("Cameron Crane "), "Cameron Crane");
+  assert.equal(sp.sourceFor("Codale"), "Codale");
+  assert.equal(sp.sourceFor("Some New Supplier"), "Other");
+  // a crew card made before v621 says Other; it still takes the matching Codale PO's number
+  const po = { ID: 7400, Vendor: { Name: "Codale" }, DateIssued: "2026-11-10", VendorNotes: "<div>3/4 EMT x 20</div><div>3/4 couplings x 40</div>", AssignedTo: { CostCenter: { Name: "Residential (Rough In)" } } };
+  const card = { id: "c9", source: "Other", po: "", items: "3/4 EMT x 20<br>3/4 couplings x 40", needsOrder: true };
+  const r = sp.planPo(po, { id: "j" }, { roughMaterials: [card] }, { nowIso: "2026-11-11T00:00:00Z" });
+  assert.equal(r.how, "linked"); assert.equal(r.cardId, "c9"); assert.equal(r.patch.source, undefined, "the crew's Other is left alone");
 });
 
 test("notes can't put markup on the card", async () => {

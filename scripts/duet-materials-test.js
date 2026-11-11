@@ -208,8 +208,8 @@ await ok("material.addCard: comm only on commercial jobs; source from the card's
   assert.strictEqual(fields(c).commMaterials.length, 2);
   assert.ok(/source must be one of/.test(MA.planAddCard({ phase: "rough", source: "Graybar", items: ["x"] }, J()).refused));
   assert.ok(!MA.planAddCard({ phase: "rough", source: "lowe's", items: ["x"] }, J()).refused, "Lowe's is a card source (SW v621)");
-  assert.ok(!MA.cleanSendArgs({}, { source: "Other", items: "x" }, "rough").refused, "a crew's Other card can get a PO (Misc Store)");
-  assert.ok(/Codale PO made in Simpro/.test(MA.cleanSendArgs({}, { source: "Other", simproSupplier: "Codale", items: "x" }, "rough").refused), "a pulled Codale card is never sent");
+  assert.ok(!MA.planAddCard({ phase: "rough", source: "codale", items: ["x"] }, J()).refused, "any Simpro supplier is a card source (SW v621)");
+  assert.ok(!MA.cleanSendArgs({}, { source: "Codale", items: "x" }, "rough").refused, "a Codale card can get a PO number");
   assert.ok(/phase must be/.test(MA.planAddCard({ phase: "qc", items: ["x"] }, J()).refused));
   assert.ok(/at least one line/.test(MA.planAddCard({ phase: "rough", items: ["", "  "] }, J()).refused));
   assert.ok(/list of plain text lines/.test(MA.planAddCard({ phase: "rough", items: "20x cans" }, J()).refused));

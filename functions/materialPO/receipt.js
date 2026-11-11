@@ -91,7 +91,7 @@ module.exports = function makeReceipt({ functions, db, simproReqWithRetry, requi
       await gate(user);
       const jobId = T(data.jobId), phase = T(data.phase), orderId = T(data.orderId);
       const source = T(data.source);
-      if (!R.supplierRule(source) || R.supplierRule(source).kind !== "number") throw new HttpsError("invalid-argument", "Receipts go on Home Depot, ACE, Lowe's, Amazon and Other cards.");
+      if (!R.receiptSource(source)) throw new HttpsError("invalid-argument", "Receipts go on Home Depot, ACE, Lowe's and Amazon cards.");
 
       if (data.checkOnly === true) {
         if (!jobId) throw new HttpsError("invalid-argument", "Missing the job.");

@@ -452,7 +452,7 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       const ccId = phase === "comm" ? T(data.ccId) : ""; // v527: commercial Materials tab
       if (phase === "comm" && !ccId) throw new HttpsError("invalid-argument", "Pick which cost center to charge first.");
       const rule = R.supplierRule(data.source);
-      if (!rule) throw new HttpsError("invalid-argument", `The app can't send to ${T(data.source) || "that supplier"} yet. Pick CED, Home Depot, ACE, Lowe's, Amazon or Other.`);
+      if (!rule) throw new HttpsError("invalid-argument", `The app can't send to ${T(data.source) || "that supplier"} yet. Pick CED or a supplier from Simpro (Home Depot, Lowe's…).`);
       const lines = R.itemsToLines(data.items);
       if (rule.kind === "email" && !lines.length) throw new HttpsError("invalid-argument", "Add the material list first.");
       // Custom "Get it": their own words replace the pickup line; no date. An

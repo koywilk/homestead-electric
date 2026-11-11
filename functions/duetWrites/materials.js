@@ -49,6 +49,8 @@ const refuse = (why) => ({ refused: why });
 const LISTS = { rough: "roughMaterials", finish: "finishMaterials", comm: "commMaterials" };
 const PHASES = Object.keys(LISTS);
 const SOURCES = ["", "Shop", "Home Depot", "CED", "Platt", "Amazon", "ACE", "Lowe's", "Other"];   // MaterialOrders ~L15175
+// SW v621: the dropdown also lists every other Simpro supplier (App.js PO_MORE_SUPPLIERS).
+const ALL_SOURCES = [...SOURCES, ...R.SIMPRO_SUPPLIERS];
 const TICK_FIELDS = ["ordered", "pickedUp", "deliveredToShop"];
 const MAX_LINES = 200;
 const PREVIEW_TTL_MS = 15 * 60e3;
@@ -107,8 +109,8 @@ const todayMdy = (ctx) => mdy(ctx.nowIso, ctx.tz);
 const sourceArg = (v) => {
   if (v == null) return { v: undefined };
   const s = String(v).trim();
-  const hit = SOURCES.find(x => x.toLowerCase() === s.toLowerCase());
-  return hit === undefined ? refuse(`source must be one of ${SOURCES.filter(Boolean).join(", ")} (or "" for none).`) : { v: hit };
+  const hit = ALL_SOURCES.find(x => x.toLowerCase() === s.toLowerCase());
+  return hit === undefined ? refuse(`source must be one of ${SOURCES.filter(Boolean).join(", ")}, any supplier in Simpro (${R.SIMPRO_SUPPLIERS.join(", ")}) (or "" for none).`) : { v: hit };
 };
 // {phase, list, card, patch-free summary} for answers and audits.
 const summary = (c) => ({ cardId: String(c.id), source: c.source || "", po: c.po || "", date: c.date || "", pickupDate: c.pickupDate || "", needsOrder: !!c.needsOrder, ordered: !!c.ordered, pickedUp: !!c.pickedUp, deliveredToShop: !!c.deliveredToShop, lines: R.itemsToLines(c.items).length });
@@ -200,10 +202,8 @@ function planTick(args, ctx) {
 // cfg:  { mode, testTo, bids, liveAccess } (api.js's io.loadPoCfg — soakTo only from gc_config/mail)
 // extra: { koyAccess, vendorEmail? (live only, one Simpro GET), senderEmail?, log? (material_po_log doc, trimmed) }
 function cleanSendArgs(args, card, phase) {
-  const rule = R.cardSupplierRule(card);
-  if (!rule) return refuse(card.simproSupplier && String(card.source || "").trim().toLowerCase() === "other"
-    ? `That card is a ${String(card.simproSupplier).trim()} PO made in Simpro; the app doesn't send to that supplier. Nothing was sent.`
-    : `The app can't send to ${String(card.source || "").trim() || "that supplier"} yet. Pick CED, Home Depot, ACE, Lowe's, Amazon or Other on the card first. Nothing was sent.`);
+  const rule = R.supplierRule(card.source);
+  if (!rule) return refuse(`The app can't send to ${String(card.source || "").trim() || "that supplier"} yet. Pick CED or a Simpro supplier on the card first. Nothing was sent.`);
   const lines = R.itemsToLines(card.items);
   if (rule.kind === "email" && !lines.length) return refuse("Add the material list to the card first. Nothing was sent.");
   const get = R.getMode(args.get);

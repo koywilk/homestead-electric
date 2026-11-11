@@ -12,24 +12,29 @@ t("suppliers", () => {
   eq(R.supplierRule(" home depot ").kind, "number", "Home Depot is a store run");
   eq(R.supplierRule("Amazon").kind, "number", "Amazon is a store run");
   eq(R.supplierRule("ACE").simproName, "ACE Hardware", "ACE alias");
-  for (const s of ["Shop", "Platt", "", null]) eq(R.supplierRule(s), null, `${s} can't be sent`);
-  eq(R.supplierRule("Other"), { kind: "number", simproName: "Misc Store" }, "Other is a Misc Store run (SW v621)");
-  // a card the Simpro pull filed as Other keeps its real supplier: never a Misc Store run
-  eq(R.cardSupplierRule({ source: "Other", simproSupplier: "Codale" }), null, "pulled Codale card can't be sent");
-  eq(R.cardSupplierRule({ source: "Other", simproSupplier: "misc store" }).simproName, "Misc Store", "pulled Misc Store card is a store run");
-  eq(R.cardSupplierRule({ source: "Other" }).simproName, "Misc Store", "a crew's Other card is a store run");
-  eq(R.cardSupplierRule({ source: "Home Depot", simproSupplier: "Home Depot" }).simproName, "Home Depot", "named stores unaffected");
+  for (const s of ["Shop", "Platt", "Other", "", null]) eq(R.supplierRule(s), null, `${s} can't be sent`);
   // SW v621: Lowe's is a store run; Simpro spells the supplier "Lowes"
   for (const s of ["Lowe's", "Lowe’s", "lowes", " LOWE'S "]) eq(R.supplierRule(s), { kind: "number", simproName: "Lowes" }, `${s} is a Lowe's run`);
+});
+
+t("every Simpro supplier gets a PO number (SW v621)", () => {
+  eq(R.SIMPRO_SUPPLIERS.length, 38, "38 more suppliers (43 in Simpro minus the five named ones)");
+  eq(R.supplierRule("Codale"), { kind: "number", simproName: "Codale" }, "Codale is number only, never emailed");
+  eq(R.supplierRule(" sunbelt rentals ").simproName, "Sunbelt Rentals", "case and spaces don't matter");
+  eq(R.vendorFor(R.supplierRule("Cameron Crane"), [{ ID: 107, Name: "Cameron Crane " }]).ID, 107, "Simpro's trailing space still matches");
+  eq(R.supplierRule("Graybar"), null, "a supplier not in Simpro can't be sent");
+  eq(R.receiptSource("Lowe's"), true, "Lowe's takes receipts");
+  eq(R.receiptSource("Codale"), false, "supply houses and cities don't nag for receipts");
+  // App.js PO_MORE_SUPPLIERS must be the same list
+  const app = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "App.js"), "utf8");
+  const m = app.match(/const PO_MORE_SUPPLIERS = (\[[^\n]*\]);/);
+  eq(m ? JSON.parse(m[1]) : null, R.SIMPRO_SUPPLIERS, "App.js PO_MORE_SUPPLIERS matches rules.js SIMPRO_SUPPLIERS");
 });
 
 t("Lowe's finds Simpro's Lowes supplier (vendor 92)", () => {
   const vendors = [{ ID: 30, Name: "Home Depot" }, { ID: 92, Name: "Lowes" }];
   eq(R.vendorFor(R.supplierRule("Lowe's"), vendors).ID, 92, "Lowe's → Lowes");
   eq(R.STORE_VENDORS.includes("lowes"), true, "Lowe's receipts are allowed");
-  eq(R.STORE_VENDORS.includes("misc store"), true, "Other (Misc Store) receipts are allowed");
-  eq(R.vendorFor(R.supplierRule("Other"), vendors), null, "no Misc Store supplier yet → null (send stops before any PO)");
-  eq(R.vendorFor(R.supplierRule("Other"), [...vendors, { ID: 300, Name: "Misc Store" }]).ID, 300, "Other → Misc Store once the office adds it");
   const po = { ID: 7400, Vendor: { ID: 92, Name: "Lowes" }, Stage: "Approved", AssignedTo: { Job: 1417 } };
   eq(R.checkStorePo({ po, typed: "7400", poNo: "7400", jobNo: "1417", source: "Lowe's" }), { ok: true, vendor: "Lowes" }, "a Lowes PO on the job takes a receipt");
 });

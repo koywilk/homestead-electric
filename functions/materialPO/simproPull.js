@@ -90,8 +90,16 @@ const vendorOf = (po) => T(po && po.Vendor && (po.Vendor.Name || po.Vendor.Compa
 const makerOf = (po) => T(po && po.CreatedBy && po.CreatedBy.Name);
 const mdy = (iso) => { const m = T(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${Number(m[2])}/${Number(m[3])}/${m[1]}` : ""; };
 
-// The app's Source dropdown. Anything else is Other, and the card shows the real name.
+// The app's Source dropdown. Since SW v621 the dropdown lists every Simpro supplier, so a
+// listed one keeps its own name; anything else is Other, and the card shows the real name.
 function sourceFor(vendor) {
+  const v0 = legacySourceFor(vendor);
+  if (v0 !== "Other") return v0;
+  const r = R.supplierRule(vendor);
+  return r ? r.simproName : "Other";
+}
+// Before SW v621 every unlisted supplier was "Other"; a crew card made then still says so.
+function legacySourceFor(vendor) {
   const v = T(vendor).toLowerCase();
   if (v === "ced") return "CED";
   if (v === "home depot") return "Home Depot";
@@ -153,7 +161,8 @@ function planPo(po, job, lists, { nowIso, lines = [], receiptDate = "" }) {
   }
   // Near-identical list on a card with no PO #, and only one such card.
   const source = sourceFor(vendorOf(po));
-  const cands = all.filter((x) => !T(x.c.po) && !x.c.simproPulled && !x.c.poSentVia && (!T(x.c.source) || T(x.c.source) === source) && cardInWindow(x.c, po))
+  const legacy = legacySourceFor(vendorOf(po));
+  const cands = all.filter((x) => !T(x.c.po) && !x.c.simproPulled && !x.c.poSentVia && (!T(x.c.source) || T(x.c.source) === source || T(x.c.source) === legacy) && cardInWindow(x.c, po))
     .map((x) => ({ ...x, score: listScore(po.VendorNotes, x.c.items) })).filter((x) => x.score >= LIST_MATCH);
   if (cands.length === 1) {
     const { list, c, score } = cands[0];

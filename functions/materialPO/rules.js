@@ -6,10 +6,8 @@
 // Suppliers the crew picks on a Material Tracking card (MaterialOrders SOURCES)
 // → how the app handles a send. "email" = create the Simpro PO and email it to
 // the supplier. "number" = create the Simpro PO and hand back the number for a
-// store run, no email. Anything else (Shop, Platt, blank) can't be sent.
-// SW v621: "Other" is a store run on Simpro's catch-all supplier MISC_SUPPLIER
-// (the office adds it in Simpro; until then a send stops before any PO exists).
-const MISC_SUPPLIER = "Misc Store";
+// store run, no email. Anything else (Shop, Platt, Other, blank) can't be sent.
+// SW v621: every other supplier in Simpro is a "number" too (SIMPRO_SUPPLIERS).
 const SUPPLIERS = {
   "ced":          { kind: "email",  simproName: "CED" },
   "home depot":   { kind: "number", simproName: "Home Depot" },
@@ -20,19 +18,23 @@ const SUPPLIERS = {
   "lowe's":       { kind: "number", simproName: "Lowes" },
   "lowe’s":       { kind: "number", simproName: "Lowes" },
   "lowes":        { kind: "number", simproName: "Lowes" },
-  "other":        { kind: "number", simproName: MISC_SUPPLIER },
 };
+// SW v621 (Koy: "can we just add every option that is in simpro already"): the rest of
+// Simpro's suppliers as of 2026-11-11 (GET /vendors/, 43 total; the five above are left
+// out). Number only: the app makes the PO and hands back the number, it never emails them.
+// App.js PO_MORE_SUPPLIERS mirrors this list (scripts/materialpo-test.js checks).
+// A supplier added in Simpro later needs a line here and in App.js.
+const SIMPRO_SUPPLIERS = ["22 System", "Ace Rentals", "AEE Solar", "AnyTech Electric", "APEX EXCAVATION", "Avetta", "Bountiful City", "Brite AV Solutions", "Cameron Crane", "Clearfield City Building Department", "Codale", "Custom Electric", "Draper City", "Duncan Electric", "EquipmentShare", "Flush Floorboxes", "Hansen Lighting", "Hexagon Garage", "Layton City", "Lighting Design", "Luxur Commercial Lighting & Controls", "McGee's Stamp & Trophy", "Millcreek City", "Mountain Land Design", "Parmida", "Perspective Lighting", "Pleasant Grove City", "Provo Power", "Sandy City", "Saw Jockey", "Springville City", "Stripe", "Sunbelt Rentals", "Vineyard City", "Wasatch County Building Department", "White Cap", "Woods Cross City", "Yarrum Electrical Services LLC"];
+const MORE = new Map(SIMPRO_SUPPLIERS.map(n => [n.toLowerCase(), n]));
 function supplierRule(source) {
-  return SUPPLIERS[String(source || "").trim().toLowerCase()] || null;
+  const k = String(source || "").trim().toLowerCase();
+  if (SUPPLIERS[k]) return SUPPLIERS[k];
+  return MORE.has(k) ? { kind: "number", simproName: MORE.get(k) } : null;
 }
-// A card's rule. A card the Simpro pull filed as "Other" because its PO is from a
-// supplier the dropdown doesn't list (Codale, White Cap…) carries simproSupplier;
-// it is that supplier's PO, never a Misc Store run. Mirrored by App.js poSendKindOf.
-function cardSupplierRule(card) {
-  const c = card || {};
-  const sup = String(c.simproSupplier || "").trim().toLowerCase();
-  if (String(c.source || "").trim().toLowerCase() === "other" && sup && sup !== MISC_SUPPLIER.toLowerCase()) return null;
-  return supplierRule(c.source);
+// Receipt photos stay on walk-in store runs (Home Depot, ACE, Lowe's, Amazon).
+function receiptSource(source) {
+  const r = supplierRule(source);
+  return !!(r && STORE_VENDORS.includes(r.simproName.toLowerCase()));
 }
 
 // Simpro vendor for a supplier rule: exact name match, case-insensitive.
@@ -269,7 +271,7 @@ function logKey(jobId, phase, orderId) {
 // A crew member snaps the Home Depot / ACE / Lowe's / Amazon receipt on a store-run card
 // and it lands on that PO's Attachments in Simpro (receipt.js). These rules
 // decide whether the number on the card really is a store PO on this job.
-const STORE_VENDORS = ["home depot", "ace hardware", "amazon", "lowes", MISC_SUPPLIER.toLowerCase()];
+const STORE_VENDORS = ["home depot", "ace hardware", "amazon", "lowes"];
 const RECEIPT_MAX_BYTES = 6 * 1024 * 1024;   // decoded; the app shrinks to ~1 MB, the callable limit is 10 MB
 
 // "7024", "PO 7024", "PO-7024", "#7024" → "7024". Anything else → "".
@@ -303,7 +305,7 @@ function checkStorePo({ po, typed, poNo, jobNo, source }) {
   if (!STORE_VENDORS.includes(vendor.toLowerCase())) {
     return { ok: false, badPo: true, error: looksLikeJob
       ? `${poNo} isn't a ${store} PO on this job. It looks like the job number. ${fix}`
-      : `PO ${poNo} is ${vendor ? `a ${vendor}` : "not a store"} PO, not a Home Depot, ACE, Lowe's, Amazon or Misc Store run. ${fix}` };
+      : `PO ${poNo} is ${vendor ? `a ${vendor}` : "not a store"} PO, not a Home Depot, ACE, Lowe's or Amazon run. ${fix}` };
   }
   const onJob = poJobNo(po);
   if (onJob !== String(jobNo)) {
@@ -355,7 +357,7 @@ function decodeReceiptPhoto(b64) {
   return { buf };
 }
 
-module.exports = { SUPPLIERS, MISC_SUPPLIER, supplierRule, cardSupplierRule, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
+module.exports = { SUPPLIERS, SIMPRO_SUPPLIERS, supplierRule, receiptSource, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
   pickupLine, cleanCustom, getMode, CUSTOM_MAX, cleanCopyTo, COPY_TO_MAX, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
   poList, cleanOrderGroups, orderLine, groupKey,
   STORE_VENDORS, RECEIPT_MAX_BYTES, cleanPoNo, poJobNo, checkStorePo, receiptFileName, receiptCount, receiptKey, decodeReceiptPhoto };
