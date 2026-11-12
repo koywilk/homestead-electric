@@ -49426,10 +49426,12 @@ const OD_NICK = { abe: "abraham", bill: "william", will: "william", bob: "robert
 function odBuildEvents(jobs, now, lastWork) {
   const out = [], from = now.getTime() - 30*OD_DAY, to = now.getTime() + 5*60*1000;
   jobs.forEach(j => {
-    const push = (raw, type, who, label, detail, tone) => {
+    // v629: `auto` = written by a sync, not a person (the Simpro change-order status stamp). It still shows
+    // in the feed, but it is not work: it used to reset a job's "last work logged" and its quiet timer.
+    const push = (raw, type, who, label, detail, tone, auto) => {
       const at = odDate(raw);
       if (!at || at.getTime() > to) return;
-      if (lastWork && (!lastWork[j.id] || at > lastWork[j.id])) lastWork[j.id] = at;
+      if (lastWork && !auto && (!lastWork[j.id] || at > lastWork[j.id])) lastWork[j.id] = at;
       if (at.getTime() < from) return;
       out.push({ at, dateOnly: odDateOnly(raw), type, who: String(who || "").trim(), label, detail: detail || "", tone: tone || "", job: j });
     };
@@ -49462,7 +49464,7 @@ function odBuildEvents(jobs, now, lastWork) {
       if (co.submittedAt) push(co.submittedAt, "co", co.submittedBy, "Change order sent to GC", odText(co.desc), "");
       if (co.quoteAddedAt) push(co.quoteAddedAt, "co", co.quoteAddedBy, `Quote ${co.quoteNumber ? "#" + co.quoteNumber + " " : ""}added to change order`, odText(co.desc), "");
       if (co.coStatusSyncedAt && OD_CO_LABEL[co.coStatus])
-        push(co.coStatusSyncedAt, "co", "", `Change order ${OD_CO_LABEL[co.coStatus]} (Simpro)`, odText(co.desc), ["approved","completed"].includes(co.coStatus) ? "good" : co.coStatus === "denied" ? "bad" : "");
+        push(co.coStatusSyncedAt, "co", "", `Change order ${OD_CO_LABEL[co.coStatus]} (Simpro)`, odText(co.desc), ["approved","completed"].includes(co.coStatus) ? "good" : co.coStatus === "denied" ? "bad" : "", true);
     });
     [["roughInspectionAttempts","Rough","roughInspectionResult"],["finalInspectionAttempts","Final","finalInspectionResult"]].forEach(([k, ph, rk]) => odRealAtts(j[k], j[rk], ph).forEach(a => {
       const fail = a.result === "fail", n = (a.items || []).length;
@@ -49982,13 +49984,19 @@ function odCostsPeople(rows, users) {
   return secs.filter(x => x.people.length);
 }
 
-function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "", range = 14, pto = [], simTotals = null, hours = null, now = new Date() }) {
+function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "", range = 14, pto = [], simTotals = null, hours = null, allJobs = null, now = new Date() }) {
   const today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const secs = OD_PHASES;
   // A record with no name is an empty shell, not a job (the app's own lists skip them too).
-  const allLive = (jobs || []).filter(j => j && !j.archived && !j.deleted && j.type !== "quote" && String(j.name || "").trim());
+  const isLiveJob = (j) => !!j && !j.archived && !j.deleted && j.type !== "quote" && !!String(j.name || "").trim();
+  const allLive = (jobs || []).filter(isLiveJob);
+  // v629: People is about the whole company, so it reads EVERY job: both divisions (`allJobs` from App),
+  // never the Residential / Commercial slice and never the foreman / coordinator filter. Before this, a
+  // remembered filter or the division switch made people look quiet or "not seen in 30+ days". With no
+  // `allJobs` (tests, older callers) it is this division's jobs, still unfiltered.
+  const everyLive = (() => { if (!Array.isArray(allJobs)) return allLive; const seen = new Set(allLive.map(j => j.id)); return [...allLive, ...allJobs.filter(j => isLiveJob(j) && !seen.has(j.id))]; })();
   const phaseById = {};
-  allLive.forEach(j => { try { phaseById[j.id] = odPhase(j, today); } catch (e) { phaseById[j.id] = null; } });
+  everyLive.forEach(j => { try { phaseById[j.id] = odPhase(j, today); } catch (e) { phaseById[j.id] = null; } });
   const secOf = (j) => (j && phaseById[j.id]) || null;
   const isDone = (j) => { const s = secOf(j); return !!s && s.key === "complete"; };
 
@@ -50049,6 +50057,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const prepOpen = (j) => { try { return !j.quickJob && !j.tempPed && (j.division === "commercial" ? commPhase(j) !== null : !prepClearedToStart(j)); } catch (e) { return false; } };
   const active = live.filter(isOpen);
   const allActive = allLive.filter(isOpen);
+  const everyActive = everyLive.filter(isOpen);
   const closedSim = live.filter(simClosed).sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
   // v626: Simpro has the job as Complete / Invoiced while it is still open here and NOT closed by the rule
   // above (billed under 99.5%, or reopened by hand after the sync closed it). It keeps counting as active;
@@ -50064,8 +50073,13 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
 
   const lastWork = {};
-  const events = odBuildEvents(live, now, lastWork);
-  const evById = {}; events.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
+  // v629: one pass over every job, then the filtered view. `events` (the feed, the counts) still follows
+  // the foreman / coordinator filter; evById and lastAct cover every job, so a job opened from Find a job
+  // with a filter on shows its real activity instead of "Nothing logged".
+  const everyEvents = odBuildEvents(everyLive, now, lastWork);
+  const liveIds = new Set(live.map(j => j.id));
+  const events = everyEvents.filter(e => liveIds.has(e.job.id));
+  const evById = {}; everyEvents.forEach(e => { (evById[e.job.id] = evById[e.job.id] || []).push(e); });
   const inRange = events.filter(e => e.at >= odAddDays(t0, -(range - 1)));
   const evToday = events.filter(e => localYmd(e.at) === today);
   const yest = localYmd(odAddDays(t0, -1));
@@ -50073,7 +50087,8 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const perDay = []; for (let i = range - 1; i >= 0; i--) { const dd = odAddDays(t0, -i), k = localYmd(dd); perDay.push({ k, d: dd, n: events.filter(e => localYmd(e.at) === k).length }); }
 
   const info = {}, lastAct = {};
-  live.forEach(j => { info[j.id] = odJobInfo(j, now); lastAct[j.id] = lastWork[j.id] || null; });
+  everyLive.forEach(j => { lastAct[j.id] = lastWork[j.id] || null; });
+  live.forEach(j => { info[j.id] = odJobInfo(j, now); });
   const sched = odBuildSchedule(live, up, today);
   const nextOf = {}; sched.forEach(s => { if (s.job && s.at >= t0 && !nextOf[s.job.id]) nextOf[s.job.id] = s; });
 
@@ -50145,7 +50160,11 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
     failGroups.push({ job: j, ph, n: fl.length, first: fl[0]._at, last: lastFail._at, passAfter: passAfter ? passAfter._at : null, rebook, items, noList: !items.length && stillFail, by: lastFail.by || "" });
   }));
   failGroups.sort((a, b) => b.last - a.last);
-  const failOpenG = failGroups.filter(g => !g.passAfter);
+  // v629: a failed inspection with no pass since on a job that is FINISHED here is not something to
+  // re-book this week; it is a record to fix (Vista Meadows #1386: final "failed 10/22", job invoiced).
+  // Those leave the re-book counts and get their own attention line, so they are not hidden either.
+  const failOpenG = failGroups.filter(g => !g.passAfter && !isDone(g.job));
+  const failClosed = failGroups.filter(g => !g.passAfter && isDone(g.job));
   const notRebooked = failOpenG.filter(g => !g.rebook);
   const failStatus = (g) => g.passAfter ? `passed ${odShort(g.passAfter)}` : g.rebook ? `re-inspect ${odDow(g.rebook)} ${odShort(g.rebook)}` : "not re-booked";
   const failGroupOf = {}; failGroups.forEach(g => { failGroupOf[`${g.job.id}|${g.ph}`] = g; });
@@ -50261,6 +50280,8 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
         .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_WARN })) },
     { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
       rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
+    { k: "failClosed", label: "Finished, with a failed inspection that never passed", color: OD_B, icon: "x",
+      rows: failClosed.map(g => ({ title: g.job.name, sub: `${g.ph} failed ${odShort(g.last)} · no pass logged since · log the pass on the job, or book the re-inspection`, job: g.job, color: OD_B })) },
     { k: "laborEarly", label: "Labor hours used up before finish starts", color: OD_R, icon: "clock",
       rows: laborEarly.map(x => ({ title: x.job.name, sub: `${x.used.toLocaleString()} of ${x.est.toLocaleString()} estimated hours used · ${x.sec.label} · ${x.job.foreman || "No foreman"}`, right: `${Math.round(x.pct * 100)}%`, job: x.job, color: OD_R })) },
     { k: "techDiff", label: "Simpro technician is not who runs the job here", color: OD_B, icon: "user",
@@ -50287,18 +50308,20 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const ptoWeek =ptoList.filter(p => (p.end || p.start) >= today && p.start <= weekEnd).sort((a, b) => String(a.start).localeCompare(String(b.start)));
   const offToday = (name) => ptoList.find(p => sameName(p.name, name) && p.start <= today && (p.end || p.start) >= today) || null;
   const people = staff.map(u => {
-    const mine = events.filter(e => e.who && sameName(e.who, u.name));
+    const mine = everyEvents.filter(e => e.who && sameName(e.who, u.name));
     let last = mine.length ? mine[0].at : null, lastDateOnly = mine.length ? mine[0].dateOnly : false;
     const openedToday = new Set();
-    allLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && localYmd(at) === today) openedToday.add(j.id); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
+    everyLive.forEach(j => Object.entries(j.presence || {}).forEach(([n, iso]) => { if (sameName(n, u.name)) { const at = odDate(iso); if (at && localYmd(at) === today) openedToday.add(j.id); if (at && (!last || at > last)) { last = at; lastDateOnly = false; } } }));
     const todayMine = mine.filter(e => localYmd(e.at) === today);
     const days7 = []; for (let i = 6; i >= 0; i--) { const k = localYmd(odAddDays(t0, -i)); days7.push(mine.filter(e => localYmd(e.at) === k).length); }
-    const jobsOn = allActive.filter(j => sameName(j.foreman, u.name) || sameName(j.lead, u.name));
+    const jobsOn = everyActive.filter(j => sameName(j.foreman, u.name) || sameName(j.lead, u.name));
     const off = offToday(u.name);
-    // active today · on in the last 3 days · approved off · not seen in 30 days ·
-    // quiet 3–30 days while foreman or lead on an active job · quiet with no job.
-    const status = last && localYmd(last) === today ? "active" : last && now - last < 3*OD_DAY ? "earlier" : off ? "off" : !last || now - last >= 30*OD_DAY ? "gone" : jobsOn.length ? "quiet" : "idle";
-    return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set([...todayMine.map(e => e.job.id), ...openedToday]).size, openedN: openedToday.size, days7, status, role: getAccess(u), title: titleOf(u),
+    // active today · on in the last 3 WORK days (v629: weekends no longer count against anyone) ·
+    // approved off · not seen in 30 days · quiet 3+ work days while foreman or lead on an active job ·
+    // quiet with no job.
+    const workDays = last ? odWorkDaysSince(last, now) : null;
+    const status = last && localYmd(last) === today ? "active" : last && workDays < 3 ? "earlier" : off ? "off" : !last || now - last >= 30*OD_DAY ? "gone" : jobsOn.length ? "quiet" : "idle";
+    return { u, name: u.name, last, lastDateOnly, mine, todayN: todayMine.length, jobsToday: new Set([...todayMine.map(e => e.job.id), ...openedToday]).size, openedN: openedToday.size, days7, status, workDays, role: getAccess(u), title: titleOf(u),
       lastJob: mine.length ? mine[0].job.name : "", jobsOn, off };
   }).sort((a, b) => (b.todayN - a.todayN) || ((b.last || 0) - (a.last || 0)));
   // Two people with the same first name show a last initial everywhere first names are used.
@@ -50357,7 +50380,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const crewGroups = crews.map(c => ({ crew: c, jobs: active.filter(j => { const o = crewOfJob(j); return !!o && o.id === c.id; }) }));
   const noCrewJobs = active.filter(j => !crewOfJob(j));
   return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, crews, crewOf, crewOfJob, owns, crewPick, leadsNamed, crewGroups, noCrewJobs, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
-    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simDoneOpen, billedThenMore, laborEarly, techDiff, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
+    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simDoneOpen, billedThenMore, laborEarly, techDiff, liveIds, everyLive, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, failClosed, notRebooked, failStatus, failGroupOf,
     overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
     people, teamN, shortName, foremenP, noForemanJobs, techsOf, suggestFm, coordOf, coordinators, upNoDate, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
 }
@@ -50379,6 +50402,35 @@ function odSimAsOf(at, now) {
   const stale = t < new Date(due.getFullYear(), due.getMonth(), due.getDate(), 5, 0, 0);
   const day = localYmd(t) === localYmd(now) ? "today" : `${odDow(t)} ${odShort(t)}`;
   return { text: `Simpro numbers as of ${day} ${odTime(t)}${stale ? " · the morning pull did not run" : ""}`, stale, at: t };
+}
+// ── v629 (dashboard plan ship 3b) ───────────────────────────────────────────────────────────────
+// Work days (Mon–Fri) after a's date, up to and including b's date. Friday → Monday is 1, so someone
+// who logged on Friday is not "quiet" on Monday morning (the old 72-clock-hour rule said they were).
+function odWorkDaysSince(a, b) {
+  if (!a || !b) return 0;
+  const d = new Date(a.getFullYear(), a.getMonth(), a.getDate()), end = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  let n = 0;
+  for (let i = 0; i < 400 && d < end; i++) { d.setDate(d.getDate() + 1); const w = d.getDay(); if (w !== 0 && w !== 6) n++; }
+  return n;
+}
+// Where the app's stage and Simpro's status differ, from the stage sync's own nightly plan
+// (settings/simproStageSync, written 4:45 AM by scheduledSimproStageSync). One rule, the sync's; this
+// only reads its rows. conflict = a person has to decide (Simpro is further along, a Simpro hold, no
+// Simpro # on the job); set = the app is ahead and Simpro would be (or could not be) updated;
+// simproOnly = open in Simpro, not in the app. Rows the sync already matched or skipped are left out.
+function odStageDiffs(syncDoc, now) {
+  const at = odDate(syncDoc && syncDoc.lastRunAt);
+  if (!at || !syncDoc || !Array.isArray(syncDoc.rows)) return { rows: [], ranAt: null, dry: false, old: false };
+  const dry = syncDoc.modeRan !== "live", st = (v) => String(v || "").replace(/^Job\s*-\s*/i, "").trim();
+  const conf = [], only = [], sets = [];
+  syncDoc.rows.forEach(r => {
+    if (!r) return;
+    if (r.conflict) conf.push({ k: "conflict", id: r.id, name: String(r.name || ""), sn: String(r.sn || ""), text: String(r.reason || "Needs a person") });
+    else if (r.action === "set" && !/^changed$/i.test(String(r.result || "")))
+      sets.push({ k: "set", id: r.id, name: String(r.name || ""), sn: String(r.sn || ""), text: `Here: ${r.section || "?"} · Simpro: ${st(r.fromName) || "?"} · ${dry ? "the sync would set Simpro to" : (r.result || "not changed") + ":"} ${st(r.toName)}` });
+  });
+  (Array.isArray(syncDoc.simproOnly) ? syncDoc.simproOnly : []).forEach(x => { if (x) only.push({ k: "simproOnly", id: "", name: String(x.name || ""), sn: String(x.sn || ""), text: `Open in Simpro (${st(x.status) || "no status"}), not in the app` }); });
+  return { rows: [...conf, ...only, ...sets], ranAt: at, dry, old: now - at > 36 * 3600 * 1000, nConflict: conf.length, nOnly: only.length, nSet: sets.length };
 }
 // ── v628 (dashboard plan ship 3a): answers from the overnight data ────────────────────────────
 // Feed health. settings/dashFeeds is written at 6:45 AM by dashHistoryNightly: for each overnight
@@ -51216,7 +51268,7 @@ function odCostsCoHours(goalsDoc) {
   const m = new Map(); Object.keys(by).forEach(k => m.set(String(k), Number(by[k]) || 0)); return m;
 }
 
-function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
+function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
   // v569 Foreman view (Koy: "a foreman friendly version that show no dollar amounts everywhere so i can show
@@ -51549,15 +51601,22 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   // (settings/dashFeeds) for Needs you. Both read-only; read when Overview or Jobs opens.
   const [phaseHrs, setPhaseHrs] = useState(null);
   const [dashFeeds, setDashFeeds] = useState(null);
+  const [stageSyncDoc, setStageSyncDoc] = useState(null);
   useEffect(() => {
     if (!["overview", "jobs"].includes(tab)) return undefined;
     let dead = false;
     loadPhaseHours().then(h => { if (!dead) setPhaseHrs(h || {}); }, () => {});
     getDoc(doc(db, "settings", "dashFeeds")).then(snap => { if (!dead) setDashFeeds(snap.exists() ? (snap.data() || null) : null); }, () => {});
+    // v629: the stage sync's nightly plan (settings/simproStageSync), for "Stage differs from Simpro". Read-only.
+    getDoc(doc(db, "settings", "simproStageSync")).then(snap => { if (!dead) setStageSyncDoc(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
   }, [tab]);
-  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, coordinator: coord, range, pto, simTotals, hours: phaseHrs, now: new Date() }),
-    [jobs, users, needs, upcoming, mode, tick, foreman, coord, range, pto, simTotals, phaseHrs]); // eslint-disable-line
+  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, coordinator: coord, range, pto, simTotals, hours: phaseHrs, allJobs, now: new Date() }),
+    [jobs, allJobs, users, needs, upcoming, mode, tick, foreman, coord, range, pto, simTotals, phaseHrs]); // eslint-disable-line
+  const stageDiff = useMemo(() => odStageDiffs(stageSyncDoc, new Date()), [stageSyncDoc, tick]); // eslint-disable-line
+  // v629: the crew questions the OFFICE owes an answer on (asked of nobody, or of an admin). The Needs you
+  // line used to count every open question, including ones out to a GC or a foreman.
+  const qSplit = useMemo(() => odSplitQuestions(d.active, users, d.now), [d, users]); // eslint-disable-line
   const feedProb = useMemo(() => odFeedProblems(dashFeeds, new Date()), [dashFeeds, tick]); // eslint-disable-line
   const plan = useMemo(() => odPlanModel(findings, new Date()), [findings, tick]); // eslint-disable-line
   const simAsOf = useMemo(() => odSimAsOf(simTotals && simTotals.at, new Date()), [simTotals, tick]); // eslint-disable-line
@@ -51716,8 +51775,15 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       open: () => openList("Time off to decide", "Tap one to decide it on My Day", d.timeOff.map(n => ({ title: odText(n.text).replace(/^Time off\s*[—-]\s*/i, ""), sub: n.requestedBy || "", right: n.dueDate || "", color: OD_O, icon: "calendar", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(n.id)}`) }))) },
     { k: "urgent", label: "Your urgent My Day tasks", icon: "myday", color: OD_R, n: myUrgent.length, extra: "",
       open: () => openList("Your urgent tasks", "Tap one to open it on My Day", myUrgent.map(t => ({ title: odText(t.text) || "Task", sub: [t.jobName, t.dueDate && "due " + t.dueDate].filter(Boolean).join(" · "), color: OD_R, icon: "myday", onClick: () => openApp(`/?view=myday&need=${encodeURIComponent(t.id)}`) }))) },
-    { k: "questions", label: "Crew questions not answered", icon: "help", color: OD_O, n: d.openQs.length, extra: [`${d.openQs.filter(x => x.age != null && x.age < 7).length} this week`, d.openQs[0] && d.openQs[0].age != null && `oldest ${d.openQs[0].age} d`].filter(Boolean).join(" · "),
-      open: () => openList("Open questions", "Oldest first, by job", d.openQs.slice().sort((a, b) => String(a.job.name).localeCompare(String(b.job.name)) || ((b.age || 0) - (a.age || 0))).map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.forWho ? " · for " + odFirst(x.forWho) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job, section: "Questions" }))) },
+    { k: "questions", label: "Crew questions waiting on the office", icon: "help", color: OD_O, n: qSplit.mine.length,
+      extra: [qSplit.mine[0] && qSplit.mine[0].age != null && `oldest ${qSplit.mine[0].age} d`, qSplit.others.length && `${qSplit.others.length} more are out to a GC or a foreman (Activity tab)`].filter(Boolean).join(" · "),
+      open: () => openList("Crew questions waiting on the office", "Asked of nobody, or of someone in the office. Oldest first. Questions out to a GC or a foreman are on the Activity tab.", qSplit.mine.map(x => ({ title: x.job.name, sub: `${x.ph}: ${x.text}${x.who ? " · asked by " + odFirst(x.who) : ""}${x.to ? " · for " + odFirst(x.to) : ""}`, right: x.age != null ? `${x.age} d` : "", color: OD_O, icon: "help", job: x.job, section: "Questions" }))) },
+    // v629: where the app's stage and Simpro's status differ (the stage sync's nightly plan).
+    { k: "stageDiff", label: "Stage differs from Simpro", icon: "alertTriangle", color: OD_B, n: stageDiff.rows.length,
+      extra: [stageDiff.nConflict && `${stageDiff.nConflict} need a person`, stageDiff.nOnly && `${stageDiff.nOnly} only in Simpro`, stageDiff.nSet && `${stageDiff.nSet} ${stageDiff.dry ? "the sync would update" : "not updated"}`, stageDiff.old && "check is over a day old"].filter(Boolean).join(" · "),
+      open: () => openList("Stage differs from Simpro", `From the nightly stage check${stageDiff.ranAt ? ` (${odDow(stageDiff.ranAt)} ${odShort(stageDiff.ranAt)} ${odTime(stageDiff.ranAt)})` : ""}. ${stageDiff.dry ? "The sync is in plan-only mode: it lists what it would change and changes nothing." : "The sync is live."} Fix whichever side is wrong.`,
+        stageDiff.rows.map(r => { const j = r.id ? ((allJobs || jobs || []).find(x => x && x.id === r.id) || null) : null;
+          return { title: r.name || (r.sn ? "#" + r.sn : "Job"), sub: r.text, right: r.sn ? "#" + r.sn : "", color: r.k === "conflict" ? OD_R : OD_B, icon: r.k === "simproOnly" ? "plus" : "alertTriangle", job: j && d.allLive.includes(j) ? j : null }; })) },
     { k: "nofm", label: "Jobs with no active foreman", icon: "hardHat", color: OD_O, n: d.noForemanJobs.length, extra: d.noFmText,
       open: () => openList("Jobs with no active foreman", `${d.noFmText} · reassign the jobs, or fix the person in Settings → Team`, d.noForemanJobs.map(j => { const sug = d.suggestFm(j), techs = d.techsOf(j);
         return { title: j.name, sub: [j.foreman && !/^unassigned$/i.test(String(j.foreman).trim()) ? `${String(j.foreman).trim()} (${d.whyNoFm(j.foreman).replace(" on the team list", "")})` : "No foreman set",
@@ -51783,7 +51849,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const shownForemen = (foreman === OD_NOFM ? [] : d.crewPick ? crewPeople(d.crewPick) : foreman ? d.people.filter(p => sameName(p.name, foreman)) : d.foremenP)
       .map(p => ({ p, t: d.troubleOf(p.name) })).sort((a, b) => (b.t.total - a.t.total) || (b.p.todayN - a.p.todayN));
     const postedN = shownForemen.filter(x => x.p.todayN > 0).length;
-    const notSeen2 = shownForemen.filter(x => !x.p.last || d.now - x.p.last > 2*OD_DAY).length;
+    const notSeen2 = shownForemen.filter(x => !x.p.last || odWorkDaysSince(x.p.last, d.now) >= 2).length;   // v629: work days
     const b = d.busy;
     main = (<>
       <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {greetLine}{fmLabel ? ` · ${fmLabel} only` : ""}</p></div></div>
@@ -51862,7 +51928,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
           </details>
         </div>
       </div>
-      <Sec right={shownForemen.length ? `${postedN} of ${odPlural(shownForemen.length, "foreman").replace(/foremans$/, "foremen")} posted today${notSeen2 ? ` · ${notSeen2} not seen in 2+ days` : ""}` : ""}>Foremen</Sec>
+      <Sec right={shownForemen.length ? `${postedN} of ${odPlural(shownForemen.length, "foreman").replace(/foremans$/, "foremen")} posted today${notSeen2 ? ` · ${notSeen2} not seen in 2+ work days` : ""}` : ""}>Foremen</Sec>
       <div className="od-plan">
         {shownForemen.slice(0, 12).map(({ p, t }, i) => {
           const fj = d.active.filter(j => d.owns(j, p.name));   // v571: as foreman or as lead
@@ -52077,7 +52143,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>); };
     const inspLogged = base.filter(e => e.type === "insp").length, inspFailed = base.filter(e => e.type === "insp" && e.tone === "bad").length;
     const quietP = d.people.filter(p => p.status === "quiet");
-    const openQuietList = () => openList("People quiet 3+ days", "Foreman or lead on an active job, nothing logged and no job opened in 3+ days (approved time off left out)", quietP.map(p => ({ title: p.name, sub: `${pulseLine(p)} · ${pulseTag(p)}`, color: OD_R, onClick: () => openPerson(p.name) })));
+    const openQuietList = () => openList("People quiet 3+ work days", "Foreman or lead on an active job, nothing logged and no job opened in 3+ work days, on any job in either division (approved time off left out)", quietP.map(p => ({ title: p.name, sub: `${pulseLine(p)} · ${pulseTag(p)}`, color: OD_R, onClick: () => openPerson(p.name) })));
     main = (<>
       <div className="od-head"><div><h1>Activity</h1><p>{actDay ? `Everything logged on ${odDow(odDate(actDay))} ${odShort(odDate(actDay))}` : `Everything logged in the last ${range} days`}{fmLabel ? ` · on ${fmLabel}` : ""} · tap a row for the job</p></div>
         {actDay && <button type="button" className="od-clear" onClick={() => setActDay("")}>Show all {range} days</button>}</div>
@@ -52118,7 +52184,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     </>);
     right = (<>
       <Me sub="Activity"/>
-      <Stats items={[[d.inRange.length, `Logged, ${range} d`], [onApp, "Crew on app today", () => pickTab("people")], [quietP.length, "People quiet 3+ d", openQuietList]]}/>
+      <Stats items={[[d.inRange.length, `Logged, ${range} d`], [onApp, "Crew on app today", () => pickTab("people")], [quietP.length, "People quiet 3+ work days", openQuietList]]}/>
       <Sec>Team pulse</Sec>
       {/* v626: quiet people first, THEN the cut to ten (it used to take the ten most active and so dropped the quiet ones it means to lead with). */}
       <Pulse list={d.people.slice().sort((a, b) => (PULSE_ORDER[a.status] - PULSE_ORDER[b.status]) || ((b.todayN || 0) - (a.todayN || 0)) || ((b.last || 0) - (a.last || 0))).slice(0, 10)}/>
@@ -52267,7 +52333,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <div className="od-white od-pad">
           <div className="od-ct">Failed inspections<small>{finalsNotRebooked ? `${odPlural(finalsNotRebooked, "failed final")} not re-booked` : d.failOpenG.length ? "latest first" : ""}</small></div>
           <Rows rows={d.failOpenG.slice(0, 8).map(failRow)} empty="No failed inspections waiting on a re-inspection."/>
-          {d.failGroups.length > d.failOpenG.length && <button type="button" className="od-more" onClick={() => openList("Failed inspections that passed later", "", d.failGroups.filter(g => g.passAfter).map(failRow))}>{d.failGroups.length - d.failOpenG.length} passed on a later inspection</button>}
+          {d.failGroups.some(g => g.passAfter) && <button type="button" className="od-more" onClick={() => openList("Failed inspections that passed later", "", d.failGroups.filter(g => g.passAfter).map(failRow))}>{d.failGroups.filter(g => g.passAfter).length} passed on a later inspection</button>}
         </div>
       </div>
       <div className="od-row2">
@@ -52402,7 +52468,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <OdMini title="Phones on latest" color={OD_P} icon="phone" value={devices == null ? "…" : latestBuild ? current : "—"} sub={devices == null ? "loading" : latestBuild ? `of ${devList.length} seen` : "latest unknown"} onClick={() => { setShowAllDevices(true); setPeopleOpen(prev => new Set([...prev, "__devices"])); }}><OdRing pct={devList.length ? current/devList.length : 0} color={OD_P} label="Share of devices on the latest build"/></OdMini>
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">People by crew<small>Settings › Team · {d.people.length} people · {scheduleNote} · red = quiet 3+ days, green = on the app today</small></div>
+        <div className="od-ct">People by crew<small>Settings › Team · {d.people.length} people · {scheduleNote} · red = quiet 3+ work days, green = on the app today</small></div>
         {groups.map(g => fold(g.key, g.label, groupSub(g), g.n, () => <div className="rows">{g.rows.map(personRow)}</div>))}
         {today.offTeam.length > 0 && <p className="od-note">Also on today's schedule but not on Settings › Team: {today.offTeam.join(", ")}</p>}
       </div>
@@ -53165,9 +53231,11 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       );
     }
   } else if (sheet && sheet.kind === "job") {
-    const j = d.allLive.find(x => x.id === sheet.id) || (jobs || []).find(x => x && x.id === sheet.id);
+    const j = d.allLive.find(x => x.id === sheet.id) || (jobs || []).find(x => x && x.id === sheet.id) || (allJobs || []).find(x => x && x.id === sheet.id);
     if (j) {
-      const inf = d.info[j.id] || odJobInfo(j, d.now), s = d.secOf(j), ev = (d.evById[j.id] || []).slice(0, 15), up = d.sched.filter(x => x.job && x.job.id === j.id);
+      const inf = d.info[j.id] || odJobInfo(j, d.now), s = d.secOf(j), ev = (d.evById[j.id] || []).slice(0, 15),
+        // v629: a job outside the foreman / coordinator filter is not in d.sched; build its own dates.
+        up = d.liveIds.has(j.id) ? d.sched.filter(x => x.job && x.job.id === j.id) : (() => { try { return odBuildSchedule([j], [], d.today); } catch (e) { return []; } })();
       const fact = (l, v) => <div><small>{l}</small><b>{v || "—"}</b></div>;
       sheetEl = (
         <OdSheet title={j.name} sub={[j.simproNo && "#" + j.simproNo, j.address, j.gc].filter(Boolean).join(" · ")} onClose={() => setSheet(null)}
@@ -53935,7 +54003,7 @@ if (IS_DASH_PAGE) {
     if (th) th.setAttribute("content", "#F7F4EE");
   } catch (e) {}
 }
-function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, canCommercial, onUpdateJob, onOpenJob, actions }) {
+function DashPage({ ok, jobs, allJobs, users, needs, upcoming, identity, mode, setMode, canCommercial, onUpdateJob, onOpenJob, actions }) {
   useEffect(() => { try { document.title = "Dashboard · Homestead Electric"; } catch (e) {} }, []);
   // v594: a job opens right here on the real job card, on the tab asked for; no reload, Close comes back.
   const openJob = (job, section) => { if (onOpenJob) onOpenJob(job, section); };
@@ -53982,7 +54050,7 @@ function DashPage({ ok, jobs, users, needs, upcoming, identity, mode, setMode, c
         </span>
       </div>
       {ok ? (
-        <OdBoundary><OfficeDash jobs={jobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob} onOpenApp={openApp} onUpdateJob={onUpdateJob}/></OdBoundary>
+        <OdBoundary><OfficeDash jobs={jobs} allJobs={allJobs} users={users} needs={needs} upcoming={upcoming} identity={identity} mode={mode} onSelectJob={openJob} onOpenApp={openApp} onUpdateJob={onUpdateJob}/></OdBoundary>
       ) : (
         <div className="od-private">
           <b>This page is private.</b>
@@ -62512,8 +62580,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-12 · App SW version: v628
+**Last manifest update:** 2026-11-12 · App SW version: v629
 ---
+
+- **Dashboard people and stages counted right: People reads every job, weekends don't make anyone quiet, a sync stamp is not work, and "Stage differs from Simpro"** · 'in-flight 2026-11-12' · 'SW v629' · 'OfficeDash' · 'odModel' · 'everyLive' · 'odWorkDaysSince' · 'odStageDiffs' · 'failClosed' · Ship 3b of 'docs/superpowers/plans/2026-11-11-dashboard-truth-and-efficiency.md' (Koy 2026-11-12: *"Start ship 3b"*). **(1) People is counted from every job.** A person's last activity, jobs today and the jobs they run came from the jobs on screen: the Residential / Commercial slice and whatever foreman or coordinator filter was remembered on that device. A forgotten filter made others read quiet, or "not seen in 30+ days". 'odModel' now takes 'allJobs' (both divisions, from App) and builds People from that, never the filter; the feed and the counts on the other tabs still follow the filter. **(2) A job opened from Find a job with a filter on shows its real activity.** Its events, last work and dates used to come from the filtered lists and read "Nothing logged" / "No dates set". **(3) Quiet is in work days for people.** On the app in the last 3 work days = fine; quiet = 3+ work days with a job to run (Friday's update no longer reads quiet on Monday morning; the old rule was 72 clock-hours). The Overview's "not seen in 2+ days" is 2+ work days. Jobs keep "no update in 5+ days". **(4) A Simpro sync stamp is not work.** The change-order status the hourly Simpro sync writes still shows in the feed, but it no longer resets a job's "last work logged" or its quiet timer. **(5) Needs you › Stage differs from Simpro.** Read from the stage sync's own nightly plan ('settings/simproStageSync', 4:45 AM), so there is one rule: jobs that need a person (Simpro is further along, a Simpro hold, no Simpro # on the job), jobs open in Simpro and not in the app, and jobs the sync would update (it is plan-only until switched on). Live on 2026-11-12: 9 need a person (Stratton, Brandt, Thayne, T&M Pool House, Koplin…), 1 only in Simpro (Hansen Design TI), 5 it would update. **(6) Two counts.** "Crew questions" in Needs you counts only the ones the office owes (asked of nobody, or of an admin); questions out to a GC or a foreman are on Activity. A failed inspection with no pass on a job that is finished here leaves "failed, not re-booked" and gets its own Needs attention line (Vista Meadows #1386). Tests: 'scripts/odash-model-test.js' +16 checks (work days, People across divisions and filters, the job pop-up's data, the sync stamp, failed-on-finished, the stage plan as written 2026-11-12). Guide 'dashboard.html' updated. Crew brief 'docs/crew-briefs/v629.md' (office only). Moved to ship 4 (layout, mockup first): Job Costs grading finished jobs only, per-foreman margin on Goals, header counts. **Why it won't lose data:** read-only. One more read when Overview or Jobs opens ('settings/simproStageSync'); the rest is how existing data is counted. No save, 'saveJob' / 'updateDoc', loader, rules or Cloud Function change, and nothing is written to Simpro.
 
 - **Dashboard answers from the overnight data: labor used up before finish starts, money added after a job was invoiced in full, the wrong Simpro technician, and a failed overnight pull** · 'in-flight 2026-11-12' · 'SW v628' · 'OfficeDash' · 'odModel' · 'odLaborEarly' · 'odFeedProblems' · 'billedThenMore' · 'techDiff' · Ship 3a of 'docs/superpowers/plans/2026-11-11-dashboard-truth-and-efficiency.md' (Koy 2026-11-12: *"Start ship 3"*). Four lines on Overview, each shown only when it has something, each from data the app already pulls overnight. **(1) Needs attention › Labor hours used up before finish starts.** A full residential job whose finish has not started here but which has already used 90% or more of its whole rough + finish hour estimate ('settings/phaseHours', the hours-only doc 'phaseCostsNightly' writes; read through the job page's shared 30-minute cache). Row: hours used of estimated, the stage, the foreman, and the percent. Live shapes on 2026-11-11: Kweller 1,277 of 805 hours with finish not started, Brandt 574 of 575. A Simpro number shared by several app jobs is skipped (the hours are the whole Simpro job's); quick jobs, temp peds and commercial are not listed. **(2) Needs you › Invoiced in full, then more was added in Simpro.** A job finished here that was invoiced in full ('invoiceSent', by hand or by the sync) and that Simpro now shows under 99.5% billed with a dollar or more left (Barry #1406: a change order section added 10/28, $272). It exists because ship 2 keeps re-reading finished jobs for 60 days. Dollar amounts hide in Foreman view. **(3) Needs attention › Simpro technician is not who runs the job here.** Goals and Job Costs credit a job to its Simpro technician; the rest of the app uses the foreman / lead. Listed: the technician has left the team, Simpro has no technician, or the technician is on a different crew. Not listed: the technician is the job's foreman or lead, or on the same crew (Settings › Team 'foremanId'); jobs Simpro was not read for; jobs with nobody named here (the no-foreman list has those); quick jobs and temp peds. **(4) Needs you › Overnight Simpro pull late or failed.** From 'settings/dashFeeds' (the 6:45 AM feed check): any of Job Costs, Scoreboard, Goals or Simpro totals whose pull failed or is late, with the error and its last good time; and "the morning feed check did not run" when the check itself is over 30 hours old. Silent on a clean night. Tests: 'scripts/odash-model-test.js' +14 checks on shapes read live (hours rows for Kweller / Brandt / Ashcraft, the Barry numbers, the 11-12 feed doc). Guide 'dashboard.html' updated. Crew brief 'docs/crew-briefs/v628.md' (office only). Left for ship 3b: People and the job popup counted from all jobs, "quiet" in work days, Job Costs grading finished jobs only, the stage-differs list (read from 'settings/simproStageSync', the stage sync's own nightly plan, so there is one rule). **Why it won't lose data:** read-only. Two more reads when Overview or Jobs opens ('settings/phaseHours' through the existing cache, 'settings/dashFeeds'); no save, 'saveJob' / 'updateDoc', loader, rules or Cloud Function change. Reverting the code removes the four lines and nothing else.
 
@@ -76714,7 +76784,7 @@ function App() {
     return (
       <ProjectsCtx.Provider value={projectsCtx}>
         {dashOk && appGlobalStyle}
-        <DashPage ok={dashOk} jobs={jobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
+        <DashPage ok={dashOk} jobs={jobs} allJobs={allJobs} users={users} needs={needsForMode} upcoming={mode==="commercial"?[]:upcoming}
           identity={myLiveRec} mode={mode} setMode={setMode} canCommercial={can(myLiveRec,"commercial.view")}
           onOpenJob={(job, section) => { if (job && job.id) openJobById(job.id, section); }}
           actions={dashOk ? <>

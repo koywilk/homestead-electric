@@ -94,7 +94,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf, odFeedProblems, odLaborEarly, OD_BEFORE_FINISH, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf, odFeedProblems, odLaborEarly, OD_BEFORE_FINISH, odWorkDaysSince, odStageDiffs, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -471,6 +471,58 @@ if (require.main === module) {
   assert.ok(/only 100 of 204 jobs came back/.test(feedRows[0].sub) && /last good pull/.test(feedRows[0].sub) && /no pull on record/.test(feedRows[1].sub), feedRows[0].sub);
   const staleCheck = X.odFeedProblems(okFeeds, new Date("2026-11-14T14:00:00.000Z")).rows;
   eq(staleCheck.map(r => r.k), ["check"], "a check over 30 hours old says the check itself did not run");
+
+  // 14. v629 SHIP 3b (in its own block: this file is one long scope)
+  {
+  const localDay = (t) => t ? `${t.getFullYear()}-${t.getMonth() + 1}-${t.getDate()}` : "";
+  //  a. Work days: weekends do not count against anyone.
+  const D = (y, m, dd, h = 9) => new Date(y, m, dd, h);
+  eq([X.odWorkDaysSince(D(2026, 10, 13, 15), D(2026, 10, 16, 8)), X.odWorkDaysSince(D(2026, 10, 12), D(2026, 10, 17)), X.odWorkDaysSince(D(2026, 10, 16), D(2026, 10, 16, 17)), X.odWorkDaysSince(D(2026, 10, 14), D(2026, 10, 15)), X.odWorkDaysSince(null, now)],
+    [1, 3, 0, 0, 0], "Fri → Mon is 1; Thu → Tue is 3 (Fri, Mon, Tue); same day 0; Sat → Sun 0");
+  //  b. People are counted from every job, whatever the filter or division. Monday 8 AM clock.
+  const mon = new Date(2026, 10, 16, 8, 0);                                   // Mon Nov 16 2026
+  const agoM = (n, h = 15) => new Date(2026, 10, 16 - n, h, 0);
+  const pUsers = [{ id: "abe", name: "Abraham Tristan", title: "foreman" }, { id: "zane", name: "Zane Watkins", title: "foreman" }, { id: "kee", name: "Keegan Wilkinson", title: "foreman" }];
+  const upd = (who, at) => [{ createdAt: at.toISOString(), text: "x", addedBy: who }];
+  const resi = [tj("p1", "Abe resi job", "Abraham Tristan", "", { roughUpdates: upd("Abraham Tristan", agoM(3)) }),               // Friday 3 PM
+    tj("p2", "Zane resi job", "Zane Watkins", "", { roughUpdates: upd("Zane Watkins", agoM(5)) })];                                   // Wednesday: 3 work days ago
+  const comm = [{ ...tj("p3", "Shop TI", "Keegan Wilkinson", "", { roughUpdates: upd("Keegan Wilkinson", agoM(0, 7)) }), division: "commercial" }];   // today, on a commercial job
+  const st = (dd) => dd.people.map(p => `${p.name}: ${p.status}`).sort();
+  const both = X.odModel({ jobs: resi, allJobs: [...resi, ...comm], users: pUsers, needs: [], upcoming: [], now: mon });
+  eq(st(both), ["Abraham Tristan: earlier", "Keegan Wilkinson: active", "Zane Watkins: quiet"], "Friday's update is not quiet on Monday; Wednesday's is; a commercial-only foreman counts in Residential view");
+  const filt = X.odModel({ jobs: resi, allJobs: [...resi, ...comm], users: pUsers, needs: [], upcoming: [], foreman: "Zane Watkins", now: mon });
+  eq(st(filt), st(both), "a foreman filter changes no one's status");
+  eq([filt.events.map(e => e.job.name), filt.evById.p1.length, !!filt.lastAct.p1, filt.liveIds.has("p1")], [["Zane resi job"], 1, true, false], "the feed follows the filter; a job outside it still has its events and last work for the job pop-up");
+  eq(X.odModel({ jobs: resi, users: pUsers, needs: [], upcoming: [], now: mon }).people.find(p => p.name === "Keegan Wilkinson").status, "gone", "without allJobs (older callers) it is this division only, as before");
+  eq(both.people.find(p => p.name === "Keegan Wilkinson").jobsOn.map(j => j.name), ["Shop TI"], "jobs a person runs include the other division's");
+  //  c. A Simpro sync stamp is in the feed but is not work.
+  const autoJob = [tj("a1", "Synced CO", "Abraham Tristan", "", { roughUpdates: upd("Abraham Tristan", agoM(9)), changeOrders: [{ id: "c", coStatus: "approved", desc: "Add can", coStatusSyncedAt: agoM(0, 6).toISOString() }] })];
+  const am = X.odModel({ jobs: autoJob, users: pUsers, needs: [], upcoming: [], now: mon });
+  assert.ok(am.events.some(e => /\(Simpro\)/.test(e.label)), "the sync row still shows in the feed");
+  eq(localDay(am.lastAct.a1), localDay(agoM(9)), "last work is the crew's update nine days ago, not this morning's sync stamp");
+  assert.ok(am.attnBy.quiet.rows.some(r => r.job.id === "a1"), "so the job is still listed as quiet");
+  //  d. A failed inspection on a finished job is its own line, not a re-book.
+  const fj = [tj("f1", "Vista Meadows", "Abraham Tristan", "", { roughStatus: "complete", finishStatus: "complete", finalInspectionResult: "fail", finalInspectionAttempts: [{ date: "10/22/2026", result: "fail", items: [] }] }),
+    tj("f2", "Open fail", "Abraham Tristan", "", { roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", finalInspectionResult: "fail", finalInspectionAttempts: [{ date: "11/10/2026", result: "fail", items: [] }] })];
+  const fm = X.odModel({ jobs: fj, users: pUsers, needs: [], upcoming: [], now: mon });
+  eq([fm.failOpenG.map(g => g.job.name), fm.notRebooked.map(g => g.job.name), fm.failClosed.map(g => g.job.name), fm.attnBy.failClosed.rows.map(r => r.title)], [["Open fail"], ["Open fail"], ["Vista Meadows"], ["Vista Meadows"]]);
+  //  e. Stage differences, from the stage sync's plan as written 2026-11-12 4:45 AM (settings/simproStageSync).
+  const syncDoc = { lastRunAt: "2026-11-12T11:45:06.467Z", modeRan: "dry", rows: [
+    { action: "skip", conflict: true, id: "1773243207133", name: "Menlove Additions", reason: "no Simpro # on the job", sn: "" },
+    { action: "set", fromName: "Job - Punch List", id: "1773186762720", name: "Wade Residence", result: "would change", section: "Completed", sn: "694", toName: "Job - Ready to Invoice" },
+    { action: "skip", id: "1773416026025", name: "Wagstaff Residence", reason: "not open in Simpro (closed, archived or not found)", sn: "713" },
+    { action: "skip", conflict: true, id: "1773186761939", name: "Stratton Residence", reason: "Simpro is further along (\"Job - Rough-In Complete\"), app says Rough In Progress: fix whichever is wrong", sn: "959" },
+    { action: "same", id: "x", name: "Agrees", sn: "1" }, null ],
+    simproOnly: [{ name: "Hansen Design TI", sn: "1029", status: "Job - Punch List" }] };
+  const sd = X.odStageDiffs(syncDoc, new Date("2026-11-12T15:00:00.000Z"));
+  eq(sd.rows.map(r => [r.k, r.name]), [["conflict", "Menlove Additions"], ["conflict", "Stratton Residence"], ["simproOnly", "Hansen Design TI"], ["set", "Wade Residence"]], "needs-a-person first, then only-in-Simpro, then what the sync would change; matched and closed rows left out");
+  eq([sd.nConflict, sd.nOnly, sd.nSet, sd.dry, sd.old], [2, 1, 1, true, false]);
+  assert.ok(/Here: Completed · Simpro: Punch List · the sync would set Simpro to Ready to Invoice/.test(sd.rows[3].text), sd.rows[3].text);
+  assert.ok(/Open in Simpro \(Punch List\), not in the app/.test(sd.rows[2].text));
+  const liveSync = X.odStageDiffs({ ...syncDoc, modeRan: "live", rows: [{ action: "set", result: "changed", name: "Done", sn: "5", section: "Completed", fromName: "Job - Finish", toName: "Job - Punch List" }, { action: "set", result: "blocked", name: "Blocked", sn: "6", section: "Completed", fromName: "Job - Finish", toName: "Job - Punch List" }], simproOnly: [] }, new Date("2026-11-14T15:00:00.000Z"));
+  eq([liveSync.rows.map(r => r.name), liveSync.dry, liveSync.old], [["Blocked"], false, true], "live: a change that went through is not a difference, a blocked one is; a check over 36 hours old is marked");
+  eq([X.odStageDiffs(null, now).rows, X.odStageDiffs({ lastRunAt: "2026-11-12T11:45:06.467Z" }, now).rows], [[], []], "no doc or no rows: silent");
+  }
 
   console.log("odash-model-test: all checks passed");
 }

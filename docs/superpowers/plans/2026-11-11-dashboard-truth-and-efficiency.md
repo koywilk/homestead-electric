@@ -64,7 +64,7 @@ Files: `functions/index.js`, `functions/fridayPacket.js`, `functions/simproSync.
 ## Ship 3 — Answers it can't give today (frontend)
 
 **Ship 3a — BUILT 2026-11-12, SW v628, branch `dash-answers`:** labor used before finish starts (`odLaborEarly`, reads `settings/phaseHours`), invoiced in full then more added (`billedThenMore`), Simpro technician mismatch (`techDiff`), overnight pull late or failed (`odFeedProblems`, reads `settings/dashFeeds`). First overnight run of ship 2 checked clean 2026-11-12.
-**Ship 3b — not built:** tasks 1 and 4 below, the stage-differs list (read `settings/simproStageSync`, the stage sync's nightly plan, instead of a second mapping), header counts, leftovers.
+**Ship 3b — BUILT 2026-11-12, SW v629, branch `dash-people`:** People from every job (`allJobs`, `everyLive`), job pop-up data for a job outside the filter, quiet in work days for people (`odWorkDaysSince`), sync stamps are not work, "Stage differs from Simpro" from `settings/simproStageSync` (`odStageDiffs`), crew questions waiting on the office, failed inspection on a finished job (`failClosed`). **Moved to ship 4:** Job Costs grading finished jobs only, per-foreman margin on Goals, header counts, removing unread model fields.
 
 Files: `src/App.js`, `scripts/odash-model-test.js`, `scripts/overview-audit-test.js`, `scripts/people-autos-audit-test.js`.
 
