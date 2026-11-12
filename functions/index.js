@@ -8135,3 +8135,129 @@ exports.dashHistoryNightly = functions
   .runWith({ timeoutSeconds: 120, memory: "512MB" })
   .pubsub.schedule("45 6 * * *").timeZone(TZ)
   .onRun(async () => { try { return await stampAutoRun("feedDashHistory", () => runDashHistory()); } catch (e) { functions.logger.error("[dashHistory] failed", { error: e.message }); return null; } });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — every day 4:45am Mountain Time (2026-11-11)
+// App → Simpro job status sync (functions/stageSync.js). Josh, 2026-11-11:
+// seven stages with the same names in the app and Simpro; "the foreman sets
+// them in the app, a nightly sync copies them to Simpro."
+//
+// Reads every job (field mask) and Simpro's open jobs (Pending + Progress),
+// works out the Simpro status each full residential job should carry, and
+// sets it where it differs. settings/simproStageSync.mode:
+//   missing / "dry" = plan only, nothing written to Simpro (the default)
+//   "live"          = write the status changes to Simpro
+//   "off"           = do nothing
+// Every run writes its plan and results to the same doc (lastRunAt, counts,
+// rows, simproOnly). It NEVER writes a job in the app. Simpro only accepts a move
+// UP its status order from the API, so: a job parked on a status Simpro ranks
+// above the stages (Material Deposit Paid, Matterport) is tried and reported as
+// blocked until someone moves it by hand once; no Simpro setup is changed. Left
+// alone in Simpro: a job Simpro shows further along than the app (a person decides),
+// money statuses (Ready to Invoice, Receipts Reviewed), hold statuses (Waiting
+// on GC / Material, Change Order Pending), jobs on hold in the app, quick jobs,
+// temp peds, commercial jobs, and jobs that share a Simpro #.
+// Runs before scoreboardNightly (5:20) and dailySimproTotals (6:15), so the
+// morning numbers read the status this set.
+// ─────────────────────────────────────────────────────────────
+const stageSync = require("./stageSync.js");
+
+// Every Simpro job that is Pending or Progress, keyed by job number. Throws when
+// a page fails: a short list would make open jobs look closed.
+async function _simproOpenJobs() {
+  const out = {};
+  for (const stage of stageSync.OPEN_SIMPRO_STAGES) {
+    for (let page = 1; ; page++) {
+      if (page > 20) throw new Error(`Simpro ${stage} job list is longer than 20 pages`);
+      const rows = await _simproGetJson(`/jobs/?Stage=${stage}&columns=ID,Name,Stage,Status&pageSize=250&page=${page}`);
+      if (!Array.isArray(rows)) throw new Error(`Simpro ${stage} job list failed on page ${page}`);
+      rows.forEach(r => { if (r && r.ID != null) out[String(r.ID)] = r; });
+      if (rows.length < 250) break;
+    }
+  }
+  return out;
+}
+
+// Set one Simpro job's status. Never throws: { ok } | { ok:false, blocked } | { ok:false, error }.
+// blocked = Simpro refused a move down its status order (see stageSync.js).
+async function _simproSetJobStatus(sn, statusId) {
+  for (let a = 0; a < 3; a++) {
+    let resp;
+    try {
+      resp = await fetch(`${SIMPRO_BASE}/jobs/${encodeURIComponent(sn)}`, {
+        method: "PATCH", headers: { Authorization: `Bearer ${SIMPRO_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ Status: statusId }), signal: AbortSignal.timeout(20000) });
+    } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 120) }; }
+    if (resp.status === 429) { await new Promise(r => setTimeout(r, 1500 * (a + 1))); continue; }
+    if (resp.ok) return { ok: true };
+    const text = await resp.text().catch(() => "");
+    if (stageSync.isPriorityBlock(resp.status, text)) return { ok: false, blocked: true };
+    return { ok: false, error: `Simpro ${resp.status}: ${text.slice(0, 100)}` };
+  }
+  return { ok: false, error: "Simpro rate limit" };
+}
+
+async function _runSimproStageSync(trigger) {
+  const cfgRef = db.doc("settings/simproStageSync");
+  const cfg = await cfgRef.get();
+  const wanted = cfg.exists ? String((cfg.data() || {}).mode || "") : "";
+  let mode = "dry";                                   // anything but exactly "live" / "off" plans only
+  if (wanted === "live" || wanted === "off") mode = wanted;
+  const at = new Date().toISOString();
+  if (mode === "off") {
+    await cfgRef.set({ lastRunAt: at, ok: true, error: "", trigger, modeRan: "off" }, { merge: true });
+    return { mode, changed: 0, blocked: 0, failed: 0 };
+  }
+  const snap = await db.collection("jobs").select("data.name", "data.type", "data.archived", "data.archivedAt", "data.deleted", "data.simproNo",
+    "data.division", "data.quickJob", "data.tempPed", "data.roughStatus", "data.roughStage", "data.roughOnHold",
+    "data.finishStatus", "data.finishStage", "data.finishOnHold", "data.finishPunchList", "data.finishPunch", "data.qcPunch",
+    "data.finalInspectionResult", "data.finalInspectionItems", "data.returnTrips",
+    "data.prepStage", "data.prepOverride", "data.prepChecklist", "data.prepNA").get();
+  const jobs = snap.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) }));
+  const open = await _simproOpenJobs();
+  // Simpro's status ranks tell the planner which moves go down the order. If the
+  // list can't be read every move is tried, and Simpro refuses the ones it won't take.
+  const priorities = stageSync.priorityMap(await _simproGetJson("/setup/statusCodes/projects/?pageSize=250&columns=ID,Name,Priority"));
+  const plan = stageSync.planAll(jobs, open, priorities);
+  let changed = 0, blocked = 0, failed = 0;
+  for (const r of plan.rows) {
+    if (r.action !== "set") continue;
+    if (mode === "live") {
+      const w = await _simproSetJobStatus(r.sn, r.toId);
+      if (w.ok) { r.result = "changed"; changed++; }
+      else if (w.blocked) { r.result = "blocked"; r.error = stageSync.blockedNote(r); blocked++; }
+      else { r.result = "failed"; r.error = w.error || "failed"; failed++; }
+    } else {
+      r.result = r.downhill ? "would try (Simpro refuses a move off this status)" : "would change";
+    }
+  }
+  await cfgRef.set({ lastRunAt: at, ok: true, error: "", trigger, modeRan: mode,
+    counts: { ...plan.counts, changed, blocked, failed, appJobs: plan.rows.length, simproOpen: Object.keys(open).length },
+    rows: plan.rows.filter(r => r.action !== "same").slice(0, 200),
+    simproOnly: plan.simproOnly.slice(0, 50) }, { merge: true });
+  functions.logger.info("simproStageSync", { trigger, mode, ...plan.counts, changed, blocked, failed });
+  return { mode, changed, blocked, failed };
+}
+
+exports.scheduledSimproStageSync = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .pubsub.schedule("45 4 * * *")
+  .timeZone(TZ)
+  .onRun(async () => {
+    try {
+      const r = await _runSimproStageSync("scheduled");
+      // A live night with a real failure should not be silent. Blocked jobs (Simpro's
+      // status order) repeat every night until moved by hand, so they stay in the
+      // report (settings/simproStageSync.rows) and do not push.
+      if (r.mode === "live" && r.failed) {
+        await sendToName("Koy", { title: "Simpro stage sync needs a look",
+          body: `${r.changed} updated, ${r.failed} failed${r.blocked ? `, ${r.blocked} blocked by Simpro's status order` : ""}.` });
+      }
+      return null;
+    } catch (e) {
+      functions.logger.error("[simproStageSync] FAILED", e.message);
+      try { await db.doc("settings/simproStageSync").set({ lastRunAt: new Date().toISOString(), ok: false, error: String(e.message || e).slice(0, 200) }, { merge: true }); } catch (_) {}
+      await sendToName("Koy", { title: "Simpro stage sync failed", body: `Nothing was changed in Simpro: ${String(e.message || e).slice(0, 120)}` });
+      throw e;
+    }
+  });
