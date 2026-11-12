@@ -47,31 +47,19 @@ Files: `src/App.js`, `scripts/odash-model-test.js`, `scripts/goals-model-test.js
 - [x] Tests: 18 new checks in `odash-model-test.js`, 9 in `goals-model-test.js`; all dashboard test scripts pass.
 - [ ] `CI=true npm run build`, show Koy the diff, Koy pushes main and deploys hosting.
 
-## Ship 2 — Feeds you can trust (Cloud Functions; one deploy)
+## Ship 2 — Feeds you can trust (Cloud Functions; one deploy) — BUILT 2026-11-11, same branch
 
-Files: `functions/index.js`, `functions/fridayPacket.js`, `functions/simproSync.js`, `functions/goalsPull.js`, new `functions/dashHistory.js`, tests `scripts/simprosync-test.js`, `scripts/goals-pull-test.js`, new `scripts/dash-history-test.js`.
+Files: `functions/index.js`, `functions/fridayPacket.js`, `functions/simproSync.js`, new `functions/dashHistory.js`, tests `scripts/simprosync-test.js`, `scripts/odash-model-test.js`, new `scripts/dash-history-test.js` (in prebuild).
 
-### Task 1: Simpro totals are whole and current (S1 backend)
-- [ ] `fetchSimproTotals` stamps each entry with `at` (ISO).
-- [ ] `collectMoneyCandidates` also returns jobs finished and fully billed whose `simproInvoicedSeenAt` is under 60 days old (new group, capped with the rest).
-- [ ] `dailySimproTotals` writes `byNo` and `quotes` as whole maps (`db.doc(...).set(payload, { mergeFields: ["at","source","byNo","quotes","syncLast"] })`), carrying forward an entry only when its `at` is under 7 days old and the job was wanted but the fetch failed.
-- [ ] Test: an entry for a job no longer wanted is gone; a failed fetch keeps yesterday's entry with its old `at`; a finished job billed 100% 10 days ago is re-read.
-
-### Task 2: History (M2, S4)
-- [ ] `functions/dashHistory.js`: `snapshotRow({ goals, phaseCosts, simproTotals, jobs, now }) → { date, marginPct, hoursPct, counted, activeJobs, openPunch, cosWaiting60, firstPass90, failedNotRebooked, quietJobs, feeds: { goals, costs, scoreboard, totals } }` (pure).
-- [ ] `dashHistoryNightly` at 6:45 AM MT writes `dash_history/{YYYY-MM-DD}` (create-only) and `settings/dashFeeds` (`{ goals, costs, scoreboard, totals }`, each `{ at, ok, error }`).
-- [ ] `runGoalsPull`: before overwriting, when the stored doc's `year` is lower than this year, copy it to `settings/goalsSimpro_<year>`; write phase 1 before phase 2 starts.
-- [ ] Add `dash_history` to `BACKUP_COLLECTIONS` and to `firestore.rules` (admin read, server write); deploy rules complete, never partial.
-- [ ] Test: Jan 1 run keeps `goalsSimpro_2026`; snapshot is create-only; a missing feed shows `ok:false`.
-
-### Task 3: Real run stamps (S3, S6)
-- [ ] `scoreboardNightly`, `goalsNightly`, `phaseCostsNightly`, `dailySimproTotals` each call `stampAutoRun(key, run)` so a failure is on record.
-- [ ] Frontend follow-up lands in ship 3 task 5 (Overview "Data feeds" line reads `settings/dashFeeds`).
-
-### Task 4: A change order is closed only when its own quote is (W12)
-- [ ] `planSimproSync(job, totals, nowIso, quotes)`: complete an approved or scheduled CO on a fully billed job only when `quotes[quoteNo]` exists with `stage` Approved and `closed === true`, or the CO has no quote number and the job total rose since the CO was approved. Otherwise leave it and log `kinds: ["coHeld"]`.
-- [ ] `fetchSimproQuotes` also reads `IsClosed`; `collectQuoteCandidates` adds quotes of approved COs.
-- [ ] Test: CO approved after the job hit 100% with an open quote is held; Mangum-shaped case (quote closed, total rose) completes.
+- [x] Task 1, Simpro totals whole and dated (S1): `carryTotals(prev, fresh, { live, nowIso, prevAt, maxDays })`; every entry has `at`; `mergeFields` write; `collectMoneyCandidates` re-reads finished, fully billed jobs for 60 days after Simpro's amount last moved.
+- [x] Task 2, history (M2, S4): `functions/dashHistory.js` (`feedHealth`, `snapshotRow`, `goalsYearEndCopy`); `dashHistoryNightly` 6:45 AM MT writes `dash_history/{date}` (create-only) and `settings/dashFeeds`; `runGoalsPull` keeps `settings/goalsSimpro_<year>` before the first pull of a new year; `dash_history` in `BACKUP_COLLECTIONS`. No rules change (server only).
+- [x] Task 3, run stamps (S6): the four feeds and the history run stamp `settings/autoDocRuns.feed*`.
+- [x] Task 4, a change order closes only with its own quote (W12): `planSimproSync(job, totals, nowIso, quotes)`, `coQuoteState`, `openCoQuoteNos`, `heldCos`; `fetchSimproQuotes` reads `IsClosed`.
+- [ ] Koy: push main, then `firebase deploy --only functions:dailySimproTotals,functions:scoreboardNightly,functions:goalsNightly,functions:phaseCostsNightly,functions:dashHistoryNightly --project homestead-electric`.
+- [ ] Morning after: `settings/simproTotals.byNo` entries carry `at`; `dash_history/<date>` exists; `settings/dashFeeds` all ok; `syncLast.rows` lists any `held` change orders.
+- Deferred, with reason: writing Goals phase 1 before phase 2 (S7). The whole pull takes about a minute against a nine-minute limit, so the restructure is not worth its risk now.
+- Deferred to ship 5: app-side counts in the history row (open punch, quiet jobs, first pass). They are computed in the browser by `odModel`; copying the rule into a function would make a second rule.
+- Ship 3 reads what this ship writes: the "Data feeds" fold (`settings/dashFeeds`), per-entry age and "left to bill on a finished job" (`byNo[].at`, `invPct`), and "quote still open in Simpro" on approved change orders (`quotes[].closed`).
 
 ## Ship 3 — Answers it can't give today (frontend)
 
@@ -88,7 +76,7 @@ Files: `src/App.js`, `scripts/odash-model-test.js`, `scripts/overview-audit-test
 - [ ] Test: the ten audited jobs' shapes give the audited answers.
 
 ### Task 3: Labor used up before finish starts (M1)
-- [ ] Overview reads `settings/phaseCostsHrs` (hours only, already written nightly) and adds the attention line "Labor budget used before finish starts": finish not started in the app and hours used ≥ 90% of the whole-job estimate, worst first.
+- [ ] Overview reads `settings/phaseHours` (hours only, already written nightly) and adds the attention line "Labor budget used before finish starts": finish not started in the app and hours used ≥ 90% of the whole-job estimate, worst first.
 - [ ] Test: Kweller (1,277 of 888, finish not started) and Brandt (574 of 575) shapes are listed; a job in finish is not.
 
 ### Task 4: Job Costs grades only finished jobs (W3), per-foreman margin on Goals (M6)

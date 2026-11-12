@@ -89,4 +89,34 @@ assert.ok(!("invoiceSent" in S.planSimproSync({ name: "x" }, { total: 100, inv: 
 const many = { name: "m", simproSync: { log: Array.from({ length: 25 }, (_, i) => ({ at: `2026-09-${String(i + 1).padStart(2, "0")}`, kinds: ["invoiced"], changes: [] })) } };
 assert.strictEqual(S.planSimproSync(many, { total: 10, inv: 5, invPct: 50, stage: "Progress" }, NOW).patch.simproSync.log.length, 20, "log keeps the last 20");
 
+// 6 · v626 ship 2 — a change order is completed only once ITS OWN quote is closed in Simpro.
+// Mangum #920 on 2026-11-11: invoiced in full; two COs whose quotes (3306, 3377) were converted into the
+// job (IsClosed true), one approved CO whose quote (3423) is still open "Waiting on GC", one with no quote #.
+const mangum = { name: "Mangum", roughStatus: "complete", finishStatus: "complete", invoiceSent: true, simproInvoicedValue: 82078.72, simproInvoicedPct: 100, simproSync: { invoiceSent: NOW, complete: NOW, cos: {} },
+  changeOrders: [{ id: "c6", coStatus: "approved", desc: "Attic outlet", quoteNumber: "3306" }, { id: "c8", coStatus: "scheduled", desc: "Coach lights", quoteNumber: "#3377" },
+    { id: "c9", coStatus: "approved", desc: "Disposal plug", quoteNumber: "3423" }, { id: "c10", coStatus: "approved", desc: "No quote on it" }, { id: "c11", coStatus: "approved", desc: "Quote not read", quoteNumber: "3500" },
+    { id: "c12", coStatus: "approved", desc: "Quote archived", quoteNumber: "3600" }, { id: "c13", coStatus: "pending", desc: "Still with the GC", quoteNumber: "3306" }] };
+const tM = { total: 82078.72, inv: 82078.72, invPct: 100, stage: "Invoiced", status: "Job - Ready to Invoice" };
+const quotes = { "3306": { total: 1276.33, stage: "Approved", status: "Quote - Convert to Job", closed: true }, "3377": { total: 657.15, stage: "Approved", status: "Quote - Convert to Job", closed: true },
+  "3423": { total: 282.87, stage: "Approved", status: "Quote: Change Order - Waiting on GC", closed: false }, "3600": { total: 10, stage: "Archived", status: "Quote - Declined", closed: true } };
+eq(mangum.changeOrders.map(co => S.coQuoteState(co, quotes)), ["closed", "closed", "open", "none", "unread", "dead", "closed"]);
+p = S.planSimproSync(mangum, tM, NOW, quotes);
+eq(p.patch.changeOrders.map(co => co.coStatus), ["completed", "completed", "approved", "completed", "approved", "approved", "pending"],
+  "closed quotes and a CO with no quote # complete; an open, unread or dead quote holds its CO; a pending CO is never touched");
+eq(p.entry.changes.filter(c => c.co).map(c => c.co), ["c6", "c8", "c10"]);
+eq(S.heldCos(mangum, tM, quotes), [{ co: "c9", quote: "3423", why: "open" }, { co: "c11", quote: "3500", why: "unread" }, { co: "c12", quote: "3600", why: "dead" }], "what is held, and why, for the run's log");
+// Next morning the GC's quote is converted: the held CO completes then, the others are not redone.
+const day2 = S.planSimproSync(apply(mangum, p), tM, LATER, { ...quotes, "3423": { ...quotes["3423"], closed: true, status: "Quote - Convert to Job" } });
+eq(day2.entry.changes.filter(c => c.co).map(c => c.co), ["c9"], "completes the day its quote closes");
+// Same quotes next morning: nothing to write, the holds stay holds.
+assert.strictEqual(S.planSimproSync(apply(mangum, p), tM, LATER, quotes), null, "a held CO causes no write");
+// No quotes passed at all (the v553 call): every approved / scheduled CO completes, as before.
+eq(S.planSimproSync(mangum, tM, NOW).patch.changeOrders.map(co => co.coStatus), ["completed", "completed", "completed", "completed", "completed", "completed", "pending"], "without a quotes map the old rule stands");
+eq(S.heldCos(mangum, tM, undefined), [], "…and nothing counts as held");
+eq(S.heldCos(mangum, { ...tM, invPct: 80 }, quotes), [], "a job not invoiced in full holds nothing (the rule does not apply yet)");
+// Which quotes to read: open COs the sync has not completed, on jobs invoiced in full this morning.
+eq(S.openCoQuoteNos([{ ...mangum, simproNo: "920" }, { simproNo: "1", changeOrders: [{ id: "x", coStatus: "approved", quoteNumber: "77" }] }, { simproNo: "2", archived: true, changeOrders: [{ id: "y", coStatus: "approved", quoteNumber: "78" }] },
+  { simproNo: "3", simproSync: { cos: { z: NOW } }, changeOrders: [{ id: "z", coStatus: "approved", quoteNumber: "79" }] }],
+  { "920": tM, "1": { invPct: 60 }, "2": { invPct: 100 }, "3": { invPct: 100 } }), ["3306", "3377", "3423", "3500", "3600"], "digits only, once each; not a part-billed job, an archived job, or a CO already completed by the sync");
+
 console.log("simprosync-test: all checks passed");

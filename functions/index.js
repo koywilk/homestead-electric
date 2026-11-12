@@ -4962,10 +4962,12 @@ async function fetchSimproQuotes(qns) {
   for (let i = 0; i < qns.length; i += CHUNK) {
     await Promise.all(qns.slice(i, i + CHUNK).map(async (qn) => {
       try {
-        const r = await _simproGetJson(`/quotes/${encodeURIComponent(qn)}?columns=ID,Stage,Status,Total`);
+        const r = await _simproGetJson(`/quotes/${encodeURIComponent(qn)}?columns=ID,Stage,Status,Total,IsClosed`);
         if (!r || typeof r !== "object" || Array.isArray(r)) return;
         const top = r.Total || {};
-        out[qn] = { total: typeof top.IncTax === "number" ? top.IncTax : null, stage: String(r.Stage || ""), status: String((r.Status && r.Status.Name) || "") };
+        // v626 ship 2: `closed` = Simpro's IsClosed (the quote was converted into its job). The invoicing
+        // sync completes an approved change order only once its own quote is closed (simproSync.coQuoteState).
+        out[qn] = { total: typeof top.IncTax === "number" ? top.IncTax : null, stage: String(r.Stage || ""), status: String((r.Status && r.Status.Name) || ""), closed: r.IsClosed === true };
       } catch (e) { /* no number for this quote */ }
     }));
   }
@@ -5005,16 +5007,25 @@ exports.dailySimproTotals = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB" })
   .pubsub.schedule("15 6 * * 1-5")
   .timeZone(TZ)
-  .onRun(async () => {
+  // v626 ship 2: the run stamps settings/autoDocRuns.feedSimproTotals (ok / error), so a morning that
+  // failed is on record for the dashboard's feed check instead of only in the function log.
+  .onRun(() => stampAutoRun("feedSimproTotals", async () => {
     const snap = await db.collection("jobs").select("data.name", "data.type", "data.archived", "data.archivedAt", "data.deleted", "data.simproNo",
       "data.readyToInvoice", "data.invoiceDismissed", "data.finishStatus", "data.finishStage", "data.changeOrders",
-      "data.quickJob", "data.quickJobStatus", "data.tempPed", "data.tempPedStatus", "data.simproInvoicedPct").get();
+      "data.quickJob", "data.quickJobStatus", "data.tempPed", "data.tempPedStatus", "data.simproInvoicedPct",
+      "data.simproInvoicedSeenAt", "data.simproSync.cos").get();
     const jobs = snap.docs.map(d => ({ id: d.id, ...((d.data() || {}).data || {}) }));
     const now = new Date();
     const wanted = fridayPacketLib.collectMoneyCandidates(jobs, now);
     const byNo = await fetchSimproTotals(wanted);
     const quoteNos = fridayPacketLib.collectQuoteCandidates(jobs, now);
     const quotes = await fetchSimproQuotes(quoteNos);
+    // v626 ship 2: the quotes behind approved / scheduled change orders on jobs this morning's numbers
+    // show invoiced in full, so the sync below can tell "its quote is inside the job" from "its quote
+    // is still open in Simpro" before it completes a change order (simproSync.coQuoteState).
+    const coQuoteNos = simproSync.openCoQuoteNos(jobs, byNo).filter(q => !(q in quotes));
+    const coQuotes = coQuoteNos.length ? await fetchSimproQuotes(coQuoteNos) : {};
+    const quotesToday = { ...quotes, ...coQuotes };
     // v553: Simpro → app invoicing sync (functions/simproSync.js). settings/simproSync.mode:
     // "off" = no job writes, "dry" = plan only (listed in settings/simproTotals.syncLast),
     // anything else = live. Each job is read and written in one transaction, so the plan
@@ -5033,8 +5044,9 @@ exports.dailySimproTotals = functions
             const cur = await tx.get(ref);
             const raw = cur.exists ? (cur.data() || {}) : null;
             if (!raw || !raw.data || raw.data.archived || raw.data.deleted) return null;
-            const plan = simproSync.planSimproSync(raw.data, byNo[sn], nowIso);
-            if (!plan) return null;
+            const plan = simproSync.planSimproSync(raw.data, byNo[sn], nowIso, quotesToday);
+            const held = simproSync.heldCos(raw.data, byNo[sn], quotesToday);   // v626: change orders left as they are because their own quote is not closed in Simpro yet
+            if (!plan) return held.length ? { id: ids[0], sn, name: String(raw.data.name || "").trim(), kinds: [], changes: 0, held } : null;
             if (syncMode === "live") {
               const upd = { updated_at: nowIso, saved_by: simproSync.SYNC_BY, device: "server", tab: "simpro-sync",
                 // Same version-lock stamp shape the app writes (app_build int + a fresh w).
@@ -5042,18 +5054,29 @@ exports.dailySimproTotals = functions
               Object.entries(plan.patch).forEach(([k, v]) => { upd[`data.${k}`] = v; });
               tx.update(ref, upd);
             }
-            return { id: ids[0], sn, name: String(raw.data.name || "").trim(), kinds: plan.kinds, changes: plan.entry.changes.filter(c => c.undo !== false || c.co).length };
+            return { id: ids[0], sn, name: String(raw.data.name || "").trim(), kinds: plan.kinds, changes: plan.entry.changes.filter(c => c.undo !== false || c.co).length, ...(held.length ? { held } : {}) };
           });
-          if (row && (row.kinds.length || row.changes)) syncRows.push(row);
+          if (row && (row.kinds.length || row.changes || row.held)) syncRows.push(row);
         } catch (e) { syncRows.push({ id: ids[0], sn, error: String(e.message || e).slice(0, 120) }); }
       }
     }
-    await db.doc("settings/simproTotals").set({ at: new Date().toISOString(), source: "dailySimproTotals", byNo, quotes,
-      syncLast: { at: new Date().toISOString(), mode: syncMode, rows: syncRows.slice(0, 150) } }, { merge: true });
-    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length, quotesWanted: quoteNos.length, quotesGot: Object.keys(quotes).length,
-      syncMode, synced: syncRows.filter(r => !r.error && !r.skipped).length, syncErrors: syncRows.filter(r => r.error).length });
+    // v626 ship 2: byNo and quotes are written WHOLE (mergeFields), each entry carrying its own `at`. The
+    // old deep merge kept an entry forever once the pull stopped reading that job, with nothing to say
+    // how old it was. Entries not re-read this morning keep their own date; one whose job has left the
+    // app, or that is over 180 days old, is dropped (simproSync.carryTotals).
+    const atIso = new Date().toISOString();
+    let prevTotals = {};
+    try { const pv = await db.doc("settings/simproTotals").get(); prevTotals = pv.exists ? (pv.data() || {}) : {}; } catch (e) { functions.logger.warn("dailySimproTotals: previous doc unreadable, writing today's entries only", { error: e.message }); }
+    const liveSns = new Set(jobs.filter(j => j.type !== "quote" && !j.archived && !j.deleted && !j.archivedAt).map(j => String(j.simproNo || "").trim()).filter(Boolean));
+    const liveQuotes = new Set(); jobs.forEach(j => { if (j.type === "quote" || j.archived || j.deleted || j.archivedAt) return; (j.changeOrders || []).forEach(co => { const q = String((co && co.quoteNumber) || "").replace(/^#/, "").trim(); if (q) liveQuotes.add(q); }); });
+    const byNoAll = simproSync.carryTotals(prevTotals.byNo, byNo, { live: liveSns, nowIso: atIso, prevAt: prevTotals.at || "" });
+    const quotesAll = simproSync.carryTotals(prevTotals.quotes, quotesToday, { live: liveQuotes, nowIso: atIso, prevAt: prevTotals.at || "" });
+    await db.doc("settings/simproTotals").set({ at: atIso, source: "dailySimproTotals", byNo: byNoAll, quotes: quotesAll,
+      syncLast: { at: atIso, mode: syncMode, rows: syncRows.slice(0, 150) } }, { mergeFields: ["at", "source", "byNo", "quotes", "syncLast"] });
+    functions.logger.info("dailySimproTotals", { wanted: wanted.length, got: Object.keys(byNo).length, kept: Object.keys(byNoAll).length, quotesWanted: quoteNos.length + coQuoteNos.length, quotesGot: Object.keys(quotesToday).length,
+      syncMode, synced: syncRows.filter(r => !r.error && !r.skipped && (r.kinds || []).length).length, cosHeld: syncRows.reduce((n, r) => n + ((r.held || []).length), 0), syncErrors: syncRows.filter(r => r.error).length });
     return null;
-  });
+  }));
 
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Friday 6:00am Mountain Time
@@ -6277,7 +6300,7 @@ exports.notifInboxPrune = functions.pubsub
 // Firebase console → Storage, gunzip, then restore jobs via the in-app
 // "restore from file" tool or __HE_RESTORE in the DevTools console.
 // ─────────────────────────────────────────────────────────────
-const BACKUP_COLLECTIONS = ["jobs","settings","manualTasks","needs","quoteWalks","suggestions","homeowner_requests"];
+const BACKUP_COLLECTIONS = ["jobs","settings","manualTasks","needs","quoteWalks","suggestions","homeowner_requests","dash_history"];   // v626 ship 2: + the dashboard's daily history
 const BACKUP_KEEP_DAYS = 30;
 
 async function _runFirestoreBackup(trigger) {
@@ -7844,7 +7867,7 @@ async function runScoreboardPull({ reason = "nightly" } = {}) {
 exports.scoreboardNightly = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .pubsub.schedule("20 5 * * *").timeZone(TZ)
-  .onRun(async () => { try { return await runScoreboardPull({ reason: "nightly" }); } catch (e) { functions.logger.error("[scoreboard] nightly failed", { error: e.message }); return null; } });
+  .onRun(async () => { try { return await stampAutoRun("feedScoreboard", () => runScoreboardPull({ reason: "nightly" })); } catch (e) { functions.logger.error("[scoreboard] nightly failed", { error: e.message }); return null; } });
 // Admin "Pull from Simpro now" button on the Scoreboard tab (same app-key guard as every other callable).
 exports.sendTestScoreboardPull = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
@@ -7928,6 +7951,17 @@ async function runGoalsPull({ reason = "nightly" } = {}) {
   }
   const bytes = Buffer.byteLength(JSON.stringify(payload));
   if (bytes > 900000) throw new Error(`[goals] doc would be ${bytes} bytes — over the document limit, not written`);
+  // v626 ship 2: the doc counts jobs invoiced THIS year, so the first pull of a new year would overwrite
+  // last year's final numbers. Keep them once as settings/goalsSimpro_<year> first. If that copy can't be
+  // written the pull stops here and the old doc stays (never lose the year to save a night).
+  {
+    const prevSnap = await db.collection("settings").doc(GOALS_DOC).get();
+    const keep = _dashHistory.goalsYearEndCopy(prevSnap.exists ? prevSnap.data() : null, year, GOALS_DOC);
+    if (keep) {
+      await db.collection("settings").doc(keep.id).create(keep.doc).catch(e => { if (!(e && (e.code === 6 || /already exists/i.test(String(e.message))))) throw e; });
+      functions.logger.info("[goals] kept last year's final doc", { id: keep.id });
+    }
+  }
   await db.collection("settings").doc(GOALS_DOC).set(payload);
   const p2 = payload.phase2 || {};
   functions.logger.info("[goals] doc written", { ...payload.counts, bytes, seconds: payload.seconds, reason, marginPct: payload.measures.marginPct, hoursPct: payload.measures.hoursPct,
@@ -7939,7 +7973,7 @@ async function runGoalsPull({ reason = "nightly" } = {}) {
 exports.goalsNightly = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .pubsub.schedule("40 5 * * *").timeZone(TZ)
-  .onRun(async () => { try { return await runGoalsPull({ reason: "nightly" }); } catch (e) { functions.logger.error("[goals] nightly failed", { error: e.message }); return null; } });
+  .onRun(async () => { try { return await stampAutoRun("feedGoals", () => runGoalsPull({ reason: "nightly" })); } catch (e) { functions.logger.error("[goals] nightly failed", { error: e.message }); return null; } });
 // "Pull from Simpro now" on the Goals tab (admins; same app-key guard as every other callable).
 exports.sendTestGoalsPull = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
@@ -8044,7 +8078,7 @@ async function runPhaseCosts({ reason = "nightly", budgetMs = 420000 } = {}) {
 exports.phaseCostsNightly = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .pubsub.schedule("15 2,3,4 * * *").timeZone(TZ)
-  .onRun(async () => { try { return await runPhaseCosts({ reason: "nightly" }); } catch (e) { functions.logger.error("[phaseCosts] nightly failed", { error: e.message }); return null; } });
+  .onRun(async () => { try { return await stampAutoRun("feedPhaseCosts", () => runPhaseCosts({ reason: "nightly" })); } catch (e) { functions.logger.error("[phaseCosts] nightly failed", { error: e.message }); return null; } });
 // v577: live rough / finish hours for ONE job (the field app's Rough / Finish badges). Reads the job's
 // cost-center totals now (sections + one list per section) and reuses each cost center's saved split from
 // the nightly pull; items are re-read only for a cost center whose estimate changed since. Hours only.
@@ -8069,3 +8103,35 @@ exports.sendTestPhaseCosts = functions
     try { return await runPhaseCosts({ reason: "manual" }); }
     catch (e) { functions.logger.error("[phaseCosts] manual pull failed", { error: e.message }); return { ok: false, error: e.message }; }
   });
+
+
+// ─────────────────────────────────────────────────────────────
+// DASHBOARD HISTORY + FEED HEALTH — 6:45 AM Mountain, every day (v626 ship 2, audit 2026-11-11)
+// After the four Simpro feeds have run (phaseCosts 2:15–4:15, scoreboard 5:20, goals 5:40,
+// simproTotals 6:15 weekdays): one small create-only row in dash_history/{YYYY-MM-DD} (so a
+// number has a yesterday), and settings/dashFeeds (each feed's last good data time, and whether
+// it is on schedule or its last run failed). Reads four settings docs with a field mask (never
+// the big job / row arrays) and settings/autoDocRuns. No Simpro call, no job read or write.
+// Rules: dash_history has no client rule, so the catch-all denies browsers; server only for now.
+// ─────────────────────────────────────────────────────────────
+const _dashHistory = require("./dashHistory.js");
+async function runDashHistory({ now = new Date() } = {}) {
+  const S = db.collection("settings");
+  const mask = ["generated_at", "year", "counts", "measures", "phase2.hours.warranty.sharePct", "phase2.hours.co.hours", "phase2.storeRuns.total", "phase2.weekly.weeksAll", "at", "byNo",
+    "feedPhaseCosts", "feedScoreboard", "feedGoals", "feedSimproTotals"];
+  const [g, c, sb, t, r] = await db.getAll(S.doc(GOALS_DOC), S.doc(PC_DOC), S.doc(SCOREBOARD_DOC), S.doc("simproTotals"), S.doc("autoDocRuns"), { fieldMask: mask });
+  const D = (snap) => (snap.exists ? (snap.data() || {}) : null);
+  const goals = D(g), costs = D(c), scoreboard = D(sb), totals = D(t), runs = D(r) || {};
+  const feeds = _dashHistory.feedHealth({ at: { goals: goals && goals.generated_at, costs: costs && costs.generated_at, scoreboard: scoreboard && scoreboard.generated_at, totals: totals && totals.at }, runs, now });
+  const row = _dashHistory.snapshotRow({ goals, costs, scoreboard, totals, feeds, now });
+  let created = true;
+  await db.collection("dash_history").doc(row.date).create(row).catch(e => { if (e && (e.code === 6 || /already exists/i.test(String(e.message)))) created = false; else throw e; });
+  await S.doc("dashFeeds").set({ at: now.toISOString(), feeds });
+  const bad = Object.entries(feeds).filter(([, f]) => !f.ok).map(([k]) => k);
+  functions.logger[bad.length ? "warn" : "info"]("[dashHistory] written", { date: row.date, created, feedsNotOk: bad });
+  return { ok: true, date: row.date, created, feedsNotOk: bad };
+}
+exports.dashHistoryNightly = functions
+  .runWith({ timeoutSeconds: 120, memory: "512MB" })
+  .pubsub.schedule("45 6 * * *").timeZone(TZ)
+  .onRun(async () => { try { return await stampAutoRun("feedDashHistory", () => runDashHistory()); } catch (e) { functions.logger.error("[dashHistory] failed", { error: e.message }); return null; } });

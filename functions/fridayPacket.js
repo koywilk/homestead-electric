@@ -212,10 +212,14 @@ function collectMoneyCandidates(jobs, now = new Date(), cap = 250) {
   const open = live.filter(j => !done(j));
   // v553: finished here but not yet recorded as invoiced in full — the invoicing sync still watches them.
   const unbilled = live.filter(j => done(j) && !((typeof j.simproInvoicedPct === "number" ? j.simproInvoicedPct : -1) >= 99.5));
+  // v626 ship 2: finished AND invoiced in full, but Simpro's amount last moved under 60 days ago. These
+  // used to fall off the list the day they hit 100%, so a late change order or credit added in Simpro
+  // was never seen (Barry #1406, 2026-11-11: $272 added after it read 100%). Last, and capped.
+  const settling = live.filter(j => { const t = Date.parse(j.simproInvoicedSeenAt || ""); return done(j) && !!t && now - t < 60 * 86400e3; });
   const out = [], seen = new Set();
   const add = (j, capped) => { const sn = String(j.simproNo).trim(); if (seen.has(sn) || (capped && out.length >= cap)) return; seen.add(sn); out.push(sn); };
   rti.forEach(j => add(j, false));
-  [...old, ...approved, ...doneCo, ...open, ...unbilled].forEach(j => add(j, true));
+  [...old, ...approved, ...doneCo, ...open, ...unbilled, ...settling].forEach(j => add(j, true));
   return out;
 }
 

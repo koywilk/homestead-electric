@@ -69,7 +69,70 @@ function completePatch(j) {
 
 // Returns null when nothing changes, else { patch, entry, kinds }: patch holds
 // top-level job data keys to write (whole values), entry is the log line.
-function planSimproSync(job, t, nowIso) {
+// ── v626 ship 2 (dashboard audit 2026-11-11) ────────────────────────────────────────────────
+// Rule 3 below assumes an approved change order's quote is already INSIDE the Simpro job, so a job
+// invoiced in full means the CO was invoiced too. That is false for a CO approved after the job
+// hit 100%: its quote is still its own open quote in Simpro, and closing the CO here cleared the
+// reminder to bill it. So when the caller passes that morning's quotes (by quote number, each
+// with `closed` = Simpro's IsClosed), a CO with a quote number is completed only once its quote is
+// closed (converted into the job). No quote number on the CO = nothing to check it against: the
+// v553 behaviour. No `quotes` argument at all (tests, old dry runs) = the v553 behaviour.
+const quoteNoOf = (co) => String((co && co.quoteNumber) || "").replace(/^#/, "").trim();
+function coQuoteState(co, quotes) {
+  if (!quotes) return "unchecked";
+  const qn = quoteNoOf(co);
+  if (!/^\d+$/.test(qn)) return "none";
+  const q = quotes[qn];
+  if (!q) return "unread";                                   // not read this morning: wait, try tomorrow
+  if (/archiv|declin|lost|cancel/i.test(`${q.stage || ""} ${q.status || ""}`)) return "dead";
+  return q.closed === true ? "closed" : "open";
+}
+const CO_HOLD = ["unread", "open", "dead"];
+// The quote numbers worth reading for the rule above: approved / scheduled COs the sync has not
+// completed yet, on jobs that morning's totals show invoiced in full. Digits only, once each.
+function openCoQuoteNos(jobs, byNo, cap = 80) {
+  const out = [], seen = new Set();
+  (jobs || []).forEach(j => {
+    if (!j || j.type === "quote" || j.archived || j.deleted || j.archivedAt) return;
+    const t = (byNo || {})[String(j.simproNo || "").trim()];
+    if (!t || !(num(t.invPct) >= FULL)) return;
+    const did = (j.simproSync && j.simproSync.cos) || {};
+    (j.changeOrders || []).forEach(co => {
+      if (!co || !OPEN_CO.includes(co.coStatus) || !co.id || did[co.id]) return;
+      const qn = quoteNoOf(co);
+      if (!/^\d+$/.test(qn) || seen.has(qn) || out.length >= cap) return;
+      seen.add(qn); out.push(qn);
+    });
+  });
+  return out;
+}
+// The COs rule 3 is holding open this morning, and why (for the run's own log line).
+function heldCos(job, t, quotes) {
+  const j = job || {};
+  if (!t || !(num(t.invPct) >= FULL) || !Array.isArray(j.changeOrders)) return [];
+  const did = (j.simproSync && j.simproSync.cos) || {};
+  return j.changeOrders.filter(co => co && OPEN_CO.includes(co.coStatus) && co.id && !did[co.id] && CO_HOLD.includes(coQuoteState(co, quotes)))
+    .map(co => ({ co: co.id, quote: quoteNoOf(co), why: coQuoteState(co, quotes) }));
+}
+// settings/simproTotals keeps one entry per Simpro number. The morning pull only re-reads the jobs
+// it wants that day; with a plain merge, an entry it stopped reading (or whose read failed) stayed
+// forever with no date on it. Now every entry carries `at`: fresh ones get this run's time, the
+// rest keep their own, and an entry is dropped once its job is gone from the app or it is older
+// than `maxDays`. `prevAt` dates entries written before entries had their own date (atGuess: true).
+function carryTotals(prev, fresh, { live = null, nowIso, prevAt = "", maxDays = 180 } = {}) {
+  const out = {}, now = Date.parse(nowIso);
+  Object.entries(prev || {}).forEach(([k, e]) => {
+    if (!e || typeof e !== "object" || (live && !live.has(k))) return;
+    const at = e.at || prevAt || "", ms = Date.parse(at);
+    if (!ms || now - ms > maxDays * 86400e3) return;
+    // An entry written before entries had dates takes the old doc's date, marked as a guess (it may be older).
+    out[k] = e.at ? { ...e, at } : { ...e, at, atGuess: true };
+  });
+  Object.entries(fresh || {}).forEach(([k, e]) => { if (e && typeof e === "object") out[k] = { ...e, at: nowIso }; });
+  return out;
+}
+
+function planSimproSync(job, t, nowIso, quotes) {
   const j = job || {};
   if (!t || typeof t !== "object") return null;
   const inv = num(t.inv), pct = num(t.invPct), total = num(t.total);
@@ -112,6 +175,7 @@ function planSimproSync(job, t, nowIso) {
     const done = new Set(j.coDoneDismissed || []);
     const next = j.changeOrders.map(co => {
       if (!co || !OPEN_CO.includes(co.coStatus) || !co.id || sync.cos[co.id]) return co;
+      if (CO_HOLD.includes(coQuoteState(co, quotes))) return co;   // v626: its own quote is not closed in Simpro yet (see coQuoteState)
       touched = true;
       sync.cos[co.id] = nowIso;
       // Checked off exactly like the crew's "mark done" on the punch list (App.js markDone):
@@ -164,4 +228,4 @@ function undoPatch(job, entry) {
   return p;
 }
 
-module.exports = { planSimproSync, undoPatch, isDoneInApp, completePatch, FULL, CLOSED_STAGES, OPEN_CO, SYNC_BY };
+module.exports = { planSimproSync, undoPatch, isDoneInApp, completePatch, FULL, CLOSED_STAGES, OPEN_CO, SYNC_BY, coQuoteState, openCoQuoteNos, heldCos, carryTotals };

@@ -331,6 +331,10 @@ if (require.main === module) {
     { simproNo: "13", finishStatus: "complete", simproInvoicedPct: 100 },               // v553: finished and invoiced in full → no longer watched
   ];
   eq(fp.collectMoneyCandidates(cand, now), ["1", "3", "12", "5", "4", "8", "10", "2", "6", "9"], "ready to invoice, 55+ d COs, approved COs, finished with open COs, open jobs, then (v553) finished jobs not yet invoiced in full");
+  // v626 ship 2: finished and invoiced in full is still re-read while Simpro's amount last moved under 60 days ago
+  // (Barry #1406: $272 added in Simpro after it read 100%); after that, or with no date, it drops off as before.
+  const settle = (no, days) => ({ simproNo: no, finishStatus: "complete", simproInvoicedPct: 100, ...(days == null ? {} : { simproInvoicedSeenAt: ago(days).toISOString() }) });
+  eq(fp.collectMoneyCandidates([settle("20", 14), settle("21", 59), settle("22", 61), settle("23", null), { simproNo: "24", roughStatus: "inprogress" }], now), ["24", "20", "21"], "open jobs first, then finished jobs still settling");
   const many = Array.from({ length: 300 }, (_, i) => ({ simproNo: String(1000 + i), roughStatus: "inprogress" }));
   const capped = fp.collectMoneyCandidates([...many, { simproNo: "77", readyToInvoice: true, finishStatus: "complete" }], now);
   assert.strictEqual(capped.length, 250, "250 Simpro reads at most; ready to invoice always gets in");
