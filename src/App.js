@@ -14,6 +14,7 @@ import NeedShape from "./needShape";
 import JobNotesShape from "./jobNotesShape";
 import StageChange from "./stageChange";
 import PunchListStage from "./punchListStage";   // v624: the derived Punch List stage (Josh, 2026-11-11)
+import SchedMode from "./schedMode";   // v627: the scheduling pill reads Simpro live (Koy, 2026-11-11)
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import inspAtt from "./inspAttempts";
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
@@ -2820,6 +2821,34 @@ async function fetchSimproOnSchedulePids(httpsCallableFn, functionsInstance, for
 }
 function subscribeSimproPids(cb) { _simproPidsListeners.add(cb); return () => _simproPidsListeners.delete(cb); }
 function getCachedSimproPids() { return _simproPidsCache.pids; }
+// v627: is this job on Simpro's schedule in the next 14 days? true / false, or
+// null when unknown (no Simpro #, a quote, or the schedule hasn't loaded yet).
+// Read from the shared cache, so every screen answers the same way.
+function simproOnSchedule(job) {
+  const pids = _simproPidsCache.pids;
+  const sn = (job && job.type !== "quote") ? String(job.simproNo || "").trim() : "";
+  if (!pids || !sn) return null;
+  return pids.has(sn);
+}
+// v627: keeps that shared read fresh for the whole app, not only while a job page
+// is open: loads once signed in, re-asks every 10 minutes while the app is on
+// screen, and when the app comes back to the front with a read over 5 minutes
+// old. Each fresh read re-renders the caller so every pill redraws. Read-only.
+function useSimproOnSchedule(enabled) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const bump = () => setTick(t => t + 1);
+    const unsub = subscribeSimproPids(bump);
+    const load = () => { fetchSimproOnSchedulePids(httpsCallable, functions).catch(() => {}); };
+    const visible = () => typeof document === "undefined" || document.visibilityState === "visible";
+    load();
+    const iv = setInterval(() => { if (visible()) load(); }, SchedMode.REFRESH_MS);
+    const onVis = () => { if (visible()) load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { unsub(); clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [enabled]);
+}
 
 // v577: Rough / Finish tab hours from the nightly Job Costs split (settings/phaseHours, written by
 // phaseCostsNightly — hours only, never dollars). One read per 30 min, shared by every open job.
@@ -33894,10 +33923,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             needsHard={!!job.roughNeedsSchedHard}
                             onToggle={()=>{
                               const cur = deriveScheduleMode(job, "rough");
-                              const next = cur==="scheduled" ? "needsSched"
-                                        : cur==="needsSched"  ? "ongoing"
-                                        : cur==="ongoing"     ? "scheduled"
-                                        : "scheduled";
+                              // v627: while In Progress the pill follows Simpro, so the tap only offers what can be true.
+                              const next = SchedMode.nextMode(cur, job.roughStatus==="inprogress" ? simproOnSchedule(job) : null);
+                              if(!next) { toast.info(SchedMode.LOCKED_NOTE); return; }
                               u(applyScheduleMode(job, "rough", next));
                             }}
                             onSetNeedsDate={()=>openNeedsSchedModal("rough")}
@@ -34290,10 +34318,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             needsHard={!!job.finishNeedsSchedHard}
                             onToggle={()=>{
                               const cur = deriveScheduleMode(job, "finish");
-                              const next = cur==="scheduled" ? "needsSched"
-                                        : cur==="needsSched"  ? "ongoing"
-                                        : cur==="ongoing"     ? "scheduled"
-                                        : "scheduled";
+                              // v627: while In Progress the pill follows Simpro, so the tap only offers what can be true.
+                              const next = SchedMode.nextMode(cur, job.finishStatus==="inprogress" ? simproOnSchedule(job) : null);
+                              if(!next) { toast.info(SchedMode.LOCKED_NOTE); return; }
                               u(applyScheduleMode(job, "finish", next));
                             }}
                             onSetNeedsDate={()=>openNeedsSchedModal("finish")}
@@ -38549,8 +38576,9 @@ const deriveScheduleMode = (job, phase) => {
   if(!st) return null;
   if(st==="complete" || st==="invoice") return null;
   if(st==="inprogress") {
-    if(mode==="scheduled" || mode==="needsSched" || mode==="ongoing") return mode;
-    return "ongoing"; // default for in-progress when no explicit sub-state
+    // v627: On Schedule vs Ongoing comes from Simpro's live schedule when it is
+    // known; the saved sub-state only decides when Simpro is unknown (schedMode.js).
+    return SchedMode.inProgressMode(mode, simproOnSchedule(job));
   }
   if(st==="scheduled") return "scheduled";
   // "date_confirmed" → GC has given us a start date; we just need a crew.
@@ -44190,7 +44218,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
           // In Progress → schedule-presence pill. Manual value wins; else
           // derive from Simpro schedule (month pids set), else null.
           inProgressMode: rs==="inprogress"
-            ? (job.roughInProgressMode ||
+            ? (simproOnSchedule(job) !== null ? deriveScheduleMode(job, "rough") : job.roughInProgressMode ||
                (job.simproNo && simproAllSnos.has(String(job.simproNo)) ? "scheduled"
                 : (job.simproNo ? "ongoing" : null)))
             : null,
@@ -44216,7 +44244,7 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
           status:fs, statusLabel:isInv?"Ready to Invoice":(fsDef.label||"Projected"),
           desc:isInv?"Ready to Invoice":(fsDef.label||"Projected start date set"),
           inProgressMode: fs==="inprogress"
-            ? (job.finishInProgressMode ||
+            ? (simproOnSchedule(job) !== null ? deriveScheduleMode(job, "finish") : job.finishInProgressMode ||
                (job.simproNo && simproAllSnos.has(String(job.simproNo)) ? "scheduled"
                 : (job.simproNo ? "ongoing" : null)))
             : null,
@@ -46243,10 +46271,10 @@ function SchedulingForecast({ jobs: _allJobs, strictDivision = false, onSelectJo
                                         // "scheduled" (showing as ongoing) cycles ongoing→scheduled
                                         // rather than scheduled→needsSched.
                                         if(phaseMode) {
-                                          const next = effectiveMode==="scheduled" ? "needsSched"
-                                                    : effectiveMode==="needsSched"  ? "ongoing"
-                                                    : effectiveMode==="ongoing"     ? "scheduled"
-                                                    : "scheduled";
+                                          // v627: same rule as the job page (schedMode.js).
+                                          const _inProg = job[phaseKey==="rough"?"roughStatus":"finishStatus"]==="inprogress";
+                                          const next = SchedMode.nextMode(effectiveMode, _inProg ? simproOnSchedule(job) : null);
+                                          if(!next) { toast.info(SchedMode.LOCKED_NOTE); return; }
                                           const patch = applyScheduleMode(job, phaseKey, next);
                                           if(Object.keys(patch).length) onUpdateJob({ ...job, ...patch }, patch);
                                         } else {
@@ -62386,8 +62414,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v626
+**Last manifest update:** 2026-11-11 · App SW version: v627
 ---
+
+- **The scheduling pill reads Simpro live: On Schedule / Ongoing is right without the refresh arrow, on every screen** · 'in-flight 2026-11-11' · 'SW v627' · 'schedMode.js' · 'inProgressMode' · 'nextMode' · 'simproOnSchedule' · 'useSimproOnSchedule' · 'deriveScheduleMode' · 'getSimproSchedule' · Koy, looking at a grey Ongoing pill beside a Finish status: *"this grey on going is kinda pointless because i have to click the refresh everytime for it to be accurate. investigate and automate."* **What was wrong:** the pill showed a value saved on the job ('roughInProgressMode' / 'finishInProgressMode'). The job page asked Simpro *is this job on the schedule in the next 14 days?* only while that field was blank, saved the answer, and never asked again (the one exception: a saved Needs Sched flipped to On Schedule). A job booked later kept saying Ongoing, and a job that fell off the schedule kept saying On Schedule, until someone tapped the refresh arrow; and that only ran on an open job page, so the Job Board, job cards and Crew Planner rows of jobs nobody opened were stale too. **Now:** pure 'src/schedMode.js' decides. For a phase that is In Progress, 'deriveScheduleMode' (the one function behind the job page pills, the job card, the board row and the Crew Planner row) asks the shared Simpro read each time it draws: on Simpro's schedule in the next 14 days → **On Schedule**; Simpro read and not on it → **Ongoing**, unless a person flagged **Needs Sched**, which stays until Simpro has the job; Simpro unknown (no Simpro #, a quote, or not loaded yet) → the saved value, exactly as before. Forecast and Huddle rows use the same answer instead of letting the saved value win. 'useSimproOnSchedule' (mounted in 'App' once signed in) keeps that read fresh for the whole app: on load, every 10 minutes while the app is on screen, and when it comes back to the front with a read over 5 minutes old; each fresh read redraws every pill. **Taps:** same pill, same tap count, nothing removed (the refresh arrow stays and still forces a re-read). While In Progress the tap only offers what can be true: not on Simpro's schedule → Ongoing ⇄ Needs Sched; on Simpro's schedule → the tap says *This job is on Simpro's schedule in the next 14 days. Change the schedule in Simpro.* (the old tap saved Needs Sched and the app put it straight back). Other statuses and unknown Simpro keep the old three-way cycle. **Server:** 'getSimproSchedule' read ONE page of Simpro's schedule (newest 250 of about 21,000 rows) and filtered by date afterwards, so the first rows to fall off were today's. With both dates given it now asks Simpro for that range ('Date=between') and pages through it, up to 2,000 rows. That feeds this pill, the Crew Planner, Forecast, Huddle and the dashboard's crew coverage. Tests: new 'scripts/sched-mode-test.js' (40 checks, in prebuild: the rule, the tap, and the App.js + server wiring). Guides 'rough.html' + 'finish.html' updated. **Why it won't lose data:** display only. No new field and no new write: the pill is worked out from data already loaded plus a read-only Simpro call; the hook has no 'setDoc' / 'updateDoc' / 'saveJob' (a test pins that). The saved sub-state fields are untouched and still used when Simpro is unknown, so reverting the code reverts the pill. The two existing job-page writes (blank → Simpro's answer; Needs Sched → On Schedule once booked) are unchanged. No loader or rules change; the one function change is read-only on Simpro.
 
 - **Dashboard feeds you can trust: dated Simpro totals, a change order closes only when its own quote does, daily history, and every nightly pull leaves a pass / fail stamp** · 'in-flight 2026-11-11' · 'SW v626' (Cloud Functions; needs 'firebase deploy --only functions') · 'dailySimproTotals' · 'simproSync.carryTotals' · 'simproSync.coQuoteState' · 'collectMoneyCandidates' · 'dashHistoryNightly' · 'functions/dashHistory.js' · 'runGoalsPull' · Ship 2 of 'docs/superpowers/plans/2026-11-11-dashboard-truth-and-efficiency.md' (Koy 2026-11-11: *"keep going with ship 2"*). No screen changes; it makes what the dashboard reads right and leaves a record. **(1) Simpro totals are dated and whole.** 'settings/simproTotals.byNo' and '.quotes' were deep-merged, so an entry stayed forever once the pull stopped reading that job, with nothing to say how old it was. Every entry now carries its own 'at'; the maps are written whole ('mergeFields'); an entry not re-read keeps its own date (entries from before this carry the old doc's date with 'atGuess: true'); one whose job left the app, or over 180 days old, is dropped. **(2) Finished jobs are still watched for 60 days.** A job finished here and invoiced in full fell off the pull list that day, so a late change order or credit added in Simpro was never seen (Barry #1406, 2026-11-11: $272 added after it read 100%). 'collectMoneyCandidates' now keeps re-reading it while 'simproInvoicedSeenAt' is under 60 days old. **(3) A change order is completed only once its own quote is closed.** The v553 sync completed every approved / scheduled CO on a job invoiced in full, assuming its quote was already inside the job. A CO approved after the job hit 100% still has its own open quote in Simpro, and completing it cleared the reminder to bill it. The morning pull now also reads those COs' quotes ('openCoQuoteNos', Simpro 'IsClosed'), and 'planSimproSync(job, totals, now, quotes)' completes a CO with a quote number only when that quote is closed; open, unread or archived / declined holds it (listed as 'held' in 'syncLast.rows', no job write). A CO with no quote number completes as before. **(4) History.** New 'dashHistoryNightly' (6:45 AM MT, daily) writes one small create-only row to 'dash_history/{YYYY-MM-DD}' (Goals margin and hours, per technician, warranty share, store runs, in-progress contract / invoiced / left to bill) and 'settings/dashFeeds' (each feed's last good data time, late or failed). 'dash_history' is added to the nightly backup. The first Goals pull of a new year first keeps last year's final doc as 'settings/goalsSimpro_<year>' (it used to be overwritten). **(5) Run stamps.** 'scoreboardNightly', 'goalsNightly', 'phaseCostsNightly', 'dailySimproTotals' and 'dashHistoryNightly' each stamp 'settings/autoDocRuns.feed*' with ok / error, so a failed night is on record. Tests: new 'scripts/dash-history-test.js' (in prebuild; feed health incl. weekends, the daily row, year end, carry-forward), 'scripts/simprosync-test.js' (+10 checks on the Mangum #920 shape), 'scripts/odash-model-test.js' (+1, the 60-day list). Not built here: the dashboard line that shows feed health and the per-entry age (ship 3); app-side counts in history. **Why it won't lose data:** the only job write is the existing morning sync, and it now writes LESS (a change order it would have completed is left as it is until its quote closes; nothing it already completed is touched, and Undo is unchanged). 'settings/simproTotals' keeps every entry for a job still in the app, now with a date. The new function only reads four settings docs and writes two new places ('dash_history', 'settings/dashFeeds'); the year-end copy is create-only and, if it cannot be written, the Goals pull stops and the old doc stays. No Firestore rules change (browsers cannot read 'dash_history'; the catch-all denies it).
 
@@ -72720,6 +72750,8 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
+  // v627: keep Simpro's "on the schedule" read fresh app-wide so every scheduling pill is live.
+  useSimproOnSchedule(!!identity);
   // v433 usage tracking: count only for a logged-in internal identity. Set at
   // render time (idempotent) so JobDetail's tab effect — a child effect, which
   // runs before this component's effects — already sees it on first mount.

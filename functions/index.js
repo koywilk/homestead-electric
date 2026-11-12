@@ -4543,19 +4543,34 @@ exports.getSimproJobOrderedQty = functions
   });
 
 // ─── Get Simpro Schedule ──────────────────────────────────────────────────────
+// v627 (audit 2026-11-11): Simpro lists schedules newest date first, 250 a page,
+// about 21,000 rows in all. This used to read ONE page with no date filter and
+// then filter by date here, so it only ever saw the newest 250 rows: fine while
+// little is booked ahead, but the first rows to fall off are today's. With both
+// dates given it now asks Simpro for just that range (Date=between) and pages
+// through it, up to 8 pages (2,000 rows; about 14 weeks at the current rate).
+// With a date missing it behaves as before. Read-only on Simpro; no Firestore.
+const SIMPRO_SCHEDULE_MAX_PAGES = 8;
+const isIsoDay = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
 exports.getSimproSchedule = functions.https.onCall(async (data) => {
     requireAppKey(data);
   const { dateFrom, dateTo } = data || {};
+  const ranged = isIsoDay(dateFrom) && isIsoDay(dateTo);
+  const base = `${SIMPRO_BASE}/schedules/?pageSize=250${ranged ? `&Date=between(${dateFrom},${dateTo})` : ""}`;
 
-  const url = `${SIMPRO_BASE}/schedules/?pageSize=250`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
-  });
-  if (!resp.ok) {
-    throw new functions.https.HttpsError("internal", `Simpro error: ${resp.status}`);
+  let schedules = [];
+  for (let page = 1; page <= (ranged ? SIMPRO_SCHEDULE_MAX_PAGES : 1); page++) {
+    const resp = await fetch(`${base}&page=${page}`, {
+      headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
+    });
+    if (!resp.ok) {
+      throw new functions.https.HttpsError("internal", `Simpro error: ${resp.status}`);
+    }
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) break;
+    schedules = schedules.concat(rows);
+    if (rows.length < 250) break;
   }
-
-  let schedules = await resp.json();
 
   if (dateFrom) schedules = schedules.filter(s => s.Date >= dateFrom);
   if (dateTo)   schedules = schedules.filter(s => s.Date <= dateTo);
