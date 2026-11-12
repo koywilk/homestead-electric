@@ -74,10 +74,34 @@ ok(!P.isPunchListJob(hideout, "scheduled"), "not started never");
 for (const k of [{ quickJob: true }, { tempPed: true }, { type: "quote" }, { division: "commercial" }])
   ok(!P.isPunchListJob({ ...casten, ...k }, "complete"), "never on " + JSON.stringify(k));
 
+// v625: the Finish dropdown's "Punch List" choice (finishPunchList flag).
+const low = { name: "Ashcraft", finishStatus: "inprogress", finishStage: "45%", finishPunch: tree([item("a")]) };
+ok(!P.isPunchListJob(low, "inprogress"), "Ashcraft 45% is not on Punch List by itself");
+ok(P.isPunchListJob({ ...low, finishPunchList: true }, "inprogress"), "picked by hand → Punch List at any %");
+ok(P.isPunchListJob({ ...low, finishPunch: {}, finishPunchList: true }, "inprogress"), "picked by hand → Punch List even with nothing open");
+ok(!P.isPunchListJob({ ...hideout, finishPunchList: false }, "inprogress"), "foreman kept it off → stays in Finish at 95% with open items");
+ok(P.isPunchListJob({ ...hideout, finishPunchList: null }, "inprogress"), "cleared flag → the automatic rule again");
+ok(!P.isPunchListJob({ ...low, finishPunchList: true }, "waiting"), "On Hold beats the flag");
+ok(!P.isPunchListJob({ ...casten, finishPunch: {}, finishPunchList: true }, "complete"), "Complete ignores the flag (nothing open → Completed)");
+ok(P.isPunchListJob({ ...casten, finishPunchList: false }, "complete"), "Complete ignores a false flag too (open items → Punch List)");
+const opts = P.finishStatusOptions([{ value: "" }, { value: "scheduled" }, { value: "inprogress" }, { value: "waiting" }, { value: "complete" }]).map(o => o.value);
+ok(JSON.stringify(opts) === JSON.stringify(["", "scheduled", "inprogress", "punchlist", "waiting", "complete"]), "dropdown: Punch List right after In Progress");
+ok(P.finishStatusShown(hideout, "inprogress") === "punchlist", "dropdown shows Punch List for an automatic one");
+ok(P.finishStatusShown({ ...low, finishPunchList: true }, "inprogress") === "punchlist", "dropdown shows Punch List when picked");
+ok(P.finishStatusShown(low, "inprogress") === "inprogress", "dropdown shows In Progress otherwise");
+ok(P.finishStatusShown(casten, "complete") === "complete", "a completed job's dropdown still says Complete");
+const pk = (j, v) => JSON.stringify(P.punchListPick(j, j.finishStatus, v));
+ok(pk(low, "punchlist") === JSON.stringify({ status: "inprogress", finishPunchList: true }), "pick Punch List → stored as In Progress + flag");
+ok(pk(hideout, "inprogress") === JSON.stringify({ status: "inprogress", finishPunchList: false }), "pick In Progress while it shows Punch List → kept off");
+ok(pk(low, "inprogress") === JSON.stringify({ status: "inprogress", finishPunchList: null }), "pick In Progress otherwise → flag cleared");
+for (const v of ["", "scheduled", "waiting", "complete"]) ok(JSON.parse(pk({ ...low, finishPunchList: true }, v)).finishPunchList === null && JSON.parse(pk(low, v)).status === v, "pick " + (v || "unset") + " clears the flag");
+
 // App.js wiring: one rule, sections exclusive.
 const app = fs.readFileSync(path.join(__dirname, "../src/App.js"), "utf8");
 const sec = (key) => { const m = app.match(new RegExp(`\\{ key:"${key}",[^\\n]*\\n\\s*(?:extra:[^\\n]*\\n\\s*)?test:[^\\n]*(?:\\n\\s+\\|\\|[^\\n]*)*`)); return m ? m[0] : ""; };
 ok(/import PunchListStage from "\.\/punchListStage"/.test(app), "App.js imports the module");
+ok(/<select value=\{fsShown\}/.test(app) && /finishStatusOptions\(FINISH_STATUSES\)\.map/.test(app), "the Finish dropdown offers and shows Punch List");
+ok(/const pick=punchListPick\(job, effFS\(job\), e\.target\.value\);/.test(app) && /finishPunchList:pick\.finishPunchList/.test(app), "the Finish dropdown writes the flag");
 ok(/isPunchList\(j\)/.test(sec("punchList")), "Punch List section tests isPunchList");
 ok(/!isPunchList\(j\)/.test(sec("finish")), "Finish In Progress excludes Punch List jobs");
 const ci = app.indexOf('{ key:"complete",'); const complete = ci > 0 ? app.slice(ci, app.indexOf("\n];", ci)) : "";

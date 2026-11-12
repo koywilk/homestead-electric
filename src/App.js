@@ -46,7 +46,7 @@ const { sameName, needAssignee, needUpdates, dueBucketFromDate, needWorkReset, n
 // defined here too (the module keeps its own identical one-liner; the ship-7
 // test pins the two lines equal).
 const { stageChangePlan, READY_TO_INVOICE_ALERTS } = StageChange;
-const { punchListOpen, isPunchListJob, punchListLine } = PunchListStage;
+const { punchListOpen, isPunchListJob, punchListLine, finishStatusOptions, finishStatusShown, punchListPick } = PunchListStage;
 // Open a stored URL only if it is actually navigable. React does NOT block
 // javascript: URLs, and photo/attachment records live in anonymously-writable
 // collections — so an unsafe value must simply do nothing, not open a tab.
@@ -34231,7 +34231,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Finish Stage" color={C.finish} defaultOpen={true}>
                 {(()=>{
-                  const fsDef = getStatusDef(FINISH_STATUSES, job.finishStatus);
+                  // v625: the dropdown also offers Punch List (punchListStage.js).
+                  const fsShown = finishStatusShown(job, effFS(job));
+                  const fsDef = fsShown === "punchlist" ? { value:"punchlist", label:"Punch List", color:"#A8505E" } : getStatusDef(FINISH_STATUSES, job.finishStatus);
                   return (
                     <div style={{marginBottom:12}}>
 
@@ -34250,8 +34252,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             </span>
                           );
                         })()}
-                        <select value={job.finishStatus||""} onChange={e=>{
-                          const v=e.target.value;
+                        <select value={fsShown} onChange={e=>{
+                          const pick=punchListPick(job, effFS(job), e.target.value);
+                          const v=pick.status;
                           if(v==="complete"){
                             const finishOpen=punchOpen(job.finishPunch);
                             const qcOpen=punchOpen(job.qcPunch);
@@ -34270,12 +34273,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
                             ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
+                            ...((pick.finishPunchList!==null || job.finishPunchList!=null) ? {finishPunchList:pick.finishPunchList} : {}),
                           });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:13,fontFamily:"inherit",
                           fontWeight:fsDef.color?700:400,outline:"none",cursor:"pointer"}}>
-                          {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                          {finishStatusOptions(FINISH_STATUSES).map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {job.finishStatus && job.finishStatus!=="complete" && job.finishStatus!=="invoice" && (
                           <InProgressModePill
@@ -62316,8 +62320,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v624
+**Last manifest update:** 2026-11-11 · App SW version: v625
 ---
+
+- **Punch List is a choice in the Finish status dropdown, and a foreman's call sticks** · 'in-flight 2026-11-11' · 'SW v625' · 'finishPunchList' · 'finishStatusOptions' · 'finishStatusShown' · 'punchListPick' · Koy, after v624 (the Punch List stage was automatic only): *"why do i not see punch list as an option in the app?"*, then picked **Add to dropdown**. The Finish tab's status dropdown now lists **Punch List** right after In Progress. Picking it saves 'finishStatus: "inprogress"' plus **'finishPunchList: true'**. It is not a new status value, because the Crew Planner, Up Next, schedule pills and the server reports all read "inprogress". The automatic v624 rule stays as the backstop. 'finishPunchList' is three-way and counts only while finish is In Progress: 'true' = on Punch List at any % (even with nothing open), 'false' = kept off (written only when In Progress is picked while the dropdown showed Punch List), unset/null = the automatic rule. Complete jobs always use the automatic rule, so a return trip added later still pulls them back. On Hold beats the flag. Any other pick writes 'finishPunchList: null' (only if the job already has one). The dropdown shows Punch List whenever finish is In Progress and the job is on Punch List, by hand or on its own. The Job Board card pill reads "Finish: Punch List". The Complete gate is unchanged. Not changed: the stage % select ('stageChangePlan', shared with duetApi) and Duet's status writer. A flag left 'true' on a job finished through 100% is ignored while Complete. Tests: 'scripts/punch-list-stage-test.js' grew to 56 checks (flag on/off/cleared, hold, complete, option order, what the dropdown shows, what each pick writes, the App.js wiring). Guide 'finish.html' updated. Crew brief 'docs/crew-briefs/v625.md'. **Why it won't lose data:** one new field, 'finishPunchList', inside the job's data (the loader already spreads 'data'), written only by the Finish dropdown through the same 'u()' save funnel that writes 'finishStatus'. The status fields a pick writes are exactly what that pick wrote before ("Punch List" writes what "In Progress" writes). No loader, rules or Cloud Function change, and no existing field changes meaning.
 
 - **Punch List stage on the Job Board: finish 90%+ (or Complete) with anything still open sits between Finish In Progress and Completed, on its own** · 'in-flight 2026-11-11' · 'SW v624' · 'punchListStage.js' · 'isPunchListJob' · 'isPunchList' · 'STAGE_SECTIONS' · 'pipelineTiles' · 'jobStageBand' · 'odPhase' · Josh (2026-11-11 email): seven stages in the app and Simpro, *"Add a Punch List stage to the app between Finish and Completed. Right now it jumps straight from Finish to Completed, and that's where most of the mismatches come from."* What the live data showed: the 100% gate already refuses Finish while finish punch or QC items are open, so loose-end jobs sat in Finish In Progress at 95% for months (The Hideout #1302, Austin Cloward #1187), and 11 jobs marked Complete still had open finish punch or a return trip (Casten-Vaught 8 items, Maddox 10 + a trip). **The rule** (pure 'src/punchListStage.js', shared by every place that files a job): a full residential job is on **Punch List** when its effective finish status is In Progress at **90%+** or Complete (legacy 'invoice' too) **and** something is open: a finish punch item (not done, not voided, every floor incl. extras and hot check), a legacy QC-walk item ('qcPunch', the same two trees the 100% gate counts), a failed final-inspection item not marked done, or a return trip that isn't 'rtStatus: "complete"' and isn't signed off. It leaves when the last one closes. On Hold stays On Hold; quick jobs, temp peds, quotes and commercial never; rough punch doesn't count. **Where:** a new 'punchList' section in 'STAGE_SECTIONS' between Finish In Progress and Completed (both now exclude Punch List jobs, so no job shows twice; the folded header shows "N open items"), which carries it to the main board, each foreman page and the pipeline strip (new "Punch List" tile); the job page band reads PUNCH LIST with the open line; '/dashboard''s 'odPhase' gets a "Punch list" stage (counted active, not done; not in 'OD_UNDERWAY', so quiet-job lists are unchanged). No new taps, by design (Koy: redesigns never add taps): a dropdown option would drift the way Simpro did. Moves 13 live jobs (2 from Finish, 11 back from Completed). Preview with the live jobs + simulator: 'docs/mockups/punch-list-stage.html' (claude.ai/artifact/S2auKAESLv7bmUMyunVZtm). Tests: new 'scripts/punch-list-stage-test.js' (in prebuild; real-shaped Hideout, Austin Cloward, Casten-Vaught, Helmondollar, Vista Meadows, Rose, plus the App.js wiring); 'scripts/odash-model-test.js' sandbox gets the module. Guides 'finish.html' + 'dashboard.html' updated. **Why it won't lose data:** derived only. No field, save, 'saveJob'/'updateDoc', loader, rules or Cloud Function change; it reads fields the job already has, and 'simproSync''s "done in app" check is untouched, so no job's stored status moves. Reverting the code reverts the board.
 
@@ -75754,7 +75760,7 @@ function App() {
             {prepAlert&&<Pill label="Redline plans need update" color="#C62828" onClick={()=>openJobById(job.id,"Plans & Links")} onHold={()=>setPillFilter({label:"Redline needs update", test:j=>j.prepStage===PREP_STAGE_ALERT})}/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#6A3FB5" onClick={()=>openJobById(job.id,"Return Trips")}/>}
             {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim} onClick={()=>openJobById(job.id,"Rough")} onHold={()=>setPillFilter({label:"Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs), test:j=>effRS(j)===rs})}/>}
-            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim} onClick={()=>openJobById(job.id,"Finish")} onHold={()=>setPillFilter({label:"Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs), test:j=>effFS(j)===fs})}/>}
+            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):isPunchList(job)?"Finish: Punch List":("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={isPunchList(job)?"#A8505E":(getStatusDef(FINISH_STATUSES,fs).color||C.dim)} onClick={()=>openJobById(job.id,"Finish")} onHold={()=>setPillFilter({label:"Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs), test:j=>effFS(j)===fs})}/>}
             {job.matterportStatus&&job.matterportStatus!=="complete"&&<Pill label={job.matterportStatus==="scheduled"&&job.matterportStatusDate?"Matterport: "+fmtDisplay(job.matterportStatusDate):("Matterport: "+(getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).label||job.matterportStatus))} color={getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).color||C.dim} onClick={()=>openJobById(job.id,"Plans & Links")}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 

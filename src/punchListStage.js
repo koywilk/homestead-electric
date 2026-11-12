@@ -16,6 +16,16 @@
 //     final-inspection item, or a return trip that isn't done.
 // It leaves the moment the last one closes. On Hold always stays On Hold.
 //
+// v625 (Koy: "Add to dropdown"): the Finish status dropdown also offers
+// "Punch List", so a foreman can put a job there by hand. That writes ONE flag,
+// finishPunchList, next to finishStatus "inprogress" (never a new status value:
+// the Crew Planner, Up Next and the server reports all read "inprogress"):
+//   true  = on Punch List, whatever the % or open count (the foreman's call)
+//   false = kept off it (foreman picked In Progress while it showed Punch List)
+//   unset = the automatic rule above decides
+// The flag only counts while finish is In Progress. Complete jobs always use the
+// automatic rule, so a return trip added after Complete still pulls them back.
+//
 // Pure, CommonJS, no requires — the CRA bundle imports it (App.js) and
 // scripts/punch-list-stage-test.js drives the exact file that ships.
 "use strict";
@@ -64,8 +74,34 @@ function isPunchListJob(job, fs) {
   const j = job || {};
   if (j.tempPed || j.quickJob || j.type === "quote" || j.division === "commercial") return false;
   const done = fs === "complete" || fs === "invoice";
+  if (fs === "inprogress" && j.finishPunchList === true) return true;
+  if (fs === "inprogress" && j.finishPunchList === false) return false;
   if (!done && !(fs === "inprogress" && parseStage(j.finishStage) >= PUNCH_LIST_FROM_PCT)) return false;
   return punchListOpen(j).total > 0;
+}
+
+// v625: the Finish dropdown's choices: the shared status list with "Punch List"
+// right after In Progress. FINISH_STATUSES itself is untouched (it is pinned to
+// the server's copy and read in many places).
+function finishStatusOptions(statuses) {
+  const out = [];
+  (statuses || []).forEach(s => { out.push(s); if (s && s.value === "inprogress") out.push({ value: "punchlist", label: "Punch List" }); });
+  return out;
+}
+// What the dropdown shows: "punchlist" while finish is In Progress and the job
+// is on Punch List (by hand or automatically), else the stored status.
+function finishStatusShown(job, fs) {
+  const j = job || {};
+  return fs === "inprogress" && isPunchListJob(j, fs) ? "punchlist" : (j.finishStatus || "");
+}
+// The extra fields a dropdown pick writes, next to the status patch the app
+// already builds. v = the picked value. Returns { status, finishPunchList }:
+// status is what finishStatus becomes ("punchlist" is stored as "inprogress").
+function punchListPick(job, fs, v) {
+  if (v === "punchlist") return { status: "inprogress", finishPunchList: true };
+  // In Progress picked while it showed Punch List: the foreman says it isn't.
+  if (v === "inprogress" && finishStatusShown(job, fs) === "punchlist") return { status: "inprogress", finishPunchList: false };
+  return { status: v, finishPunchList: null };
 }
 
 // "2 punch items · 1 return trip" — what's keeping it here, in plain words.
@@ -80,4 +116,4 @@ function punchListLine(open) {
   ].filter(Boolean).join(" · ");
 }
 
-module.exports = { PUNCH_LIST_FROM_PCT, openPunchItems, punchListOpen, isPunchListJob, punchListLine };
+module.exports = { PUNCH_LIST_FROM_PCT, openPunchItems, punchListOpen, isPunchListJob, punchListLine, finishStatusOptions, finishStatusShown, punchListPick };
