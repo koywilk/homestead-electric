@@ -49656,6 +49656,8 @@ function OdItem({ color, icon, tag, tagColor, title, sub, when, onClick }) {
 }
 
 // ── Claude tab helpers (2026-11-04) ─────────────────────────────────────────
+// v632: Koy's one-on-one tracker (a claude.ai page he keeps), linked from his view of the Claude tab.
+const OD_ONE_ON_ONES_URL = "https://claude.ai/artifact/WmbyjZwfMexKgrgdV9qoPR";
 // A change row's job as Koy reads it: number then name ("1443 Koplin Residence").
 function odClaudeJobLabel(r, jobs) {
   const j = r.jobId ? (jobs || []).find(x => x && String(x.id) === String(r.jobId)) : null;
@@ -53038,6 +53040,12 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
           </div> : null}
           <button type="button" className="od-mini-btn" onClick={() => setClaudeTick(t => t + 1)}>Refresh</button>
         </div></div>
+      {/* v632: Koy's one-on-one tracker for the residential team, a claude.ai page. Koy's view only:
+          the page is private to him, so the owners' view leaves the link off. Opens in a new tab. */}
+      {isKoy && !claudeOwners ? <div className="od-white od-pad"><div className="od-list">
+        <OdItem color={OD_G} icon="users" tag="One-on-Ones" title="Residential team one-on-one tracker" sub="your page on claude.ai · opens in a new tab"
+          when="Open" onClick={() => { try { window.open(OD_ONE_ON_ONES_URL, "_blank", "noopener,noreferrer"); } catch (e) {} }}/>
+      </div></div> : null}
       {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
       {cd === undefined ? <div className="od-white od-pad">Loading…</div> : cd && cd.ok === false ? <div className="od-white od-pad">Couldn't load this: {cd.err || "try Refresh"}</div> : <>
         <div className="od-minis">
@@ -62604,8 +62612,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v631
+**Last manifest update:** 2026-11-13 · App SW version: v632
 ---
+
+- **One-on-Ones link on the Claude tab: Koy's residential team one-on-one tracker opens in a new tab** · 'in-flight 2026-11-12' · 'SW v632' · 'OD_ONE_ON_ONES_URL' · Koy: *"let's add it to the dashboard as well"*. In Koy's view of the Claude tab (not the owners' view), one card above the sections opens his one-on-one tracker, a claude.ai page, in a new tab ('noopener,noreferrer'). Link only: nothing is read or written. Guide 'dashboard.html'. **Why it won't lose data:** one link; no read, save, loader, rules or Cloud Function change.
 
 - **Schedule calendar shows 7, 14 or 30 days** · 'in-flight 2026-11-13' · 'SW v631' · 'OfficeDash' · 'odCalDays' · 'rangeApplies' · Koy 2026-11-13, with a screenshot of the Schedule tab: "would love to be able to see the 14 day and 30 day calendars here." The 7 / 14 / 30 day switch at the top of /dashboard was greyed out on Schedule; it now drives the calendar there too. 14 days is two rows of seven columns, 30 is a week per row, same item cards, same tap to open the job, same time-off line. The arrows move a whole span; picking a span goes back to today. Crew Planner weeks load for every week on screen so "Nobody assigned" stays true further out. Screen only: no data is written. The four cards above and the lists below keep their own fixed windows.
 
