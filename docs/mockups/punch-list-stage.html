@@ -1,0 +1,345 @@
+<title>Punch List Stage</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one reading column; a live "try it" board in the middle; the 13 real jobs below. */
+:root{
+  --bg:#F3F4F6; --card:#FFFFFF; --ink:#1B1F24; --dim:#5C6470; --faint:#8A929C; --line:#E1E4E9;
+  --finish:#6A7BAA; --punch:#A8505E; --done:#2E8B57; --hold:#5E6A78; --steel:#2F6BC0;
+  --finish-t:#6A7BAA1A; --punch-t:#A8505E1C; --done-t:#2E8B571A;
+  --shadow:0 1px 2px rgba(20,24,30,.06),0 6px 18px rgba(20,24,30,.07);
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12151A; --card:#1B2027; --ink:#E8EBEF; --dim:#A6AEB8; --faint:#7C8591; --line:#2C333C;
+  --finish:#93A3D6; --punch:#E08592; --done:#5CC28A; --hold:#9AA6B4; --steel:#66A8FF;
+  --finish-t:#93A3D622; --punch-t:#E0859224; --done-t:#5CC28A22;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12151A; --card:#1B2027; --ink:#E8EBEF; --dim:#A6AEB8; --faint:#7C8591; --line:#2C333C;
+  --finish:#93A3D6; --punch:#E08592; --done:#5CC28A; --hold:#9AA6B4; --steel:#66A8FF;
+  --finish-t:#93A3D622; --punch-t:#E0859224; --done-t:#5CC28A22;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 64px}
+.wrap{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:34px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;letter-spacing:.01em}
+h1{font-size:clamp(34px,6vw,52px);line-height:1;text-transform:uppercase;font-weight:800}
+h2{font-size:26px;text-transform:uppercase;font-weight:700}
+h3{font-size:19px;font-weight:700}
+p{margin:0;max-width:68ch}
+.eyebrow{font-family:var(--display);font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:13px;color:var(--steel)}
+.lede{color:var(--dim);font-size:17px}
+.sec{display:flex;flex-direction:column;gap:14px}
+.card{background:var(--card);border-radius:14px;box-shadow:var(--shadow);padding:18px}
+.num{font-variant-numeric:tabular-nums}
+
+/* the rule as a flow */
+.flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:stretch}
+.stage{border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.stage .nm{font-family:var(--display);font-weight:800;font-size:22px;text-transform:uppercase;letter-spacing:.03em}
+.stage small{color:var(--dim);font-size:13.5px}
+.s-fin{background:var(--finish-t);color:var(--finish)} .s-pl{background:var(--punch-t);color:var(--punch);outline:2px solid var(--punch);outline-offset:-2px}
+.s-done{background:var(--done-t);color:var(--done)}
+.arrow{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;color:var(--faint);font-size:12px;text-align:center;max-width:120px}
+.arrow b{font-size:22px;line-height:1;color:var(--ink)}
+@media (max-width:720px){.flow{grid-template-columns:1fr}.arrow{flex-direction:row;max-width:none;gap:8px}.arrow b{transform:rotate(90deg)}}
+
+.open-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.open-list div{background:var(--card);border-radius:10px;padding:12px 14px;box-shadow:var(--shadow);font-size:14px}
+.open-list b{display:block;font-family:var(--display);font-size:17px;text-transform:uppercase;letter-spacing:.03em}
+
+/* pipeline strip, as the Job Board draws it */
+.pipe{display:flex;flex-wrap:wrap;gap:10px}
+.pipe .total{flex:1 1 120px;background:#2B1F18;color:#fff;border-radius:12px;padding:12px 18px}
+.pipe .tiles{flex:999 1 520px;display:flex;flex-wrap:wrap;gap:2px;border-radius:12px;overflow:hidden;box-shadow:var(--shadow);min-width:0}
+.tile{flex:1 1 120px;padding:12px 16px;background:var(--card);display:flex;flex-direction:column;gap:1px}
+.tile .n{font-family:var(--display);font-weight:800;font-size:34px;line-height:1}
+.tile .l{font-size:13px;font-weight:600}
+.tile .d{font-size:12px;color:var(--dim);min-height:16px}
+.tile.new{background:linear-gradient(var(--punch-t),var(--punch-t)),var(--card)}
+
+/* try it */
+.try{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px}
+@media (max-width:820px){.try{grid-template-columns:1fr}}
+.ctrl{display:flex;flex-direction:column;gap:14px}
+label.f{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+select{font:inherit;font-size:15px;padding:9px 10px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);max-width:100%}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:inherit;font-size:14px;font-weight:600;padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--card);border-color:var(--ink)}
+.chip:focus-visible,select:focus-visible,.item input:focus-visible+span,button:focus-visible,summary:focus-visible{outline:2px solid var(--steel);outline-offset:2px}
+.items{display:flex;flex-direction:column;gap:4px;max-height:330px;overflow:auto;padding-right:4px}
+.item{display:flex;gap:10px;align-items:flex-start;padding:7px 9px;border-radius:8px;cursor:pointer;font-size:14px}
+.item:hover{background:var(--bg)}
+.item input{margin-top:3px;accent-color:var(--done);width:16px;height:16px;flex:none}
+.item.off span{color:var(--faint);text-decoration:line-through}
+.kind{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:5px;background:var(--bg);color:var(--dim);margin-right:6px;white-space:nowrap}
+.kind.trip{background:var(--punch-t);color:var(--punch)}
+.board{display:flex;flex-direction:column;gap:8px}
+.lane{border-radius:11px;border:1px dashed var(--line);padding:10px 12px;min-height:58px;display:flex;flex-direction:column;gap:8px;transition:background .25s}
+.lane h4{margin:0;font-family:var(--display);font-size:15px;text-transform:uppercase;letter-spacing:.06em;display:flex;justify-content:space-between;gap:8px}
+.lane.on{border-style:solid}
+.lane[data-k="finish"] h4{color:var(--finish)} .lane[data-k="punch"] h4{color:var(--punch)} .lane[data-k="done"] h4{color:var(--done)} .lane[data-k="hold"] h4{color:var(--hold)}
+.lane[data-k="finish"].on{background:var(--finish-t);border-color:var(--finish)} .lane[data-k="punch"].on{background:var(--punch-t);border-color:var(--punch)}
+.lane[data-k="done"].on{background:var(--done-t);border-color:var(--done)} .lane[data-k="hold"].on{border-color:var(--hold)}
+.jc{background:var(--card);border-radius:9px;box-shadow:var(--shadow);padding:10px 12px;animation:pop .35s ease}
+.jc b{display:block} .jc small{color:var(--dim)}
+@keyframes pop{from{transform:scale(.96);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.jc{animation:none}.lane{transition:none}}
+.why{font-size:14px;color:var(--dim);border-left:3px solid var(--punch);padding-left:10px}
+.band{display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:9px;background:var(--punch-t);color:var(--punch)}
+.band b{font-family:var(--display);font-size:22px;letter-spacing:.06em;text-transform:uppercase}
+.mini{font-size:12px;color:var(--faint)}
+
+/* jobs table */
+.tbl{overflow-x:auto;border-radius:14px;box-shadow:var(--shadow);background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
+th{font-family:var(--display);text-transform:uppercase;letter-spacing:.06em;font-size:13px;color:var(--dim);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.grp td{background:var(--bg);font-family:var(--display);font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
+td details summary{cursor:pointer;color:var(--punch);font-weight:600}
+td details ul{margin:6px 0 0;padding-left:18px;color:var(--dim)}
+.pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-done{background:var(--done-t);color:var(--done)} .p-fin{background:var(--finish-t);color:var(--finish)} .p-pl{background:var(--punch-t);color:var(--punch)}
+.flag{color:var(--punch);font-weight:600}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.grid2 .card{display:flex;flex-direction:column;gap:8px}
+ul.plain{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.decide{border:2px solid var(--steel)}
+</style>
+
+<div class="wrap">
+
+<header class="sec">
+  <div class="eyebrow">Command Center · Job Board · SW v624 preview</div>
+  <h1>Punch List stage</h1>
+  <p class="lede">A new board section between Finish In Progress and Completed. The app moves jobs in and out of it on its own. Foremen tap nothing new, and nothing gets written to the job.</p>
+</header>
+
+<section class="sec">
+  <h2>The rule</h2>
+  <div class="flow">
+    <div class="stage s-fin"><span class="nm">Finish In Progress</span><small>Crew is working. Stays here below 90%, or at any % once nothing is left open.</small></div>
+    <div class="arrow"><b>→</b>reaches 90%+ (or is marked Complete) with anything open</div>
+    <div class="stage s-pl"><span class="nm">Punch List</span><small>Finish is basically done, but loose ends remain. The section shows what is still open.</small></div>
+    <div class="arrow"><b>→</b>the last open thing closes</div>
+    <div class="stage s-done"><span class="nm">Completed</span><small>Nothing open anywhere. Once the nightly sync is built, this is the only stage that shows Ready to Invoice in Simpro.</small></div>
+  </div>
+  <p>"Anything open" means any of these four. Each one counts the same way it already does elsewhere in the app:</p>
+  <div class="open-list">
+    <div><b>Finish punch</b>Any finish punch item not checked off. Voided items don't count.</div>
+    <div><b>QC items</b>Open items from a QC walk, same as the 100% gate already counts.</div>
+    <div><b>Failed final</b>Final inspection failed and a failed item isn't marked fixed yet.</div>
+    <div><b>Return trip</b>Any trip not marked Complete and not signed off.</div>
+  </div>
+</section>
+
+<section class="sec">
+  <h2>Your board after this ship</h2>
+  <p>I ran the exact rule that ships over today's live jobs (read-only). Residential sections:</p>
+  <div class="pipe">
+    <div class="total"><div style="font-family:var(--display);font-weight:800;font-size:34px;line-height:1" class="num" id="tot"></div><div style="font-size:13px;opacity:.8">Jobs in these three</div></div>
+    <div class="tiles">
+      <div class="tile"><span class="n num" style="color:var(--finish)" id="t-fin"></span><span class="l">Finish</span><span class="d" id="t-fin-d"></span></div>
+      <div class="tile new"><span class="n num" style="color:var(--punch)" id="t-pl"></span><span class="l">Punch List</span><span class="d" id="t-pl-d"></span></div>
+      <div class="tile"><span class="n num" style="color:var(--done)" id="t-done"></span><span class="l">Completed</span><span class="d" id="t-done-d"></span></div>
+    </div>
+  </div>
+  <p class="mini">Counts cover the 63 jobs at finish 90%+ or finish In Progress, which are the only jobs this change can move. Completed holds more older jobs that this rule doesn't touch.</p>
+</section>
+
+<section class="sec">
+  <h2>Try it on a real job</h2>
+  <p>Pick a job and check items off as if the crew closed them. The card moves the same way it will on the board. This is a copy. Nothing here touches the app.</p>
+  <div class="try">
+    <div class="card ctrl">
+      <label class="f" for="pick">Job
+        <select id="pick"></select>
+      </label>
+      <div class="f" style="display:flex;flex-direction:column;gap:5px">
+        <span style="font-size:12.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">Finish status</span>
+        <div class="chips" id="st" role="group" aria-label="Finish status">
+          <button class="chip" data-v="inprogress" type="button">In Progress</button>
+          <button class="chip" data-v="waiting" type="button">On Hold</button>
+          <button class="chip" data-v="complete" type="button">Complete</button>
+        </div>
+      </div>
+      <label class="f" for="pct">Finish %
+        <select id="pct"><option>80%</option><option>85%</option><option>90%</option><option>95%</option><option>100%</option></select>
+      </label>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <span style="font-size:12.5px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">What's open on this job (live)</span>
+        <div class="items" id="items"></div>
+      </div>
+    </div>
+    <div class="card board">
+      <div class="lane" data-k="finish"><h4><span>Finish In Progress</span></h4></div>
+      <div class="lane" data-k="hold"><h4><span>Finish — On Hold</span></h4></div>
+      <div class="lane" data-k="punch"><h4><span>Punch List</span><span class="num" id="lane-n"></span></h4></div>
+      <div class="lane" data-k="done"><h4><span>Completed</span></h4></div>
+      <p class="why" id="why"></p>
+      <div>
+        <div class="mini" style="margin-bottom:4px">The top of the job page reads:</div>
+        <div class="band" id="band"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec">
+  <h2>The 13 jobs that move</h2>
+  <p>Two come over from Finish In Progress. Eleven come back from Completed because a foreman marked them done while work was still open. Most of those were marked Complete in March, so some of the leftover items may be done and just never checked off.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Job</th><th>Foreman</th><th>Finish</th><th>Today</th><th>What keeps it on Punch List</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+</section>
+
+<section class="sec">
+  <h2>Where it shows</h2>
+  <div class="grid2">
+    <div class="card"><h3>Job Board</h3><p>A Punch List section between Finish In Progress and Completed, closed by default. The header shows the total open items. It appears on the main board and each foreman's page.</p></div>
+    <div class="card"><h3>Pipeline strip</h3><p>A Punch List tile between Finish and Completed. Tapping it lists the jobs, like every other tile.</p></div>
+    <div class="card"><h3>Job page</h3><p>The band at the top reads <b>PUNCH LIST</b> and says what's open, like "2 punch items · 1 return trip".</p></div>
+    <div class="card"><h3>/dashboard</h3><p>The active jobs list gets a Punch list stage with the same reason line. These jobs count as active, not done.</p></div>
+  </div>
+</section>
+
+<section class="sec">
+  <h2>What stays the same</h2>
+  <div class="card"><ul class="plain">
+    <li><b>No new taps.</b> No button or dropdown option. The crew works the punch list exactly as now.</li>
+    <li><b>Nothing written.</b> No new field, no save, no rules or Cloud Function change. The section is worked out from what the job already has, so undoing it is just a code revert.</li>
+    <li><b>On Hold stays On Hold,</b> even with open items.</li>
+    <li><b>The 100% gate is unchanged.</b> Finish still can't be set to 100% while punch or QC items are open.</li>
+    <li><b>Quick jobs, temp peds, quotes and commercial jobs</b> don't use Punch List.</li>
+    <li><b>Rough punch doesn't count.</b> Punch List is only about finishing.</li>
+  </ul></div>
+</section>
+
+<section class="sec">
+  <div class="card decide" style="display:flex;flex-direction:column;gap:8px">
+    <div class="eyebrow">One thing to clean up</div>
+    <h3>11 jobs come back from Completed</h3>
+    <p>These are the jobs Josh means. They look done in the app and Simpro, but the app still has open work on them. Before the nightly sync starts, go through them in the one-time fix of the 14 jobs: check off what's done, void what isn't real, and book what's left. <span class="flag">Robison #1005</span> looks like test data: a punch item reading "fasdfa" and a return trip with no scope.</p>
+  </div>
+</section>
+
+</div>
+
+<script>
+const JOBS = [{"n":"23 Country LIving","no":"1354","f":"Abraham Tristan","pct":"100%","b":"Completed","a":"Punch List","open":1,"items":[{"k":"punch","t":"Replace the existing occupancy sensor switch in the bathroom near Bedroom 1. Existing sensor is not operating ","s":""}]},{"n":"Ashcraft","no":"1291","f":"Daegan Smith","pct":"20%","b":"Finish In Progress","a":"Finish In Progress","open":96,"items":[]},{"n":"Austin Cloward Residence","no":"1187","f":"Colby Fogh","pct":"95%","b":"Finish In Progress","a":"Punch List","open":3,"items":[{"k":"punch","t":"Garage lights not straight with eachother","s":""},{"k":"punch","t":"Install smart switch","s":""},{"k":"trip","t":"Install last casetta switch","s":"needs"}]},{"n":"Barry Residence Remodel - Cottonwood Heights","no":"1406","f":"Abraham Tristan","pct":"95%","b":"Completed","a":"Punch List","open":6,"items":[{"k":"punch","t":"Install 1 light fixture above tub.","s":""},{"k":"punch","t":"The floor heat thermostat is not on site yet. Not sure when it will be available for installation.","s":""},{"k":"punch","t":"Per GC, we need to install a short piece of 2” Smurf tube and a whisker biscuit. Not sure why these were not i","s":""},{"k":"punch","t":"The homeowner requested separate controls for the light and exhaust fan in the master toilet room, with a time","s":""},{"k":"punch","t":"Install 20 ft LED tape lights and tracks Driver The driver for the LED strip lights is already installed and r","s":""},{"k":"punch","t":"The basement area has not been painted yet, so we are still waiting to complete the work listed in the change ","s":""}]},{"n":"Branca Lot 17 - Midway","no":"1038","f":"Vasa Mataafa","pct":"95%","b":"Completed","a":"Punch List","open":3,"items":[{"k":"punch","t":"Humidifier","s":""},{"k":"punch","t":"Back porch fan","s":""},{"k":"punch","t":"Install 3 flood lights","s":""}]},{"n":"Bulowski","no":"866","f":"Colby Fogh","pct":"95%","b":"Completed","a":"Punch List","open":2,"items":[{"k":"punch","t":"Fix tape light in wet bar","s":""},{"k":"punch","t":"Add dimmers (see CO)","s":""}]},{"n":"Casten-Vaught","no":"1327","f":"Daegan Smith","pct":"90%","b":"Completed","a":"Punch List","open":8,"items":[{"k":"punch","t":"box dishwashers","s":""},{"k":"punch","t":"Flood lights","s":""},{"k":"punch","t":"Install all fans","s":""},{"k":"punch","t":"Tape light","s":""},{"k":"punch","t":"Wire up steamer","s":""},{"k":"punch","t":"install vanity","s":""},{"k":"punch","t":"Swap Christmas for timer","s":""},{"k":"punch","t":"Figure out what we are doing with speaker boxes","s":""}]},{"n":"Cowdrey","no":"929","f":"Keegan Wilkinson","pct":"95%","b":"Completed","a":"Punch List","open":1,"items":[{"k":"trip","t":"Floor outlets","s":"needs"}]},{"n":"Lot 23 Vista Meadows","no":"1386","f":"Abraham Tristan","pct":"100%","b":"Completed","a":"Punch List","open":1,"items":[{"k":"trip","t":"Install 2x air switches","s":"needs"}]},{"n":"Maddox Residence","no":"945","f":"Vasa Mataafa","pct":"90%","b":"Completed","a":"Punch List","open":11,"items":[{"k":"punch","t":"New countertop outlets","s":""},{"k":"punch","t":"Install island chandelier. see designer note for height","s":""},{"k":"punch","t":"Install power for bottle filler.","s":""},{"k":"punch","t":"Troubleshoot frosted windows","s":""},{"k":"punch","t":"Install plug or hardwire shelves","s":""},{"k":"punch","t":"Built in fixtures Waiting on fixtures","s":""},{"k":"punch","t":"Replace two outlets for the recliners that are scratched","s":""},{"k":"punch","t":"Arcade sign.","s":""},{"k":"punch","t":"Install flag pole light","s":""},{"k":"punch","t":"Pendants","s":""},{"k":"trip","t":"Warranty punch list per Owusu","s":"scheduled"}]},{"n":"Olson Garage","no":"1267","f":"Keegan Wilkinson","pct":"90%","b":"Completed","a":"Punch List","open":2,"items":[{"k":"punch","t":"Install fan","s":""},{"k":"punch","t":"Install flood lights","s":""}]},{"n":"Robison Residence","no":"1005","f":"Keegan Wilkinson","pct":"100%","b":"Completed","a":"Punch List","open":2,"items":[{"k":"punch","t":"fasdfa","s":""},{"k":"trip","t":"Return trip (no scope written)","s":""}]},{"n":"Rose","no":"889","f":"Keegan Wilkinson","pct":"25%","b":"Finish In Progress","a":"Finish In Progress","open":135,"items":[]},{"n":"Stacy Remodel","no":"1425","f":"Colby Fogh","pct":"60%","b":"Finish In Progress","a":"Finish In Progress","open":16,"items":[]},{"n":"The Hideout","no":"1302","f":"Colby Fogh","pct":"95%","b":"Finish In Progress","a":"Punch List","open":2,"items":[{"k":"punch","t":"Bedside sconces","s":""},{"k":"punch","t":"10x glass orbs","s":""}]},{"n":"Zimmer Residence","no":"837","f":"Vasa Mataafa","pct":"95%","b":"Completed","a":"Punch List","open":4,"items":[{"k":"punch","t":"Install center chandelier","s":""},{"k":"punch","t":"Ceiling fixture","s":""},{"k":"punch","t":"Install sconce in closet under stairs","s":""},{"k":"punch","t":"Fixture","s":""}]}];
+const KIND = { punch: "Punch", qc: "QC", insp: "Failed final", trip: "Return trip" };
+
+function lineOf(items) {
+  const c = { punch: 0, qc: 0, insp: 0, trip: 0 };
+  items.forEach(i => { if (!i.off) c[i.k]++; });
+  const n = (x, w) => `${x} ${w}${x === 1 ? "" : "s"}`;
+  return [c.punch && n(c.punch, "punch item"), c.qc && n(c.qc, "QC item"), c.insp && n(c.insp, "inspection item"), c.trip && n(c.trip, "return trip")].filter(Boolean).join(" · ");
+}
+// The same rule as src/punchListStage.js isPunchListJob.
+function laneOf(status, pct, openCount) {
+  if (status === "waiting") return "hold";
+  const done = status === "complete";
+  const p = parseInt(pct) || 0;
+  if ((done || (status === "inprogress" && p >= 90)) && openCount > 0) return "punch";
+  return done ? "done" : "finish";
+}
+
+// Pipeline numbers
+(function () {
+  const pl = JOBS.filter(j => j.a === "Punch List").length;
+  const finBefore = JOBS.filter(j => j.b === "Finish In Progress").length;
+  const finAfter = JOBS.filter(j => j.a === "Finish In Progress").length;
+  const back = JOBS.filter(j => j.b === "Completed" && j.a === "Punch List").length;
+  const from = JOBS.filter(j => j.b === "Finish In Progress" && j.a === "Punch List").length;
+  const doneTotal = 58; // jobs at finish 90%+ marked Complete in the live pull
+  document.getElementById("tot").textContent = finBefore + doneTotal;
+  document.getElementById("t-fin").textContent = finAfter;
+  document.getElementById("t-fin-d").textContent = `was ${finBefore}`;
+  document.getElementById("t-pl").textContent = pl;
+  document.getElementById("t-pl-d").textContent = `new · ${from} from Finish, ${back} from Completed`;
+  document.getElementById("t-done").textContent = doneTotal - back;
+  document.getElementById("t-done-d").textContent = `was ${doneTotal}`;
+})();
+
+// Table
+(function () {
+  const tb = document.getElementById("rows");
+  const add = (label) => { const tr = tb.insertRow(); tr.className = "grp"; const td = tr.insertCell(); td.colSpan = 5; td.textContent = label; };
+  const groups = [["From Finish In Progress", j => j.b === "Finish In Progress" && j.a === "Punch List"], ["Back from Completed", j => j.b === "Completed" && j.a === "Punch List"], ["Stays in Finish In Progress (under 90%)", j => j.a === "Finish In Progress"]];
+  groups.forEach(([label, test]) => {
+    const list = JOBS.filter(test);
+    add(`${label} · ${list.length}`);
+    list.forEach(j => {
+      const tr = tb.insertRow();
+      const c1 = tr.insertCell(); const b = document.createElement("b"); b.textContent = j.n; c1.append(b, document.createElement("br")); const s = document.createElement("span"); s.className = "mini"; s.textContent = "#" + j.no; c1.append(s);
+      tr.insertCell().textContent = j.f || "—";
+      const c3 = tr.insertCell(); c3.className = "num"; c3.textContent = j.pct;
+      const c4 = tr.insertCell(); const p = document.createElement("span"); p.className = "pill " + (j.b === "Completed" ? "p-done" : "p-fin"); p.textContent = j.b; c4.append(p);
+      const c5 = tr.insertCell();
+      if (j.a !== "Punch List") { c5.textContent = `${j.open} open, but finish is only ${j.pct}`; c5.className = "mini"; return; }
+      const d = document.createElement("details"); const sm = document.createElement("summary"); sm.textContent = lineOf(j.items); d.append(sm);
+      const ul = document.createElement("ul"); j.items.forEach(i => { const li = document.createElement("li"); li.textContent = `${KIND[i.k]}: ${i.t}`; ul.append(li); }); d.append(ul); c5.append(d);
+    });
+  });
+})();
+
+// Try it
+const pick = document.getElementById("pick"), pctSel = document.getElementById("pct"), stBox = document.getElementById("st"), itemsBox = document.getElementById("items");
+const movers = JOBS.filter(j => j.a === "Punch List");
+movers.forEach((j, i) => { const o = document.createElement("option"); o.value = i; o.textContent = `${j.n} (#${j.no})`; pick.append(o); });
+let cur = null, status = "inprogress";
+function load(i) {
+  const j = movers[i];
+  cur = { ...j, items: j.items.map(x => ({ ...x, off: false })) };
+  status = j.b === "Completed" ? "complete" : "inprogress";
+  pctSel.value = j.pct === "100%" ? "100%" : j.pct;
+  drawItems(); draw();
+}
+function drawItems() {
+  itemsBox.textContent = "";
+  cur.items.forEach((it, idx) => {
+    const lab = document.createElement("label"); lab.className = "item" + (it.off ? " off" : "");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = it.off; cb.id = "it" + idx;
+    cb.addEventListener("change", () => { it.off = cb.checked; lab.className = "item" + (it.off ? " off" : ""); draw(); });
+    const sp = document.createElement("span"); const k = document.createElement("span"); k.className = "kind" + (it.k === "trip" ? " trip" : ""); k.textContent = KIND[it.k];
+    sp.append(k, document.createTextNode(it.t)); lab.append(cb, sp); itemsBox.append(lab);
+  });
+}
+function draw() {
+  [...stBox.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === status)));
+  const open = cur.items.filter(i => !i.off).length;
+  const lane = laneOf(status, pctSel.value, open);
+  document.querySelectorAll(".lane").forEach(l => { l.classList.toggle("on", l.dataset.k === lane); l.querySelectorAll(".jc").forEach(c => c.remove()); });
+  const card = document.createElement("div"); card.className = "jc";
+  const b = document.createElement("b"); b.textContent = cur.n; const sm = document.createElement("small");
+  sm.textContent = `${cur.f || "No foreman"} · finish ${pctSel.value}` + (lane === "punch" ? ` · ${lineOf(cur.items)}` : "");
+  card.append(b, sm); document.querySelector(`.lane[data-k="${lane}"]`).append(card);
+  document.getElementById("lane-n").textContent = lane === "punch" ? `${open} open item${open === 1 ? "" : "s"}` : "";
+  const p = parseInt(pctSel.value);
+  document.getElementById("why").textContent =
+    lane === "hold" ? "On Hold always stays On Hold, even with open items." :
+    lane === "punch" ? `On Punch List: finish is ${status === "complete" ? "marked Complete" : pctSel.value} and ${lineOf(cur.items)} still open.` :
+    lane === "done" ? "Nothing open, so it's Completed." :
+    open > 0 ? `Stays in Finish In Progress: ${open} open, but finish is under 90%.` : "Nothing open. It moves to Completed when the foreman marks finish 100%.";
+  const band = document.getElementById("band"); band.textContent = "";
+  const bb = document.createElement("b"); const bs = document.createElement("span");
+  if (lane === "punch") { bb.textContent = "Punch list"; bs.textContent = lineOf(cur.items); band.style.cssText = ""; }
+  else if (lane === "done") { bb.textContent = "Completed"; band.style.cssText = "background:var(--done-t);color:var(--done)"; }
+  else if (lane === "hold") { bb.textContent = "Finish on hold"; bs.textContent = pctSel.value; band.style.cssText = "background:var(--bg);color:var(--hold)"; }
+  else { bb.textContent = "Finish in progress"; bs.textContent = pctSel.value; band.style.cssText = "background:var(--finish-t);color:var(--finish)"; }
+  band.append(bb, bs);
+}
+stBox.addEventListener("click", e => { const v = e.target.dataset && e.target.dataset.v; if (!v) return; status = v; if (v === "complete") pctSel.value = "100%"; draw(); });
+pctSel.addEventListener("change", draw);
+pick.addEventListener("change", () => load(+pick.value));
+const austin = movers.findIndex(j => /Austin Cloward/.test(j.n));
+pick.value = austin >= 0 ? austin : 0; load(+pick.value);
+</script>

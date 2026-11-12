@@ -13,6 +13,7 @@ import PunchTicks from "./punchTicks";
 import NeedShape from "./needShape";
 import JobNotesShape from "./jobNotesShape";
 import StageChange from "./stageChange";
+import PunchListStage from "./punchListStage";   // v624: the derived Punch List stage (Josh, 2026-11-11)
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import inspAtt from "./inspAttempts";
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
@@ -45,6 +46,7 @@ const { sameName, needAssignee, needUpdates, dueBucketFromDate, needWorkReset, n
 // defined here too (the module keeps its own identical one-liner; the ship-7
 // test pins the two lines equal).
 const { stageChangePlan, READY_TO_INVOICE_ALERTS } = StageChange;
+const { punchListOpen, isPunchListJob, punchListLine } = PunchListStage;
 // Open a stored URL only if it is actually navigable. React does NOT block
 // javascript: URLs, and photo/attachment records live in anonymously-writable
 // collections — so an unsafe value must simply do nothing, not open a tab.
@@ -31813,10 +31815,11 @@ function _isFullyDone(job) {
 // Which stage the band reads, in the same order the Job Board files a job. The
 // inputs are the same effective statuses STAGE_SECTIONS tests.
 function jobStageBand(o) {
-  const { rs, fs, prepCleared, quote, tempPed, commLabel, roughStage, finishStage } = o;
+  const { rs, fs, prepCleared, quote, tempPed, commLabel, roughStage, finishStage, punchList } = o;
   if (quote) return { key: "quote", label: "Quote", pct: "" };
   if (tempPed) return { key: "tempPed", label: "Temp Ped", pct: "" };
   if (commLabel) return { key: "commercial", label: commLabel, pct: "" };
+  if (punchList) return { key: "punchList", label: "Punch list", pct: punchList };   // v624: what's still open
   if (fs === "complete") return { key: "complete", label: "Completed", pct: "" };
   if (fs === "inprogress") return { key: "finish", label: "Finish in progress", pct: finishStage || "0%" };
   if (fs === "waiting") return { key: "hold", label: "Finish on hold", pct: finishStage || "0%" };
@@ -33456,8 +33459,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         {(()=>{
           const commSec = isCommercial(job) ? COMM_STAGE_SECTIONS.find(sec => sec.test(job)) : null;
           const band = jobStageBand({ rs: effRS(job), fs: effFS(job), prepCleared: prepClearedToStart(job), quote: job.type==="quote", tempPed: !!job.tempPed,
-            commLabel: isCommercial(job) ? (commSec ? commSec.label : "Commercial") : "", roughStage: job.roughStage, finishStage: job.finishStage });
-          const bandColor = { rough:C.rough, finish:C.finish, between:C.purple, prep:C.teal, notStarted:C.slate, hold:C.slate, complete:C.green, quote:C.accent, tempPed:C.purple, commercial:(commSec&&commSec.color)||C.teal }[band.key] || C.slate;
+            commLabel: isCommercial(job) ? (commSec ? commSec.label : "Commercial") : "", roughStage: job.roughStage, finishStage: job.finishStage,
+            punchList: isPunchList(job) ? punchListLine(punchListOpen(job)) : "" });
+          const bandColor = { rough:C.rough, finish:C.finish, punchList:"#A8505E", between:C.purple, prep:C.teal, notStarted:C.slate, hold:C.slate, complete:C.green, quote:C.accent, tempPed:C.purple, commercial:(commSec&&commSec.color)||C.teal }[band.key] || C.slate;
           return (
             <div style={{display:"flex",alignItems:"center",flexWrap:"wrap",gap:"6px 10px",flexShrink:0,padding:"4px 10px 4px 16px",color:bandColor,
               background:`linear-gradient(${bandColor}1A,${bandColor}1A),${C.card}`,borderBottom:`1px solid ${bandColor}33`}}>
@@ -38525,6 +38529,10 @@ const effFS = j => {
   if(j.finishStatus) return j.finishStatus;
   const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":"";
 };
+// v624: on the Punch List — finish 90%+ or Complete with anything still open
+// (finish punch, QC items, failed final items, a return trip). Derived only:
+// nothing is written; it reads the same effective finish status as the board.
+const isPunchList = j => isPunchListJob(j, effFS(j));
 
 // ── Simplified scheduling state (3 values: needsSched | scheduled | ongoing) ──
 // Derives a single indicator from whatever the user's current status + mode is,
@@ -38775,14 +38783,19 @@ const STAGE_SECTIONS = [
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#6A7BAA",
-    test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" && !isPunchList(j) },
+
+  // v624: Punch List — finish 90%+ (or marked Complete) with something still open.
+  { key:"punchList",    label:"Punch List",                color:"#A8505E",
+    extra: js => { const n = js.reduce((t,j) => t + punchListOpen(j).total, 0); return n ? `${n} open item${n===1?"":"s"}` : ""; },
+    test: j => isPunchList(j) },
 
   // All completed — quick jobs, temp peds, and full jobs in one section
   { key:"complete",     label:"Completed",                 color:"#2E8B57",
     extra: js => { const n = js.filter(j => j.quickJob && qjStage(j) === "ready").length; return n ? `${n} to invoice` : ""; },
     test: j => (j.quickJob && (j.quickJobStatus==="complete"||j.quickJobStatus==="invoice")) ||
                (j.tempPed && j.tempPedStatus==="completed") ||
-               (!j.tempPed && !j.quickJob && effFS(j) === "complete") },
+               (!j.tempPed && !j.quickJob && effFS(j) === "complete" && !isPunchList(j)) },
 
 ];
 
@@ -38807,7 +38820,7 @@ const COMM_BOARD_SECTIONS = [...STAGE_SECTIONS.filter(sec => sec.key.startsWith(
 // sits in two stages of the list (prep open, rough started) counts in both tiles.
 function pipelineTiles(jobs, sections) {
   const MERGE = { quickScheduled:"quickNew", quickInProgress:"quickNew", tempPedScheduled:"tempPedReady", roughHold:"rough", finishHold:"finish" };
-  const LABEL = { quickNew:"Quick Jobs", tempPedReady:"Temp Peds", roughNotStarted:"Not Started", rough:"Rough", finish:"Finish" };
+  const LABEL = { quickNew:"Quick Jobs", tempPedReady:"Temp Peds", roughNotStarted:"Not Started", rough:"Rough", finish:"Finish", punchList:"Punch List" };
   const HIDE_EMPTY = { quickNew:true, tempPedReady:true };
   const SUB = { quickNew:["quickNew","to schedule"], rough:["roughHold","on hold"], finish:["finishHold","on hold"] };
   const byKey = {};
@@ -49777,6 +49790,7 @@ function odJobInfo(j, now) {
 // "Rough done, finish next" and get asked for a finish date.
 const OD_PHASES = [
   { key: "finish",     label: "Finish in progress",       short: "Finish",      color: OD_A },
+  { key: "punchList",  label: "Punch list",               short: "Punch list",  color: OD_R },
   { key: "finishDue",  label: "Finish start date passed", short: "Finish late", color: OD_WARN },
   { key: "finishHold", label: "Finish on hold",           short: "Hold",        color: OD_SLATE },
   { key: "roughFail",  label: "Rough inspection failed",  short: "Failed insp", color: OD_R },
@@ -49837,6 +49851,7 @@ function odPhase(j, today) {
   if (OD_NOT_STARTED.includes(rs) && OD_NOT_STARTED.includes(fs)) { const at = worked("roughUpdates", "roughPunch"); if (at) return { ...ph("rough", behind(at, rs)), stale: true }; }
   const due = (v) => { const at = odDate(v); return at && localYmd(at) <= today ? at : null; };
   const when = (v, ok) => { const at = odDate(v); return at ? `${ok ? "confirmed" : "projected"} ${odShort(at)}${localYmd(at) < today ? " (date passed)" : ""}` : ""; };
+  if (isPunchListJob(j, fs)) return ph("punchList", punchListLine(punchListOpen(j)));   // v624, the Job Board's Punch List
   if (fs === "complete") return ph("complete");
   if (fs === "inprogress") return ph("finish", parseStage(j.finishStage) ? `${parseStage(j.finishStage)}%` : "");
   if (fs === "waiting") return ph("finishHold");
@@ -62301,8 +62316,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v623
+**Last manifest update:** 2026-11-11 · App SW version: v624
 ---
+
+- **Punch List stage on the Job Board: finish 90%+ (or Complete) with anything still open sits between Finish In Progress and Completed, on its own** · 'in-flight 2026-11-11' · 'SW v624' · 'punchListStage.js' · 'isPunchListJob' · 'isPunchList' · 'STAGE_SECTIONS' · 'pipelineTiles' · 'jobStageBand' · 'odPhase' · Josh (2026-11-11 email): seven stages in the app and Simpro, *"Add a Punch List stage to the app between Finish and Completed. Right now it jumps straight from Finish to Completed, and that's where most of the mismatches come from."* What the live data showed: the 100% gate already refuses Finish while finish punch or QC items are open, so loose-end jobs sat in Finish In Progress at 95% for months (The Hideout #1302, Austin Cloward #1187), and 11 jobs marked Complete still had open finish punch or a return trip (Casten-Vaught 8 items, Maddox 10 + a trip). **The rule** (pure 'src/punchListStage.js', shared by every place that files a job): a full residential job is on **Punch List** when its effective finish status is In Progress at **90%+** or Complete (legacy 'invoice' too) **and** something is open: a finish punch item (not done, not voided, every floor incl. extras and hot check), a legacy QC-walk item ('qcPunch', the same two trees the 100% gate counts), a failed final-inspection item not marked done, or a return trip that isn't 'rtStatus: "complete"' and isn't signed off. It leaves when the last one closes. On Hold stays On Hold; quick jobs, temp peds, quotes and commercial never; rough punch doesn't count. **Where:** a new 'punchList' section in 'STAGE_SECTIONS' between Finish In Progress and Completed (both now exclude Punch List jobs, so no job shows twice; the folded header shows "N open items"), which carries it to the main board, each foreman page and the pipeline strip (new "Punch List" tile); the job page band reads PUNCH LIST with the open line; '/dashboard''s 'odPhase' gets a "Punch list" stage (counted active, not done; not in 'OD_UNDERWAY', so quiet-job lists are unchanged). No new taps, by design (Koy: redesigns never add taps): a dropdown option would drift the way Simpro did. Moves 13 live jobs (2 from Finish, 11 back from Completed). Preview with the live jobs + simulator: 'docs/mockups/punch-list-stage.html' (claude.ai/artifact/S2auKAESLv7bmUMyunVZtm). Tests: new 'scripts/punch-list-stage-test.js' (in prebuild; real-shaped Hideout, Austin Cloward, Casten-Vaught, Helmondollar, Vista Meadows, Rose, plus the App.js wiring); 'scripts/odash-model-test.js' sandbox gets the module. Guides 'finish.html' + 'dashboard.html' updated. **Why it won't lose data:** derived only. No field, save, 'saveJob'/'updateDoc', loader, rules or Cloud Function change; it reads fields the job already has, and 'simproSync''s "done in app" check is untouched, so no job's stored status moves. Reverting the code reverts the board.
 
 - **Job Prep shows every job: Commercial in its own lane, quick jobs with a job #** · 'in-flight 2026-11-11' · 'SW v623' · 'jobPrepIncluded' · 'JobPrepTracker' · Koy: *"i need all jobs, inlcuding commercial to show up in the job prep tab on resi, just haver a seperarte drop down or something for commercial. This includes quick jobs that have a job number attached to them."* Before this, Job Prep (a Resi-only tab) got only the current mode's jobs and 'jobPrepIncluded' dropped every quick job, so Commercial jobs and quick jobs never showed. Now the tab gets 'allJobs' (every division) and 'jobPrepIncluded' keeps full jobs until finish is complete, plus quick jobs that carry a 'simproNo' until 'quickJobStatus' is complete or invoice. Temp ped cards, temp ped pickup/install runs ('quickJobType: "tempped"') and quotes stay out. **Resi full jobs** run every lane as before, and every header count (held / override / cleared) is still over them. **Resi quick jobs** join the **Office Admin** lane only (the prep checklist doesn't fit a service call). **Commercial jobs** get a new folded **Commercial** lane at the bottom with the same Office Admin rows (ACCOUNT / PRE-LIEN / TEMP PED chips, ▾ menu, Ped #, ✓ complete strip) and no prep checklist, since their prep is Job Start. The header line adds "· N quick jobs · N commercial". Search and the foreman filter (its list now includes every division's foremen) cover the new lane; Show complete opens it. Tapping a Commercial job's name opens it from Resi mode. The Temp Peds Out lane now sees Commercial peds too, since it reads the same job list. Tests: new 'scripts/jobprep-included-test.js' (in prebuild). Guide 'jobprep.html' updated. **Why it won't lose data:** display-only. The rows reuse 'JobPrepAdminRow' and the same 'onUpdateJob' funnel the Office Admin lane already uses, so a chip tap writes exactly the fields it wrote before. No new field, loader, rules or function change.
 

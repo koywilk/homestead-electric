@@ -84,6 +84,8 @@ const NEED_SHAPE = require(path.join(__dirname, "..", "src", "needShape.js"));
 function makeSandbox(extra = {}) {
   const sb = {
     sameName: NEED_SHAPE.sameName, needAssignee: NEED_SHAPE.needAssignee,
+    // v624: the Punch List stage lives in src/punchListStage.js (the shipped module, as globals).
+    ...require(path.join(__dirname, "..", "src", "punchListStage.js")),
     console, Date, Math, JSON, Object, Array, String, Number, Set, Map, RegExp, isNaN, parseInt, parseFloat,
     React: { createElement: () => null }, Component: class {}, Fragment: "f",
     useState: () => [null, () => {}], useEffect: () => {}, useMemo: (f) => f(), useRef: () => ({}),
