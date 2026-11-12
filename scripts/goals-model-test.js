@@ -81,10 +81,22 @@ eq(X.odGoalDue("Weekly, ongoing", now), null);
 eq(X.odGoalDue("Starting now", now), null);
 eq(X.odGoalDue("Oct 1", now).text, "Overdue 22 d");
 eq(X.odGoalDue("Dec 15, 2026", now).days, 53);
+// v626: the list's heading year pins a date typed without one, so an old goal stays overdue.
+eq([sheet.goalsYear, folded.goalsYear], [2026, 2026], "REST OF 2026 → the list's year");
+eq(X.odGoalDue("Oct 31", new Date(2027, 2, 1), 2026).text, "Overdue 121 d", "Oct 31 on the 2026 list is still overdue in March 2027");
+assert.ok(X.odGoalDue("Oct 31", new Date(2027, 2, 1)).days > 0, "without a list year the old guess is kept");
+eq([X.odGoalDue("Jan", now, 2026).due.getFullYear(), X.odGoalDue("Jun 15", now, 2026).due.getFullYear(), X.odGoalDue("Jul 1", now, 2026).due.getFullYear()], [2027, 2027, 2026], "Jan–Jun on a rest-of-2026 list is 2027");
+eq(X.odGoalDue("Oct 31", now, 2026).text, "Due in 8 d", "same answer as before for today's sheet");
+eq(X.odGoalDue("Dec 15, 2027", now, 2026).due.getFullYear(), 2027, "a typed year always wins");
+const y28 = X.odGoalsParse([["", "REST OF 2027", ""], ["", "AREA", "GOAL", "WHO", "BY", "STATUS"], ["", "Field", "A goal", "Koy", "Nov 30", ""], ["", "2028 SCOREBOARD", ""], ["", "MEASURE", "WHERE WE ARE TODAY", "2028 GOAL"], ["", "Margin", "12%", "15%"], ["", "2028 BY QUARTER", ""], ["", "Q1", "x"]]);
+eq([y28.goals.length, y28.measures.length, y28.quarters.length, y28.goalsYear], [1, 1, 1, 2027], "next year's headings parse too");
 
 // 3. STATUS
 eq(X.odGoalStatus("Done", X.odGoalDue("Jan", now)), { text: "Done", tone: "good" });
 eq(X.odGoalStatus("At risk", null).text, "At risk");
+// v626: only a status that starts with done / complete / completed is Done.
+eq(["Complete", "Completed 11/3", "done"].map(s => X.odGoalStatus(s, null).text), ["Done", "Done", "Done"]);
+eq(["Incomplete", "Not complete", "50% complete"].map(s => X.odGoalStatus(s, null)), [{ text: "Incomplete", tone: "grey", flag: "" }, { text: "Not complete", tone: "grey", flag: "" }, { text: "50% complete", tone: "grey", flag: "" }], "these used to read as Done");
 eq(X.odGoalStatus("", X.odGoalDue("Oct 31", now)), { text: "Due in 8 d", tone: "bad" }, "blank status shows the due flag");
 eq(X.odGoalStatus("", null), { text: "No status yet", tone: "grey" });
 

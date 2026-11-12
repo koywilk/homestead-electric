@@ -94,7 +94,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf,odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -158,7 +158,9 @@ if (require.main === module) {
     { id: "n2", text: "Call GC", status: "open", assignedTo: "Koy Wilkinson", priority: "urgent" }];
   const presence = { "Joel Old": new Date(2026, 7, 6).toISOString() };
   jobs[0].presence = presence;
-  const pto = [{ name: "James Livingston", start: "2026-10-14", end: "2026-10-16", note: "PTO" }];
+  // v626: the shape settings/crewPTO really holds (the app's date picker writes M/D/YYYY). The year-first
+  // sample this used to carry is why "Out this week" never showing went unnoticed.
+  const pto = [{ name: "James Livingston", start: "10/14/2026", end: "10/16/2026", note: "PTO" }];
   const simTotals = {
     byNo: {
       "1304": { total: 41000, inv: 20500, invPct: 50, stage: "Progress", status: "Job - In Progress" },
@@ -372,6 +374,40 @@ if (require.main === module) {
   assert.strictEqual(X.canOpenDash({ id: "u3", name: "Old Admin", access: "admin", active: false }), false, "a deactivated admin does not");
   assert.strictEqual(X.canOpenDash(null), false);
   assert.ok(X.OD_DOCS.filter(x => x.koyOnly).map(x => x.k).join() === "bonus,ninety", "Koy's own doc tiles are marked");
+
+  // 12. v626 TRUTH FIXES (dashboard audit 2026-11-11)
+  //  Time off typed 10/14/2026 must read as out this week and off today.
+  eq(d.ptoWeek.map(p => [p.name, p.start, p.end]), [["James Livingston", "2026-10-14", "2026-10-16"]], "M/D/YYYY time off shows in Out this week");
+  assert.ok(d.offToday("James Livingston"), "…and counts as off today");
+  assert.ok((d.people.find(p => p.name === "James Livingston") || {}).off, "the person's row carries the approved day off");
+  eq(X.odModel({ jobs: [], users, needs: [], upcoming: [], pto: [{ name: "X", start: "garbage" }, { name: "Y", start: "10/16/2026", end: "10/15/2026" }, { name: "Z", start: "2026-10-20" }], now }).ptoList.map(p => [p.name, p.start, p.end]),
+    [["Y", "2026-10-15", "2026-10-16"], ["Z", "2026-10-20", "2026-10-20"]], "unreadable start dropped; reversed dates put right; year-first still works");
+  //  Complete in Simpro at 80% billed: still an active job, and listed for Koy.
+  eq(d.simDoneOpen.map(j => j.name), ["Lot 23"], "Complete in Simpro, still open here");
+  assert.ok(d.active.some(j => j.name === "Lot 23") && !d.closedSim.some(j => j.name === "Lot 23"), "…it stays active and is not in Closed in Simpro");
+  assert.ok(!d.simDoneOpen.some(j => d.closedSim.includes(j)), "the two lists never share a job");
+  //  How old the Simpro copy is (pull = weekdays 6:15 AM).
+  const pulled = (y, m, dd) => new Date(y, m, dd, 6, 15).toISOString();
+  const today615 = X.odSimAsOf(pulled(2026, 9, 15), now);
+  assert.ok(!today615.stale && /as of today 6:15/.test(today615.text), today615.text);
+  const wedOnly = X.odSimAsOf(pulled(2026, 9, 14), now);
+  assert.ok(wedOnly.stale && /did not run/.test(wedOnly.text), "Thursday 7:30 with only Wednesday's pull = this morning's was missed");
+  assert.strictEqual(X.odSimAsOf(pulled(2026, 9, 16), new Date(2026, 9, 18, 15, 0)).stale, false, "Friday's pull is fine on Sunday");
+  assert.strictEqual(X.odSimAsOf(pulled(2026, 9, 16), new Date(2026, 9, 19, 6, 30)).stale, false, "…and on Monday before the pull is due");
+  assert.strictEqual(X.odSimAsOf(pulled(2026, 9, 16), new Date(2026, 9, 19, 8, 0)).stale, true, "…but not after Monday 7 AM");
+  assert.ok(X.odSimAsOf("", now).stale && /no pull/.test(X.odSimAsOf(null, now).text), "no stamp at all is said plainly");
+  //  A "Run now" test is not the real run.
+  const testRun = X.odDocStatus(wed, { latestDocs: {}, runs: { weekly: { lastRunAt: new Date(2026, 9, 13, 16, 2).toISOString(), ok: true, test: true } }, now });
+  eq([testRun.tone, testRun.text], [none.tone, none.text], "a test run alone reads the same as nothing on record, not green");
+  const testFail = X.odDocStatus(wed, { latestDocs: {}, runs: { weekly: { lastRunAt: new Date(2026, 9, 13, 16, 2).toISOString(), ok: false, error: "x", test: true } }, now });
+  assert.notStrictEqual(testFail.tone, "bad", "a failed test does not turn the card red either");
+  //  A plan nobody filed keeps waiting past 14 days; a note that only waits to be seen does not come back.
+  const oldPlan = { id: "unmatched_email_9", type: "unmatched_plan", item: "email_9", createdAt: ago(40).toISOString() };
+  const oldFiled = { id: "unmatched_email_8", type: "unmatched_plan", item: "email_8", createdAt: ago(40).toISOString(), resolved: true };
+  const pm2 = X.odPlanModel([f0, oldPlan, oldFiled], now);
+  eq(pm2.waiting.map(f => f.id), ["unmatched_email_9", "unmatched_email_1"], "oldest first, the 40-day-old one included; a resolved old one is not");
+  assert.strictEqual(pm2.oldest.id, "unmatched_email_9");
+  assert.ok(!pm2.fl.some(f => f.id === "unmatched_email_9"), "the 14-day activity list itself is unchanged");
 
   console.log("odash-model-test: all checks passed");
 }

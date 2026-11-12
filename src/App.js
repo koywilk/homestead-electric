@@ -50022,6 +50022,11 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const active = live.filter(isOpen);
   const allActive = allLive.filter(isOpen);
   const closedSim = live.filter(simClosed).sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
+  // v626: Simpro has the job as Complete / Invoiced while it is still open here and NOT closed by the rule
+  // above (billed under 99.5%, or reopened by hand after the sync closed it). It keeps counting as active;
+  // it is listed in Needs you so the two can be made to agree (Austin Cloward #1187, 2026-11-11: Complete
+  // in Simpro since 9/14 at 98.8% billed, shown here as an ordinary open finish job with no flag).
+  const simDoneOpen = active.filter(j => { const t = simOf(j); return !!t && OD_SIM_CLOSED.includes(t.stage); }).sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
   const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
   const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
 
@@ -50211,8 +50216,13 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
 
   // People
   const weekEnd = localYmd(odAddDays(t0, 6));
-  const ptoList = (pto || []).filter(p => p && p.name && p.start);
-  const ptoWeek = ptoList.filter(p => (p.end || p.start) >= today && p.start <= weekEnd).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+  // v626: time off is saved the way the app's date picker writes it (11/9/2026), and everything below
+  // compares year-first text (2026-11-09). Read each row's dates once as real dates; before this fix
+  // "Out this week" never showed and someone on approved leave counted as quiet. A row whose start
+  // can't be read is left out; a row typed end-before-start is put the right way round.
+  const ptoIso = (v) => { const at = odDate(v); return at ? localYmd(at) : ""; };
+  const ptoList = (pto || []).filter(p => p && p.name && p.start).map(p => { const s = ptoIso(p.start), e = ptoIso(p.end) || s; return s ? { ...p, start: s <= e ? s : e, end: s <= e ? e : s } : null; }).filter(Boolean);
+  const ptoWeek =ptoList.filter(p => (p.end || p.start) >= today && p.start <= weekEnd).sort((a, b) => String(a.start).localeCompare(String(b.start)));
   const offToday = (name) => ptoList.find(p => sameName(p.name, name) && p.start <= today && (p.end || p.start) >= today) || null;
   const people = staff.map(u => {
     const mine = events.filter(e => e.who && sameName(e.who, u.name));
@@ -50285,7 +50295,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const crewGroups = crews.map(c => ({ crew: c, jobs: active.filter(j => { const o = crewOfJob(j); return !!o && o.id === c.id; }) }));
   const noCrewJobs = active.filter(j => !crewOfJob(j));
   return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, crews, crewOf, crewOfJob, owns, crewPick, leadsNamed, crewGroups, noCrewJobs, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
-    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
+    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simDoneOpen, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
     overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
     people, teamN, shortName, foremenP, noForemanJobs, techsOf, suggestFm, coordOf, coordinators, upNoDate, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
 }
@@ -50295,6 +50305,19 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
 // and a plan the Routine (or anyone) filed later leaves a filed_<item> finding —
 // not until someone taps Seen. The other kinds (possible CO, two folders, errors)
 // wait until seen, as before.
+// v626: how old the Simpro copy is. Every Simpro figure on the dashboard (billed %, left to bill, quote $,
+// "Closed in Simpro") comes from settings/simproTotals, which dailySimproTotals writes on weekdays at
+// 6:15 AM; the page never said so and showed "Live". `at` is that doc's own stamp. Old = no pull since the
+// last weekday morning that has passed (so Friday's copy is fine all weekend and until Monday's pull).
+function odSimAsOf(at, now) {
+  const t = odDate(at);
+  if (!t) return { text: "Simpro numbers: no pull on record", stale: true, at: null };
+  let due = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
+  while (due > now || due.getDay() === 0 || due.getDay() === 6) due = new Date(due.getFullYear(), due.getMonth(), due.getDate() - 1, 7, 0, 0);
+  const stale = t < new Date(due.getFullYear(), due.getMonth(), due.getDate(), 5, 0, 0);
+  const day = localYmd(t) === localYmd(now) ? "today" : `${odDow(t)} ${odShort(t)}`;
+  return { text: `Simpro numbers as of ${day} ${odTime(t)}${stale ? " · the morning pull did not run" : ""}`, stale, at: t };
+}
 function odPlanModel(findings, now) {
   const all = (findings || []).map(f => ({ ...f, _at: odDate(f.createdAt) }));
   const ids = new Set(all.map(f => f.id));
@@ -50304,7 +50327,11 @@ function odPlanModel(findings, now) {
   const cutoff = now.getTime() - 14*OD_DAY;
   const fl = all.filter(f => f._at && f._at.getTime() >= cutoff);
   const isWaiting = (f) => PLAN_NEEDS.includes(f.type) && (["unmatched_plan", "walk_unmatched"].includes(f.type) ? !resolved(f) : !f.seen);
-  const waiting = fl.filter(isWaiting).sort((a, b) => a._at - b._at);
+  // v626: a plan or walk nobody has filed keeps waiting however old it is (it used to drop off the
+  // count after 14 days, so "oldest N d" could never pass 14). The kinds that only wait to be seen
+  // keep the 14-day window, so an old unread note does not come back.
+  const stays = (f) => ["unmatched_plan", "walk_unmatched"].includes(f.type);
+  const waiting = all.filter(f => f._at && (stays(f) || f._at.getTime() >= cutoff) && isWaiting(f)).sort((a, b) => a._at - b._at);
   const byNo = {};
   waiting.forEach(f => [f.bestGuess, f.altGuess, f.number].forEach(v => { const n = String(v || "").replace(/^#/, "").trim(); if (/^\d+$/.test(n)) (byNo[n] = byNo[n] || []).includes(f) || byNo[n].push(f); }));
   return { fl, waiting, isWaiting, resolved, byNo, oldest: waiting[0] || null };
@@ -50327,7 +50354,10 @@ function odLastDue(due, now) {
 function odDocStatus(x, { latestDocs, runs, now }) {
   const lt = x.latest && latestDocs && latestDocs[x.latest];
   const doc = lt && lt.url ? lt : null;
-  const run = OD_DOC_RUN[x.k] && runs ? runs[OD_DOC_RUN[x.k]] : null;
+  // v626: a "Run now" test stamps the same run record with test:true. A test is not the real run, so it
+  // no longer turns the card green (or red): the card then goes by the doc in the folder alone.
+  const runRaw = OD_DOC_RUN[x.k] && runs ? runs[OD_DOC_RUN[x.k]] : null;
+  const run = runRaw && runRaw.test ? null : runRaw;
   const runAt = run && odDate(run.lastRunAt);
   const made = [doc && odDate(doc.createdTime), run && run.ok !== false && runAt].filter(Boolean).sort((a, b) => b - a)[0] || null;
   const due = OD_DOC_DUE[x.k] && odLastDue(OD_DOC_DUE[x.k], now);
@@ -50408,13 +50438,15 @@ function odGoalsParse(grid) {
     if (missionCell) { const mm = missionCell.match(/our goal:\s*([\s\S]*?)(?:\s+REST OF 20\d\d.*)?$/i); out.mission = (mm ? mm[1] : missionCell).replace(/\s+AREA$/i, "").trim(); if (!out.title && /^team goals/i.test(missionCell)) { const tm = missionCell.match(/^(Team Goals[^.]*?\d{4}(?:\s*[–-]\s*\d{4})?)/i); out.title = tm ? tm[1] : "Team Goals"; } }
     if (!out.title && /^team goals/i.test(text[0])) { out.title = text[0]; return; }
     const foldedArea = cells.findIndex(c => /(^|\s)AREA$/i.test(c));
-    if (/REST OF 2026/.test(up) && foldedArea >= 0 && cells.some(c => c.toUpperCase() === "GOAL")) {
-      section = "goals"; cols = { area: foldedArea, goal: cells.findIndex(c => c.toUpperCase() === "GOAL"), who: cells.findIndex(c => c.toUpperCase() === "WHO"), by: cells.findIndex(c => c.toUpperCase() === "BY"), status: cells.findIndex(c => c.toUpperCase() === "STATUS") }; return;
+    if (/REST OF 20\d\d/.test(up) && foldedArea >= 0 && cells.some(c => c.toUpperCase() === "GOAL")) {
+      section = "goals"; out.goalsYear = Number((up.match(/REST OF (20\d\d)/) || [])[1]) || 0; cols = { area: foldedArea, goal: cells.findIndex(c => c.toUpperCase() === "GOAL"), who: cells.findIndex(c => c.toUpperCase() === "WHO"), by: cells.findIndex(c => c.toUpperCase() === "BY"), status: cells.findIndex(c => c.toUpperCase() === "STATUS") }; return;
     }
     if (missionCell) return;
-    if (/REST OF 2026/.test(up)) { section = "goals"; cols = null; return; }
-    if (/2027 SCOREBOARD/.test(up)) { section = "measures"; cols = null; return; }
-    if (/2027 BY QUARTER/.test(up)) { section = "quarters"; cols = null; return; }
+    // v626: any year in the three headings (they used to be the literal 2026 / 2027, so next year's
+    // sheet would have read as empty). The goals list remembers its heading's year for the due flags.
+    if (/REST OF 20\d\d/.test(up)) { section = "goals"; cols = null; out.goalsYear = Number((up.match(/REST OF (20\d\d)/) || [])[1]) || 0; return; }
+    if (/20\d\d SCOREBOARD/.test(up)) { section = "measures"; cols = null; return; }
+    if (/20\d\d BY QUARTER/.test(up)) { section = "quarters"; cols = null; return; }
     const ix = (name) => cells.findIndex(c => c.toUpperCase() === name);
     if (section === "goals") {
       if (ix("AREA") >= 0) { cols = { area: ix("AREA"), goal: ix("GOAL"), who: ix("WHO"), by: ix("BY"), status: ix("STATUS") }; return; }
@@ -50439,16 +50471,21 @@ function odGoalsParse(grid) {
 // A BY cell like "Oct 31", "Nov 30", "Jan", "Dec 15, 2026" → when it is due; "Starting now",
 // "Ongoing", "Weekly, ongoing", "Every quote" → no date, no flag. A month-only cell is due
 // at the end of that month; a month already more than 120 days behind us means next year.
-function odGoalDue(by, now) {
+// v626: `listYear` is the year in the list's own heading ("REST OF 2026" → 2026). With it, a date typed
+// with no year stays in that list's year (July–December) or the next one (January–June), for good:
+// "Oct 31" on the rest-of-2026 list is still overdue in March, where it used to flip to "due in ~240 d".
+// Without it (no heading year found) the old 120-day guess is kept.
+function odGoalDue(by, now, listYear) {
   const s = String(by || "").trim();
   const m = s.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?(?:\s+(\d{1,2}))?(?:,?\s+(\d{4}))?$/i);
   if (!m) return null;
   const mi = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(m[1].slice(0, 3).toLowerCase());
   const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  let year = m[3] ? Number(m[3]) : now.getFullYear();
+  const ly = Number(listYear) > 2000 ? Number(listYear) : 0;
+  let year = m[3] ? Number(m[3]) : ly ? (mi >= 6 ? ly : ly + 1) : now.getFullYear();
   const dayOf = (y) => m[2] ? new Date(y, mi, Number(m[2])) : new Date(y, mi + 1, 0);
   let due = dayOf(year);
-  if (!m[3] && (t0 - due) / 864e5 > 120) { year += 1; due = dayOf(year); }
+  if (!m[3] && !ly && (t0 - due) / 864e5 > 120) { year += 1; due = dayOf(year); }
   const days = Math.round((due - t0) / 864e5);
   const text = days < 0 ? `Overdue ${-days} d` : days === 0 ? "Due today" : `Due in ${days} d`;
   return { due, days, text, tone: days <= 10 ? "bad" : days <= 45 ? "warn" : "grey" };
@@ -50456,7 +50493,9 @@ function odGoalDue(by, now) {
 // Status comes from the sheet's STATUS column (Koy / Josh type it); the app only adds the due flag.
 function odGoalStatus(status, due) {
   const s = String(status || "").trim().toLowerCase();
-  if (/^done|complete/.test(s)) return { text: "Done", tone: "good" };
+  // v626: only a status that STARTS with done / complete / completed is Done ("Incomplete", "Not complete"
+  // and "50% complete" used to read as Done).
+  if (/^(done|complete|completed)\b/.test(s)) return { text: "Done", tone: "good" };
   if (/on track/.test(s)) return { text: "On track", tone: "good", flag: due && due.days < 0 ? due.text : "" };
   if (/at risk|behind|blocked/.test(s)) return { text: "At risk", tone: "bad", flag: due ? due.text : "" };
   if (/not started/.test(s)) return { text: "Not started", tone: "grey", flag: due ? due.text : "" };
@@ -50534,7 +50573,7 @@ function odGoalsModel({ sheet, sim, sb, d, plans, now = new Date() }) {
     const live = entry ? compute(entry) : null;
     return { ...x, key: entry ? entry.key : "", live, rule: entry && live && !live.pending ? live.rule || "" : "" };
   });
-  const goals = ((sheet && sheet.goals) || []).map(g => { const due = odGoalDue(g.by, now); return { ...g, due, pill: odGoalStatus(g.status, due) }; });
+  const goals = ((sheet && sheet.goals) || []).map(g => { const due = odGoalDue(g.by, now, sheet && sheet.goalsYear); return { ...g, due, pill: odGoalStatus(g.status, due) }; });
   const y = now.getFullYear(), q = Math.floor(now.getMonth() / 3) + 1;
   const nextQ = y < 2027 ? "Q1" : y === 2027 ? `Q${q}` : "";
   const quarters = ((sheet && sheet.quarters) || []).map(x => ({ ...x, next: x.q === nextQ }));
@@ -51338,7 +51377,10 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     gcAdminCallable("claudeActivity", identity)({ days: 14, owners: claudeOwners }).then(
       r => { if (!dead) setClaudeData((r && r.data) || { ok: false }); },
       e => { if (dead) return; const code = String((e && e.code) || "");
+        // v626: sample rows only when the function truly is not there yet (not-found / unimplemented). Any
+        // other failure (no signal, a server error) used to draw made-up changes with real job and crew names.
         setClaudeData(/permission-denied/.test(code) ? { ok: false, err: (e && e.message) || "Not allowed" }
+          : !/not-found|unimplemented/.test(code) ? { ok: false, err: "Couldn't reach it. Check the connection, then press Refresh." }
           : odClaudeSample(jobs, users, identity && identity.id === "koy" && !claudeOwners)); });
     return () => { dead = true; };
   }, [tab, claudeTick, claudeOwners]); // eslint-disable-line
@@ -51402,6 +51444,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
   const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, coordinator: coord, range, pto, simTotals, now: new Date() }),
     [jobs, users, needs, upcoming, mode, tick, foreman, coord, range, pto, simTotals]); // eslint-disable-line
   const plan = useMemo(() => odPlanModel(findings, new Date()), [findings, tick]); // eslint-disable-line
+  const simAsOf = useMemo(() => odSimAsOf(simTotals && simTotals.at, new Date()), [simTotals, tick]); // eslint-disable-line
   const docStat = (x) => odDocStatus(x, { latestDocs, runs: docRuns, now: d.now });
 
   const openJob = (job) => { if (job) setSheet({ kind: "job", id: job.id }); };
@@ -51568,6 +51611,12 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     // v551: Simpro has closed these out (Invoiced / Complete, billed in full) while the app
     // still has them open. They no longer count as active; each one waits here until it
     // is finished in the app, so its punch, change orders and return trips stop counting.
+    // v626: Complete / Invoiced in Simpro but still an open, counted job here (see simDoneOpen in odModel).
+    { k: "simDoneOpen", label: "Complete in Simpro, still open here", icon: "alertTriangle", color: OD_B, n: d.simDoneOpen.length, extra: "",
+      open: () => openList("Complete in Simpro, still open here", "Simpro has these as Complete or Invoiced, but they are not billed in full (or someone reopened them here), so they still count as active jobs. Finish each one here, or move it back in Simpro, so the two agree.", d.simDoneOpen.map(j => {
+        const t = d.simOf(j), bp = d.billedPct(j), left = d.leftOf(j);
+        return { title: j.name, sub: [`Simpro: ${t.stage}${t.status ? " · " + t.status : ""}${bp != null ? ` · ${Math.round(bp * 10) / 10}% billed` : ""}`, !fview && left ? `${odMoney(left)} left to bill` : "", `here: ${d.secOf(j) ? d.secOf(j).label : "open"}`].filter(Boolean).join(" · "),
+          right: j.simproNo ? "#" + j.simproNo : "", color: OD_B, icon: "alertTriangle", job: j }; })) },
     { k: "simClosed", label: "Closed in Simpro — close it here?", icon: "checkCircle", color: OD_B, n: d.closedSim.length,
       extra: (() => { const p = d.closedSim.reduce((t, j) => t + d.info[j.id].punch.length, 0), c = d.closedSim.reduce((t, j) => t + d.info[j.id].openCos.length, 0); return [p && `${p} punch`, c && odPlural(c, "open CO")].filter(Boolean).join(" · ") + (p || c ? " still on them" : ""); })(),
       open: () => openList("Closed in Simpro — close it here?", "Simpro has invoiced these in full. They are already left out of active jobs, open punch, quiet jobs, no-foreman jobs, crew questions and needs-a-date. Open each one and mark it finished here (answer or clear its crew questions first).", d.closedSim.map(j => {
@@ -51945,7 +51994,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
       <Me sub="Activity"/>
       <Stats items={[[d.inRange.length, `Logged, ${range} d`], [onApp, "Crew on app today", () => pickTab("people")], [quietP.length, "People quiet 3+ d", openQuietList]]}/>
       <Sec>Team pulse</Sec>
-      <Pulse list={d.people.slice(0, 10)}/>
+      {/* v626: quiet people first, THEN the cut to ten (it used to take the ten most active and so dropped the quiet ones it means to lead with). */}
+      <Pulse list={d.people.slice().sort((a, b) => (PULSE_ORDER[a.status] - PULSE_ORDER[b.status]) || ((b.todayN || 0) - (a.todayN || 0)) || ((b.last || 0) - (a.last || 0))).slice(0, 10)}/>
     </>);
   } else if (tab === "schedule") {
     const ws = odAddDays(d.t0, week*7);
@@ -51969,7 +52019,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const inspRow = (s) => { const r = schedRow(s), ic = s.job ? odInspCalled(s.job, inspPh(s)) : null; return ic ? { ...r, tag: [r.tag, ic.called ? "Called in" : "Not called in"].filter(Boolean).join(" · "), tagColor: ic.called ? r.tagColor : redInk } : r; };
     const toCallRow = (x) => ({ title: x.job.name, sub: `${x.ph} inspection · ${x.ph === "Rough" ? "rough" : "finish"} ${x.pct}% · ${x.job.foreman || "No foreman"}`, tag: "Not called in", tagColor: redInk, color: OD_R, icon: "checkCircle", job: x.job });
     const noCrew14 = starts14.filter(s => (cov(s) || {}).none).length;
-    const upList = () => openList("In the Upcoming tab", `${odPlural(d.up.length, "job")} not started yet · tap the app's Upcoming tab to edit`, d.up.slice().sort((a, b) => String(a.projectedStart || "~").localeCompare(String(b.projectedStart || "~"))).map(u => ({ title: u.name || "Upcoming job", sub: [u.foreman || "No foreman", u.gc, u.startConfirmed ? "start confirmed" : u.projectedStart ? "start projected" : "no start date"].filter(Boolean).join(" · "), right: u.projectedStart ? (() => { const at = odDate(u.projectedStart); return at ? `${odDow(at)} ${odShort(at)}` : String(u.projectedStart); })() : "", color: OD_O, icon: "flag" })));
+    const upList = () => openList("In the Upcoming tab", `${odPlural(d.up.length, "job")} not started yet · tap the app's Upcoming tab to edit`, d.up.slice().sort((a, b) => ((odDate(a.projectedStart) || 8e15) - (odDate(b.projectedStart) || 8e15))).map(u => ({ title: u.name || "Upcoming job", sub: [u.foreman || "No foreman", u.gc, u.startConfirmed ? "start confirmed" : u.projectedStart ? "start projected" : "no start date"].filter(Boolean).join(" · "), right: u.projectedStart ? (() => { const at = odDate(u.projectedStart); return at ? `${odDow(at)} ${odShort(at)}` : String(u.projectedStart); })() : "", color: OD_O, icon: "flag" })));
     main = (<>
       <div className="od-head"><div><h1>Schedule</h1><p>Starts, inspections, QC walks, scans and return trips with a date · {odPlural(next7.length, "item")} in the next 7 days{fmLabel ? ` · ${fmLabel}` : ""}</p></div></div>
       <div className="od-minis">
@@ -52050,7 +52100,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const fpColor = d.fp90 == null ? OD_G : d.fp90 >= 90 ? OD_G : d.fp90 >= 75 ? OD_WARN : OD_R;
     const failedFirst = d.in90.filter(f => !f.pass).length;
     // Inspections in the next 7 days and whether a QC walk was logged before them.
-    const QC_DONE = ["pass", "fixed", "completed"];
+    const QC_DONE = ["pass", "fixed", "completed", "passed_items"];   // v626: "Passed with Items" is a walk that happened, not a missing one
     const inspNext = insp7.map(s => { const fin = /Final/.test(s.label); const qs = s.job ? (fin ? s.job.finishQcStatus : s.job.qcStatus) : ""; return { s, walked: QC_DONE.includes(qs || ""), qs }; })
       .sort((a, b) => (a.walked ? 1 : 0) - (b.walked ? 1 : 0) || a.s.at - b.s.at);
     const unwalked = inspNext.filter(x => !x.walked).length;
@@ -52435,6 +52485,18 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     const fp = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
     const mC = (x) => x == null ? OD_GREY : x < 0 ? OD_R : x < OD_COST_GOAL ? OD_O : OD_G;
     const fmtAt = (iso) => { const t = odDate(iso); return t ? `${odDow(t)} ${odTime(t)}` : "—"; };
+    // v626: how old the rows really are. The header time is only the last run; each row carries its own
+    // pulledAt (an invoiced job is re-read once a week), and nothing warned when the nightly pull stopped.
+    const costsAge = (() => {
+      const rows = (costsDoc && Array.isArray(costsDoc.rows)) ? costsDoc.rows : [], gen = odDate(costsDoc && costsDoc.generated_at);
+      if (!gen) return { note: "", old: false };
+      const at = (r) => odDate(r && r.pulledAt);
+      if (d.now - gen > 36 * 3600 * 1000) return { old: true, note: `The nightly pull has not run since ${odShort(gen)}.` };
+      const stuck = rows.filter(r => { const t = at(r); return t && d.now - t > 8 * OD_DAY; }).length;
+      if (stuck) return { old: true, note: `${odPlural(stuck, "job")} not re-read in over 8 days.` };
+      const earlier = rows.filter(r => { const t = at(r); return t && gen - t > 12 * 3600 * 1000; }).length;
+      return { old: false, note: earlier ? `${earlier} of ${rows.length} jobs were last read before that (invoiced jobs are re-read once a week).` : "" };
+    })();
     const pullNow = async () => {
       if (costsPull === "busy") return;
       if (!window.confirm("Pull every job's cost centers from Simpro now? Read-only. The first pull takes several runs of up to 9 minutes; after that about a minute.")) return;
@@ -52566,7 +52628,7 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     main = (<div className="jc">
       <header className="jc-top">
         <img src="/hs-logo-white.png" alt="Homestead Electric"/>
-        <div className="jc-title"><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split into rough and finish. Credit and finished-job margins follow Josh's rule.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}</p></div>
+        <div className="jc-title"><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split into rough and finish. Credit and finished-job margins follow Josh's rule.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}{costsAge.note ? <b style={{ color: costsAge.old ? OD_R : "inherit", fontWeight: costsAge.old ? 700 : 400 }}>{" " + costsAge.note}</b> : null}</p></div>
         <div className="jc-act">
           <button type="button" className="jc-btn dark" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
           {canOpenDash(identity) && !noM ? <button type="button" className="jc-btn hv" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
@@ -53095,6 +53157,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         .odash .od-help button:hover{border-color:rgba(142,99,54,.45)!important}
         .odash .live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dim);white-space:nowrap}
         .odash .od-top .live{margin-left:auto}
+        .odash .od-asof{display:flex;align-items:center;gap:6px;justify-content:flex-end;font-size:11.5px;color:var(--dim);margin:-2px 0 6px}
+        .odash .od-asof.old{color:${OD_R};font-weight:700}
         .odash .live::before{content:"";width:8px;height:8px;border-radius:50%;background:${D.live};box-shadow:0 0 0 4px rgba(52,209,127,.2)}
         .odash .od-ctrl .live{display:none}
         .odash .od-fpanel{display:contents}
@@ -53679,6 +53743,8 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         <span className="od-help"><HelpDot section="dashboard" color={OD_A}/></span>
         <span className="live">Live · {mode === "commercial" ? "Commercial" : "Residential"} jobs</span>
       </div>
+      {/* v626: the app's own data is live; the Simpro figures are this morning's copy. Say when. */}
+      <div className={"od-asof" + (simAsOf.stale ? " old" : "")} role={simAsOf.stale ? "alert" : undefined}><Icon name={simAsOf.stale ? "alertTriangle" : "clock"} size={12}/><span>{simAsOf.text}</span></div>
       {fview ? <div className="od-fvbar"><Icon name="eyeOff" size={14}/><span><b>Foreman view.</b> No dollar amounts on this page; hours and percentages only.</span></div> : null}
       {tab !== "cc" && tab !== "claude" && (
         <div className={"od-ctrl" + (filtersOpen ? " open" : "")}>
@@ -62320,8 +62386,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v625
+**Last manifest update:** 2026-11-11 · App SW version: v626
 ---
+
+- **Dashboard truth fixes: time off shows, the Simpro copy says how old it is, "Complete in Simpro, still open here", and seven smaller wrong numbers** · 'in-flight 2026-11-11' · 'SW v626' · 'OfficeDash' · 'odModel' · 'odSimAsOf' · 'simDoneOpen' · 'odGoalDue' · 'odGoalStatus' · 'odPlanModel' · 'odDocStatus' · Koy, after the read-only Dashboard audit of 2026-11-11 (10 jobs checked against Simpro): *"create plan to fix and make dashboard as effective and efficient as possible, and begin"*. Ship 1 of the plan ('docs/superpowers/plans/2026-11-11-dashboard-truth-and-efficiency.md'), display and counting only. **(1) Time off shows.** 'settings/crewPTO' holds dates the way the date picker writes them (11/9/2026) and the dashboard compared them as text with 2026-11-11, so "Out this week" never appeared on Overview or People and someone on approved leave counted as quiet. 'odModel' now reads each row's dates once as real dates. **(2) The Simpro copy says when it was taken.** Billed %, left to bill, quote $ and "Closed in Simpro" come from 'settings/simproTotals', written weekdays at 6:15 AM, under a badge that said "Live". A line under the header now reads "Simpro numbers as of today 6:15 AM" and turns red with "the morning pull did not run" when a weekday pull is missed ('odSimAsOf'; Friday's copy is fine all weekend). **(3) Complete in Simpro, still open here.** A new Needs you line lists jobs Simpro has as Complete or Invoiced that are still open, counted jobs in the app because they are under 99.5% billed or were reopened by hand (Austin Cloward #1187: Complete since 9/14 at 98.8%, shown as an ordinary open job with no flag). They stay active; the row gives Simpro's stage, billed % and what is left to bill. **(4) Goals.** A status of "Incomplete", "Not complete" or "50% complete" no longer reads as Done; a due date typed without a year stays in the year of its list's heading, so an old goal stays overdue (it used to flip to "due in ~240 d" once 120 days late); the three sheet headings parse with any year, not only 2026 / 2027. **(5) Smaller.** QC "Passed with Items" counts as a walk on Quality's inspections-next-7-days; a "Run now" test no longer turns an automated-doc card green or red; a plan nobody filed keeps waiting past 14 days; the Claude tab shows an error on a failed load (sample rows only when the function is not deployed); Job Costs says when rows are older than the header time and turns red when the nightly pull stops; the Upcoming list sorts by real date; Team pulse keeps its quiet people. Tests: 'scripts/odash-model-test.js' (time-off sample now M/D/YYYY, plus 18 new checks) and 'scripts/goals-model-test.js' (9 new checks). Guide 'dashboard.html' updated. Crew brief 'docs/crew-briefs/v626.md' (office only). **Why it won't lose data:** display and counting only. No save, 'saveJob' / 'updateDoc', loader, Firestore rules or Cloud Function change; the dashboard reads the same docs it read before ('settings/crewPTO', 'settings/simproTotals', 'settings/phaseCosts', 'settings/autoDocRuns', 'agentFindings') and writes nothing new. Reverting the code reverts every line.
 
 - **Punch List is a choice in the Finish status dropdown, and a foreman's call sticks** · 'in-flight 2026-11-11' · 'SW v625' · 'finishPunchList' · 'finishStatusOptions' · 'finishStatusShown' · 'punchListPick' · Koy, after v624 (the Punch List stage was automatic only): *"why do i not see punch list as an option in the app?"*, then picked **Add to dropdown**. The Finish tab's status dropdown now lists **Punch List** right after In Progress. Picking it saves 'finishStatus: "inprogress"' plus **'finishPunchList: true'**. It is not a new status value, because the Crew Planner, Up Next, schedule pills and the server reports all read "inprogress". The automatic v624 rule stays as the backstop. 'finishPunchList' is three-way and counts only while finish is In Progress: 'true' = on Punch List at any % (even with nothing open), 'false' = kept off (written only when In Progress is picked while the dropdown showed Punch List), unset/null = the automatic rule. Complete jobs always use the automatic rule, so a return trip added later still pulls them back. On Hold beats the flag. Any other pick writes 'finishPunchList: null' (only if the job already has one). The dropdown shows Punch List whenever finish is In Progress and the job is on Punch List, by hand or on its own. The Job Board card pill reads "Finish: Punch List". The Complete gate is unchanged. Not changed: the stage % select ('stageChangePlan', shared with duetApi) and Duet's status writer. A flag left 'true' on a job finished through 100% is ignored while Complete. Tests: 'scripts/punch-list-stage-test.js' grew to 56 checks (flag on/off/cleared, hold, complete, option order, what the dropdown shows, what each pick writes, the App.js wiring). Guide 'finish.html' updated. Crew brief 'docs/crew-briefs/v625.md'. **Why it won't lose data:** one new field, 'finishPunchList', inside the job's data (the loader already spreads 'data'), written only by the Finish dropdown through the same 'u()' save funnel that writes 'finishStatus'. The status fields a pick writes are exactly what that pick wrote before ("Punch List" writes what "In Progress" writes). No loader, rules or Cloud Function change, and no existing field changes meaning.
 
