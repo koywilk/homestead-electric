@@ -94,7 +94,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf,odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf, odFeedProblems, odLaborEarly, OD_BEFORE_FINISH, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -412,6 +412,65 @@ if (require.main === module) {
   eq(pm2.waiting.map(f => f.id), ["unmatched_email_9", "unmatched_email_1"], "oldest first, the 40-day-old one included; a resolved old one is not");
   assert.strictEqual(pm2.oldest.id, "unmatched_email_9");
   assert.ok(!pm2.fl.some(f => f.id === "unmatched_email_9"), "the 14-day activity list itself is unchanged");
+
+  // 13. v628 SHIP 3a — answers from the overnight data (shapes read live 2026-11-11 / 11-12)
+  //  a. Labor used before finish starts (settings/phaseHours: r / f = [used, estimate] by Simpro number).
+  const hrs = { "1107": { r: [1248.5, 394.4], f: [28.6, 410.9] }, "1430": { r: [567.8, 341.7], f: [5.9, 233.4] }, "1291": { r: [920.1, 553.1], f: [311.3, 477.6] },
+    "1438": { r: [500, 789.4], f: [0, 639.7] }, "7000": { r: [300, 100] }, "7001": { r: [95, 100], f: [0, 0] }, "7002": { r: [500, 100], f: [0, 100] }, "7003": { r: [500, 100], f: [0, 100] } };
+  const lj = [
+    tj("l1", "Kweller", "Zane Watkins", "1107", { roughStatus: "complete", roughStage: "100%", finishStatus: "waiting_date" }),          // rough done, finish not started
+    tj("l2", "Brandt", "Zane Watkins", "1430", { roughStatus: "inprogress", roughStage: "95%" }),                                        // still in rough
+    tj("l3", "Ashcraft", "Zane Watkins", "1291", { roughStatus: "complete", finishStatus: "inprogress", finishStage: "45%" }),          // finish started: not this list
+    tj("l4", "Miller", "Zane Watkins", "1438", { roughStatus: "complete", finishStatus: "waiting_date" }),                              // 35% used: fine
+    tj("l5", "Building A", "Zane Watkins", "7000", {}), tj("l6", "Building B", "Zane Watkins", "7000", {}),                             // one Simpro # on two jobs: skipped
+    tj("l7", "Rough-only estimate", "Zane Watkins", "7001", {}),                                                                        // 95% of a rough-only estimate
+    tj("l8", "Quick one", "Zane Watkins", "7002", { quickJob: true, quickJobStatus: "inprogress" }),
+    tj("l9", "Shop TI", "Zane Watkins", "7003", { division: "commercial" }),
+    tj("l10", "No hours row", "Zane Watkins", "7999", {}),
+  ];
+  const ld = X.odModel({ jobs: lj, users, needs: [], upcoming: [], hours: hrs, now });
+  eq(ld.laborEarly.map(x => [x.job.name, x.used, x.est, Math.round(x.pct * 100)]), [["Kweller", 1277, 805, 159], ["Brandt", 574, 575, 100], ["Rough-only estimate", 95, 100, 95]],
+    "worst first; a job in finish, a job under 90%, a shared Simpro #, a quick job, a commercial job and a job with no hours row are not listed");
+  const le = ld.attnBy.laborEarly.rows[0];
+  assert.ok(/1,277 of 805 estimated hours used/.test(le.sub) && le.right === "159%" && le.job.name === "Kweller", le.sub);
+  eq(X.odModel({ jobs: lj, users, needs: [], upcoming: [], now }).laborEarly, [], "no hours doc yet: no rows, no crash");
+  eq(X.odLaborEarly(lj, { "1107": { r: ["x", null], f: [] } }, () => ({ key: "between", label: "b" })), [], "junk numbers are zero, not NaN rows");
+  assert.ok(!X.OD_BEFORE_FINISH.includes("finish") && !X.OD_BEFORE_FINISH.includes("punchList") && X.OD_BEFORE_FINISH.includes("between"));
+  //  b. Simpro technician vs who runs the job here. Crews: Abe's crew = Abe + Vasa (foremanId).
+  const tUsers = users.map(u => u.id === "vasa" ? { ...u, foremanId: "abe" } : u);
+  const tJobs = [tj("t1", "Same person", "Abraham Tristan", "801"), tj("t2", "Same crew", "Abraham Tristan", "802"), tj("t3", "Lead is the tech", "Zane Watkins", "803", { lead: "Vasa Mataafa" }),
+    tj("t4", "Vista Meadows", "Abraham Tristan", "804"), tj("t5", "No tech", "Abraham Tristan", "805"), tj("t6", "Other crew", "Zane Watkins", "806"),
+    tj("t7", "Not read", "Abraham Tristan", "807"), tj("t8", "Nobody here", "", "808"), tj("t9", "Quick", "Abraham Tristan", "809", { quickJob: true, quickJobStatus: "inprogress" })];
+  const tSim = { byNo: { "801": { techs: ["Abraham Tristan"] }, "802": { techs: ["Vasa Mataafa"] }, "803": { techs: ["Vasa Mataafa"] }, "804": { techs: ["Jonathan Harding"] }, "805": { techs: [] },
+    "806": { techs: ["Vasa Mataafa"] }, "807": { total: 5 }, "808": { techs: ["Jonathan Harding"] }, "809": { techs: ["Jonathan Harding"] } } };
+  const td = X.odModel({ jobs: tJobs, users: tUsers, needs: [], upcoming: [], simTotals: tSim, now });
+  eq(td.techDiff.map(x => [x.job.name, x.kind]), [["Vista Meadows", "gone"], ["No tech", "none"], ["Other crew", "other"]],
+    "left the team first, then no technician, then another crew; same person, same crew, the lead, an unread job, a job with nobody named and a quick job agree or are skipped");
+  assert.ok(/Jonathan Harding is not on the team/.test(td.techDiff[0].text) && /Abraham's crew/.test(td.techDiff[2].text), td.techDiff[2].text);
+  assert.ok(/here: Abraham Tristan/.test(td.attnBy.techDiff.rows[0].sub) && td.attnBy.techDiff.rows[0].right === "#804");
+  //  c. Invoiced in full, then more added in Simpro (Barry #1406: 98.6% after reading 100%).
+  const bJobs = [tj("b1", "Barry", "Abraham Tristan", "1406", { roughStatus: "complete", finishStatus: "complete", invoiceSent: true }),
+    tj("b2", "Sync said so", "Abraham Tristan", "901", { roughStatus: "complete", finishStatus: "complete", simproSync: { invoiceSent: "2026-10-28T12:15:17.574Z" } }),
+    tj("b3", "Never invoiced in full", "Abraham Tristan", "902", { roughStatus: "complete", finishStatus: "complete" }),
+    tj("b4", "Still full", "Abraham Tristan", "903", { roughStatus: "complete", finishStatus: "complete", invoiceSent: true }),
+    tj("b5", "Open job", "Abraham Tristan", "904", { roughStatus: "complete", finishStatus: "inprogress", finishStage: "50%", invoiceSent: true }),
+    tj("b6", "Pennies", "Abraham Tristan", "905", { roughStatus: "complete", finishStatus: "complete", invoiceSent: true })];
+  const bSim = { byNo: { "1406": { total: 19615.48, inv: 19343.21, invPct: 98.61, stage: "Complete" }, "901": { total: 1000, inv: 400, invPct: 40, stage: "Complete" }, "902": { total: 1000, inv: 400, invPct: 40, stage: "Progress" },
+    "903": { total: 1000, inv: 1000, invPct: 100, stage: "Invoiced" }, "904": { total: 1000, inv: 400, invPct: 40, stage: "Progress" }, "905": { total: 100, inv: 99.4, invPct: 99.4, stage: "Invoiced" } } };
+  const bd = X.odModel({ jobs: bJobs, users, needs: [], upcoming: [], simTotals: bSim, now });
+  eq(bd.billedThenMore.map(j => [j.name, Math.round(bd.leftOf(j))]), [["Sync said so", 600], ["Barry", 272]], "largest unbilled first; never-invoiced, still-full, open and under-a-dollar jobs are not listed");
+  //  d. Feed health (settings/dashFeeds as dashHistoryNightly wrote it 2026-11-12 6:45 AM).
+  const okFeeds = { at: "2026-11-12T13:45:05.433Z", feeds: { costs: { label: "Job Costs", ok: true, at: "2026-11-12T11:15:23.580Z", ageH: 2.5, error: "" }, goals: { label: "Goals", ok: true, at: "2026-11-12T12:40:04.237Z", ageH: 1.1, error: "" },
+    scoreboard: { label: "Scoreboard", ok: true, at: "2026-11-12T12:20:56.216Z", ageH: 1.4, error: "" }, totals: { label: "Simpro totals", ok: true, at: "2026-11-12T13:15:38.915Z", ageH: 0.5, error: "" } } };
+  const seven = new Date("2026-11-12T14:00:00.000Z");
+  eq(X.odFeedProblems(okFeeds, seven).rows, [], "the clean night: nothing to show");
+  eq([X.odFeedProblems(null, seven).rows, X.odFeedProblems({}, seven).rows, X.odFeedProblems({ at: "2026-11-12T13:45:05.433Z" }, seven).rows], [[], [], []], "no doc yet (before the first run): silent, not an alarm");
+  const badFeeds = { ...okFeeds, feeds: { ...okFeeds.feeds, goals: { label: "Goals", ok: false, late: false, at: "2026-11-11T12:40:12.748Z", ageH: 25, error: "only 100 of 204 jobs came back" }, totals: { label: "Simpro totals", ok: false, late: true, at: "", ageH: null, error: "" } } };
+  const feedRows = X.odFeedProblems(badFeeds, seven).rows;
+  eq(feedRows.map(r => r.title), ["Goals: last pull failed", "Simpro totals: pull is late"], "only the feeds that are not ok, in a fixed order");
+  assert.ok(/only 100 of 204 jobs came back/.test(feedRows[0].sub) && /last good pull/.test(feedRows[0].sub) && /no pull on record/.test(feedRows[1].sub), feedRows[0].sub);
+  const staleCheck = X.odFeedProblems(okFeeds, new Date("2026-11-14T14:00:00.000Z")).rows;
+  eq(staleCheck.map(r => r.k), ["check"], "a check over 30 hours old says the check itself did not run");
 
   console.log("odash-model-test: all checks passed");
 }

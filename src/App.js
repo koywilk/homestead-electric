@@ -49982,7 +49982,7 @@ function odCostsPeople(rows, users) {
   return secs.filter(x => x.people.length);
 }
 
-function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "", range = 14, pto = [], simTotals = null, now = new Date() }) {
+function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "", range = 14, pto = [], simTotals = null, hours = null, now = new Date() }) {
   const today = localYmd(now), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const secs = OD_PHASES;
   // A record with no name is an empty shell, not a job (the app's own lists skip them too).
@@ -50055,6 +50055,11 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   // it is listed in Needs you so the two can be made to agree (Austin Cloward #1187, 2026-11-11: Complete
   // in Simpro since 9/14 at 98.8% billed, shown here as an ordinary open finish job with no flag).
   const simDoneOpen = active.filter(j => { const t = simOf(j); return !!t && OD_SIM_CLOSED.includes(t.stage); }).sort((a, b) => String(a.name).trim().localeCompare(String(b.name).trim()));
+  // v628: finished here and once invoiced in full, but Simpro now shows it under 99.5% billed: something
+  // was added in Simpro after the last invoice (Barry #1406, 2026-11-12: a change order section added
+  // 10/28, $272 not billed). Finished jobs only; an open job in this state is in simDoneOpen above.
+  const billedThenMore = live.filter(j => isDone(j) && (j.invoiceSent || (j.simproSync && j.simproSync.invoiceSent)) && billedPct(j) != null && !fullyBilled(j) && (leftOf(j) || 0) >= 1)
+    .sort((a, b) => (leftOf(b) || 0) - (leftOf(a) || 0));
   const secIdx = (j) => { const s = secOf(j); return s ? s.i : 999; };
   const bySec = secs.map(s => ({ ...s, jobs: active.filter(j => secOf(j) && secOf(j).key === s.key) })).filter(s => s.jobs.length);
 
@@ -50186,6 +50191,31 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   });
   const notReadyIds = new Set(notReady.map(s => s.job.id));
 
+  // v628: labor already used before finish starts (odLaborEarly), and jobs whose Simpro technician is
+  // not the person running the job here. Goals and Job Costs credit a job to its Simpro technician, the
+  // rest of the app to its foreman / lead, so a technician who has left (Vista Meadows #1386: Jonathan
+  // Harding), none at all, or one from another crew sends the credit to the wrong place. A technician
+  // who is the job's foreman or lead, or on the same crew as the job, agrees.
+  const laborEarly = odLaborEarly(active, hours, secOf);
+  const techDiff = [];
+  active.forEach(j => {
+    if (j.quickJob || j.tempPed) return;
+    const t = simOf(j); if (!t || !Array.isArray(t.techs)) return;            // not read from Simpro: nothing to compare
+    const fm = String(j.foreman || "").trim(), ld = String(j.lead || "").trim();
+    if (!fm && !ld) return;                                                    // nobody named here: the no-foreman list owns it
+    const here = [fm, ld].filter(Boolean).join(" / "), techs = t.techs.map(x => String(x || "").trim()).filter(Boolean);
+    if (!techs.length) { techDiff.push({ job: j, kind: "none", here, text: "Simpro has no technician" }); return; }
+    if (techs.some(n => sameName(n, fm) || sameName(n, ld))) return;
+    const onTeam = techs.filter(n => staff.some(u => sameName(u.name, n)));
+    if (!onTeam.length) { techDiff.push({ job: j, kind: "gone", here, text: `Simpro technician ${techs.join(" / ")} is not on the team` }); return; }
+    const jc = crewOfJob(j);
+    if (jc && onTeam.some(n => { const c = crewOf(n); return !!c && c.id === jc.id; })) return;
+    const tc = crewOf(onTeam[0]);
+    techDiff.push({ job: j, kind: "other", here, text: `Simpro technician ${onTeam.join(" / ")}${tc ? ` (${tc.label})` : ""}` });
+  });
+  const TECH_ORDER = { gone: 0, none: 1, other: 2 };
+  techDiff.sort((a, b) => (TECH_ORDER[a.kind] - TECH_ORDER[b.kind]) || String(a.job.name).localeCompare(String(b.job.name)));
+
   // Needs attention
   const attnAll = [
     { k: "stale", label: "Status is behind the work logged", color: OD_WARN, icon: "alertTriangle",
@@ -50231,6 +50261,10 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
         .map(j => ({ title: j.name, sub: `${secOf(j).label} · ${j.foreman || "No foreman"} · last work logged ${lastAct[j.id] ? odAgo(lastAct[j.id], now) : "never"}`, job: j, color: OD_WARN })) },
     { k: "serious", label: "Serious punch items open", color: OD_R, icon: "openitems",
       rows: openPunch.filter(p => p.serious).map(p => ({ title: p.job.name, sub: `${p.phase}${p.room ? " · " + p.room : ""}: ${p.text}`, job: p.job, color: OD_R })) },
+    { k: "laborEarly", label: "Labor hours used up before finish starts", color: OD_R, icon: "clock",
+      rows: laborEarly.map(x => ({ title: x.job.name, sub: `${x.used.toLocaleString()} of ${x.est.toLocaleString()} estimated hours used · ${x.sec.label} · ${x.job.foreman || "No foreman"}`, right: `${Math.round(x.pct * 100)}%`, job: x.job, color: OD_R })) },
+    { k: "techDiff", label: "Simpro technician is not who runs the job here", color: OD_B, icon: "user",
+      rows: techDiff.map(x => ({ title: x.job.name, sub: `${x.text} · here: ${x.here} · fix the technician in Simpro so Goals and Job Costs credit the right person`, right: x.job.simproNo ? "#" + x.job.simproNo : "", job: x.job, color: OD_B })) },
   ];
   const attnBy = {}; attnAll.forEach(a => { attnBy[a.k] = a; });
   // The quotes' $ (each Simpro quote once, however many COs sit on it), not the job value.
@@ -50323,7 +50357,7 @@ function odModel({ jobs, users, needs, upcoming, foreman = "", coordinator = "",
   const crewGroups = crews.map(c => ({ crew: c, jobs: active.filter(j => { const o = crewOfJob(j); return !!o && o.id === c.id; }) }));
   const noCrewJobs = active.filter(j => !crewOfJob(j));
   return { now, today, t0, secs, foremen: roster, roster, fmName, allLive, live, up, active, allActive, crews, crewOf, crewOfJob, owns, crewPick, leadsNamed, crewGroups, noCrewJobs, secOf, secIdx, bySec, prepOpen, isDone, events, evById, inRange, evToday, evYest, perDay, info, lastAct, sched, nextOf,
-    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simDoneOpen, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
+    openPunch, openCOs, coWaiting, coBy, coOnDone, coBilled, coBilledOf, closedSim, simDoneOpen, billedThenMore, laborEarly, techDiff, simOf, leftOf, billedPct, fullyBilled, quoteOf, syncLog, syncWeek, openRTs, rtSum, openQs, qcRows, byForeman, firsts, allAtts, fails, in90, fp90, insp30, months, failGroups, failOpenG, notRebooked, failStatus, failGroupOf,
     overdue, lateOf, needsDate, scans, scanInfo, notReady, notReadyIds, attn, attnBy, moneyOf, coAge,
     people, teamN, shortName, foremenP, noForemanJobs, techsOf, suggestFm, coordOf, coordinators, upNoDate, noFmGroups, noFmText, whyNoFm, offTeam, troubleOf, openNeeds, load, timeOff, ptoList, ptoWeek, offToday, busy, busyRange };
 }
@@ -50345,6 +50379,47 @@ function odSimAsOf(at, now) {
   const stale = t < new Date(due.getFullYear(), due.getMonth(), due.getDate(), 5, 0, 0);
   const day = localYmd(t) === localYmd(now) ? "today" : `${odDow(t)} ${odShort(t)}`;
   return { text: `Simpro numbers as of ${day} ${odTime(t)}${stale ? " · the morning pull did not run" : ""}`, stale, at: t };
+}
+// ── v628 (dashboard plan ship 3a): answers from the overnight data ────────────────────────────
+// Feed health. settings/dashFeeds is written at 6:45 AM by dashHistoryNightly: for each overnight
+// Simpro pull, its last good data time and whether it was late or its last run failed. → the rows
+// worth showing (nothing when every feed is fine, or when the doc has not been written yet). If the
+// check itself is over 30 hours old it says so first, because then the lines under it are stale too.
+function odFeedProblems(feedDoc, now) {
+  const at = odDate(feedDoc && feedDoc.at), feeds = feedDoc && feedDoc.feeds;
+  if (!at || !feeds || typeof feeds !== "object") return { rows: [], checkedAt: null };
+  const rows = [], when = (t) => `${odDow(t)} ${odShort(t)} ${odTime(t)}`;
+  if (now - at > 30 * 3600 * 1000) rows.push({ k: "check", title: "The morning feed check did not run", sub: `Last checked ${when(at)}. Anything listed here is from then.` });
+  ["costs", "scoreboard", "goals", "totals"].forEach(k => {
+    const f = feeds[k]; if (!f || f.ok) return;
+    const t = odDate(f.at);
+    rows.push({ k, title: `${f.label || k}: ${f.error ? "last pull failed" : "pull is late"}`,
+      sub: [f.error ? odText(f.error) : "", t ? `last good pull ${when(t)}` : "no pull on record"].filter(Boolean).join(" · ") });
+  });
+  return { rows, checkedAt: at };
+}
+// Labor used before finish starts. settings/phaseHours (phaseCostsNightly, hours only) holds per Simpro
+// number r: [used, estimate] and f: [used, estimate]. A job whose finish has not started here but which
+// has already used `min` (90%) of its whole rough + finish hour estimate will finish over; nothing on
+// Overview said so (Kweller 2026-11-11: 1,277 hours used of an 805-hour estimate, finish not started).
+// Full residential jobs only; a Simpro number shared by several app jobs (project buildings) is skipped,
+// because the hours are the whole Simpro job's.
+const OD_BEFORE_FINISH = ["roughNext", "noStatus", "prep", "rough", "roughDue", "roughHold", "roughFail", "between", "finishDue"];
+function odLaborEarly(active, hours, secOf, min = 0.9) {
+  if (!hours || typeof hours !== "object") return [];
+  const noOf = (j) => String((j && j.simproNo) || "").trim();
+  const shared = {}; (active || []).forEach(j => { const n = noOf(j); if (n) shared[n] = (shared[n] || 0) + 1; });
+  const rows = [];
+  (active || []).forEach(j => {
+    if (!j || j.quickJob || j.tempPed || j.division === "commercial") return;
+    const s = secOf(j), n = noOf(j), h = n && shared[n] === 1 ? hours[n] : null;
+    if (!s || !OD_BEFORE_FINISH.includes(s.key) || !h) return;
+    const v = (a, i) => (Array.isArray(a) && typeof a[i] === "number" && isFinite(a[i]) ? a[i] : 0);
+    const used = v(h.r, 0) + v(h.f, 0), est = v(h.r, 1) + v(h.f, 1);
+    if (!(est > 0) || used / est < min) return;
+    rows.push({ job: j, used: Math.round(used), est: Math.round(est), pct: used / est, sec: s });
+  });
+  return rows.sort((a, b) => b.pct - a.pct);
 }
 function odPlanModel(findings, now) {
   const all = (findings || []).map(f => ({ ...f, _at: odDate(f.createdAt) }));
@@ -51469,8 +51544,21 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
     return () => { dead = true; };
   }, [tab, simproPoTick]);
 
-  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, coordinator: coord, range, pto, simTotals, now: new Date() }),
-    [jobs, users, needs, upcoming, mode, tick, foreman, coord, range, pto, simTotals]); // eslint-disable-line
+  // v628: last night's rough / finish hours per Simpro number (settings/phaseHours, the shared 30-minute
+  // cache the job page already uses) for "labor used before finish starts", and the 6:45 AM feed check
+  // (settings/dashFeeds) for Needs you. Both read-only; read when Overview or Jobs opens.
+  const [phaseHrs, setPhaseHrs] = useState(null);
+  const [dashFeeds, setDashFeeds] = useState(null);
+  useEffect(() => {
+    if (!["overview", "jobs"].includes(tab)) return undefined;
+    let dead = false;
+    loadPhaseHours().then(h => { if (!dead) setPhaseHrs(h || {}); }, () => {});
+    getDoc(doc(db, "settings", "dashFeeds")).then(snap => { if (!dead) setDashFeeds(snap.exists() ? (snap.data() || null) : null); }, () => {});
+    return () => { dead = true; };
+  }, [tab]);
+  const d = useMemo(() => odModel({ jobs, users, needs, upcoming, foreman, coordinator: coord, range, pto, simTotals, hours: phaseHrs, now: new Date() }),
+    [jobs, users, needs, upcoming, mode, tick, foreman, coord, range, pto, simTotals, phaseHrs]); // eslint-disable-line
+  const feedProb = useMemo(() => odFeedProblems(dashFeeds, new Date()), [dashFeeds, tick]); // eslint-disable-line
   const plan = useMemo(() => odPlanModel(findings, new Date()), [findings, tick]); // eslint-disable-line
   const simAsOf = useMemo(() => odSimAsOf(simTotals && simTotals.at, new Date()), [simTotals, tick]); // eslint-disable-line
   const docStat = (x) => odDocStatus(x, { latestDocs, runs: docRuns, now: d.now });
@@ -51661,6 +51749,16 @@ function OfficeDash({ jobs, users = [], needs = [], upcoming = [], identity, mod
         title: x.job.name, sub: `${odSyncText(x.e)}${x.e.undoneAt ? " · undone" : ""}`, right: `${odDow(x.at)} ${odShort(x.at)}`, color: OD_B, icon: "refresh", job: x.job }))) },
     { k: "qc", label: "QC walks that need a walk", icon: "clipboard", color: OD_B, n: d.qcRows.filter(r => r.st === "needs" || r.st === "overdue").length, extra: "",
       open: () => openList("QC walks that need a walk", "", d.qcRows.filter(r => r.st === "needs" || r.st === "overdue").map(r => ({ title: r.job.name, sub: `${r.phase} · ${OD_QC_BUCKET[r.st]} · ${r.job.foreman || "No foreman"}`, right: r.at ? odShort(r.at) : "", color: OD_B, icon: "clipboard", job: r.job }))) },
+    // v628: an overnight Simpro pull that failed or is late (settings/dashFeeds). Shown only when one is.
+    { k: "feeds", label: "Overnight Simpro pull late or failed", icon: "alertTriangle", color: OD_R, n: feedProb.rows.length, extra: feedProb.rows.map(r => r.title).join(" · "),
+      open: () => openList("Overnight Simpro pulls", "The numbers these pulls feed (Job Costs, Scoreboard, Goals, billed % and left to bill) are older than they should be until the next good pull.", feedProb.rows.map(r => ({ title: r.title, sub: r.sub, color: OD_R, icon: "alertTriangle" }))) },
+    // v628: finished and invoiced in full, then something more was added in Simpro (billedThenMore in odModel).
+    { k: "billedMore", label: "Invoiced in full, then more was added in Simpro", icon: "changeorders", color: OD_B, n: d.billedThenMore.length,
+      extra: fview ? "" : `${odMoney(d.billedThenMore.reduce((t, j) => t + (d.leftOf(j) || 0), 0))} not billed`,
+      open: () => openList("Invoiced in full, then more was added in Simpro", "These jobs are finished here and were invoiced in full. Simpro now shows a higher total than what was invoiced, usually a change order added afterwards. Invoice the difference in Simpro.", d.billedThenMore.map(j => {
+        const t = d.simOf(j), bp = d.billedPct(j), left = d.leftOf(j);
+        return { title: j.name, sub: [`Simpro: ${t.stage}${t.status ? " · " + t.status : ""} · ${Math.round(bp * 10) / 10}% billed`, !fview && left ? `${odMoney(left)} not billed` : "", j.foreman || ""].filter(Boolean).join(" · "),
+          right: j.simproNo ? "#" + j.simproNo : "", color: OD_B, icon: "changeorders", job: j }; })) },
     { k: "docs", label: "Automated docs that did not run", icon: "fileText", color: OD_R, n: docsMissed.length, extra: docsMissed.map(o => o.x.title).join(", "),
       open: () => pickTab("cc") },
   ].filter(x => x.n > 0);
@@ -62414,8 +62512,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-11 · App SW version: v627
+**Last manifest update:** 2026-11-12 · App SW version: v628
 ---
+
+- **Dashboard answers from the overnight data: labor used up before finish starts, money added after a job was invoiced in full, the wrong Simpro technician, and a failed overnight pull** · 'in-flight 2026-11-12' · 'SW v628' · 'OfficeDash' · 'odModel' · 'odLaborEarly' · 'odFeedProblems' · 'billedThenMore' · 'techDiff' · Ship 3a of 'docs/superpowers/plans/2026-11-11-dashboard-truth-and-efficiency.md' (Koy 2026-11-12: *"Start ship 3"*). Four lines on Overview, each shown only when it has something, each from data the app already pulls overnight. **(1) Needs attention › Labor hours used up before finish starts.** A full residential job whose finish has not started here but which has already used 90% or more of its whole rough + finish hour estimate ('settings/phaseHours', the hours-only doc 'phaseCostsNightly' writes; read through the job page's shared 30-minute cache). Row: hours used of estimated, the stage, the foreman, and the percent. Live shapes on 2026-11-11: Kweller 1,277 of 805 hours with finish not started, Brandt 574 of 575. A Simpro number shared by several app jobs is skipped (the hours are the whole Simpro job's); quick jobs, temp peds and commercial are not listed. **(2) Needs you › Invoiced in full, then more was added in Simpro.** A job finished here that was invoiced in full ('invoiceSent', by hand or by the sync) and that Simpro now shows under 99.5% billed with a dollar or more left (Barry #1406: a change order section added 10/28, $272). It exists because ship 2 keeps re-reading finished jobs for 60 days. Dollar amounts hide in Foreman view. **(3) Needs attention › Simpro technician is not who runs the job here.** Goals and Job Costs credit a job to its Simpro technician; the rest of the app uses the foreman / lead. Listed: the technician has left the team, Simpro has no technician, or the technician is on a different crew. Not listed: the technician is the job's foreman or lead, or on the same crew (Settings › Team 'foremanId'); jobs Simpro was not read for; jobs with nobody named here (the no-foreman list has those); quick jobs and temp peds. **(4) Needs you › Overnight Simpro pull late or failed.** From 'settings/dashFeeds' (the 6:45 AM feed check): any of Job Costs, Scoreboard, Goals or Simpro totals whose pull failed or is late, with the error and its last good time; and "the morning feed check did not run" when the check itself is over 30 hours old. Silent on a clean night. Tests: 'scripts/odash-model-test.js' +14 checks on shapes read live (hours rows for Kweller / Brandt / Ashcraft, the Barry numbers, the 11-12 feed doc). Guide 'dashboard.html' updated. Crew brief 'docs/crew-briefs/v628.md' (office only). Left for ship 3b: People and the job popup counted from all jobs, "quiet" in work days, Job Costs grading finished jobs only, the stage-differs list (read from 'settings/simproStageSync', the stage sync's own nightly plan, so there is one rule). **Why it won't lose data:** read-only. Two more reads when Overview or Jobs opens ('settings/phaseHours' through the existing cache, 'settings/dashFeeds'); no save, 'saveJob' / 'updateDoc', loader, rules or Cloud Function change. Reverting the code removes the four lines and nothing else.
 
 - **The scheduling pill reads Simpro live: On Schedule / Ongoing is right without the refresh arrow, on every screen** · 'in-flight 2026-11-11' · 'SW v627' · 'schedMode.js' · 'inProgressMode' · 'nextMode' · 'simproOnSchedule' · 'useSimproOnSchedule' · 'deriveScheduleMode' · 'getSimproSchedule' · Koy, looking at a grey Ongoing pill beside a Finish status: *"this grey on going is kinda pointless because i have to click the refresh everytime for it to be accurate. investigate and automate."* **What was wrong:** the pill showed a value saved on the job ('roughInProgressMode' / 'finishInProgressMode'). The job page asked Simpro *is this job on the schedule in the next 14 days?* only while that field was blank, saved the answer, and never asked again (the one exception: a saved Needs Sched flipped to On Schedule). A job booked later kept saying Ongoing, and a job that fell off the schedule kept saying On Schedule, until someone tapped the refresh arrow; and that only ran on an open job page, so the Job Board, job cards and Crew Planner rows of jobs nobody opened were stale too. **Now:** pure 'src/schedMode.js' decides. For a phase that is In Progress, 'deriveScheduleMode' (the one function behind the job page pills, the job card, the board row and the Crew Planner row) asks the shared Simpro read each time it draws: on Simpro's schedule in the next 14 days → **On Schedule**; Simpro read and not on it → **Ongoing**, unless a person flagged **Needs Sched**, which stays until Simpro has the job; Simpro unknown (no Simpro #, a quote, or not loaded yet) → the saved value, exactly as before. Forecast and Huddle rows use the same answer instead of letting the saved value win. 'useSimproOnSchedule' (mounted in 'App' once signed in) keeps that read fresh for the whole app: on load, every 10 minutes while the app is on screen, and when it comes back to the front with a read over 5 minutes old; each fresh read redraws every pill. **Taps:** same pill, same tap count, nothing removed (the refresh arrow stays and still forces a re-read). While In Progress the tap only offers what can be true: not on Simpro's schedule → Ongoing ⇄ Needs Sched; on Simpro's schedule → the tap says *This job is on Simpro's schedule in the next 14 days. Change the schedule in Simpro.* (the old tap saved Needs Sched and the app put it straight back). Other statuses and unknown Simpro keep the old three-way cycle. **Server:** 'getSimproSchedule' read ONE page of Simpro's schedule (newest 250 of about 21,000 rows) and filtered by date afterwards, so the first rows to fall off were today's. With both dates given it now asks Simpro for that range ('Date=between') and pages through it, up to 2,000 rows. That feeds this pill, the Crew Planner, Forecast, Huddle and the dashboard's crew coverage. Tests: new 'scripts/sched-mode-test.js' (40 checks, in prebuild: the rule, the tap, and the App.js + server wiring). Guides 'rough.html' + 'finish.html' updated. **Why it won't lose data:** display only. No new field and no new write: the pill is worked out from data already loaded plus a read-only Simpro call; the hook has no 'setDoc' / 'updateDoc' / 'saveJob' (a test pins that). The saved sub-state fields are untouched and still used when Simpro is unknown, so reverting the code reverts the pill. The two existing job-page writes (blank → Simpro's answer; Needs Sched → On Schedule once booked) are unchanged. No loader or rules change; the one function change is read-only on Simpro.
 
