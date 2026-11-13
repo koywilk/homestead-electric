@@ -4,8 +4,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-11-12 · App SW version: v630
+**Last manifest update:** 2026-11-13 · App SW version: v631
 ---
+
+- **Schedule calendar shows 7, 14 or 30 days** · `in-flight 2026-11-13` · `SW v631` · `OfficeDash` · `odCalDays` · `rangeApplies` · Koy 2026-11-13, with a screenshot of the Schedule tab: "would love to be able to see the 14 day and 30 day calendars here." The 7 / 14 / 30 day switch at the top of /dashboard was greyed out on Schedule; it now drives the calendar there too. 14 days is two rows of seven columns, 30 is a week per row, same item cards, same tap to open the job, same time-off line. The arrows move a whole span; picking a span goes back to today. Crew Planner weeks load for every week on screen so "Nobody assigned" stays true further out. Screen only: no data is written. The four cards above and the lists below keep their own fixed windows.
 
 - **Goals tab says when the Team Goals sheet was last edited, and flags it after 14 days** · `in-flight 2026-11-12` · `SW v630` (Cloud Function `goalsNightly`; needs `firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull`) · `OfficeDash` · `odGoalsSheetAge` · `OD_GOALS_SHEET_STALE_D` · `functions/goalsPull.js sheetStamp` · Koy 2026-11-12: "I want it all to stay up to date." The overnight feeds were all current, but the sheet behind the goal list, statuses and due dates had not been edited since Oct 23 and nothing said so. The sheet is read as public CSV, which has no edit date, so the nightly Goals pull fingerprints that CSV and keeps the day it last changed in `settings/goalsSimpro.sheet` (`hash`, `changedAt`, `checkedAt`); seeded with the Oct 23 text so the first night shows the true age. The tab's title line shows "sheet last edited Oct 23 (20 days ago)", a red note appears past 14 days, and the Goals sheet line under "Where the numbers come from" turns red. Read-only against Google; an unreadable sheet keeps the last known date and never fails the Simpro pull. Before the first nightly run after deploy the tab shows nothing new.
 

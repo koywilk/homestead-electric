@@ -51131,6 +51131,13 @@ function odSimproStaffByDay(entries) {
 // (lead, then crew), then Simpro's scheduled staff, one name per first name like the huddle's
 // crewToday merge. weeks = { [mondayKey]: assignments | null (no doc) }; a key not present means
 // that week isn't loaded yet. A start with no job (Upcoming tab) can't be on the planner.
+// v631: the Schedule calendar's days. `span` is the page's 7 / 14 / 30 day switch; `page` is how many
+// spans forward (or back) the arrows have moved. Always starts on today when page is 0.
+function odCalDays(t0, page, span) {
+  const n = [7, 14, 30].includes(span) ? span : 7, out = [];
+  for (let i = 0; i < n; i++) out.push(odAddDays(t0, (page || 0) * n + i));
+  return out;
+}
 function odStartCoverage(starts, weeks, simproByNo) {
   return (starts || []).map(s => {
     const di = s.at.getDay() - 1, mk = odMondayKey(s.at), ymd = localYmd(s.at);
@@ -51304,7 +51311,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
   const [coord, setCoord] = useState(() => read("he_odash_coord", v => v != null, ""));
   const pickCoord = (c) => { setCoord(c); keep("he_odash_coord", c); };
   const [range, setRange] = useState(() => Number(read("he_odash_range", v => ["7","14","30"].includes(v), "14")));
-  const pickRange = (r) => { setRange(r); keep("he_odash_range", String(r)); };
+  const pickRange = (r) => { setRange(r); keep("he_odash_range", String(r)); setWeek(0); };
   const [q, setQ] = useState("");
   // v540: on a phone the foreman / range / search controls fold behind one Filters button (starts closed).
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -51428,11 +51435,11 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
     if (tab !== "schedule") return undefined;
     let dead = false;
     const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-    const keys = new Set(); for (let i = -7; i <= 35; i += 7) keys.add(odMondayKey(odAddDays(t0, i))); for (let i = 0; i < 7; i++) keys.add(odMondayKey(odAddDays(odAddDays(t0, week * 7), i)));
+    const keys = new Set(); for (let i = -7; i <= 35; i += 7) keys.add(odMondayKey(odAddDays(t0, i))); odCalDays(t0, week, range).forEach(dd => keys.add(odMondayKey(dd)));   // v631: every week the calendar shows
     keys.forEach(k => { if (Object.prototype.hasOwnProperty.call(planWeeks, k)) return;
       getDoc(doc(db, "settings", "schedule_" + k)).then(snap => { if (!dead) setPlanWeeks(m => ({ ...m, [k]: snap.exists() ? ((snap.data() || {}).assignments || {}) : null })); }, () => { if (!dead) setPlanWeeks(m => ({ ...m, [k]: null })); }); });
     return () => { dead = true; };
-  }, [tab, week]); // eslint-disable-line
+  }, [tab, week, range]); // eslint-disable-line
   useEffect(() => {
     if (tab !== "schedule" || simproDays) return undefined;
     let dead = false;
@@ -51670,7 +51677,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
   const when = (at) => at ? `${localYmd(at) === d.today ? "Today" : `${odDow(at)} ${odShort(at)}`}` : "";
   const redInk = readableInk(OD_R);   // v581: red text on the white cards, never a fill
   // The 7/14/30-day window only changes Overview's chart and the Activity tab (v542).
-  const rangeApplies = tab === "overview" || tab === "activity";
+  const rangeApplies = tab === "overview" || tab === "activity" || tab === "schedule";   // v631: Schedule's calendar follows it too
   const fmLabel = foreman === OD_NOFM ? "jobs with no foreman" : d.crewPick ? d.crewPick.label : foreman ? `${foreman}'s jobs (foreman or lead)` : "";
   const TONE = { good: OD_G, bad: OD_R };
   const TYPE_ICON = { punch: "openitems", co: "changeorders", insp: "checkCircle", rt: "returntrips", update: "note", photo: "camera", question: "help", note: "fileText" };
@@ -52203,8 +52210,9 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       <Pulse list={d.people.slice().sort((a, b) => (PULSE_ORDER[a.status] - PULSE_ORDER[b.status]) || ((b.todayN || 0) - (a.todayN || 0)) || ((b.last || 0) - (a.last || 0))).slice(0, 10)}/>
     </>);
   } else if (tab === "schedule") {
-    const ws = odAddDays(d.t0, week*7);
-    const days = []; for (let i = 0; i < 7; i++) { const dd = odAddDays(ws, i); days.push({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }); }
+    // v631: the calendar shows the 7 / 14 / 30 days picked at the top of the page, a week per row.
+    const calDates = odCalDays(d.t0, week, range), ws = calDates[0], we = calDates[calDates.length - 1];
+    const days = calDates.map(dd => ({ dd, items: d.sched.filter(s => localYmd(s.at) === localYmd(dd)) }));
     const types = [["start","Starts"],["insp","Inspections"],["qc","QC walks"],["scan","Scans"],["rt","Return trips"]];
     // Past their date, oldest first (v542): split inspections vs return trips, and
     // this month vs older than 30 days, every row saying how late it is.
@@ -52238,12 +52246,12 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
           <OdRing pct={d.sched.length ? od.length/d.sched.length : 0} color={OD_WARN} label="Share of dated items past due"/></OdMini>
       </div>
       <div className="od-white od-pad">
-        <div className="od-ct">{week === 0 ? "Next 7 days" : `${odShort(ws)} – ${odShort(odAddDays(ws, 6))}`}<small>tap an item for the job</small>
-          <span className="od-nav"><button type="button" onClick={() => setWeek(w => w - 1)} aria-label="Previous week"><Icon name="chevronLeft" size={14}/></button>
+        <div className="od-ct">{week === 0 ? `Next ${range} days` : `${odShort(ws)} – ${odShort(we)}`}<small>tap an item for the job · 7, 14 or 30 days at the top of the page</small>
+          <span className="od-nav"><button type="button" onClick={() => setWeek(w => w - 1)} aria-label={`Previous ${range} days`}><Icon name="chevronLeft" size={14}/></button>
             {week !== 0 && <button type="button" onClick={() => setWeek(0)}>Today</button>}
-            <button type="button" onClick={() => setWeek(w => w + 1)} aria-label="Next week"><Icon name="chevronRight" size={14}/></button></span>
+            <button type="button" onClick={() => setWeek(w => w + 1)} aria-label={`Next ${range} days`}><Icon name="chevronRight" size={14}/></button></span>
         </div>
-        <div className="od-weekwrap"><div className="od-week">
+        <div className="od-weekwrap"><div className={"od-week" + (range > 7 ? " multi" : "")}>
           {days.map((x, i) => (
             <div className={"col" + (localYmd(x.dd) === d.today ? " today" : "")} key={i}>
               <div className="dh">{localYmd(x.dd) === d.today ? "Today" : odDow(x.dd)} <span>{odShort(x.dd)}</span></div>
@@ -53582,6 +53590,8 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-week{display:grid;grid-template-columns:repeat(7,minmax(96px,1fr));gap:6px;min-width:700px}
         .odash .od-week .col{background:rgba(41,33,25,.035);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;min-height:120px}
         .odash .od-week .col.today{background:var(--o-soft)}
+        .odash .od-week.multi .col{min-height:92px}
+        .odash .od-week.multi .none{margin-top:8px}
         .odash .od-week .dh{font-size:11.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim)}
         .odash .od-week .col.today .dh{color:var(--o-ink)}
         .odash .od-week .dh span{font-weight:600;margin-left:3px}
@@ -53972,7 +53982,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
               <option value="">All coordinators</option>{d.coordinators.map(c => <option key={c} value={c}>{c}</option>)}
               <option value={OD_NOCOORD}>No coordinator</option>
             </select>
-            <span className={"od-seg" + (rangeApplies ? "" : " off")} role="group" aria-label={rangeApplies ? "Date range" : "Date range (does not apply on this tab)"} title={rangeApplies ? "" : "The day range only changes Overview's chart and the Activity tab"}>{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} aria-disabled={!rangeApplies} onClick={() => pickRange(r)}>{r} days</button>)}</span>
+            <span className={"od-seg" + (rangeApplies ? "" : " off")} role="group" aria-label={rangeApplies ? "Date range" : "Date range (does not apply on this tab)"} title={rangeApplies ? "" : "The day range only changes Overview's chart, the Activity tab and the Schedule calendar"}>{[7, 14, 30].map(r => <button type="button" key={r} aria-pressed={range === r} aria-disabled={!rangeApplies} onClick={() => pickRange(r)}>{r} days</button>)}</span>
             <div className="od-find">
               <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find a job: name, number, address, GC" aria-label="Find a job"/>
               {searchHits.length > 0 && <div className="hits">{searchHits.map(j => (
@@ -62594,8 +62604,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-12 · App SW version: v630
+**Last manifest update:** 2026-11-13 · App SW version: v631
 ---
+
+- **Schedule calendar shows 7, 14 or 30 days** · 'in-flight 2026-11-13' · 'SW v631' · 'OfficeDash' · 'odCalDays' · 'rangeApplies' · Koy 2026-11-13, with a screenshot of the Schedule tab: "would love to be able to see the 14 day and 30 day calendars here." The 7 / 14 / 30 day switch at the top of /dashboard was greyed out on Schedule; it now drives the calendar there too. 14 days is two rows of seven columns, 30 is a week per row, same item cards, same tap to open the job, same time-off line. The arrows move a whole span; picking a span goes back to today. Crew Planner weeks load for every week on screen so "Nobody assigned" stays true further out. Screen only: no data is written. The four cards above and the lists below keep their own fixed windows.
 
 - **Goals tab says when the Team Goals sheet was last edited, and flags it after 14 days** · 'in-flight 2026-11-12' · 'SW v630' (Cloud Function 'goalsNightly'; needs 'firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull') · 'OfficeDash' · 'odGoalsSheetAge' · 'OD_GOALS_SHEET_STALE_D' · 'functions/goalsPull.js sheetStamp' · Koy 2026-11-12: "I want it all to stay up to date." The overnight feeds were all current, but the sheet behind the goal list, statuses and due dates had not been edited since Oct 23 and nothing said so. The sheet is read as public CSV, which has no edit date, so the nightly Goals pull fingerprints that CSV and keeps the day it last changed in 'settings/goalsSimpro.sheet' ('hash', 'changedAt', 'checkedAt'); seeded with the Oct 23 text so the first night shows the true age. The tab's title line shows "sheet last edited Oct 23 (20 days ago)", a red note appears past 14 days, and the Goals sheet line under "Where the numbers come from" turns red. Read-only against Google; an unreadable sheet keeps the last known date and never fails the Simpro pull. Before the first nightly run after deploy the tab shows nothing new.
 

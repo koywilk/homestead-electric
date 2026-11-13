@@ -94,7 +94,7 @@ function makeSandbox(extra = {}) {
     ...extra,
   };
   vm.createContext(sb);
-  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf, odFeedProblems, odLaborEarly, OD_BEFORE_FINISH, odWorkDaysSince, odStageDiffs, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalsSheetAge, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
+  vm.runInContext(code + "\n;globalThis.__x = { odModel, odPlanModel, odDocStatus, odSimAsOf, odFeedProblems, odLaborEarly, OD_BEFORE_FINISH, odWorkDaysSince, odStageDiffs, odRtInfo, odPhase, OD_NOFM, OD_NOCOORD, OD_COORDS, odStartPatch, odSyncUndo, OD_DOCS, canOpenDash, odGoalsParse, odGoalsModel, odGoalsSheetAge, odGoalDue, odGoalStatus, odGoalsMeasures, OD_GOALS_SHEET, OD_GOAL_LIVE, odCostsJoin, odCostsSummary, odCostsCrew, odCostsJobPct, odCostsMargins, odCostsJosh, OD_COST_DONE, odCrews, odCostsByCrew, odCostsPeople, odGoalWarranty, odGoalCoHours, odGoalStoreRuns, odGoalHoursWeekly, odCostsRoughOverruns, odCostsOwners, odCostsCoHours, OD_P2_PENDING, odMondayKey, odSimproStaffByDay, odStartCoverage, odCalDays, odInspCalled, odInspToCall, odTimeOffByDay, odFirstPassByForeman, OD_RT_CAUSES, odRtCause, odRtCauses, odReinspByDate, odPlannerMonday, odPlannerDayIdx, odPlannerPerson, odClock, odBlockSpan, odTodayByPerson, odTodayText, odPeopleByCrew, OD_TIER, OD_TIER_LABEL, odPrevRun, odOpenQuestions, odQuestionSide, odSplitQuestions, odJobWaiting, odDaysInStage, OD_WAIT_LABEL, OD_WAIT_RANK, odTodayByCrew, odWeekBounds, odStartsUnconfirmedWeek, odMoneyAtRisk };", sb, { filename: "odash-extract.js" });
   return sb.__x;
 }
 module.exports = { makeSandbox };
@@ -524,5 +524,15 @@ if (require.main === module) {
   eq([X.odStageDiffs(null, now).rows, X.odStageDiffs({ lastRunAt: "2026-11-12T11:45:06.467Z" }, now).rows], [[], []], "no doc or no rows: silent");
   }
 
+  // v631: the Schedule calendar follows the 7 / 14 / 30 day switch.
+  {
+    const t0 = new Date(2026, 10, 13), ymd = (x) => `${x.getMonth() + 1}/${x.getDate()}`;
+    const c7 = X.odCalDays(t0, 0, 7), c14 = X.odCalDays(t0, 0, 14), c30 = X.odCalDays(t0, 0, 30);
+    assert.deepStrictEqual([c7.length, ymd(c7[0]), ymd(c7[6])], [7, "11/13", "11/19"], "7 days starts today");
+    assert.deepStrictEqual([c14.length, ymd(c14[13])], [14, "11/26"], "14 days");
+    assert.deepStrictEqual([c30.length, ymd(c30[29])], [30, "12/12"], "30 days crosses the month end");
+    assert.deepStrictEqual([ymd(X.odCalDays(t0, 1, 30)[0]), ymd(X.odCalDays(t0, -1, 14)[0])], ["12/13", "10/30"], "the arrows move a whole span, with no gap or overlap");
+    assert.strictEqual(X.odCalDays(t0, 0, 99).length, 7, "an unknown span falls back to 7");
+  }
   console.log("odash-model-test: all checks passed");
 }
