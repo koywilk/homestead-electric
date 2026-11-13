@@ -52,7 +52,7 @@ const FLAG_ACTIONS = [
 // Named so a reader sees the rule, and so a later edit to FLAG_ACTIONS can't slip one in.
 const NEVER_ACTIONS = ["phase.setStage", "phase.setStatus", "qc.setStatus", "job.setField", "job.archive", "material.sendPo", "material.previewPo",
   "broadcast.send", "question.reply", "photo.add", "undo.apply", "note.archive", "note.delete", "punch.void", "punch.restore"];
-const STATUS = ["open", "answered", "done", "dismissed", "applied", "failed", "handled"];
+const STATUS = ["open", "answered", "done", "dismissed", "applied", "failed", "handled", "tasked", "toSchedule"];
 const CLOSED = new Set(["answered", "done", "dismissed", "applied", "handled"]);
 const ASKS = ["yes_no", "date", "name", "text", "done"];
 const KINDS = { co: "Change order", inspection: "Inspection", schedule: "Scheduling", trip: "Return trip", po: "PO / material", quote: "Quote", question: "Question", task: "Task", email: "Email", time: "Time off", job: "Job setup", other: "Other" };
@@ -326,10 +326,16 @@ function listView(rows, a) {
     .slice(0, 300);
 }
 
+const CHOICES = ["yes", "no", "done", "dismiss", "answer", "task", "schedule"];
 // ── Koy's answer from the dashboard ──────────────────────────────────────────
-// args: { id, choice: yes|no|done|dismiss|answer, text?, seenAt } — seenAt is the
-// flag's updatedAt as the dashboard drew it, so a Yes never runs a proposal that
+// args: { id, choice: yes|no|done|dismiss|answer|task|schedule, text?, seenAt } — seenAt
+// is the flag's updatedAt as the dashboard drew it, so a Yes never runs a proposal that
 // changed after Koy read it.
+// v636 (Koy, 2026-11-13: "i dont understand what the no yes etc do here"): a flag with
+// no proposal gets plain buttons. task = "Add to my tasks": one My Day task for Koy made
+// here (task.create, the flag's title, its job), status "tasked". schedule = "Schedule it":
+// no write at all; status "toSchedule", and the crew-schedule watch posts a booking
+// preview in its channel for his OK there (no Simpro write ever runs from a flag).
 function planAnswer(args, prior, nowIso) {
   const a = args && typeof args === "object" ? args : {};
   const id = String(a.id || "");
@@ -342,18 +348,26 @@ function planAnswer(args, prior, nowIso) {
   if (stuck && String(a.choice || "") === "yes") return { refused: "The last Yes on this stopped part way. Check the job, then mark it Done or Dismiss it." };
   if (String(a.seenAt || "") !== String(prior.updatedAt || "")) return { refused: "This flag changed since you opened it. Refresh and look again before answering." };
   const choice = String(a.choice || "");
-  if (!["yes", "no", "done", "dismiss", "answer"].includes(choice)) return { refused: "Pick Yes, No, Done, Dismiss or type an answer." };
+  if (!CHOICES.includes(choice)) return { refused: "Pick one of the buttons or type an answer." };
+  if (stuck && choice === "task") return { refused: "The last try on this stopped part way. Check My Day, then mark it Done or Dismiss it." };
   const t = line(a.text, 400);
   if (choice === "answer" && !t) return { refused: "Type your answer first." };
   const answer = { choice, text: t, at: nowIso, by: "Koy" };
   // A Yes again on a flag whose earlier Yes stopped part way runs only the changes
   // that didn't go through, so nothing is made twice.
-  const doneIdx = new Set(prior.status === "failed" && prior.applied && Array.isArray(prior.applied.results) ? prior.applied.results.filter(r => r.ok).map(r => r.i) : []);
-  const run = choice === "yes" ? (prior.proposal || []).map((p, i) => ({ ...p, i })).filter(p => !doneIdx.has(p.i)) : [];
+  const doneIdx = new Set(choice === "yes" && prior.status === "failed" && prior.applied && Array.isArray(prior.applied.results) ? prior.applied.results.filter(r => r.ok).map(r => r.i) : []);
+  const run = choice === "yes" ? (prior.proposal || []).map((p, i) => ({ ...p, i })).filter(p => !doneIdx.has(p.i))
+    : choice === "task" ? [{ ...taskFor(prior), i: 0 }] : [];
   for (const p of run) if (!FLAG_ACTIONS.includes(p.action) || NEVER_ACTIONS.includes(p.action)) return { refused: `${p.action} can't be done from a flag. Nothing was changed.` };
-  const status = choice === "dismiss" ? "dismissed" : choice === "done" ? "done" : run.length ? "applying" : "answered";
+  const status = choice === "dismiss" ? "dismissed" : choice === "done" ? "done" : choice === "schedule" ? "toSchedule" : run.length ? "applying" : "answered";
   const kept = prior.applied && Array.isArray(prior.applied.results) ? prior.applied.results.filter(r => doneIdx.has(r.i)) : [];
-  return { id, answer, run, status, kept };
+  return { id, answer, run, status, kept, okStatus: choice === "task" ? "tasked" : "applied" };
+}
+// "Add to my tasks": the My Day task the button makes, and the dashboard shows before it asks.
+function taskFor(f) {
+  const args = { text: line(f && f.title, 200) || "Flag from Claude" };
+  if (f && f.jobId) args.jobId = String(f.jobId);
+  return { action: "task.create", args };
 }
 // After the run: results [{ i, action, ok, refused?, requestId }] for the changes tried
 // (the run stops at the first one refused).
@@ -362,7 +376,7 @@ function finishAnswer(plan, results, nowIso) {
   const ok = results.length === plan.run.length && results.every(r => r.ok);
   const bad = results.find(r => !r.ok);
   const all = (plan.kept || []).concat(results.map(r => ({ i: r.i, action: r.action, ok: !!r.ok, requestId: r.requestId || "", why: line(r.refused || "", 200) }))).sort((a, b) => a.i - b.i);
-  return { status: ok ? "applied" : "failed", updatedAt: nowIso, answer: plan.answer,
+  return { status: ok ? (plan.okStatus || "applied") : "failed", updatedAt: nowIso, answer: plan.answer,
     applied: { ok, at: nowIso, results: all, why: bad ? line(bad.refused || "", 200) : "" } };
 }
 
@@ -398,5 +412,5 @@ function buildWork({ routines, flags, viewer, nowIso }) {
 
 module.exports = {
   ROUTINE_ACTIONS, FLAG_ACTIONS_API, FLAG_ACTIONS, NEVER_ACTIONS, STATUS, KINDS, ASKS, TRIG, FLAG_ID,
-  flagId, scheduleText, denverOffsetHours, planSync, planCheckin, planFlags, planClose, listView, planAnswer, finishAnswer, buildWork, hasDollars,
+  flagId, scheduleText, denverOffsetHours, planSync, planCheckin, planFlags, planClose, listView, planAnswer, finishAnswer, buildWork, hasDollars, taskFor, CHOICES,
 };

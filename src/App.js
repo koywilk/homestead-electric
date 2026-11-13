@@ -49830,7 +49830,8 @@ function odFlagChanges(proposal) {
     rows: Object.keys(p.args || {}).filter(k => k !== "jobId").map(k => [k, odFlagVal(p.args[k]).slice(0, 400)]) }));
 }
 const OD_FLAG_DONE = { applied: ["Changed", OD_G, "checkCircle"], answered: ["Answered", OD_B, "send"], done: ["You did it", OD_G, "checkCircle"],
-  dismissed: ["Dismissed", OD_GREY, "eyeOff"], handled: ["Handled on its own", OD_G, "checkCircle"], failed: ["Stopped part way", OD_R, "alertTriangle"], applying: ["Running", OD_SLATE, "clock"] };
+  dismissed: ["Dismissed", OD_GREY, "eyeOff"], handled: ["Handled on its own", OD_G, "checkCircle"], failed: ["Stopped part way", OD_R, "alertTriangle"], applying: ["Running", OD_SLATE, "clock"],
+  tasked: ["On your My Day", OD_G, "checkCircle"], toSchedule: ["Sent to crew schedule", OD_B, "calendar"] };
 const OD_ROUTINE_HEALTH = { ok: ["Ran fine", OD_G, "checkCircle"], failed: ["Last run failed", OD_R, "alertTriangle"], missed: ["Missed its run", OD_WARN, "clock"],
   off: ["Off", OD_GREY, "x"], paused: ["Paused: channel archived", OD_GREY, "x"], new: ["No run yet", OD_SLATE, "clock"] };
 // One open flag, read and answered in place. busy = the answer in flight; onAnswer(choice, text).
@@ -49839,6 +49840,9 @@ function OdFlag({ f, label, canAnswer, busy, msg, onAnswer, onOpenJob }) {
   const changes = odFlagChanges(f.proposal);
   const hasChange = changes.length > 0;
   const stuck = f.status === "applying";
+  // "Schedule it" on a crew-scheduling ask; "Add to my tasks" unless it already came from My Day.
+  const canSchedule = !hasChange && f.kind === "schedule";
+  const canTask = !hasChange && !/^myday-/i.test(String(f.key || ""));
   return (
     <div className="od-rep-body od-flagbox">
       <div className="od-flag-meta">{[f.kindLabel, f.routine && `from ${f.routine}`, f.channel && `posted in ${f.channel}`, `open ${f.daysOpen} d`, f.seen > 1 && `seen ${f.seen} times`].filter(Boolean).join(" · ")}</div>
@@ -49853,17 +49857,26 @@ function OdFlag({ f, label, canAnswer, busy, msg, onAnswer, onOpenJob }) {
             {c.rows.length ? <div className="od-rep-tw"><table><tbody>{c.rows.map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table></div> : null}
           </div>))}
       </> : null}
-      {f.status === "failed" && f.applied ? <p className="od-flag-bad">Stopped part way: {f.applied.why || "a change was refused"}. Yes again runs only the changes not done yet.</p> : null}
+      {f.status === "failed" && f.applied ? <p className="od-flag-bad">{hasChange ? `Stopped part way: ${f.applied.why || "a change was refused"}. Yes again runs only the changes not done yet.` : `Couldn't add the task: ${f.applied.why || "it was refused"}.`}</p> : null}
       {stuck ? <p className="od-flag-bad">The last Yes stopped part way. Check the job, then mark it Done or Dismiss it.</p> : null}
       {canAnswer ? <>
+        {/* v636 (Koy: "i dont understand what the no yes etc do here"): Yes / No only on a card that
+            carries a change. Every other card gets plain buttons that say what they do. */}
         <div className="od-ct-actions od-flag-btns">
-          {!stuck ? <button type="button" className="od-mini-btn od-yes" disabled={!!busy} onClick={() => onAnswer("yes")}>{hasChange ? (f.status === "failed" ? "Yes, finish it" : "Yes, make the change") : "Yes"}</button> : null}
-          {!stuck ? <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("no")}>No</button> : null}
-          <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("done")}>I did it</button>
+          {hasChange && !stuck ? <>
+            <button type="button" className="od-mini-btn od-yes" disabled={!!busy} onClick={() => onAnswer("yes")}>{f.status === "failed" ? "Yes, finish it" : "Yes, make the change"}</button>
+            <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("no")}>No</button>
+          </> : null}
+          {!hasChange && !stuck && canSchedule ? <button type="button" className="od-mini-btn od-yes" disabled={!!busy} onClick={() => onAnswer("schedule")}>Schedule it</button> : null}
+          {!hasChange && !stuck && canTask ? <button type="button" className={"od-mini-btn" + (canSchedule ? "" : " od-yes")} disabled={!!busy} onClick={() => onAnswer("task")}>Add to my tasks</button> : null}
+          <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("done")}>Done</button>
           <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("dismiss")}>Dismiss</button>
         </div>
-        {!stuck ? <div className="od-frow od-flag-ans">
-          <input className="od-q" value={txt} onChange={e => setTxt(e.target.value)} placeholder={f.ask === "date" ? "Type a date" : f.ask === "name" ? "Type a name" : "Or type your answer"} aria-label="Your answer"/>
+        {!stuck ? <div className="od-flag-help">{hasChange
+          ? "Yes makes the change above. No drops it. Done: you already took care of it. Dismiss: hide it."
+          : [canSchedule && "Schedule it: crew schedule posts a booking for your OK.", canTask && "Add to my tasks: puts it on your My Day.", "Done: you already took care of it.", "Dismiss: hide it."].filter(Boolean).join(" ")}</div> : null}
+        {!stuck && f.ask && f.ask !== "yes_no" ? <div className="od-frow od-flag-ans">
+          <input className="od-q" value={txt} onChange={e => setTxt(e.target.value)} placeholder={f.ask === "date" ? "Type a date" : f.ask === "name" ? "Type a name" : "Type your answer"} aria-label="Your answer"/>
           <button type="button" className="od-mini-btn" disabled={!!busy || !txt.trim()} onClick={() => onAnswer("answer", txt.trim())}>Send</button>
         </div> : null}
         {msg ? <div className="od-rep-foot" role="status">{msg}</div> : null}
@@ -51758,11 +51771,13 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       const n = f.proposal.length;
       if (!window.confirm(`Make ${n > 1 ? `these ${n} changes` : "this change"} in Command Center now?`)) return;
     }
+    // v636: the exact My Day task, shown before it's made.
+    if (choice === "task" && !window.confirm(`Add this to your My Day?\n\n${f.title}${f.jobNo || f.jobName ? `\nJob: ${[f.jobNo, f.jobName].filter(Boolean).join(" ")}` : ""}`)) return;
     setFlagBusy(f.id);
     setFlagMsg(m => ({ ...m, [f.id]: "Working…" }));
     gcAdminCallable("claudeFlagAnswer", identity)({ id: f.id, choice, text: text || "", seenAt: f.updatedAt }).then(
       r => { const x = (r && r.data) || {};
-        setFlagMsg(m => ({ ...m, [f.id]: x.refused ? x.refused : x.status === "applied" ? "Done. The change is in Command Center (undo is in Changes)." : x.status === "failed" ? `Stopped part way: ${(x.applied && x.applied.why) || "a change was refused"}.` : "Saved." }));
+        setFlagMsg(m => ({ ...m, [f.id]: x.refused ? x.refused : x.status === "applied" ? "Done. The change is in Command Center (undo is in Changes)." : x.status === "tasked" ? "Added to your My Day." : x.status === "toSchedule" ? "Sent to crew schedule. It posts a booking for your OK at its next check." : x.status === "failed" ? `Stopped part way: ${(x.applied && x.applied.why) || "a change was refused"}.` : "Saved." }));
         setFlagBusy(null); if (!x.refused) { setFlagOpen(null); setClaudeTick(t => t + 1); } },
       e => { setFlagMsg(m => ({ ...m, [f.id]: (e && e.message) || "Couldn't save. Try again." })); setFlagBusy(null); });
   };
@@ -53713,6 +53728,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-flag-chg{margin:6px 0 8px}.odash .od-flag-chg th{width:30%}
         .odash .od-flag-bad{color:${OD_R};font-weight:600}
         .odash .od-flag-btns{flex-wrap:wrap;gap:8px;margin-top:10px}
+        .odash .od-flag-help{font-size:12px;color:${C.dim};margin-top:6px;line-height:1.4}
         .odash .od-flag-ans{display:flex;gap:8px;align-items:center;margin-top:8px}
         .odash .od-mini-btn.od-yes{background:${OD_G};border-color:${OD_G};color:#fff}.odash .od-mini-btn.od-yes:hover{filter:brightness(.92)}
         .odash .od-svg{width:100%;height:auto;display:block}
@@ -62881,8 +62897,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v635
+**Last manifest update:** 2026-11-13 · App SW version: v636
 ---
+
+- **Needs you cards say what each button does: Yes / No only when the card carries a change; every other card gets Add to my tasks, Schedule it (crew-scheduling asks), Done and Dismiss** · 'in-flight 2026-11-13' · 'SW v636' · 'OdFlag' · 'claudeWork.planAnswer' · 'taskFor' · Koy 2026-11-13 on an Asks watch card: "i dont understand what the no yes etc do here. makes no sense", then "Yes, send it" to this fix. Add to my tasks shows the exact My Day task (the card's title and job), asks once, then makes it for Koy through the same checks, log and undo as every Claude change (flag status 'tasked'). Schedule it writes nothing: the flag goes to 'toSchedule' and the crew-schedule watch posts a booking preview in its channel for his OK there; no Simpro write ever runs from a flag. A card that came from My Day has no Add to my tasks. The typed answer box shows only when the routine asked for a date, a name or text. Deploy: hosting plus 'claudeFlagAnswer' (no other function changed).
 
 - **Printed panel schedules: one big faint Homestead logo behind every page, and a sharp, larger logo in the header** · 'in-flight 2026-11-13' · 'SW v635' · 'PRINT_LOGO' · 'PRINT_WM_CSS' · 'PRINT_WM_HTML' · '_pdfWatermark' · '_pdfDrawWatermark' · 'printPanelSchedule' · 'printElectricalPanel' · 'printSavantPanelHomeRunsStyle' · 'printSavantV2PanelCover' · 'printSavantV2PullList' · Koy: *"I want to redo the panel schedules that print, including the lighting control. Once, I want a big Homestead watermark behind it, and the Homestead logo is pretty blurry and tiny right now."* **Where:** all seven schedule printouts: the lighting control schedule (Control 4 / Lutron / Crestron / Savant grid) on **Print** and **Download**, the electrical panel schedule on the Home Runs tab on **Print** and **Download**, the Savant panel-cover sheet, and the Savant V2 **panel cover** and **pull list**. **Watermark:** one Homestead logo per page, centered, 4.9 inches wide at 9% strength, over the schedule so shaded cells cannot hide it and black text is unchanged. It is a real image, not a CSS background (browsers drop backgrounds when printing), and 'position: fixed' repeats it on every printed page in Chrome. The PDF downloads are a picture of the sheet with no pages for that to repeat on, so the two savers ('_saveHtmlAsPdfPaged', '_saveHtmlAsPdf') hide the on-sheet mark and paint the same one onto each PDF page; a sheet with no mark (loads list, Home Runs by-panel PDF) is untouched. **Header logo:** the old header put the square app icon ('/icon-192.png') in a 32px box, which left the logo about a third of an inch wide, and the download then turned it into a 2x picture. The header now uses 'public/hs-logo-print.png' (947px wide, transparent, cut from the largest copy in the repo; there is no vector logo) at 52px tall on the lighting schedule and 64px on the electrical and Savant sheets (48px on 60 to 80 slot panels so they still land on one page). On the electrical and Savant sheets the logo replaces the icon plus the HOMESTEAD ELECTRIC text line, which stays as the fallback if the image fails. The Savant V2 cover and pull list had no logo and get one in the header corner. **Also:** the fit-to-one-sheet check (v476) measured at full size, and shrinking re-wraps a few load names, so the taller header pushed Miller LCP 1's last module onto a second page; it now re-measures at the chosen shrink and eases down until the sheet really fits. PDF downloads of these schedules capture at about 300 dpi (was 200), eased back on long sheets to stay inside a phone's canvas limit. The electrical panel PDF no longer has the on-screen Print button in the picture. **Known edges:** the lighting header is 16px taller, so a panel long enough to paginate that sat within 16px of a page edge gains a page; on iPhone Safari a multi-page print may carry the mark on page 1 only (Download paints every page). **Verified** on Miller Residence - Alpine (1438): Lutron LCP 1 and electrical Panel A, Print (headless Chrome print-to-PDF of the real builder output) and Download (the real savers in a browser, 'jsPDF.save' captured); the three Savant printouts were layout-checked on an empty panel only. Guides 'panelizedlighting.html' and 'homeruns.html' updated. **Why it won't lose data:** print and PDF rendering only; nothing is read that was not read before and nothing is written anywhere; no job field, loader, function or rules change; one new static image.
 

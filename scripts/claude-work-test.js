@@ -153,6 +153,30 @@ const coFlag = { key: "1107-Q2819", routine: "Job issues watch", routineId: T1, 
     assert(CW.planAnswer({ id, choice: "yes", seenAt: doc.updatedAt }, { ...doc, proposal: [{ action: "phase.setStage", args: {} }] }, NOW).refused);
   });
 
+  await check("v636 plain buttons: Add to my tasks makes one My Day task, Schedule it writes nothing", () => {
+    const ask = { key: "josh-chat-2026-11-13-1107", routine: "Asks watch", routineId: "trig_01BhZ7Nmn6MAhRpk2tg7sqKh", channel: "asks-of-me", jobId: "1772863862618", kind: "schedule", title: "Colby asks for a crew to put in heat tape", ask: "yes_no" };
+    const doc = { ...CW.planFlags({ flags: [ask] }, { "1772863862618": JOB }, {}, "2026-11-12T10:00:00.000Z").docs[0].doc };
+    const id = CW.flagId(ask.key);
+    const t = CW.planAnswer({ id, choice: "task", seenAt: doc.updatedAt }, doc, NOW);
+    assert.strictEqual(t.run.length, 1); assert.strictEqual(t.run[0].action, "task.create");
+    assert.strictEqual(t.run[0].args.text, ask.title); assert.strictEqual(t.run[0].args.jobId, "1772863862618");
+    assert.strictEqual(CW.finishAnswer(t, [{ i: 0, action: "task.create", ok: true, requestId: "fa_t" }], NOW).status, "tasked");
+    assert.strictEqual(CW.finishAnswer(t, [{ i: 0, action: "task.create", ok: false, refused: "dup" }], NOW).status, "failed");
+    const s = CW.planAnswer({ id, choice: "schedule", seenAt: doc.updatedAt }, doc, NOW);
+    assert.strictEqual(s.run.length, 0); assert.strictEqual(s.status, "toSchedule");
+    assert.strictEqual(CW.finishAnswer(s, [], NOW).status, "toSchedule");
+    assert(CW.planAnswer({ id, choice: "book", seenAt: doc.updatedAt }, doc, NOW).refused);
+    const noJob = CW.taskFor({ title: "Call the builder" });
+    assert.strictEqual(noJob.args.jobId, undefined);
+    // A task answer never runs a stored proposal, even on a card that has one.
+    const co = { ...CW.planFlags({ flags: [coFlag] }, { "1772863862618": JOB }, {}, "2026-11-12T10:00:00.000Z").docs[0].doc };
+    const t2 = CW.planAnswer({ id: CW.flagId(coFlag.key), choice: "task", seenAt: co.updatedAt }, co, NOW);
+    assert.deepStrictEqual(t2.run.map(r => r.action), ["task.create"]);
+    // The watches read the new answers back.
+    const rows = [[id, { ...doc, ...CW.finishAnswer(s, [], NOW) }]];
+    assert.strictEqual(CW.listView(rows, { status: "answered" })[0].answer.choice, "schedule");
+  });
+
   await check("a Yes that stopped part way: failed, and the next Yes runs only what didn't go through", () => {
     const doc = { ...CW.planFlags({ flags: [{ ...coFlag, proposal: [coFlag.proposal[0], { action: "rt.create", args: { jobId: "1772863862618", title: "Cans" } }] }] }, { "1772863862618": JOB }, {}, "2026-11-12T10:00:00.000Z").docs[0].doc };
     const id = CW.flagId(coFlag.key);
