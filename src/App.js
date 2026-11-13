@@ -4375,6 +4375,31 @@ const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:""
 //
 // Data safety: read-only — never mutates modules / job. If the popup is
 // blocked we surface a toast so the user can retry.
+//
+// PRINT BRANDING (shared by every schedule printout below). Koy: "I want a
+// big Homestead watermark behind it, and the Homestead logo is pretty blurry
+// and tiny right now."
+//   • PRINT_LOGO is the real logo cut from the largest copy in the repo
+//     (947px wide, transparent). The old header used the square app icon in a
+//     32px box, which left the logo itself about a third of an inch wide.
+//   • The watermark is ONE real <img> per page (browsers drop CSS backgrounds
+//     when printing, an <img> always prints). position:fixed repeats it on
+//     every printed page in Chrome; it sits over the sheet at 9% so shaded
+//     cells can't hide it and black text is unchanged.
+//   • The PDF savers find img.wm, hide it and paint the same mark onto each
+//     PDF page themselves (_pdfWatermark), because a captured picture has no
+//     pages for position:fixed to repeat on.
+const PRINT_LOGO = "/hs-logo-print.png";
+const PRINT_WM_OPACITY = 0.09;
+const PRINT_WM_WIDTH_IN = 4.9;
+const PRINT_WM_CSS = `
+    .wm { position: fixed; top: 50%; left: 50%; width: ${PRINT_WM_WIDTH_IN}in; max-width: 92vw; height: auto; transform: translate(-50%, -50%); opacity: ${PRINT_WM_OPACITY}; pointer-events: none; z-index: 5; }
+    @media print { .wm { max-width: none; } }`;
+const PRINT_WM_HTML = `<img class="wm" src="${PRINT_LOGO}" alt="" aria-hidden="true" onerror="this.style.display='none'"/>`;
+// Centered header logo with the old text line as the fallback: the logo
+// already reads HOMESTEAD ELECTRIC, so the heading only shows if the image
+// fails to load.
+const PRINT_LOGO_ONERROR = `this.style.display='none';var f=this.parentNode.querySelector('.brand-fallback');if(f)f.style.display='block';`;
 function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                               // Optional Savant-only schedule data. When system is
                               // "Savant" and these are supplied we render the
@@ -4537,7 +4562,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; }
     .header { border-bottom: 1.5px solid #000; padding-bottom: 5px; margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
     .header .logo-block { display:flex; align-items:center; gap:8px; }
-    .header img { height: 32px; width: 32px; object-fit: contain; flex-shrink: 0; }
+    .header img { height: 52px; width: auto; flex-shrink: 0; }
     .header h1 { font-size: 13px; letter-spacing:0.03em; }
     .header .sys { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; color: #444; text-transform: uppercase; margin-top: 1px; }
     .header .meta { font-size: 8px; color: #444; margin-top: 2px; }
@@ -4584,7 +4609,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .sav-feeds { font-size: 6px; font-weight: 700; color: #2C5C40; background: #fff; border: 0.5px solid #2C5C40; padding: 0 2px; flex-shrink: 0; }
     .toolbar { margin-bottom: 8px; text-align:right; }
     .toolbar button { padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
-    .toolbar button:hover { background: #f0f0f0; }
+    .toolbar button:hover { background: #f0f0f0; }${PRINT_WM_CSS}
     @media print {
       .toolbar { display:none; }
       /* FIT ONE SHEET (v476) — Koy: "I'd really like these to fit on one
@@ -4602,10 +4627,11 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
+  ${PRINT_WM_HTML}
   <div class="sheet">
   <div class="header">
     <div class="logo-block">
-      <img src="/icon-192.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
+      <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/>
       <div>
         <h1>${esc(panelLabel || "Panel Schedule")}</h1>
         <div class="sys">${esc(sys)} Panel Schedule</div>
@@ -4627,12 +4653,24 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     (function () {
       var PAGE_H = (11 - 0.8) * 96, STRIP_W = 5.25 * 96, FLOOR = 0.7;
       var sheet = document.querySelector(".sheet"); if (!sheet) return;
-      var probe = document.createElement("div");
+      var probe = document.createElement("div"), clone = sheet.cloneNode(true);
       probe.style.cssText = "position:absolute;left:-99999px;top:0;width:" + STRIP_W + "px;";
-      probe.appendChild(sheet.cloneNode(true));
+      probe.appendChild(clone);
       document.body.appendChild(probe);
-      var h = probe.scrollHeight; probe.remove();
+      var h = probe.scrollHeight;
       var fit = h > PAGE_H ? PAGE_H / h : 1;
+      // Shrinking re-wraps a few load names, so the zoomed sheet can come out
+      // a line or two taller than the arithmetic says and push the last
+      // module onto a second page (Miller LCP 1 did once the header grew).
+      // Check the clone AT that zoom and ease down until it really fits.
+      var ROOM = PAGE_H * 0.995;
+      for (var i = 0; i < 6 && fit < 1 && fit >= FLOOR; i++) {
+        clone.style.zoom = String(fit);
+        var zh = probe.scrollHeight;
+        if (zh <= ROOM) break;
+        fit = fit * (ROOM / zh) - 0.002;
+      }
+      probe.remove();
       if (fit < FLOOR) fit = 1;
       document.documentElement.style.setProperty("--fit", String(Math.floor(fit * 1000) / 1000));
     })();
@@ -4677,7 +4715,7 @@ async function downloadPanelSchedule(args) {
     // stylesheet's --fit); otherwise pages with every module (and every row
     // of a .tall one) kept whole across the cuts. The on-screen Print button
     // is dropped the way the print stylesheet does.
-    await _saveHtmlAsPdfPaged(captured, filename, { fitOne: 0.7, avoid: ".module:not(.tall), .module tr", hide: ".toolbar" });
+    await _saveHtmlAsPdfPaged(captured, filename, { fitOne: 0.7, avoid: ".module:not(.tall), .module tr", hide: ".toolbar", scale: 3 });
     if (typeof toast !== "undefined" && toast.success) toast.success(`Saved ${filename}`);
     return true;
   } catch (e) {
@@ -4758,6 +4796,38 @@ function loadsListHtml({ jobName, jobAddress, system, rows, dateStr }) {
   <div class="foot">Load list only — no panel, module or channel assignments. Homestead Electric.</div>
   </body></html>`;
 }
+// Watermark for the PDF savers (see PRINT BRANDING). A sheet that carries an
+// img.wm gets it hidden before capture (position:fixed would land once, in
+// the middle of a tall capture) and painted onto each PDF page instead.
+// "multiply" only ever darkens, so the mark reads as sitting behind the
+// text. A sheet with no img.wm (loads list, home runs) is untouched.
+async function _pdfWatermark(doc) {
+  const el = doc.querySelector("img.wm");
+  if (!el) return null;
+  const src = el.currentSrc || el.src;
+  el.style.display = "none";
+  try {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    return img.naturalWidth ? img : null;
+  } catch { return null; }   // no logo is better than no PDF
+}
+// pxPerIn: canvas pixels per printed inch on this page. cy: page center, px.
+// Returns the canvas to put in the PDF. The mark goes on a fresh copy, never
+// on html2canvas's own canvas: that one comes back with its scale and clip
+// still set, and a mark drawn straight onto it silently vanishes.
+function _pdfDrawWatermark(canvas, img, pxPerIn, cy) {
+  if (!img) return canvas;
+  const out = document.createElement("canvas"); out.width = canvas.width; out.height = canvas.height;
+  const ctx = out.getContext("2d");
+  ctx.drawImage(canvas, 0, 0);
+  const w = PRINT_WM_WIDTH_IN * pxPerIn, h = w * img.naturalHeight / img.naturalWidth;
+  ctx.globalAlpha = PRINT_WM_OPACITY;
+  ctx.globalCompositeOperation = "multiply";
+  ctx.drawImage(img, (out.width - w) / 2, cy - h / 2, w, h);
+  return out;
+}
 // Multi-page cousin of _saveHtmlAsPdf: captures the whole document height and
 // slices it into letter pages. It's a picture of the page, not reflowed text,
 // so by default a row can land on a page edge (the loads list; its CSV is the
@@ -4775,6 +4845,10 @@ function loadsListHtml({ jobName, jobAddress, system, rows, dateStr }) {
 //                fits one page at that scale or larger it is drawn on ONE
 //                page, shrunk to fit (never enlarged). Smaller than that and
 //                it paginates as above instead.
+//   opts.scale — capture sharpness (default 2, about 200 dpi). The panel
+//                schedule asks for 3 so the logo and 8px rows stay crisp; it
+//                is eased back toward 2 on long sheets to stay inside a
+//                phone's canvas limit.
 async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
   await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
   await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
@@ -4791,10 +4865,12 @@ async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
     await new Promise(r => setTimeout(r, 350));
     const doc = iframe.contentDocument, bodyEl = doc.body;
     if (opts.hide) { const st = doc.createElement("style"); st.textContent = `${opts.hide}{display:none !important}`; doc.head.appendChild(st); }
+    const wm = await _pdfWatermark(doc);
     const fullH = Math.max(bodyEl.scrollHeight, 1056);
     iframe.style.height = fullH + "px";
+    const capScale = opts.scale ? Math.max(2, Math.min(opts.scale, Math.sqrt(15e6 / (816 * fullH)))) : 2;
     const canvas = await window.html2canvas(bodyEl, {
-      scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false,
+      scale: capScale, useCORS: true, backgroundColor: "#ffffff", logging: false,
       width: 816, height: fullH, windowWidth: 816, windowHeight: fullH,
     });
     const { jsPDF } = window.jspdf;
@@ -4808,7 +4884,10 @@ async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
     const fitScale = Math.min(1, pagePx / canvas.height);
     if (opts.fitOne && fitScale >= opts.fitOne) {
       const w = imgW * fitScale, h = canvas.height * ptPerPx * fitScale;
-      pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", margin + (imgW - w) / 2, margin, w, h);
+      // The sheet is about to be shrunk by fitScale, so the mark is drawn
+      // that much larger here and lands at its true size on paper.
+      const one = _pdfDrawWatermark(canvas, wm, 72 / ptPerPx / fitScale, canvas.height / 2);
+      pdf.addImage(one.toDataURL("image/jpeg", 0.92), "JPEG", margin + (imgW - w) / 2, margin, w, h);
       pdf.save(filename);
       return;
     }
@@ -4830,10 +4909,16 @@ async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
         for (const b of blocks) if (b.top > y + 1 && b.top < end && b.bottom > end) end = b.top;
       }
       const h = end - y;
-      const slice = document.createElement("canvas"); slice.width = canvas.width; slice.height = h;
-      slice.getContext("2d").drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+      // With a watermark every slice is a full page tall (white below a short
+      // last slice) so the mark sits whole and centered on each page.
+      const sliceH = wm ? pagePx : h;
+      const slice = document.createElement("canvas"); slice.width = canvas.width; slice.height = sliceH;
+      const sctx = slice.getContext("2d");
+      if (wm) { sctx.fillStyle = "#ffffff"; sctx.fillRect(0, 0, slice.width, sliceH); }
+      sctx.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+      const pageImg = _pdfDrawWatermark(slice, wm, 72 / ptPerPx, pagePx / 2);
       if (page > 0) pdf.addPage();
-      pdf.addImage(slice.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, h * ptPerPx);
+      pdf.addImage(pageImg.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, sliceH * ptPerPx);
       y = end; page += 1;
     }
     pdf.save(filename);
@@ -4925,8 +5010,8 @@ function downloadJobListCsv({ jobs, division }) {
 //   │ slot 3 top   │ 3  │ 4  │ slot 4 top   │
 //   │ ...          │    │    │ ...          │
 //
-// Logo from /icon-192.png in the public/ folder. Self-contained popup so the
-// styling doesn't fight the main app.
+// Logo and watermark come from PRINT_LOGO (see PRINT BRANDING above).
+// Self-contained popup so the styling doesn't fight the main app.
 function printElectricalPanel({ jobName, jobAddress, panel }) {
   const esc = (s) => String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -4976,6 +5061,9 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   const _rowHeight = slotCount <= 40 ? 16 : slotCount <= 60 ? 12 : 10;
   const _nameFs    = slotCount <= 40 ? 9  : slotCount <= 60 ? 8  : 7;
   const _numFs     = slotCount <= 40 ? 10 : slotCount <= 60 ? 9  : 8;
+  // Header logo: big on the usual 40-slot sheet, held to the old header's
+  // height on 60-80 slot panels so they still land on one page.
+  const _logoH     = slotCount <= 40 ? 64 : 48;
   const html = `<!DOCTYPE html>
 <html lang="en"><head>
   <meta charset="utf-8"/>
@@ -4987,8 +5075,9 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
     .toolbar button { padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
     .header { text-align: center; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1.5px solid #000; }
-    .header img { height: 32px; width: 32px; margin-bottom: 2px; object-fit: contain; }
+    .header img { display: block; height: ${_logoH}px; width: auto; margin: 0 auto 3px; }
     .header h1 { font-size: 13px; letter-spacing: 0.04em; }
+    .header .brand-fallback { display: none; }
     .header .meta { font-size: 8px; color: #444; margin-top: 1px; }
     .panel-meta { margin-bottom: 6px; font-size: 9px; line-height: 1.3; }
     .panel-meta .left strong { font-size: 12px; letter-spacing: 0.03em; }
@@ -4999,7 +5088,7 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
     table.schedule td.num { width: 10%; text-align: center; font-weight: 700; background: #EEF0F3; font-size: ${_numFs}px; }
     table.schedule td.bottom { border-top: 0.5px dashed #888; }
     table.schedule td .amps { color: #444; font-size: ${_nameFs - 1}px; margin-left: 3px; }
-    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }
+    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }${PRINT_WM_CSS}
     @media print {
       .toolbar { display: none; }
       body { padding: 0.4in; max-width: 5.25in; }
@@ -5012,9 +5101,10 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
+  ${PRINT_WM_HTML}
   <div class="header">
-    <img src="/icon-192.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
-    <h1>HOMESTEAD ELECTRIC</h1>
+    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="${PRINT_LOGO_ONERROR}"/>
+    <h1 class="brand-fallback">HOMESTEAD ELECTRIC</h1>
     <div class="meta">Panel Schedule</div>
   </div>
   <div class="panel-meta">
@@ -5158,6 +5248,7 @@ function printSavantPanelHomeRunsStyle({ jobName, jobAddress, panelLabel, module
   const _rowHeight = panelSize <= 40 ? 16 : panelSize <= 60 ? 12 : 10;
   const _nameFs    = panelSize <= 40 ? 9  : panelSize <= 60 ? 8  : 7;
   const _numFs     = panelSize <= 40 ? 10 : panelSize <= 60 ? 9  : 8;
+  const _logoH     = panelSize <= 40 ? 64 : 48;
 
   const html = `<!DOCTYPE html>
 <html lang="en"><head>
@@ -5170,8 +5261,9 @@ function printSavantPanelHomeRunsStyle({ jobName, jobAddress, panelLabel, module
     .toolbar button { padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
     .header { text-align: center; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1.5px solid #000; }
-    .header img { height: 32px; width: 32px; margin-bottom: 2px; object-fit: contain; }
+    .header img { display: block; height: ${_logoH}px; width: auto; margin: 0 auto 3px; }
     .header h1 { font-size: 13px; letter-spacing: 0.04em; }
+    .header .brand-fallback { display: none; }
     .header .meta { font-size: 8px; color: #444; margin-top: 1px; }
     .panel-meta { margin-bottom: 6px; font-size: 9px; line-height: 1.3; }
     .panel-meta .left strong { font-size: 12px; letter-spacing: 0.03em; }
@@ -5183,7 +5275,7 @@ function printSavantPanelHomeRunsStyle({ jobName, jobAddress, panelLabel, module
     table.schedule td.bottom { border-top: 0.5px dashed #888; }
     table.schedule td .amps { color: #444; font-size: ${_nameFs - 1}px; margin-left: 3px; }
     table.schedule td .kind { font-weight: 700; font-size: ${_nameFs - 2}px; opacity: 0.65; margin-right: 3px; letter-spacing: 0.03em; }
-    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }
+    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }${PRINT_WM_CSS}
     @media print {
       .toolbar { display: none; }
       body { padding: 0.4in; max-width: 5.25in; }
@@ -5192,9 +5284,10 @@ function printSavantPanelHomeRunsStyle({ jobName, jobAddress, panelLabel, module
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
+  ${PRINT_WM_HTML}
   <div class="header">
-    <img src="/icon-192.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
-    <h1>HOMESTEAD ELECTRIC</h1>
+    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="${PRINT_LOGO_ONERROR}"/>
+    <h1 class="brand-fallback">HOMESTEAD ELECTRIC</h1>
     <div class="meta">Savant Panel Schedule</div>
   </div>
   <div class="panel-meta">
@@ -5341,7 +5434,8 @@ function printSavantV2PanelCover({ jobName, jobAddress, panelLabel, v2 }) {
   .toolbar button { font-family:inherit; font-size:13px; padding:4px 12px; cursor:pointer; }
   @media print { .toolbar { display:none; } }
   .page { max-width:5.25in; margin:0 auto; padding:0.15in 0; }
-  .hdr { padding:6px 0 8px; border-bottom:1.5px solid #1B1F24; margin-bottom:8px; }
+  .hdr { position:relative; min-height:50px; padding:6px 1.05in 8px 0; border-bottom:1.5px solid #1B1F24; margin-bottom:8px; }
+  .hdr img { position:absolute; right:0; top:2px; height:44px; width:auto; }
   .hdr h1 { margin:0; font-size:14px; letter-spacing:0.04em; }
   .hdr .meta { font-size:10px; color:#5E6670; margin-top:2px; }
   table.schedule { width:100%; border-collapse:collapse; table-layout:fixed; }
@@ -5353,11 +5447,13 @@ function printSavantV2PanelCover({ jobName, jobAddress, panelLabel, v2 }) {
   .sub { font-size:8px; color:#5E6670; margin-top:1px; }
   .sub.muted { font-style:italic; }
   .mod-head { font-size:8px; font-weight:600; color:#475569; margin-bottom:1px; text-transform:uppercase; letter-spacing:0.04em; }
-  .footer { font-size:9px; color:#5E6670; margin-top:8px; padding-top:4px; border-top:0.5px solid #E1E4E9; text-align:center; }
+  .footer { font-size:9px; color:#5E6670; margin-top:8px; padding-top:4px; border-top:0.5px solid #E1E4E9; text-align:center; }${PRINT_WM_CSS}
 </style></head><body>
 <div class="toolbar"><button onclick="window.print()">Print</button></div>
+${PRINT_WM_HTML}
 <div class="page">
   <div class="hdr">
+    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/>
     <h1>${esc(panelLabel||"Lighting panel")}</h1>
     <div class="meta">${esc(jobName||"")}${jobAddress?` &middot; ${esc(jobAddress)}`:""} &middot; ${panelSize} slots &middot; ${modules.length} modules &middot; ${feeders.length} feeders</div>
   </div>
@@ -5451,7 +5547,8 @@ function printSavantV2PullList({ jobName, jobAddress, panelLabel, v2 }) {
   .toolbar button { font-family:inherit; font-size:13px; padding:4px 12px; cursor:pointer; }
   @media print { .toolbar { display:none; } }
   .page { max-width:7.5in; margin:0 auto; padding:0.15in 0; }
-  .hdr { padding:6px 0 10px; border-bottom:2px solid #1B1F24; margin-bottom:14px; }
+  .hdr { position:relative; min-height:60px; padding:6px 1.25in 10px 0; border-bottom:2px solid #1B1F24; margin-bottom:14px; }
+  .hdr img { position:absolute; right:0; top:2px; height:52px; width:auto; }
   .hdr h1 { margin:0; font-size:18px; letter-spacing:0.02em; }
   .hdr .meta { font-size:11px; color:#5E6670; margin-top:3px; }
   .room-block { margin-bottom:18px; page-break-inside:avoid; }
@@ -5464,11 +5561,13 @@ function printSavantV2PullList({ jobName, jobAddress, panelLabel, v2 }) {
   td.r-type { width:90px; color:#5E6670; font-size:10px; }
   td.r-watts { width:60px; text-align:right; color:#5E6670; font-variant-numeric:tabular-nums; font-size:10px; }
   td.r-bkr { width:120px; color:#5E6670; font-size:10px; }
-  .footer { font-size:10px; color:#5E6670; margin-top:14px; padding-top:6px; border-top:0.5px solid #E1E4E9; text-align:center; }
+  .footer { font-size:10px; color:#5E6670; margin-top:14px; padding-top:6px; border-top:0.5px solid #E1E4E9; text-align:center; }${PRINT_WM_CSS}
 </style></head><body>
 <div class="toolbar"><button onclick="window.print()">Print</button></div>
+${PRINT_WM_HTML}
 <div class="page">
   <div class="hdr">
+    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/>
     <h1>Pull list — ${esc(panelLabel||"Lighting panel")}</h1>
     <div class="meta">${esc(jobName||"")}${jobAddress?` &middot; ${esc(jobAddress)}`:""} &middot; ${rows.length} switch leg${rows.length===1?"":"s"} across ${roomNames.length} room${roomNames.length===1?"":"s"}</div>
   </div>
@@ -5530,10 +5629,17 @@ async function _saveHtmlAsPdf(html, filename) {
     iframe.contentDocument.write(html);
     iframe.contentDocument.close();
     await new Promise(r => setTimeout(r, 350));
-    const canvas = await window.html2canvas(iframe.contentDocument.body, {
-      scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false,
+    const wm = await _pdfWatermark(iframe.contentDocument);
+    // The on-screen Print button is not part of the sheet (the print
+    // stylesheet hides it; a capture has to be told).
+    const st = iframe.contentDocument.createElement("style"); st.textContent = ".toolbar{display:none !important}"; iframe.contentDocument.head.appendChild(st);
+    // 3x (about 300 dpi) so the logo and the 9px circuit names stay crisp.
+    const shot = await window.html2canvas(iframe.contentDocument.body, {
+      scale: 3, useCORS: true, backgroundColor: "#ffffff", logging: false,
       width: 816, height: 1056, windowWidth: 816, windowHeight: 1056,
     });
+    // The capture is laid across the page less a 12pt margin each side.
+    const canvas = _pdfDrawWatermark(shot, wm, shot.width / ((612 - 24) / 72), shot.height / 2);
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
     const pdfW = pdf.internal.pageSize.getWidth();
@@ -62775,8 +62881,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v634
+**Last manifest update:** 2026-11-13 · App SW version: v635
 ---
+
+- **Printed panel schedules: one big faint Homestead logo behind every page, and a sharp, larger logo in the header** · 'in-flight 2026-11-13' · 'SW v635' · 'PRINT_LOGO' · 'PRINT_WM_CSS' · 'PRINT_WM_HTML' · '_pdfWatermark' · '_pdfDrawWatermark' · 'printPanelSchedule' · 'printElectricalPanel' · 'printSavantPanelHomeRunsStyle' · 'printSavantV2PanelCover' · 'printSavantV2PullList' · Koy: *"I want to redo the panel schedules that print, including the lighting control. Once, I want a big Homestead watermark behind it, and the Homestead logo is pretty blurry and tiny right now."* **Where:** all seven schedule printouts: the lighting control schedule (Control 4 / Lutron / Crestron / Savant grid) on **Print** and **Download**, the electrical panel schedule on the Home Runs tab on **Print** and **Download**, the Savant panel-cover sheet, and the Savant V2 **panel cover** and **pull list**. **Watermark:** one Homestead logo per page, centered, 4.9 inches wide at 9% strength, over the schedule so shaded cells cannot hide it and black text is unchanged. It is a real image, not a CSS background (browsers drop backgrounds when printing), and 'position: fixed' repeats it on every printed page in Chrome. The PDF downloads are a picture of the sheet with no pages for that to repeat on, so the two savers ('_saveHtmlAsPdfPaged', '_saveHtmlAsPdf') hide the on-sheet mark and paint the same one onto each PDF page; a sheet with no mark (loads list, Home Runs by-panel PDF) is untouched. **Header logo:** the old header put the square app icon ('/icon-192.png') in a 32px box, which left the logo about a third of an inch wide, and the download then turned it into a 2x picture. The header now uses 'public/hs-logo-print.png' (947px wide, transparent, cut from the largest copy in the repo; there is no vector logo) at 52px tall on the lighting schedule and 64px on the electrical and Savant sheets (48px on 60 to 80 slot panels so they still land on one page). On the electrical and Savant sheets the logo replaces the icon plus the HOMESTEAD ELECTRIC text line, which stays as the fallback if the image fails. The Savant V2 cover and pull list had no logo and get one in the header corner. **Also:** the fit-to-one-sheet check (v476) measured at full size, and shrinking re-wraps a few load names, so the taller header pushed Miller LCP 1's last module onto a second page; it now re-measures at the chosen shrink and eases down until the sheet really fits. PDF downloads of these schedules capture at about 300 dpi (was 200), eased back on long sheets to stay inside a phone's canvas limit. The electrical panel PDF no longer has the on-screen Print button in the picture. **Known edges:** the lighting header is 16px taller, so a panel long enough to paginate that sat within 16px of a page edge gains a page; on iPhone Safari a multi-page print may carry the mark on page 1 only (Download paints every page). **Verified** on Miller Residence - Alpine (1438): Lutron LCP 1 and electrical Panel A, Print (headless Chrome print-to-PDF of the real builder output) and Download (the real savers in a browser, 'jsPDF.save' captured); the three Savant printouts were layout-checked on an empty panel only. Guides 'panelizedlighting.html' and 'homeruns.html' updated. **Why it won't lose data:** print and PDF rendering only; nothing is read that was not read before and nothing is written anywhere; no job field, loader, function or rules change; one new static image.
 
 - **A PO card on a job with no Rough In / Finish cost center asks which cost center to charge, instead of stopping at an error** · 'in-flight 2026-11-13' · 'SW v634' · 'ccChoices' · 'sendMaterialPO' · 'MaterialOrders send sheet' · Koy: *"when we try to put a po in there is an error for there is not a finish cost center on this job. Can we have this route them to a cost center they can order from instead of just saying that error."* A rough/finish card finds its cost center by name (Rough In, Finish or Trim). On a job without one, Send used to stop at "Couldn't find a Finish cost center on Simpro job N". Now the server answers with the job's own cost centers ('details.reason: "pick-cc"') and the send sheet shows the same **Charge to** list the commercial Materials tab has. Pick one, tap Send again, and the PO goes on it ('ccId', checked against the job in Simpro). The pick is saved on the card ('chargeCcId', 'chargeCcName'). Jobs that have their Rough In / Finish send exactly as before, with no question. **Needs the functions deploy** ('sendMaterialPO') to turn on; until then the old error shows. Why it can't lose data: nothing is written or made in Simpro until a cost center is picked, and the one-PO-per-card claim is unchanged.
 
