@@ -145,4 +145,16 @@ eq(m2.measures.find(x => x.key === "firstPass").live.value, "75%");
 eq(m2.extra.map(e => e.key).includes("firstPass"), false);
 eq(X.odGoalsModel({ sheet: null, sim: null, sb: null, d: null, now }).counts.goals, 0, "nothing loaded yet renders empty, not a crash");
 
+// 6. SHEET AGE (SW v630) — the day the sheet last changed, from settings/goalsSimpro.sheet.
+{
+  const at = new Date(2026, 9, 23, 16, 2).toISOString(), n13 = new Date(2026, 10, 13, 7, 0);
+  const a = X.odGoalsSheetAge({ hash: "h", changedAt: at }, n13);
+  eq([a.days, a.date, a.ago, a.stale], [21, "Oct 23", "21 days ago", true], "three weeks without an edit is flagged");
+  eq(X.odGoalsSheetAge({ hash: "h", changedAt: at }, new Date(2026, 10, 6, 7, 0)).stale, false, "exactly 14 days is not yet stale");
+  eq(X.odGoalsSheetAge({ hash: "h", changedAt: n13.toISOString() }, new Date(2026, 10, 13, 18, 0)).ago, "today");
+  eq(X.odGoalsSheetAge(null, n13), null, "no stamp yet (before the first nightly run) shows nothing");
+  eq(X.odGoalsModel({ sheet, sim: { ...sim, sheet: { hash: "h", changedAt: at } }, sb, d, now: n13 }).sheetAge.stale, true, "the model carries it");
+  eq(X.odGoalsModel({ sheet, sim, sb, d, now }).sheetAge, null, "a doc written before v630 has no sheet stamp");
+}
+
 console.log("goals-model-test: all checks passed");

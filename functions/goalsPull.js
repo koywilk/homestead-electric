@@ -305,5 +305,24 @@ async function pullPhase2({ get, year, todayYmd, slim, users, appLog, concurrenc
   return { generated_at: new Date().toISOString(), year, hours, storeRuns: runs, weekly, errors };
 }
 
+// ── Goals SHEET stamp (SW v630) ──────────────────────────────────────────────
+// The Goals tab reads Koy's Team Goals sheet as public CSV, which carries no "last edited" date.
+// So the nightly pull fingerprints that same CSV and remembers the day the fingerprint last
+// changed: settings/goalsSimpro.sheet = { hash, changedAt, checkedAt }. Read-only against Google.
+// SEED: the sheet as it stood when this shipped (last edited 2026-10-23 per Drive). If the first
+// run still sees that exact text it keeps the true date; anything else counts as edited today.
+const SHEET_SEED = { hash: "01690db788823cfe80dc79328521c8b64bb60ff70b6045c4a2823119d426d59c", changedAt: "2026-10-23T22:02:31.604Z" };
+const sheetHash = (text) => require("crypto").createHash("sha256").update(String(text == null ? "" : text).replace(/\r\n?/g, "\n").trim()).digest("hex");
+function sheetStamp({ text, prev, nowIso, seed = SHEET_SEED }) {
+  const p = prev && prev.hash ? prev : null;
+  // A sign-in page or an empty answer is not the sheet: keep what we knew and say why.
+  if (typeof text !== "string" || !text.trim() || /^\s*<(!doctype|html)/i.test(text)) {
+    return p ? { ...p, error: "sheet not readable", errorAt: nowIso } : null;
+  }
+  const hash = sheetHash(text);
+  if (p) return { hash, changedAt: p.hash === hash ? p.changedAt : nowIso, checkedAt: nowIso };
+  return { hash, changedAt: seed && seed.hash === hash ? seed.changedAt : nowIso, checkedAt: nowIso };
+}
+
 module.exports = { slimJob, jobCounts, distinctJobIds, invoiceStats, measures, divisionOf,
-  phase2CcKind, phase2Hours, weekRanges, crewMembers, matchEmployees, weeklyHours, storeVendorIds, storeRuns, pullPhase2 };
+  phase2CcKind, phase2Hours, weekRanges, crewMembers, matchEmployees, weeklyHours, storeVendorIds, storeRuns, pullPhase2, sheetHash, sheetStamp, SHEET_SEED };

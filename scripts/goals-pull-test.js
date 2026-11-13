@@ -162,5 +162,20 @@ assert.deepStrictEqual(sr.byWeek, [1, 0, 0, 0, 0, 0, 0, 2], "9/2 falls in the fi
   // one part failing leaves its key null and names it; the others still land
   const r2 = await G.pullPhase2({ get: async (p) => p.startsWith("/vendors") ? null : get(p), year: 2026, todayYmd: "2026-10-30", slim: [{ id: 1, hrs_act: 100 }], users: [], appLog: [] });
   assert.strictEqual(r2.storeRuns, null); assert.ok(r2.hours && r2.weekly, "hours and weekly still read"); assert.ok(r2.errors.some(e => /storeRuns/.test(e)), "the failure is named");
-  console.log("goals-pull-test: all checks passed (incl. Phase 2)");
+  // SHEET STAMP (SW v630) — the day the Team Goals sheet's text last changed.
+{
+  const seed = { hash: G.sheetHash("a,b\n1,2"), changedAt: "2026-10-23T22:02:31.604Z" };
+  const first = G.sheetStamp({ text: "a,b\r\n1,2\n", prev: null, nowIso: "2026-11-13T12:40:00.000Z", seed });
+  assert.strictEqual(first.changedAt, "2026-10-23T22:02:31.604Z", "first run on the unchanged sheet keeps Drive's real date (line endings ignored)");
+  assert.strictEqual(G.sheetStamp({ text: "a,b\n1,3", prev: null, nowIso: "2026-11-13T12:40:00.000Z", seed }).changedAt, "2026-11-13T12:40:00.000Z", "first run on an already-edited sheet counts as edited now");
+  const same = G.sheetStamp({ text: "a,b\n1,2", prev: first, nowIso: "2026-11-14T12:40:00.000Z", seed });
+  assert.deepStrictEqual([same.changedAt, same.checkedAt], ["2026-10-23T22:02:31.604Z", "2026-11-14T12:40:00.000Z"], "no edit: the date holds, the check moves");
+  const edited = G.sheetStamp({ text: "a,b\n1,2\nOffice,Done", prev: same, nowIso: "2026-11-15T12:40:00.000Z", seed });
+  assert.strictEqual(edited.changedAt, "2026-11-15T12:40:00.000Z", "an edit moves the date");
+  const signIn = G.sheetStamp({ text: "<!DOCTYPE html><html>Sign in</html>", prev: edited, nowIso: "2026-11-16T12:40:00.000Z", seed });
+  assert.deepStrictEqual([signIn.hash, signIn.changedAt, signIn.error], [edited.hash, edited.changedAt, "sheet not readable"], "a sign-in page never counts as an edit");
+  assert.strictEqual(G.sheetStamp({ text: null, prev: null, nowIso: "x", seed }), null, "nothing read and nothing known: no stamp");
+}
+
+console.log("goals-pull-test: all checks passed (incl. Phase 2)");
 })().catch(e => { console.error(e); process.exit(1); });

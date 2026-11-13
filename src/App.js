@@ -50714,6 +50714,18 @@ const OD_GOAL_LIVE = [
   { key: "plans", label: "Plans waiting to be filed", test: /plans? (filed|waiting|intake)|file(d)? plans?/i,
     live: ({ plans }) => plans ? { value: String(plans.waiting), sub: plans.oldest != null ? `waiting to be filed · oldest ${plans.oldest} d` : "waiting to be filed", tone: plans.waiting === 0 ? "good" : plans.oldest != null && plans.oldest <= 1 ? "warn" : "bad", bar: 0 } : null },
 ];
+// v630: how old the Team Goals sheet's last edit is. `meta` = settings/goalsSimpro.sheet, written by
+// goalsNightly (a fingerprint of the sheet's text and the day it last changed). The goal list, status
+// pills and due dates are typed by hand, so past OD_GOALS_SHEET_STALE_D days they are flagged.
+const OD_GOALS_SHEET_STALE_D = 14;
+function odGoalsSheetAge(meta, now = new Date()) {
+  const t = meta && meta.changedAt ? new Date(meta.changedAt) : null;
+  if (!t || isNaN(t)) return null;
+  const days = Math.max(0, Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / 864e5));
+  const date = t.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(t.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+  const ago = days === 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
+  return { at: meta.changedAt, days, date, ago, stale: days > OD_GOALS_SHEET_STALE_D, unread: !!meta.error };
+}
 // Everything the Goals tab renders. `sheet` = odGoalsParse output (or null while loading),
 // `sim` = settings/goalsSimpro (or null), `sb` = settings/scoreboardCompleted (prog rows),
 // `d` = odModel output, `plans` = { waiting, oldest } from the plan model.
@@ -50737,6 +50749,7 @@ function odGoalsModel({ sheet, sim, sb, d, plans, now = new Date() }) {
   const done = goals.filter(g => g.pill.text === "Done").length, dueSoon = goals.filter(g => g.due && g.due.days <= 45).length;
   const daysLeft = Math.max(0, Math.round((new Date(y, 11, 31) - new Date(y, now.getMonth(), now.getDate())) / 864e5));
   return { title: (sheet && sheet.title) || "Team Goals 2026–2027", mission: (sheet && sheet.mission) || "", goals, measures, quarters, extra, m, simAt: (sim && sim.generated_at) || null, simYear: (sim && sim.year) || y,
+    sheetAge: odGoalsSheetAge(sim && sim.sheet, now),
     counts: { goals: goals.length, done, dueSoon, measures: measures.length, atGoal, tracked, daysLeft } };
 }
 
@@ -53136,13 +53149,14 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         </div>
       ); };
     main = (<>
-      <div className="od-head"><div><h1>Goals</h1><p>{g.title} · from the Goals sheet · Simpro numbers use Josh's rule, jobs invoiced this year{g.simAt ? ` · pulled ${fmtAt(g.simAt)}` : " · no Simpro pull yet"}</p></div>
+      <div className="od-head"><div><h1>Goals</h1><p>{g.title} · from the Goals sheet · Simpro numbers use Josh's rule, jobs invoiced this year{g.simAt ? ` · pulled ${fmtAt(g.simAt)}` : " · no Simpro pull yet"}{g.sheetAge ? ` · sheet last edited ${g.sheetAge.date} (${g.sheetAge.ago})` : ""}</p></div>
         <div className="od-ct-actions">
           <button type="button" className="od-mini-btn" onClick={() => setGoalsTick(t => t + 1)}>Refresh</button>
           <button type="button" className="od-mini-btn" onClick={() => go(OD_GOALS_SHEET.edit)}>Open sheet</button>
           {canOpenDash(identity) ? <button type="button" className="od-mini-btn run" disabled={goalsPull === "busy"} onClick={pullNow}>{goalsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
         </div></div>
       {goalsPull && goalsPull !== "busy" ? <div className="od-goal-note">{goalsPull}</div> : null}
+      {g.sheetAge && g.sheetAge.stale ? <div className="od-goal-note" role="status" style={{ borderLeft: `3px solid ${OD_R}` }}><b>The goals sheet has not been edited in {g.sheetAge.days} days.</b> The goal list, statuses and due dates below are as typed on {g.sheetAge.date}; the Simpro and app numbers beside them are current. <button type="button" className="od-mini-btn" onClick={() => go(OD_GOALS_SHEET.edit)}>Open sheet</button></div> : null}
       {sheetErr ? <div className="od-white od-pad"><div className="od-ct">The goals sheet</div><div className="od-empty">{sheetErr}</div></div> : null}
       {g.mission ? <div className="od-goal-mission"><b>Our goal:</b> {g.mission}</div> : null}
       <div className="od-minis">
@@ -53182,7 +53196,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       <Stats items={[[g.counts.goals, "Goals, rest of 2026"], [`${g.counts.atGoal}/${g.counts.measures}`, "Measures at goal"], [g.counts.daysLeft, "Days left in 2026"]]}/>
       <Sec>Where the numbers come from</Sec>
       <div className="od-list">
-        <OdItem color={OD_B} icon="fileText" tag="Goals sheet" title="Read when this tab opens" sub="Koy's copy of Josh's Team Goals 2026–2027 · edit it there, press Refresh here" onClick={() => go(OD_GOALS_SHEET.edit)}/>
+        <OdItem color={g.sheetAge && g.sheetAge.stale ? OD_R : OD_B} icon="fileText" tag="Goals sheet" title="Read when this tab opens" sub={`Koy's copy of Josh's Team Goals 2026–2027 · edit it there, press Refresh here${g.sheetAge ? ` · last edited ${g.sheetAge.date} (${g.sheetAge.ago})${g.sheetAge.stale ? `, over ${OD_GOALS_SHEET_STALE_D} days` : ""} · checked nightly` : ""}`} onClick={() => go(OD_GOALS_SHEET.edit)}/>
         <OdItem color={simStale ? OD_R : OD_B} icon="refresh" tag="Simpro" title="Nightly 5:40 AM" sub={g.simAt ? `Last pull ${fmtAt(g.simAt)}${simStale ? " · older than 2 days" : ""} · ${g.m ? g.m.counted : 0} jobs counted` : "No pull yet. Press Pull from Simpro now."}/>
         <OdItem color={OD_B} icon="activity" tag="This dashboard" title="Live from the jobs" sub="First-pass, questions, return trips, change orders, quiet jobs, plans"/>
       </div>
@@ -62580,8 +62594,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-12 · App SW version: v629
+**Last manifest update:** 2026-11-12 · App SW version: v630
 ---
+
+- **Goals tab says when the Team Goals sheet was last edited, and flags it after 14 days** · 'in-flight 2026-11-12' · 'SW v630' (Cloud Function 'goalsNightly'; needs 'firebase deploy --only functions:goalsNightly,functions:sendTestGoalsPull') · 'OfficeDash' · 'odGoalsSheetAge' · 'OD_GOALS_SHEET_STALE_D' · 'functions/goalsPull.js sheetStamp' · Koy 2026-11-12: "I want it all to stay up to date." The overnight feeds were all current, but the sheet behind the goal list, statuses and due dates had not been edited since Oct 23 and nothing said so. The sheet is read as public CSV, which has no edit date, so the nightly Goals pull fingerprints that CSV and keeps the day it last changed in 'settings/goalsSimpro.sheet' ('hash', 'changedAt', 'checkedAt'); seeded with the Oct 23 text so the first night shows the true age. The tab's title line shows "sheet last edited Oct 23 (20 days ago)", a red note appears past 14 days, and the Goals sheet line under "Where the numbers come from" turns red. Read-only against Google; an unreadable sheet keeps the last known date and never fails the Simpro pull. Before the first nightly run after deploy the tab shows nothing new.
 
 - **Dashboard people and stages counted right: People reads every job, weekends don't make anyone quiet, a sync stamp is not work, and "Stage differs from Simpro"** · 'in-flight 2026-11-12' · 'SW v629' · 'OfficeDash' · 'odModel' · 'everyLive' · 'odWorkDaysSince' · 'odStageDiffs' · 'failClosed' · Ship 3b of 'docs/superpowers/plans/2026-11-11-dashboard-truth-and-efficiency.md' (Koy 2026-11-12: *"Start ship 3b"*). **(1) People is counted from every job.** A person's last activity, jobs today and the jobs they run came from the jobs on screen: the Residential / Commercial slice and whatever foreman or coordinator filter was remembered on that device. A forgotten filter made others read quiet, or "not seen in 30+ days". 'odModel' now takes 'allJobs' (both divisions, from App) and builds People from that, never the filter; the feed and the counts on the other tabs still follow the filter. **(2) A job opened from Find a job with a filter on shows its real activity.** Its events, last work and dates used to come from the filtered lists and read "Nothing logged" / "No dates set". **(3) Quiet is in work days for people.** On the app in the last 3 work days = fine; quiet = 3+ work days with a job to run (Friday's update no longer reads quiet on Monday morning; the old rule was 72 clock-hours). The Overview's "not seen in 2+ days" is 2+ work days. Jobs keep "no update in 5+ days". **(4) A Simpro sync stamp is not work.** The change-order status the hourly Simpro sync writes still shows in the feed, but it no longer resets a job's "last work logged" or its quiet timer. **(5) Needs you › Stage differs from Simpro.** Read from the stage sync's own nightly plan ('settings/simproStageSync', 4:45 AM), so there is one rule: jobs that need a person (Simpro is further along, a Simpro hold, no Simpro # on the job), jobs open in Simpro and not in the app, and jobs the sync would update (it is plan-only until switched on). Live on 2026-11-12: 9 need a person (Stratton, Brandt, Thayne, T&M Pool House, Koplin…), 1 only in Simpro (Hansen Design TI), 5 it would update. **(6) Two counts.** "Crew questions" in Needs you counts only the ones the office owes (asked of nobody, or of an admin); questions out to a GC or a foreman are on Activity. A failed inspection with no pass on a job that is finished here leaves "failed, not re-booked" and gets its own Needs attention line (Vista Meadows #1386). Tests: 'scripts/odash-model-test.js' +16 checks (work days, People across divisions and filters, the job pop-up's data, the sync stamp, failed-on-finished, the stage plan as written 2026-11-12). Guide 'dashboard.html' updated. Crew brief 'docs/crew-briefs/v629.md' (office only). Moved to ship 4 (layout, mockup first): Job Costs grading finished jobs only, per-foreman margin on Goals, header counts. **Why it won't lose data:** read-only. One more read when Overview or Jobs opens ('settings/simproStageSync'); the rest is how existing data is counted. No save, 'saveJob' / 'updateDoc', loader, rules or Cloud Function change, and nothing is written to Simpro.
 

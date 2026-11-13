@@ -7903,6 +7903,8 @@ exports.sendTestScoreboardPull = functions
 // ─────────────────────────────────────────────────────────────
 const _goals = require("./goalsPull");
 const GOALS_DOC = "goalsSimpro";
+// The same CSV the Goals tab fetches (src/App.js OD_GOALS_SHEET) — keep the two in step.
+const GOALS_SHEET_CSV = "https://docs.google.com/spreadsheets/d/1p4ZPUck4VM4GxffWx_zkHZCis0ZR3PWqHtDHRrYY-l4/gviz/tq?tqx=out:csv&headers=0&sheet=Goals";
 async function goalsListInvoices(year) {
   const cols = "ID,DateIssued,IsPaid,DatePaid,DueDate,Total,Jobs,Customer,IsCredit";
   const out = [];
@@ -7964,6 +7966,18 @@ async function runGoalsPull({ reason = "nightly" } = {}) {
     functions.logger.error("[goals] phase2 failed", { error: e.message });
     try { const prev = await db.collection("settings").doc(GOALS_DOC).get(); const p2 = prev.exists && (prev.data() || {}).phase2; if (p2) payload.phase2 = { ...p2, carried: true, carriedReason: e.message, carriedAt: now.toISOString() }; } catch (_) { /* no previous doc */ }
   }
+  // SW v630: when was the Team Goals sheet last edited? Fingerprint the same public CSV the Goals tab
+  // reads and keep the day it last changed (functions/goalsPull.js sheetStamp). Never fails the run:
+  // an unreadable sheet carries the previous stamp forward with an error note.
+  try {
+    let prevSheet = null;
+    try { const prev = await db.collection("settings").doc(GOALS_DOC).get(); prevSheet = (prev.exists && (prev.data() || {}).sheet) || null; } catch (_) { /* no previous doc */ }
+    let text = null;
+    try { const res = await fetch(GOALS_SHEET_CSV, { redirect: "follow", signal: AbortSignal.timeout(20000) }); text = res.ok ? await res.text() : null; if (!res.ok) functions.logger.warn("[goals] sheet read miss", { status: res.status }); }
+    catch (e) { functions.logger.warn("[goals] sheet read failed", { error: e.message }); }
+    const stamp = _goals.sheetStamp({ text, prev: prevSheet, nowIso: now.toISOString() });
+    if (stamp) payload.sheet = stamp;
+  } catch (e) { functions.logger.warn("[goals] sheet stamp failed", { error: e.message }); }
   const bytes = Buffer.byteLength(JSON.stringify(payload));
   if (bytes > 900000) throw new Error(`[goals] doc would be ${bytes} bytes — over the document limit, not written`);
   // v626 ship 2: the doc counts jobs invoiced THIS year, so the first pull of a new year would overwrite
