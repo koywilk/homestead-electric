@@ -49834,6 +49834,24 @@ const OD_FLAG_DONE = { applied: ["Changed", OD_G, "checkCircle"], answered: ["An
   tasked: ["On your My Day", OD_G, "checkCircle"], toSchedule: ["Sent to crew schedule", OD_B, "calendar"] };
 const OD_ROUTINE_HEALTH = { ok: ["Ran fine", OD_G, "checkCircle"], failed: ["Last run failed", OD_R, "alertTriangle"], missed: ["Missed its run", OD_WARN, "clock"],
   off: ["Off", OD_GREY, "x"], paused: ["Paused: channel archived", OD_GREY, "x"], new: ["No run yet", OD_SLATE, "clock"] };
+// v637 (Koy, 2026-11-13: "Separate the automations in the Claude section into the different categories.
+// It's really hard to find what I'm looking for"): each routine lands in one group, by its name first,
+// then its channel. Off / paused always go to the last group.
+const OD_ROUTINE_GROUPS = [
+  ["sched", "Scheduling & crews", /schedul|crew|time off/i, /crew-schedule/i],
+  ["meet", "Meetings", /meeting|granola|prefill|one.on.one/i, /weekly-meetings|meeting/i],
+  ["money", "Margins & reports", /margin|forecast|rough-in|report/i, /margin/i],
+  ["jobs", "Jobs, COs & POs", /job issue|\bco\b|change order|ced|pickup|\bpos?\b|simpro|inspection|punch|trip/i, /job-issues|ced|po/i],
+  ["mail", "Email, asks & briefs", /email|ask|brief|digest|text/i, /asks-of-me|email|morning-brief|gcs/i],
+  ["upkeep", "Plans & app upkeep", /plan|appliance|command center|dashboard|deck|skill|tidy|heartbeat|automations|sync/i, /app-building|plan/i],
+];
+function odRoutineGroup(r) {
+  if (!r.enabled || r.health === "off" || r.health === "paused") return "off";
+  const name = String(r.name || ""), ch = String(r.channelName || "");
+  const g = OD_ROUTINE_GROUPS.find(x => x[2].test(name)) || OD_ROUTINE_GROUPS.find(x => ch && x[3].test(ch));
+  return g ? g[0] : "other";
+}
+const OD_ROUTINE_GROUP_LABEL = Object.fromEntries(OD_ROUTINE_GROUPS.map(g => [g[0], g[1]]).concat([["other", "Other"], ["off", "Off or paused"]]));
 // One open flag, read and answered in place. busy = the answer in flight; onAnswer(choice, text).
 function OdFlag({ f, label, canAnswer, busy, msg, onAnswer, onOpenJob }) {
   const [txt, setTxt] = useState("");
@@ -51754,6 +51772,8 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
   const [claudeWork, setClaudeWork] = useState(undefined);   // undefined = loading · null = not deployed yet · answer
   const [flagOpen, setFlagOpen] = useState(null);
   const [routineOpen, setRoutineOpen] = useState(null);
+  const [routineGrpOpen, setRoutineGrpOpen] = useState({});   // v637: which Automations groups are open
+  const [routineQ, setRoutineQ] = useState("");
   const [flagBusy, setFlagBusy] = useState(null);             // the flag id whose answer is in flight
   const [flagMsg, setFlagMsg] = useState({});                 // id → last message for that flag
   useEffect(() => {
@@ -53304,7 +53324,12 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
           </div> : <div className="od-empty">Nothing waits on you. Flags from the watches show here as they come in.</div>, OD_R) : null}
         {fold("autos", "Automations", `every Claude routine · when it runs is Denver time${claudeWork.syncAt ? ` · list synced ${odAgo(D(claudeWork.syncAt), d.now)}` : ""}`,
           `${claudeWork.routines.filter(r => r.enabled).length} on${claudeWork.routines.filter(r => r.health === "failed" || r.health === "missed").length ? ` · ${claudeWork.routines.filter(r => r.health === "failed" || r.health === "missed").length} need a look` : ""}`,
-          claudeWork.routines.length ? <div className="od-list">{claudeWork.routines.map(r => { const h = OD_ROUTINE_HEALTH[r.health] || OD_ROUTINE_HEALTH.new; return (
+          claudeWork.routines.length ? (() => {
+            const rq = routineQ.trim().toLowerCase();
+            const hits = claudeWork.routines.filter(r => !rq || [r.name, r.about, r.channelName, r.when].join(" ").toLowerCase().includes(rq));
+            const order = OD_ROUTINE_GROUPS.map(g => g[0]).concat(["other", "off"]);
+            const groups = order.map(k => ({ k, label: OD_ROUTINE_GROUP_LABEL[k], rows: hits.filter(r => odRoutineGroup(r) === k) })).filter(g => g.rows.length);
+            const routineRow = (r) => { const h = OD_ROUTINE_HEALTH[r.health] || OD_ROUTINE_HEALTH.new; return (
             <Fragment key={r.id}>
               <OdItem color={h[1]} icon={h[2]} tag={[h[0], r.when].filter(Boolean).join(" · ")} title={r.name}
                 sub={[r.about, r.channelName && `posts in ${r.channelName}`].filter(Boolean).join(" · ")}
@@ -53319,7 +53344,21 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
                 <div className="od-rep-tl">Does on its own, without asking</div>
                 {r.onItsOwn && r.onItsOwn.length ? <ul>{r.onItsOwn.map((x, i) => <li key={i}>{x}</li>)}</ul> : <p>Nothing. It only reads and posts.</p>}
               </div> : null}
-            </Fragment>); })}</div>
+            </Fragment>); };
+            return <>
+              <input className="od-q" type="search" value={routineQ} onChange={e => setRoutineQ(e.target.value)} placeholder="Find an automation by name, channel or what it does" aria-label="Find an automation"/>
+              {groups.length ? groups.map(g => { const bad = g.rows.filter(r => r.health === "failed" || r.health === "missed").length;
+                const open = !!rq || !!routineGrpOpen[g.k]; return (
+                <div key={g.k} className="od-rgrp">
+                  <button type="button" className="od-sec od-sec-tap" aria-expanded={open} onClick={() => setRoutineGrpOpen(o => ({ ...o, [g.k]: !o[g.k] }))}>
+                    <span>{g.label}</span>
+                    <small>{g.rows.length}{bad ? ` · ${bad} need a look` : ""}</small>
+                    <Icon name={open ? "chevronDown" : "chevronRight"} size={14}/>
+                  </button>
+                  {open ? <div className="od-list">{g.rows.map(routineRow)}</div> : null}
+                </div>); })
+              : <div className="od-empty">No automation matches "{routineQ.trim()}".</div>}
+            </>; })()
           : <div className="od-empty">No routines listed yet. The list fills in on the first sync.</div>, OD_B)}
       </>}
       {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
@@ -53766,6 +53805,9 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-sec span::before{content:"";display:inline-block;width:3px;height:15px;border-radius:2px;background:var(--o);margin-right:9px;vertical-align:-2px}
         .odash .od-sec small{margin-left:auto;font-weight:500;font-size:11.5px;color:var(--dim)}
         .odash .od-sec button{margin-left:auto;border:0;background:transparent;color:var(--o-ink);font-size:12px;font-weight:700;cursor:pointer}
+        .odash button.od-sec-tap{width:100%;border:0;background:transparent;padding:10px 2px;font:inherit;font-weight:700;font-size:14px;color:var(--ink);cursor:pointer;text-align:left}
+        .odash button.od-sec-tap small{margin-left:auto}
+        .odash .od-rgrp + .od-rgrp{border-top:1px solid ${C.border}}
         .odash .od-plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
         .odash .od-crew{padding:14px;display:flex;gap:10px;align-items:center;min-width:0;transition:transform .25s}
         .odash .od-crew > div{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
@@ -62897,8 +62939,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v636
+**Last manifest update:** 2026-11-13 · App SW version: v637
 ---
+
+- **Automations on the Claude tab grouped: Scheduling & crews, Meetings, Margins & reports, Jobs, COs & POs, Email, asks & briefs, Plans & app upkeep, and Off or paused at the bottom, each folded with a count, plus a find box** · 'in-flight 2026-11-13' · 'SW v637' · 'OD_ROUTINE_GROUPS' · 'odRoutineGroup' · Koy 2026-11-13: "can we Separate the automations in the Claude section into the different categories. It's really hard to find what I'm looking for in there because there's a lot of them". A routine lands in a group by its name first, then its channel; anything that matches none goes in Other. A group header says how many need a look. Typing in the find box opens every group with a match. Hosting only, no function deploy.
 
 - **Needs you cards say what each button does: Yes / No only when the card carries a change; every other card gets Add to my tasks, Schedule it (crew-scheduling asks), Done and Dismiss** · 'in-flight 2026-11-13' · 'SW v636' · 'OdFlag' · 'claudeWork.planAnswer' · 'taskFor' · Koy 2026-11-13 on an Asks watch card: "i dont understand what the no yes etc do here. makes no sense", then "Yes, send it" to this fix. Add to my tasks shows the exact My Day task (the card's title and job), asks once, then makes it for Koy through the same checks, log and undo as every Claude change (flag status 'tasked'). Schedule it writes nothing: the flag goes to 'toSchedule' and the crew-schedule watch posts a booking preview in its channel for his OK there; no Simpro write ever runs from a flag. A card that came from My Day has no Add to my tasks. The typed answer box shows only when the routine asked for a date, a name or text. Deploy: hosting plus 'claudeFlagAnswer' (no other function changed).
 

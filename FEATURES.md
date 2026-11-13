@@ -4,8 +4,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-11-13 · App SW version: v636
+**Last manifest update:** 2026-11-13 · App SW version: v637
 ---
+
+- **Automations on the Claude tab grouped: Scheduling & crews, Meetings, Margins & reports, Jobs, COs & POs, Email, asks & briefs, Plans & app upkeep, and Off or paused at the bottom, each folded with a count, plus a find box** · `in-flight 2026-11-13` · `SW v637` · `OD_ROUTINE_GROUPS` · `odRoutineGroup` · Koy 2026-11-13: "can we Separate the automations in the Claude section into the different categories. It's really hard to find what I'm looking for in there because there's a lot of them". A routine lands in a group by its name first, then its channel; anything that matches none goes in Other. A group header says how many need a look. Typing in the find box opens every group with a match. Hosting only, no function deploy.
 
 - **Needs you cards say what each button does: Yes / No only when the card carries a change; every other card gets Add to my tasks, Schedule it (crew-scheduling asks), Done and Dismiss** · `in-flight 2026-11-13` · `SW v636` · `OdFlag` · `claudeWork.planAnswer` · `taskFor` · Koy 2026-11-13 on an Asks watch card: "i dont understand what the no yes etc do here. makes no sense", then "Yes, send it" to this fix. Add to my tasks shows the exact My Day task (the card's title and job), asks once, then makes it for Koy through the same checks, log and undo as every Claude change (flag status `tasked`). Schedule it writes nothing: the flag goes to `toSchedule` and the crew-schedule watch posts a booking preview in its channel for his OK there; no Simpro write ever runs from a flag. A card that came from My Day has no Add to my tasks. The typed answer box shows only when the routine asked for a date, a name or text. Deploy: hosting plus `claudeFlagAnswer` (no other function changed).
 
