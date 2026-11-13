@@ -497,7 +497,7 @@ await ok("api.js: the action lists and allowlist hold the five ship-8 actions; B
   assert.ok(/clientTest: cfg\.mode === "live" \? false : true/.test(src), "clientTest false only when live");
   assert.ok(/soakTo/.test(src) && !/mail\.key|\.key\b/.test(src.split("loadPoCfg")[1].split("readPoLog")[0]), "loadPoCfg never touches the key");
   const idx = fs.readFileSync(path.join(root, "functions", "index.js"), "utf8");
-  assert.ok(idx.indexOf("const _poGmail = require") < idx.indexOf("exports.duetApi = require"), "the Gmail sender is built before duetApi");
+  assert.ok(idx.indexOf("const _poGmail = require") < idx.indexOf("const _duet = require(\"./duetWrites/api.js\")"), "the Gmail sender is built before duetApi");
   assert.ok(/materialDeps: \{ simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail\.send \}/.test(idx), "duetApi gets the sender's real deps");
   assert.strictEqual((idx.match(/const _poGmail = require/g) || []).length, 1, "one Gmail sender instance");
 });

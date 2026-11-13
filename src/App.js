@@ -49684,6 +49684,76 @@ function OdReport({ body }) {
       <div className="od-rep-foot">{body.ownersOnly ? "Owners only: has dollar figures" : "No dollar figures"}{body.forWho ? ` · for ${body.forWho}` : ""} · version {body.version || 1}</div>
     </div>);
 }
+// ── Needs you + Automations (SW v633) ───────────────────────────────────────
+// Koy, 2026-11-12: "be able to click on what on see, see all of it. So I can work in
+// one spot", and a Yes should "Change it right then". A flag's proposal is shown as
+// the exact change that will run: the action in words and every field it sends, drawn
+// here from the stored action + args (never from the routine's own description).
+const OD_FLAG_ACT = {
+  "co.create": "Add change order", "co.edit": "Edit change order", "co.setStatus": "Set change order status", "co.convert": "Turn change order into a return trip",
+  "rt.create": "Add return trip", "rt.update": "Change return trip", "job.setStatusUpdate": "Set the job's status note",
+  "question.add": "Add question", "question.answer": "Answer question", "question.reopen": "Reopen question",
+  "note.add": "Add job note", "note.addLine": "Add a line to a job note", "note.editLine": "Edit a job note line", "dailyUpdate.add": "Add daily update",
+  "punch.setDone": "Tick punch item", "punch.add": "Add punch item", "punch.assign": "Assign punch item", "punch.waiting": "Mark punch item waiting", "punch.editText": "Edit punch item",
+  "rtPunch.add": "Add trip punch items", "rtPunch.setDone": "Tick trip punch item", "rtPunch.waiting": "Mark trip punch item waiting", "rtPunch.editText": "Edit trip punch item",
+  "inspection.setResult": "Log inspection result", "inspection.items": "Inspection items", "inspection.createTrip": "Add inspection fix trip", "prep.tick": "Tick prep item", "phase.setDates": "Set schedule dates",
+  "material.addCard": "Add material card", "material.editCard": "Edit material card", "material.tick": "Tick material card",
+  "task.create": "Add My Day task", "task.update": "Change My Day task", "job.setPeople": "Set job people", "job.createFromSimpro": "Add job from Simpro", "job.setInfo": "Set job info",
+  "crew.assign": "Book crew", "crew.unassign": "Take crew off", "crew.setLead": "Set crew lead", "timeOff.decide": "Decide time off", "autoTask.promote": "Make auto task real", "planIntake.decide": "Decide plan intake",
+};
+function odFlagVal(v) {
+  if (v == null) return "";
+  if (Array.isArray(v)) return v.map(odFlagVal).filter(Boolean).join("; ");
+  if (typeof v === "object") return Object.keys(v).map(k => `${k}: ${odFlagVal(v[k])}`).join(", ");
+  return String(v);
+}
+// [{ label, rows: [[field, value]] }] — every arg except jobId (the job line already says it).
+function odFlagChanges(proposal) {
+  return (proposal || []).map(p => ({ label: OD_FLAG_ACT[p.action] || p.action,
+    rows: Object.keys(p.args || {}).filter(k => k !== "jobId").map(k => [k, odFlagVal(p.args[k]).slice(0, 400)]) }));
+}
+const OD_FLAG_DONE = { applied: ["Changed", OD_G, "checkCircle"], answered: ["Answered", OD_B, "send"], done: ["You did it", OD_G, "checkCircle"],
+  dismissed: ["Dismissed", OD_GREY, "eyeOff"], handled: ["Handled on its own", OD_G, "checkCircle"], failed: ["Stopped part way", OD_R, "alertTriangle"], applying: ["Running", OD_SLATE, "clock"] };
+const OD_ROUTINE_HEALTH = { ok: ["Ran fine", OD_G, "checkCircle"], failed: ["Last run failed", OD_R, "alertTriangle"], missed: ["Missed its run", OD_WARN, "clock"],
+  off: ["Off", OD_GREY, "x"], paused: ["Paused: channel archived", OD_GREY, "x"], new: ["No run yet", OD_SLATE, "clock"] };
+// One open flag, read and answered in place. busy = the answer in flight; onAnswer(choice, text).
+function OdFlag({ f, label, canAnswer, busy, msg, onAnswer, onOpenJob }) {
+  const [txt, setTxt] = useState("");
+  const changes = odFlagChanges(f.proposal);
+  const hasChange = changes.length > 0;
+  const stuck = f.status === "applying";
+  return (
+    <div className="od-rep-body od-flagbox">
+      <div className="od-flag-meta">{[f.kindLabel, f.routine && `from ${f.routine}`, f.channel && `posted in ${f.channel}`, `open ${f.daysOpen} d`, f.seen > 1 && `seen ${f.seen} times`].filter(Boolean).join(" · ")}</div>
+      {f.jobNo || f.jobName ? <div className="od-flag-job">{onOpenJob ? <button type="button" className="od-mini-btn" onClick={onOpenJob}>Open {label}</button> : <b>{label}</b>}</div> : null}
+      {f.reopenedWhy ? <p><b>Back again:</b> {f.reopenedWhy}</p> : null}
+      {f.detail ? <p className="od-flag-detail">{f.detail}</p> : null}
+      {hasChange ? <>
+        <div className="od-rep-tl">{changes.length > 1 ? `Yes makes these ${changes.length} changes in Command Center` : "Yes makes this change in Command Center"}</div>
+        {changes.map((c, i) => (
+          <div className="od-flag-chg" key={i}>
+            <b>{changes.length > 1 ? `${i + 1}. ` : ""}{c.label}{f.applied && f.applied.results && f.applied.results.find(r => r.i === i && r.ok) ? " (done)" : ""}</b>
+            {c.rows.length ? <div className="od-rep-tw"><table><tbody>{c.rows.map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table></div> : null}
+          </div>))}
+      </> : null}
+      {f.status === "failed" && f.applied ? <p className="od-flag-bad">Stopped part way: {f.applied.why || "a change was refused"}. Yes again runs only the changes not done yet.</p> : null}
+      {stuck ? <p className="od-flag-bad">The last Yes stopped part way. Check the job, then mark it Done or Dismiss it.</p> : null}
+      {canAnswer ? <>
+        <div className="od-ct-actions od-flag-btns">
+          {!stuck ? <button type="button" className="od-mini-btn od-yes" disabled={!!busy} onClick={() => onAnswer("yes")}>{hasChange ? (f.status === "failed" ? "Yes, finish it" : "Yes, make the change") : "Yes"}</button> : null}
+          {!stuck ? <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("no")}>No</button> : null}
+          <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("done")}>I did it</button>
+          <button type="button" className="od-mini-btn" disabled={!!busy} onClick={() => onAnswer("dismiss")}>Dismiss</button>
+        </div>
+        {!stuck ? <div className="od-frow od-flag-ans">
+          <input className="od-q" value={txt} onChange={e => setTxt(e.target.value)} placeholder={f.ask === "date" ? "Type a date" : f.ask === "name" ? "Type a name" : "Or type your answer"} aria-label="Your answer"/>
+          <button type="button" className="od-mini-btn" disabled={!!busy || !txt.trim()} onClick={() => onAnswer("answer", txt.trim())}>Send</button>
+        </div> : null}
+        {msg ? <div className="od-rep-foot" role="status">{msg}</div> : null}
+      </> : <div className="od-rep-foot">Koy answers these.</div>}
+    </div>);
+}
+
 // Same action on the same job within 10 minutes reads as one row ("Added 13 photos").
 function odClaudeFold(changes) {
   const out = [];
@@ -51547,6 +51617,38 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       r => { const x = r && r.data; setReportBody(m => ({ ...m, [id]: x && x.ok && x.report ? x.report : { err: "This report isn't there any more." } })); },
       e => setReportBody(m => ({ ...m, [id]: { err: (e && e.message) || "Couldn't open it. Try again." } })));
   };
+  // Needs you + Automations (SW v633): claude_flags / claude_routines through the admin-PIN
+  // callable claudeWork; Koy's answer through claudeFlagAnswer (his record only). A Yes on a
+  // flag with a change runs that change on the server right then, through the same door and
+  // audit every Claude change uses (undo in Changes below). Nothing else here writes.
+  const [claudeWork, setClaudeWork] = useState(undefined);   // undefined = loading · null = not deployed yet · answer
+  const [flagOpen, setFlagOpen] = useState(null);
+  const [routineOpen, setRoutineOpen] = useState(null);
+  const [flagBusy, setFlagBusy] = useState(null);             // the flag id whose answer is in flight
+  const [flagMsg, setFlagMsg] = useState({});                 // id → last message for that flag
+  useEffect(() => {
+    if (tab !== "claude") return undefined;
+    let dead = false;
+    gcAdminCallable("claudeWork", identity)({}).then(
+      r => { if (!dead) setClaudeWork((r && r.data) || { ok: false, err: "try Refresh" }); },
+      e => { if (dead) return; const code = String((e && e.code) || "");
+        setClaudeWork(/not-found|unimplemented/.test(code) ? null : { ok: false, err: /permission-denied/.test(code) ? ((e && e.message) || "Not allowed") : "Couldn't reach it. Check the connection, then press Refresh." }); });
+    return () => { dead = true; };
+  }, [tab, claudeTick]); // eslint-disable-line
+  const answerFlag = (f, choice, text) => {
+    if (flagBusy) return;
+    if (choice === "yes" && (f.proposal || []).length) {
+      const n = f.proposal.length;
+      if (!window.confirm(`Make ${n > 1 ? `these ${n} changes` : "this change"} in Command Center now?`)) return;
+    }
+    setFlagBusy(f.id);
+    setFlagMsg(m => ({ ...m, [f.id]: "Working…" }));
+    gcAdminCallable("claudeFlagAnswer", identity)({ id: f.id, choice, text: text || "", seenAt: f.updatedAt }).then(
+      r => { const x = (r && r.data) || {};
+        setFlagMsg(m => ({ ...m, [f.id]: x.refused ? x.refused : x.status === "applied" ? "Done. The change is in Command Center (undo is in Changes)." : x.status === "failed" ? `Stopped part way: ${(x.applied && x.applied.why) || "a change was refused"}.` : "Saved." }));
+        setFlagBusy(null); if (!x.refused) { setFlagOpen(null); setClaudeTick(t => t + 1); } },
+      e => { setFlagMsg(m => ({ ...m, [f.id]: (e && e.message) || "Couldn't save. Try again." })); setFlagBusy(null); });
+  };
   useEffect(() => {
     if (tab !== "claude") return undefined;
     let dead = false;
@@ -53046,6 +53148,48 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         <OdItem color={OD_G} icon="users" tag="One-on-Ones" title="Residential team one-on-one tracker" sub="your page on claude.ai · opens in a new tab"
           when="Open" onClick={() => { try { window.open(OD_ONE_ON_ONES_URL, "_blank", "noopener,noreferrer"); } catch (e) {} }}/>
       </div></div> : null}
+      {/* v633: Needs you (Koy's view: every open flag, answered in place) and Automations (every routine). */}
+      {claudeWork === null ? <div className="od-white od-pad">Needs you and Automations show here once the new Claude functions are deployed.</div>
+        : claudeWork && claudeWork.ok === false ? <div className="od-white od-pad">Couldn't load Needs you and Automations: {claudeWork.err || "try Refresh"}</div>
+        : claudeWork === undefined ? null : <>
+        {full ? fold("needs", "Needs you", "oldest first · tap one to see it all and answer", claudeWork.open.length,
+          claudeWork.open.length ? <div className="od-list">{claudeWork.open.map(f => { const lb = odClaudeJobLabel(f, jobs); const st = OD_FLAG_DONE[f.status]; return (
+            <Fragment key={f.id}>
+              <OdItem color={st ? st[1] : f.ownersOnly ? OD_SLATE : OD_R} icon={st ? st[2] : f.ownersOnly ? "lock" : "flag"}
+                tag={[st ? st[0] : f.kindLabel, f.routine, f.ownersOnly && "Owners only"].filter(Boolean).join(" · ")}
+                title={f.jobNo || f.jobName ? `${lb.label}: ${f.title}` : f.title}
+                sub={[(f.proposal || []).length ? (f.proposal.length > 1 ? `Yes makes ${f.proposal.length} changes` : "Yes makes the change") : "", `${f.daysOpen} d open`].filter(Boolean).join(" · ")}
+                when={flagOpen === f.id ? "Close" : "Open"} onClick={() => setFlagOpen(o => (o === f.id ? null : f.id))}/>
+              {flagOpen === f.id ? <OdFlag f={f} label={lb.label} canAnswer={!!claudeWork.canAnswer} busy={flagBusy === f.id} msg={flagMsg[f.id]}
+                onAnswer={(c, t) => answerFlag(f, c, t)} onOpenJob={lb.job ? () => openJob(lb.job) : null}/> : null}
+            </Fragment>); })}
+            {claudeWork.closed.length ? <><div className="od-sec"><span>Answered</span><small>last 14 days</small></div>
+              {claudeWork.closed.slice(0, 15).map(f => { const lb = odClaudeJobLabel(f, jobs); const st = OD_FLAG_DONE[f.status] || ["Answered", OD_B, "send"]; return (
+                <OdItem key={f.id} color={st[1]} icon={st[2]} tag={[st[0], f.routine].filter(Boolean).join(" · ")}
+                  title={f.jobNo || f.jobName ? `${lb.label}: ${f.title}` : f.title}
+                  sub={f.answer ? [f.answer.choice === "answer" ? `You said: ${f.answer.text}` : f.answer.choice === "handled" ? f.answer.text : "", f.answer.by && `by ${f.answer.by}`].filter(Boolean).join(" · ") : ""}
+                  when={dayName(D(f.updatedAt))}/>); })}</> : null}
+          </div> : <div className="od-empty">Nothing waits on you. Flags from the watches show here as they come in.</div>, OD_R) : null}
+        {fold("autos", "Automations", `every Claude routine · when it runs is Denver time${claudeWork.syncAt ? ` · list synced ${odAgo(D(claudeWork.syncAt), d.now)}` : ""}`,
+          `${claudeWork.routines.filter(r => r.enabled).length} on${claudeWork.routines.filter(r => r.health === "failed" || r.health === "missed").length ? ` · ${claudeWork.routines.filter(r => r.health === "failed" || r.health === "missed").length} need a look` : ""}`,
+          claudeWork.routines.length ? <div className="od-list">{claudeWork.routines.map(r => { const h = OD_ROUTINE_HEALTH[r.health] || OD_ROUTINE_HEALTH.new; return (
+            <Fragment key={r.id}>
+              <OdItem color={h[1]} icon={h[2]} tag={[h[0], r.when].filter(Boolean).join(" · ")} title={r.name}
+                sub={[r.about, r.channelName && `posts in ${r.channelName}`].filter(Boolean).join(" · ")}
+                when={routineOpen === r.id ? "Close" : r.lastRunAt ? odAgo(D(r.lastRunAt), d.now) : "never"} onClick={() => setRoutineOpen(o => (o === r.id ? null : r.id))}/>
+              {routineOpen === r.id ? <div className="od-rep-body">
+                <div className="od-stats">
+                  <div><b>{r.lastRunAt ? `${dayName(D(r.lastRunAt))} ${odTime(D(r.lastRunAt))}` : "–"}</b><small>Last run</small></div>
+                  <div><b>{r.nextAt ? `${dayName(D(r.nextAt))} ${odTime(D(r.nextAt))}` : "–"}</b><small>Next run</small></div>
+                  <div><b>{r.lastFlagged || 0}</b><small>Flagged last run</small></div>
+                </div>
+                {r.lastNote ? <p><b>Last run:</b> {r.lastNote}</p> : null}
+                <div className="od-rep-tl">Does on its own, without asking</div>
+                {r.onItsOwn && r.onItsOwn.length ? <ul>{r.onItsOwn.map((x, i) => <li key={i}>{x}</li>)}</ul> : <p>Nothing. It only reads and posts.</p>}
+              </div> : null}
+            </Fragment>); })}</div>
+          : <div className="od-empty">No routines listed yet. The list fills in on the first sync.</div>, OD_B)}
+      </>}
       {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
       {cd === undefined ? <div className="od-white od-pad">Loading…</div> : cd && cd.ok === false ? <div className="od-white od-pad">Couldn't load this: {cd.err || "try Refresh"}</div> : <>
         <div className="od-minis">
@@ -53446,6 +53590,14 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-rep-body th,.odash .od-rep-body td{border-bottom:1px solid var(--cline);padding:6px 8px;text-align:left;vertical-align:top}
         .odash .od-rep-body th{font-weight:700;color:var(--cdim);white-space:nowrap}
         .odash .od-rep-foot{margin-top:10px;font-size:11.5px;color:var(--cdim)}
+        .odash .od-flag-meta{font-size:11.5px;color:var(--cdim);margin-bottom:6px}
+        .odash .od-flag-job{margin:4px 0 8px}
+        .odash .od-flag-detail{white-space:pre-wrap}
+        .odash .od-flag-chg{margin:6px 0 8px}.odash .od-flag-chg th{width:30%}
+        .odash .od-flag-bad{color:${OD_R};font-weight:600}
+        .odash .od-flag-btns{flex-wrap:wrap;gap:8px;margin-top:10px}
+        .odash .od-flag-ans{display:flex;gap:8px;align-items:center;margin-top:8px}
+        .odash .od-mini-btn.od-yes{background:${OD_G};border-color:${OD_G};color:#fff}.odash .od-mini-btn.od-yes:hover{filter:brightness(.92)}
         .odash .od-svg{width:100%;height:auto;display:block}
         .odash .od-hint{font-size:11.5px;color:var(--cdim)}
         .odash .od-daysum{display:flex;align-items:center;gap:10px;background:var(--hov);border-radius:12px;padding:9px 12px}
@@ -62612,8 +62764,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v632
+**Last manifest update:** 2026-11-13 · App SW version: v633
 ---
+
+- **Claude tab: Needs you (every open flag from the watches, answered in place, a Yes makes its change right then) and Automations (every Claude routine, when it runs, what it does on its own, last run)** · 'in-flight 2026-11-12' · 'SW v633' · 'OdFlag' · 'odFlagChanges' · 'claudeWork' · 'claudeFlagAnswer' · 'functions/duetWrites/claudeWork.js' · 'FLAG_ACTIONS' · Koy: *"I want to be able to like work things from the dashboard as well, like be able to click on what on see, see all of it. So I can work in one spot."* and, on whether a Yes should change Command Center right then: *"Change it right then"*. **Data:** two server-only collections, 'claude_routines/<trig_…>' and 'claude_flags/<flg_…>', written only through duetApi's new 'routine.sync', 'routine.checkin', 'flag.post', 'flag.list', 'flag.close' (connector v0.24.0: 'cc_routine_checkin', 'cc_routine_sync', 'cc_post_flags', 'cc_list_flags', 'cc_close_flag'); read by the admin-PIN callable 'claudeWork'. A routine's prompt is never stored. Same flag key = same flag: an answered flag never comes back unless the watch says something new happened. **Answer:** 'claudeFlagAnswer', Koy's own record only; the flag must be as he saw it ('seenAt'); a Yes runs each proposed change through duetApi's own 'handle()' in-process (same checks, 'duet_writes' audit with okBy "Koy (dashboard)", undo), stopping at the first refusal; a Yes again runs only what didn't go through. Proposals are allow-listed: never a stage, rough / finish status, QC status, any job field, email, announcement, homeowner reply, any-document write, undo or archive. **Why it won't lose data:** the two new collections are their own; nothing changes on a job until Koy taps Yes on a change he can read field by field; rules unchanged in effect (explicit deny blocks match the catch-all).
 
 - **One-on-Ones link on the Claude tab: Koy's residential team one-on-one tracker opens in a new tab** · 'in-flight 2026-11-12' · 'SW v632' · 'OD_ONE_ON_ONES_URL' · Koy: *"let's add it to the dashboard as well"*. In Koy's view of the Claude tab (not the owners' view), one card above the sections opens his one-on-one tracker, a claude.ai page, in a new tab ('noopener,noreferrer'). Link only: nothing is read or written. Guide 'dashboard.html'. **Why it won't lose data:** one link; no read, save, loader, rules or Cloud Function change.
 

@@ -306,7 +306,9 @@ const ACTIVITY_ACTIONS = AC.ACTIVITY_ACTIONS;   // v613: the Claude tab's log (c
 const RP = require("./reports.js");
 const REPORT_ACTIONS = RP.REPORT_ACTIONS;       // v616: Reports in the Claude tab (claude_reports) — like the log: no duet_writes audit, no undo, not in the hourly limit; the report doc itself is the record
 const DOC_ACTIONS = AD.DOC_ACTIONS;             // ship 12: anyDocWrite() — any top-level document through the one door (anyDoc.js: the policy + the planners)
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS, ...DOC_ACTIONS];
+const CW = require("./claudeWork.js");
+const WORK_ACTIONS = [...CW.ROUTINE_ACTIONS, ...CW.FLAG_ACTIONS_API];   // v633: Automations + Needs you (claude_routines / claude_flags) — like Reports: no duet_writes audit, no undo, not in the hourly limit; nothing in Command Center is touched
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS, ...DOC_ACTIONS, ...WORK_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -1298,7 +1300,10 @@ async function anyDocWrite(io, requestId, action, args, ctx, finish, refused) {
   return { status: out.status, body: out.body };
 }
 
-async function handle(body, io) {
+// opts (v633): { okBy } when Koy's own Yes on a dashboard flag runs the change
+// (claudeFlagAnswer, in-process) — stamped on the audit doc so the Claude tab and
+// undo show it was his tap, not Claude's own call.
+async function handle(body, io, opts) {
   const b = body && typeof body === "object" ? body : {};
   const requestId = String(b.requestId || "");
   if (!RID.test(requestId)) throw new Refusal(400, "requestId must be 8–64 letters, digits, - or _.");
@@ -1341,6 +1346,53 @@ async function handle(body, io) {
     return { status: 200, body: { ok: true, requestId, action: b.action, reportId: p.id, archived: p.patch.archived } };
   }
 
+  // Automations + Needs you (v633): claude_routines / claude_flags only, server-only.
+  // A job named on a flag is read from jobs/<id> here; nothing in Command Center changes.
+  if (WORK_ACTIONS.includes(b.action)) {
+    const nowIso = io.nowIso();
+    const ok = (extra) => ({ status: 200, body: { ok: true, requestId, action: b.action, ...extra } });
+    const no = (why) => ({ status: 400, body: { ok: false, refused: why } });
+    if (b.action === "routine.sync") {
+      const prior = await io.getRoutines();
+      const p = CW.planSync(args, prior, nowIso);
+      if (p.refused) return no(p.refused);
+      await io.writeWork("claude_routines", p.docs.map(d => ({ id: d.id, doc: d.doc, merge: true })).concat(p.removedIds.map(id => ({ id, doc: { removed: true, syncAt: nowIso }, merge: true }))));
+      return ok({ synced: p.docs.length, removed: p.removedIds.length, ...(p.skipped.length ? { skipped: p.skipped } : {}) });
+    }
+    if (b.action === "routine.checkin") {
+      const id = String(args.id || "");
+      const prior = CW.TRIG.test(id) ? ((await io.getRoutines([id]))[id] || null) : null;
+      const p = CW.planCheckin(args, prior, nowIso);
+      if (p.refused) return no(p.refused);
+      await io.writeWork("claude_routines", [{ id: p.id, doc: p.patch, merge: true }]);
+      return ok({ routineId: p.id, created: p.created });
+    }
+    if (b.action === "flag.post") {
+      const list = Array.isArray(args.flags) ? args.flags.slice(0, 25) : [];
+      const jobIds = [...new Set(list.map(f => f && f.jobId ? String(f.jobId) : "").filter(x => JOB_ID.test(x)))];
+      const jobs = {};
+      for (const j of jobIds) { const d = await io.getJobData(j); if (d) jobs[j] = d; }
+      const ids = list.map(f => f && f.key ? CW.flagId(f.key) : "").filter(Boolean);
+      const prior = await io.getFlags(ids);
+      const p = CW.planFlags(args, jobs, prior, nowIso);
+      if (p.refused) return no(p.refused);
+      await io.writeWork("claude_flags", p.docs.map(d => ({ id: d.id, doc: d.doc, merge: !!d.patch })));
+      return ok({ results: p.results, ...(p.skipped.length ? { skipped: p.skipped } : {}) });
+    }
+    if (b.action === "flag.close") {
+      const id = args.key ? CW.flagId(args.key) : "";
+      const prior = id ? ((await io.getFlags([id]))[id] || null) : null;
+      const p = CW.planClose(args, prior, nowIso);
+      if (p.refused) return no(p.refused);
+      if (p.noop) return ok({ key: args.key, status: p.status, noop: true });
+      await io.writeWork("claude_flags", [{ id: p.id, doc: p.patch, merge: true }]);
+      return ok({ key: args.key, status: "handled" });
+    }
+    // flag.list
+    const rows = await io.listFlags();
+    return ok({ flags: CW.listView(rows, args) });
+  }
+
   // Same requestId → same answer, nothing written twice.
   const prior = await io.getAudit(requestId);
   if (prior && prior.response) return { status: prior.response.status || 200, body: { ...prior.response.body, replayed: true } };
@@ -1351,7 +1403,7 @@ async function handle(body, io) {
 
   const todayYmd = io.todayYmd();
   const ctx = { nowIso, todayYmd, bucketNow: `${todayYmd}T12:00:00`, users: await io.getUsers(), rand: io.rand ? io.rand() : undefined, tz: io.tz, email };
-  const base = { at: nowIso, action: b.action, by: SAVED_BY, email, requestId, expireAt: new Date(Date.parse(nowIso) + 90 * 86400 * 1000).toISOString() };
+  const base = { at: nowIso, action: b.action, by: SAVED_BY, email, requestId, expireAt: new Date(Date.parse(nowIso) + 90 * 86400 * 1000).toISOString(), ...(opts && opts.okBy ? { okBy: String(opts.okBy).slice(0, 60), via: "dashboard" } : {}) };
   // Every answer and every audit doc goes through here, so this is the one
   // place to drop `undefined` (Firestore refuses a document holding one;
   // 2026-11-04: four real punch.add calls died on `response.body.room` inside
@@ -1629,6 +1681,31 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
       if (!/^rep_[A-Za-z0-9_-]{6,48}$/.test(id)) throw new Refusal(400, "bad report id");
       await db.collection("claude_reports").doc(id).update(dropUndefined(patch));
     },
+    // v633: Automations + Needs you. claude_routines/<trig_…> and claude_flags/<flg_…>
+    // only; ids come from claudeWork.js, never from the caller as-is.
+    getRoutines: async (ids) => {
+      const out = {};
+      if (ids) { for (const id of ids) { if (!CW.TRIG.test(id)) continue; const s = await db.collection("claude_routines").doc(id).get(); if (s.exists) out[id] = s.data(); } return out; }
+      const s = await db.collection("claude_routines").limit(500).get();
+      s.docs.forEach(d => { out[d.id] = d.data(); });
+      return out;
+    },
+    getFlags: async (ids) => {
+      const out = {};
+      const ok = (ids || []).filter(id => CW.FLAG_ID.test(id));
+      if (!ok.length) return out;
+      const snaps = await db.getAll(...ok.map(id => db.collection("claude_flags").doc(id)));
+      snaps.forEach(s => { if (s.exists) out[s.id] = s.data(); });
+      return out;
+    },
+    listFlags: async () => { const s = await db.collection("claude_flags").orderBy("updatedAt", "desc").limit(1000).get(); return s.docs.map(d => [d.id, d.data()]); },
+    writeWork: async (coll, rows) => {
+      if (!["claude_routines", "claude_flags"].includes(coll)) throw new Refusal(400, "bad collection");
+      const re = coll === "claude_routines" ? CW.TRIG : CW.FLAG_ID;
+      const batch = db.batch();
+      rows.forEach(({ id, doc, merge }) => { if (!re.test(id)) throw new Refusal(400, "bad id"); batch.set(db.collection(coll).doc(id), dropUndefined(doc), { merge: !!merge }); });
+      await batch.commit();
+    },
     arrayUnion: (...x) => FieldValue.arrayUnion(...x),
     serverTimestamp: () => FieldValue.serverTimestamp(),
     tz: TZ,
@@ -1655,7 +1732,13 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
         res.status(500).json({ ok: false, error: "Couldn't complete the change. Nothing is known to have been written; check the task before asking again." });
       }
     });
-  return { duetApi };
+  // v633: Koy's own Yes on a dashboard flag runs each proposed change through this
+  // same handle() in-process (claudeFlagAnswer in index.js): same checks, audit, undo.
+  const runAsKoy = async (body) => {
+    try { return await handle(body, io, { okBy: "Koy (dashboard)" }); }
+    catch (e) { if (e instanceof Refusal) return { status: e.status, body: { ok: false, refused: e.message } }; throw e; }
+  };
+  return { duetApi, runAsKoy, io };
 };
 module.exports.handle = handle;
 module.exports.tokenOk = tokenOk;
@@ -1683,6 +1766,7 @@ module.exports.UNDO_ACTIONS = UNDO_ACTIONS;
 module.exports.ACTIVITY_ACTIONS = ACTIVITY_ACTIONS;
 module.exports.REPORT_ACTIONS = REPORT_ACTIONS;
 module.exports.DOC_ACTIONS = DOC_ACTIONS;
+module.exports.WORK_ACTIONS = WORK_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;

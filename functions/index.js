@@ -7689,9 +7689,10 @@ exports.planDismissByHand  = _planIntake.planDismissByHand;
 // Deploy ONLY this one:
 //   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:duetApi --project homestead-electric
 const _poGmail = require("./materialPO/gmail.js")({ functions, db });
-exports.duetApi = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage(),
+const _duet = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage(),
   materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send },
-  officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById } }).duetApi;
+  officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById } });
+exports.duetApi = _duet.duetApi;
 
 // ─── Claude tab on /dashboard (2026-11-04) ───────────────────────────────────
 // Koy: one page for him, one Josh and Brady can view, and no more separate
@@ -7747,6 +7748,63 @@ exports.claudeReports = functions.https.onCall(async (data) => {
   const snap = await db.collection("claude_reports").orderBy("updatedAt", "desc").limit(1000)
     .select("jobId", "jobNo", "jobName", "type", "title", "forWho", "ownersOnly", "filedAt", "updatedAt", "version", "chars", "archived").get();
   return { ok: true, isAdmin, reports: _claudeReports.buildList(snap.docs.map(d => [d.id, d.data()]), { isAdmin, includeArchived: false }) };
+});
+
+// ─── Automations + Needs you in the Claude tab (SW v633) ──────────────────────
+// Koy, 2026-11-12: every automation listed in the dashboard's Claude section, and
+// "be able to click on what on see, see all of it. So I can work in one spot";
+// a Yes there should "Change it right then". claude_routines / claude_flags are
+// server-only (rules: no client access), written only by duetApi's routine.* /
+// flag.* actions (functions/duetWrites/claudeWork.js). claudeWork reads both
+// (live ADMIN PIN). claudeFlagAnswer is Koy's answer, Koy's own record only: a
+// Yes on a flag with a proposal runs each change through duetApi's own handle()
+// in-process (_duet.runAsKoy) — the same checks, audit and undo as every Duet
+// write, okBy "Koy (dashboard)" — and never a stage, a rough / finish status, an
+// email or announcement (claudeWork.js FLAG_ACTIONS). Deploy these three:
+//   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeWork,functions:claudeFlagAnswer,functions:duetApi --project homestead-electric
+const _claudeWork = require("./duetWrites/claudeWork.js");
+exports.claudeWork = functions.https.onCall(async (data) => {
+  const user = await requireAdmin(data);
+  if (gcAdminAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "The Claude tab is for admins.");
+  const [rs, fs] = await Promise.all([
+    db.collection("claude_routines").limit(500).get(),
+    db.collection("claude_flags").orderBy("updatedAt", "desc").limit(1000).get(),
+  ]);
+  return _claudeWork.buildWork({ routines: rs.docs.map(d => [d.id, d.data()]), flags: fs.docs.map(d => [d.id, d.data()]), viewer: user, nowIso: new Date().toISOString() });
+});
+exports.claudeFlagAnswer = functions.runWith({ timeoutSeconds: 120 }).https.onCall(async (data) => {
+  const user = await requireAdmin(data);
+  if (!user || user.id !== "koy") throw new functions.https.HttpsError("permission-denied", "Only Koy answers these.");
+  const id = String((data && data.id) || "");
+  if (!_claudeWork.FLAG_ID.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad flag id.");
+  const ref = db.collection("claude_flags").doc(id);
+  const nowIso = new Date().toISOString();
+  // Claim the flag in one transaction (a double tap can't run the changes twice).
+  let plan = null, refused = null;
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    const p = _claudeWork.planAnswer(data, s.exists ? s.data() : null, nowIso);
+    if (p.refused) { refused = p.refused; return; }
+    plan = p;
+    if (p.run.length) tx.update(ref, { status: "applying", updatedAt: nowIso });
+    else tx.update(ref, _claudeWork.finishAnswer(p, [], nowIso));
+  });
+  if (refused) return { ok: false, refused };
+  if (!plan.run.length) return { ok: true, status: plan.status };
+  const results = [];
+  const tag = Date.parse(nowIso).toString(36);
+  for (const p of plan.run) {
+    const requestId = `fa_${id.slice(4, 18)}_${tag}_${p.i}`;
+    let r;
+    try { r = await _duet.runAsKoy({ requestId, action: p.action, args: p.args, email: "" }); }
+    catch (e) { functions.logger.error("[claudeFlagAnswer] change failed", { id, action: p.action, error: e && e.message }); r = { status: 500, body: { ok: false, refused: "Couldn't complete that change. Check the job before trying again." } }; }
+    const ok = r.status === 200 && r.body && r.body.ok !== false;
+    results.push({ i: p.i, action: p.action, ok, requestId, refused: ok ? "" : (r.body && (r.body.refused || r.body.error)) || "refused" });
+    if (!ok) break;
+  }
+  const done = _claudeWork.finishAnswer(plan, results, new Date().toISOString());
+  await ref.update(done);
+  return { ok: done.status === "applied", status: done.status, applied: done.applied };
 });
 
 // ─── Crew POs from the app (SW v523) ──────────────────────────────────────────

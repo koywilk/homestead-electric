@@ -215,7 +215,7 @@ await ok("index.js: sendBroadcast's body is sendBroadcastAs (one body, two calle
   assert.ok(/broadcastRef\(id\)\.set\(\{\s*\.\.\.b, to: results\.map\(r => r\.name\), summary, replyCount: 0,/.test(sendBody) && /await deliverMany\(picked, notif, announceExtra\(b, \{ test \}\), "broadcast"\)/.test(sendBody) && /ND\.resolveBroadcastRecipients\(users, data && data\.to, sender, test, inboxKeyOf\)/.test(sendBody), "the record write, the deliver fan-out and the recipient resolution all live in the shared body");
   assert.ok(/officeDeps: \{ sendBroadcastAs, isBroadcaster: ND\.isBroadcaster, planDecide: _planIntake\.decideById \}/.test(idx), "duetApi gets the real sender, gate and decider");
   assert.ok(/materialDeps: \{ simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail\.send \}/.test(idx), "ship 8's deps untouched");
-  assert.ok(idx.indexOf("const _planIntake = require") < idx.indexOf("exports.duetApi = require"), "the watcher is built before duetApi");
+  assert.ok(idx.indexOf("const _planIntake = require") < idx.indexOf("const _duet = require(\"./duetWrites/api.js\")"), "the watcher is built before duetApi");
   assert.ok(/async function runDecide\(cfg, iref, item, body, budgetMs\) \{/.test(watcher) && /async function decideById\(itemId, body\) \{/.test(watcher), "runDecide + decideById");
   const route = watcher.slice(watcher.indexOf('route === "/decide"'), watcher.indexOf('route === "/decide"') + 400);
   assert.ok(/if \(item\.status !== "open"\) \{ res\.status\(409\)/.test(route) && /await runDecide\(cfg, iref, item, req\.body \|\| \{\}, 250 \* 1000\)/.test(route), "the route keeps its 409 and calls runDecide");

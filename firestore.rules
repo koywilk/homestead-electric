@@ -289,6 +289,18 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // claude_routines/{trig_…} and claude_flags/{flg_…} (SW v633): the Claude
+    // tab's Automations list and Needs you flags. Server-only, like the reports:
+    // written only by duetApi (routine.* / flag.*), read only through the
+    // admin-PIN callable claudeWork, answered only through claudeFlagAnswer
+    // (Koy's record). Same as the catch-all deny; spelled out so nobody opens it.
+    match /claude_routines/{id} {
+      allow read, write: if false;
+    }
+    match /claude_flags/{id} {
+      allow read, write: if false;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
