@@ -79,6 +79,16 @@ function pickCostCenterById(sections, ccId) {
   return null;
 }
 
+// v634: a rough/finish card on a job with no Rough In / Finish cost center.
+// Instead of a dead-end error the Send sheet asks which of the job's own cost
+// centers to charge. list = [{id, name, sectionName, costCenter}] in Simpro's
+// order; returns the ones offered, in the order shown.
+// TODO(Koy): the business rule lives here. Today: every cost center on the job,
+// in Simpro's own order, nothing hidden and nothing suggested first.
+function ccChoices(list, phase) {
+  return (list || []).filter(c => c && c.id != null);
+}
+
 // The card stores the list as HTML (<br>, <div>, entities). One clean line per item.
 function itemsToLines(items) {
   return String(items || "")
@@ -357,7 +367,7 @@ function decodeReceiptPhoto(b64) {
   return { buf };
 }
 
-module.exports = { SUPPLIERS, SIMPRO_SUPPLIERS, supplierRule, receiptSource, vendorFor, pickCostCenter, pickCostCenterById, itemsToLines, shortDate, cardDateToIso,
+module.exports = { SUPPLIERS, SIMPRO_SUPPLIERS, supplierRule, receiptSource, vendorFor, pickCostCenter, pickCostCenterById, ccChoices, itemsToLines, shortDate, cardDateToIso,
   pickupLine, cleanCustom, getMode, CUSTOM_MAX, cleanCopyTo, COPY_TO_MAX, vendorNotesHtml, recipients, buildPoEmail, emailMode, logKey, esc, formDate, addressLines,
   poList, cleanOrderGroups, orderLine, groupKey,
   STORE_VENDORS, RECEIPT_MAX_BYTES, cleanPoNo, poJobNo, checkStorePo, receiptFileName, receiptCount, receiptKey, decodeReceiptPhoto };

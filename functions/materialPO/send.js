@@ -449,7 +449,9 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       const jobId = T(data.jobId), phase = T(data.phase), orderId = T(data.orderId);
       const key = R.logKey(jobId, phase, orderId);
       if (!key) throw new HttpsError("invalid-argument", "Missing job, phase or card.");
-      const ccId = phase === "comm" ? T(data.ccId) : ""; // v527: commercial Materials tab
+      // v527: the commercial Materials tab always names its cost center. v634: a rough/finish
+      // card names one too, after the sheet asked because the job has no Rough In / Finish.
+      const ccId = T(data.ccId);
       if (phase === "comm" && !ccId) throw new HttpsError("invalid-argument", "Pick which cost center to charge first.");
       const rule = R.supplierRule(data.source);
       if (!rule) throw new HttpsError("invalid-argument", `The app can't send to ${T(data.source) || "that supplier"} yet. Pick CED or a supplier from Simpro (Home Depot, Lowe's…).`);
@@ -464,7 +466,16 @@ module.exports = function makeMaterialPO({ functions, db, simproReqWithRetry, re
       const { log, again } = await ensurePo({
         ref, key, cfg, user, base: { jobId, phase, orderId }, rule, lines, items: null,
         get, dueIso: get === "custom" ? "" : R.cardDateToIso(data.date), custom: data.custom, extraCc: copyTo,
-        pickCc: (jobNo) => costCenterFor(jobNo, phase, ccId),
+        pickCc: async (jobNo) => {
+          const hit = await costCenterFor(jobNo, phase, ccId);
+          if (hit || ccId) return hit;
+          // v634: no Rough In / Finish on this job. Hand back the job's own cost centers so the
+          // sheet can ask which one to charge, instead of stopping at an error.
+          const choices = R.ccChoices(await jobCostCenters(jobNo), phase);
+          if (!choices.length) return null;
+          throw new HttpsError("failed-precondition", `Simpro job ${jobNo} has no ${phase === "rough" ? "Rough In" : "Finish"} cost center. Pick which cost center to charge this order to.`,
+            { reason: "pick-cc", costCenters: choices });
+        },
         ccMissing: (jobNo) => ccId ? `That cost center isn't on Simpro job ${jobNo} any more. Refresh Bid Items and pick it again.` : `Couldn't find a ${phase === "rough" ? "Rough In" : "Finish"} cost center on Simpro job ${jobNo}.`,
       });
       if (log.kind === "email" && !log.emailOk) {

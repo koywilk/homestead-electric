@@ -15657,10 +15657,15 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
         const phaseLabel = matPhaseLabel(phase);
         // v539: commercial Materials tab — each card picks the Simpro cost center it's charged to.
         const isComm = phase === "comm";
-        const ccOpts = (bid && Array.isArray(bid.costCenters) ? bid.costCenters : []).filter(c => c && c.ccId != null)
-          .map(c => ({ id: String(c.ccId), label: [c.sectionName, String(c.ccName || "").trim()].filter(Boolean).join(" · ") }));
+        // v634: a rough/finish card asks too, but only after Simpro said the job has no
+        // Rough In / Finish cost center (the server sends the job's own list with that answer).
+        const askCc = isComm || Array.isArray(sendSheet.ccChoices);
+        const ccOpts = isComm
+          ? (bid && Array.isArray(bid.costCenters) ? bid.costCenters : []).filter(c => c && c.ccId != null)
+              .map(c => ({ id: String(c.ccId), label: [c.sectionName, String(c.ccName || "").trim()].filter(Boolean).join(" · ") }))
+          : (sendSheet.ccChoices || []);
         const ccPick = ccOpts.find(c => c.id === String(sendSheet.cc || "")) || null;
-        const needCc = isComm && !ccPick;
+        const needCc = askCc && !ccPick;
         const chip = (val, label) => (
           <button key={val} type="button" disabled={busy} onClick={()=>setSendSheet(s=>({...s, get:val}))}
             style={{fontFamily:"inherit",fontSize:14,borderRadius:99,padding:"6px 12px",cursor:"pointer",
@@ -15681,14 +15686,14 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
               items:o.items||"", get:sendSheet.get, date:isCustom ? "" : (sendSheet.date||""), clientTest:MATERIAL_PO_TEST,
               ...(isCustom ? { custom: customText } : {}),
               ...(kind === "email" && String(sendSheet.copyTo||"").trim() ? { copyTo: String(sendSheet.copyTo).trim() } : {}),
-              ...(isComm ? { ccId: ccPick.id } : {}) });
+              ...(askCc ? { ccId: ccPick.id } : {}) });
             const res = (r && r.data) || {};
             if (!res.poNo) throw new Error("Simpro didn't send back a PO number.");
             const patch = { po:String(res.poNo), simproPoId:String(res.poNo), poSentVia:"app", poSentMode:res.mode||"",
               poSentBy:me.name||"", poSentAt:poTodayMDY(), poCostCenter:res.costCenter||"",
               poEmailOk:!!res.emailOk, poEmailedTo:(res.emailedTo||[]).join(", "),
               ...(isCustom ? { poCustom: customText } : {}),
-              ...(isComm ? { chargeCcId: ccPick.id, chargeCcName: ccPick.label } : {}) };
+              ...(askCc ? { chargeCcId: ccPick.id, chargeCcName: ccPick.label } : {}) };
             if (res.kind !== "email" || res.emailOk) Object.assign(patch, { ordered:true, orderedBy:me.name||"", orderedAt:poTodayMDY() });
             // Dates fill only if still empty on the LIVE card (someone may have typed one meanwhile).
             const pickDate = isCustom ? "" : sendSheet.date;
@@ -15697,6 +15702,12 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
               ...(cur.pickupDate || !pickDate ? {} : { pickupDate: pickDate }) }));
             setSendSheet(s=>({...s, busy:false, done:res}));
           } catch (e) {
+            // v634: no Rough In / Finish cost center on the job → show the job's cost centers to pick from.
+            const d = e && e.details;
+            const choices = d && d.reason === "pick-cc" && Array.isArray(d.costCenters)
+              ? d.costCenters.filter(c => c && c.id != null).map(c => ({ id: String(c.id), label: [c.sectionName, String(c.name || "").trim()].filter(Boolean).join(" · ") || "Cost center" }))
+              : null;
+            if (choices && choices.length) { setSendSheet(s=>({...s, busy:false, error:"", ccChoices:choices})); return; }
             setSendSheet(s=>({...s, busy:false, error:String((e && e.message) || e || "Something went wrong.")}));
           }
         };
@@ -15738,9 +15749,9 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase,onPatchOrder=null,
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",lineHeight:1}}>
                     {kind === "email" ? (o.poSentVia === "app" && !(o.poSentMode === "test" && !MATERIAL_PO_TEST) ? `Resend PO ${o.po}` : `Send to ${o.source}`) : "Get a PO number"}
                   </div>
-                  <div style={{fontSize:13,color:C.dim,marginTop:3}}>{isComm ? (ccPick ? `Charged to ${ccPick.label} in Simpro` : "Pick the cost center it's charged to") : `${phaseLabel} · charged to this job's ${phaseLabel} in Simpro`}</div>
+                  <div style={{fontSize:13,color:C.dim,marginTop:3}}>{askCc ? (ccPick ? `Charged to ${ccPick.label} in Simpro` : (isComm ? "Pick the cost center it's charged to" : `This job has no ${phaseLabel} cost center in Simpro. Pick the one to charge.`)) : `${phaseLabel} · charged to this job's ${phaseLabel} in Simpro`}</div>
                 </div>
-                {isComm && (
+                {askCc && (
                   <div style={{display:"grid",gap:6}}>
                     <label htmlFor={`po-cc-${o.id}`} style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Charge to</label>
                     {ccOpts.length ? (
@@ -62764,8 +62775,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v633
+**Last manifest update:** 2026-11-13 · App SW version: v634
 ---
+
+- **A PO card on a job with no Rough In / Finish cost center asks which cost center to charge, instead of stopping at an error** · 'in-flight 2026-11-13' · 'SW v634' · 'ccChoices' · 'sendMaterialPO' · 'MaterialOrders send sheet' · Koy: *"when we try to put a po in there is an error for there is not a finish cost center on this job. Can we have this route them to a cost center they can order from instead of just saying that error."* A rough/finish card finds its cost center by name (Rough In, Finish or Trim). On a job without one, Send used to stop at "Couldn't find a Finish cost center on Simpro job N". Now the server answers with the job's own cost centers ('details.reason: "pick-cc"') and the send sheet shows the same **Charge to** list the commercial Materials tab has. Pick one, tap Send again, and the PO goes on it ('ccId', checked against the job in Simpro). The pick is saved on the card ('chargeCcId', 'chargeCcName'). Jobs that have their Rough In / Finish send exactly as before, with no question. **Needs the functions deploy** ('sendMaterialPO') to turn on; until then the old error shows. Why it can't lose data: nothing is written or made in Simpro until a cost center is picked, and the one-PO-per-card claim is unchanged.
 
 - **Claude tab: Needs you (every open flag from the watches, answered in place, a Yes makes its change right then) and Automations (every Claude routine, when it runs, what it does on its own, last run)** · 'in-flight 2026-11-12' · 'SW v633' · 'OdFlag' · 'odFlagChanges' · 'claudeWork' · 'claudeFlagAnswer' · 'functions/duetWrites/claudeWork.js' · 'FLAG_ACTIONS' · Koy: *"I want to be able to like work things from the dashboard as well, like be able to click on what on see, see all of it. So I can work in one spot."* and, on whether a Yes should change Command Center right then: *"Change it right then"*. **Data:** two server-only collections, 'claude_routines/<trig_…>' and 'claude_flags/<flg_…>', written only through duetApi's new 'routine.sync', 'routine.checkin', 'flag.post', 'flag.list', 'flag.close' (connector v0.24.0: 'cc_routine_checkin', 'cc_routine_sync', 'cc_post_flags', 'cc_list_flags', 'cc_close_flag'); read by the admin-PIN callable 'claudeWork'. A routine's prompt is never stored. Same flag key = same flag: an answered flag never comes back unless the watch says something new happened. **Answer:** 'claudeFlagAnswer', Koy's own record only; the flag must be as he saw it ('seenAt'); a Yes runs each proposed change through duetApi's own 'handle()' in-process (same checks, 'duet_writes' audit with okBy "Koy (dashboard)", undo), stopping at the first refusal; a Yes again runs only what didn't go through. Proposals are allow-listed: never a stage, rough / finish status, QC status, any job field, email, announcement, homeowner reply, any-document write, undo or archive. **Why it won't lose data:** the two new collections are their own; nothing changes on a job until Koy taps Yes on a change he can read field by field; rules unchanged in effect (explicit deny blocks match the catch-all).
 

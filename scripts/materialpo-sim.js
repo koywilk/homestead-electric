@@ -20,7 +20,7 @@ const RealDate = Date;
 global.Date = class extends RealDate { constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + skew); } static now() { return RealDate.now() + skew; } static parse(s) { return RealDate.parse(s); } static UTC(...a) { return RealDate.UTC(...a); } };
 
 // ── fake firebase-functions (v1 shape) ──
-class HttpsError extends Error { constructor(code, msg) { super(msg); this.code = code; } }
+class HttpsError extends Error { constructor(code, msg, details) { super(msg); this.code = code; if (details !== undefined) this.details = details; } }
 const functions = { https: { HttpsError, onCall: (fn) => fn }, runWith() { return this; }, logger: { info() {}, warn() {} } };
 
 // ── fake Firestore with serialized transactions ──
@@ -71,7 +71,8 @@ function makeSimpro() {
     if (method === "GET" && /^\/jobs\/1438\/sections\/$/.test(p)) return { ok: true, status: 200, data: [{ ID: 26935, Name: "Change Order - 10/7/26", DisplayOrder: 2 }, { ID: 25087, Name: "Base", DisplayOrder: 1 }] };
     if (method === "GET" && /sections\/26935\/costCenters/.test(p)) return { ok: true, status: 200, data: [
       { ID: 19094, Name: "Pool Feed, Compressor and Pressure Washer Power", CostCenter: { Name: "Residential (Rough In)" } }] };
-    if (method === "GET" && /costCenters/.test(p)) return { ok: true, status: 200, data: [
+    if (method === "GET" && /costCenters/.test(p)) return { ok: true, status: 200, data: s.noFinish ? [
+      { ID: 18864, Name: "Rough In ", CostCenter: { Name: "Residential (Rough In)" } }, { ID: 18870, Name: "Generator", CostCenter: { Name: "Residential (Generators)" } }] : [
       { ID: 18864, Name: "Rough In ", CostCenter: { Name: "Residential (Rough In)" } }, { ID: 18865, Name: "Finish", CostCenter: { Name: "Residential (Finish)" } }] };
     if (method === "GET" && /^\/jobs\/1438\?/.test(p)) return { ok: true, status: 200, data: { ID: 1438, Name: "Miller Residence - Alpine", Site: { ID: 6576 } } };
     if (method === "GET" && p === "/sites/6576") return { ok: true, status: 200, data: { Address: { Address: "1732 East Elk Ridge Lane", City: "Alpine", State: "UT", PostalCode: "84004" } } };
@@ -261,6 +262,35 @@ let n = 0; const t = async (name, fn) => { mails.length = 0; failMail = 0; skew 
     await rejects(send({ phase: "gear" }), "invalid-argument", "bad phase");
     await rejects(send({ jobId: "NOPE" }), "not-found", "unknown job");
     assert.strictEqual(simpro.pos.length, 0);
+  });
+
+  // ── v634: no Finish cost center on the job → pick one instead of a dead end ──
+  await t("finish card, job has no Finish cost center: the refusal carries the job's cost centers, nothing is made", async () => {
+    const { simpro, send } = setup(null); simpro.noFinish = true;
+    const e = await rejects(send({ phase: "finish" }), "failed-precondition", "no finish cc");
+    assert(e.details && e.details.reason === "pick-cc", "tells the sheet to ask");
+    assert.deepStrictEqual(e.details.costCenters.map(c => c.id), [18864, 18870, 19094], "every cost center on the job, Simpro's order");
+    assert.strictEqual(e.details.costCenters[1].sectionName, "Base"); assert.strictEqual(e.details.costCenters[1].name, "Generator");
+    assert.strictEqual(simpro.pos.length, 0, "no PO"); assert.strictEqual(mails.length, 0, "no email");
+  });
+  await t("finish card: Send again with the picked cost center makes one PO on it", async () => {
+    const { simpro, send } = setup(null); simpro.noFinish = true;
+    await rejects(send({ phase: "finish" }), "failed-precondition", "asks first");
+    const r = await send({ phase: "finish", ccId: "18870" });
+    assert.strictEqual(simpro.pos.length, 1, "one PO"); assert.strictEqual(simpro.pos[0].AssignedTo, 18870, "on the picked cost center");
+    assert.strictEqual(r.costCenter, "Generator"); assert(r.emailOk, "emailed");
+    const again = await send({ phase: "finish", ccId: "18870" });
+    assert(again.again && simpro.pos.length === 1, "a second tap never makes a second PO");
+  });
+  await t("finish card: a picked cost center that isn't on the job is refused", async () => {
+    const { simpro, send } = setup(null); simpro.noFinish = true;
+    const e = await rejects(send({ phase: "finish", ccId: "999999" }), "failed-precondition", "unknown cc");
+    assert(!e.details, "plain refusal, no picker loop"); assert.strictEqual(simpro.pos.length, 0);
+  });
+  await t("a job that has its Rough In / Finish still sends with no question", async () => {
+    const { simpro, send } = setup(null);
+    await send({ phase: "finish" });
+    assert.strictEqual(simpro.pos[0].AssignedTo, 18865, "Finish, as before");
   });
 
   // ── Orders from the bid: one PO per cost center, one email ──
