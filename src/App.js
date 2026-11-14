@@ -4503,14 +4503,16 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     `;
   })();
 
-  // Lutron sheets carry no Pulled column (Koy, 2026-09-30: "the pulled
-  // column isn't necessary on this"); Control 4 / Crestron keep it.
+  // No Pulled column on any system's sheet. Lutron dropped it 2026-09-30
+  // ("the pulled column isn't necessary on this"); Control 4 / Crestron
+  // followed 2026-11-14 (Koy: "remove the pulled column from the lighting
+  // control panel print out"). Pulled stays in the app, just not on paper.
   const moduleHtml = visibleMods.length === 0
     ? `<div style="padding:24px;text-align:center;color:#666;font-style:italic">No modules on this panel yet.</div>`
     : visibleMods.map(m => {
         const namedLoads = (m.loads || []).filter(l => l && (l.name||"").trim());
         const rows = namedLoads.length === 0
-          ? `<tr><td colspan="${isLut ? 5 : 6}" style="text-align:center;color:#888;font-style:italic;padding:8px">No channels named on this module yet</td></tr>`
+          ? `<tr><td colspan="5" style="text-align:center;color:#888;font-style:italic;padding:8px">No channels named on this module yet</td></tr>`
           : namedLoads.map(l => `
               <tr>
                 <td class="ch">${esc(l.num || "")}</td>
@@ -4518,7 +4520,6 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                 <td>${esc(l.loadType || "")}</td>
                 <td>${esc(l.watts || "")}${l.watts ? "W" : ""}</td>
                 <td>${esc(l.keypad || "")}</td>
-                ${isLut ? "" : `<td class="pulled">${l.pulled ? "&#10003;" : "&#9633;"}</td>`}
               </tr>
             `).join("");
         // A module with more rows than fit on one page (bus modules hold 64)
@@ -4540,7 +4541,6 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                   <th>Type</th>
                   <th>Watts</th>
                   <th>Keypad / Notes</th>
-                  ${isLut ? "" : `<th class="pulled">Pulled</th>`}
                 </tr>
               </thead>
               <tbody>${rows}</tbody>
@@ -4586,7 +4586,6 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     th, td { border: 0.5px solid #999; padding: 1px 4px; font-size: 8px; text-align: left; vertical-align: top; word-wrap: break-word; }
     th { background: #fafafa; font-size: 7px; text-transform: uppercase; letter-spacing: 0.04em; color: #444; }
     .ch { width: 22px; text-align: center; font-weight: 700; }
-    .pulled { width: 28px; text-align: center; font-size: 9px; }
     /* Savant schedule grid — used only when savUseSchedule is true */
     .sav-stats { font-size: 8px; color: #444; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
     .sav-grid { display: grid; grid-template-columns: 22px 1fr 22px 1fr; border: 0.75px solid #000; }
@@ -62939,8 +62938,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v638
+**Last manifest update:** 2026-11-14 · App SW version: v639
 ---
+
+- **Lighting control panel printout: no Pulled column on any system** · 'in-flight 2026-11-14' · 'SW v639' · 'printPanelSchedule' · 'downloadPanelSchedule' · Koy: *"remove the pulled column from the lighting control panel print out"*. Lutron sheets lost the Pulled column in v476; Control 4 and Crestron sheets kept a Pulled column of check boxes on the right. It is now gone on every system, on **Print** and **Download**, and Keypad / Notes gets the width. Pulled is still tracked and shown in the app; only the paper changes. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** print and PDF rendering only; the 'pulled' value on each load is not read differently, not written and not removed; no job field, loader, function or rules change.
 
 - **My role: once a week a pop-up shows each field person their ladder level, its responsibilities and the next step up; a My role card at the top of My Day opens it again; admins edit the words in Settings → Role Ladder** · 'in-flight 2026-11-13' · 'SW v638' · 'LADDER_DRAFT' · 'ladderLevel' · 'useRoleLadder' · 'MyRolePopup' · 'MyRoleCard' · 'RoleLadderEditor' · Josh's idea, Koy 2026-11-13: put the ladder from the Residential One-on-Ones tracker "in the app for all the guys to see", "more in their face", popping up "every Mondays", and "in an obvious spot that they can find it if they want to see it again"; "Ready to build" to the mock-up. **Who:** anyone active whose Team title is crew, lead, jrforeman or foreman and who isn't a contractor; the title is the level (same four keys as the tracker, so nothing is copied). Admins and people with no title never see it. **When:** the first open on or after Monday each week (phone's local time); Got it saves that week on the phone ('localStorage myrole.seen.<user>'). **Words:** 'settings/ladder' '{ levels: { crew|lead|jrforeman|foreman: { name, summary, expectations[] } }, updatedAt, updatedBy }'; a missing doc, level or blank field falls back to 'LADDER_DRAFT' (the tracker's draft). **Why it won't lose data:** one new settings doc, written only from the admin editor; no job, user, rules or function change.
 
