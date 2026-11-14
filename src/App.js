@@ -62939,8 +62939,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-13 · App SW version: v637
+**Last manifest update:** 2026-11-13 · App SW version: v638
 ---
+
+- **My role: once a week a pop-up shows each field person their ladder level, its responsibilities and the next step up; a My role card at the top of My Day opens it again; admins edit the words in Settings → Role Ladder** · 'in-flight 2026-11-13' · 'SW v638' · 'LADDER_DRAFT' · 'ladderLevel' · 'useRoleLadder' · 'MyRolePopup' · 'MyRoleCard' · 'RoleLadderEditor' · Josh's idea, Koy 2026-11-13: put the ladder from the Residential One-on-Ones tracker "in the app for all the guys to see", "more in their face", popping up "every Mondays", and "in an obvious spot that they can find it if they want to see it again"; "Ready to build" to the mock-up. **Who:** anyone active whose Team title is crew, lead, jrforeman or foreman and who isn't a contractor; the title is the level (same four keys as the tracker, so nothing is copied). Admins and people with no title never see it. **When:** the first open on or after Monday each week (phone's local time); Got it saves that week on the phone ('localStorage myrole.seen.<user>'). **Words:** 'settings/ladder' '{ levels: { crew|lead|jrforeman|foreman: { name, summary, expectations[] } }, updatedAt, updatedBy }'; a missing doc, level or blank field falls back to 'LADDER_DRAFT' (the tracker's draft). **Why it won't lose data:** one new settings doc, written only from the admin editor; no job, user, rules or function change.
 
 - **Automations on the Claude tab grouped: Scheduling & crews, Meetings, Margins & reports, Jobs, COs & POs, Email, asks & briefs, Plans & app upkeep, and Off or paused at the bottom, each folded with a count, plus a find box** · 'in-flight 2026-11-13' · 'SW v637' · 'OD_ROUTINE_GROUPS' · 'odRoutineGroup' · Koy 2026-11-13: "can we Separate the automations in the Claude section into the different categories. It's really hard to find what I'm looking for in there because there's a lot of them". A routine lands in a group by its name first, then its channel; anything that matches none goes in Other. A group header says how many need a look. Typing in the find box opens every group with a match. Hosting only, no function deploy.
 
@@ -70253,7 +70255,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
+function MyDay({ roleSlot = null, pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -71644,6 +71646,7 @@ function MyDay({ pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap
       </div>
       {(searchOpen || qOn) && <input ref={searchRef} type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs" aria-label="Search tasks or jobs"
         style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, marginBottom: 8 }} />}
+      {roleSlot}
       {pinsSlot}
       <div role="tablist" style={{ background: C.bg, display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto", scrollbarWidth: "none" }}>
         {TABS.map(([k, l, n, hot]) => (
@@ -73229,6 +73232,163 @@ function GCPortalDetail({ job, link, P, livePlans, initialSection, onClose }) {
   );
 }
 
+// ── MY ROLE (v638, Koy + Josh, 2026-11-13) ──────────────────────────────────
+// The role ladder from Koy's Residential One-on-Ones tracker, put "in the app
+// for all the guys to see". A field person's level IS their Team Members title
+// (crew / lead / jrforeman / foreman — the same four keys the tracker uses), so
+// there is nothing to copy or keep in sync. The words live in ONE doc,
+// settings/ladder ({ levels: { crew:{name,summary,expectations[]}, ... } }),
+// edited by admins in Settings → ROLE LADDER. Missing doc or level → the draft
+// below. The pop-up shows once a week: the first time they open the app on or
+// after Monday. "Got it" is remembered on that phone (localStorage).
+const LADDER_KEYS = ["crew", "lead", "jrforeman", "foreman"];
+const LADDER_DRAFT = { levels: {
+  crew: { name: "Crew", summary: "Apprentice on a crew. Learning the trade and earning trust.", expectations: [
+    "On time and ready every day; clocks in and out right",
+    "Rough work passes without the lead redoing it: boxes, staples, nail plates, makeup",
+    "Keeps the van and site clean and tools put away",
+    "Keeping up with apprentice school and logging hours" ] },
+  lead: { name: "Lead", summary: "Runs a task with one or two guys and checks their work.", expectations: [
+    "Runs a 1-2 person crew on a task from start to finish",
+    "Reads the plans and redlines without asking about every room",
+    "Checks the crew’s work before the foreman walks it",
+    "Flags missing material a day ahead, not the morning of",
+    "Journeyman license, or on track for it" ] },
+  jrforeman: { name: "Junior Foreman", summary: "Runs one job day to day under a foreman.", expectations: [
+    "Runs one job day to day: crew, schedule and material",
+    "Keeps each phase inside bid hours, or flags it early",
+    "Catches extra work and gets a CO before doing it",
+    "Handles the GC and homeowner on site, professionally",
+    "Rough and final pass with a short punch list" ] },
+  foreman: { name: "Foreman", summary: "Runs several jobs and builds the people under them.", expectations: [
+    "Runs several jobs at once and hits margin",
+    "Builds leads and junior foremen under them",
+    "Owns the GC relationship and schedule on their jobs",
+    "Keeps COs, POs and punch lists moving without reminders",
+    "Sets the standard on site, and the crew follows it" ] },
+} };
+// One level, cleaned: a saved level wins field by field; anything blank falls back to the draft.
+function ladderLevel(ladder, k) {
+  const d = LADDER_DRAFT.levels[k]; if (!d) return null;
+  const s = (ladder && ladder.levels && ladder.levels[k]) || {};
+  const exp = Array.isArray(s.expectations) ? s.expectations.map(x => String(x || "").trim()).filter(Boolean) : [];
+  return { key: k, name: String(s.name || "").trim() || d.name, summary: String(s.summary || "").trim() || d.summary, expectations: exp.length ? exp : d.expectations };
+}
+function ladderKeyOf(rec) { const t = rec && rec.title; return LADDER_KEYS.includes(t) ? t : null; }
+function ladderNextKey(k) { const i = LADDER_KEYS.indexOf(k); return i >= 0 && i < LADDER_KEYS.length - 1 ? LADDER_KEYS[i + 1] : null; }
+// "YYYY-MM-DD" of this week's Monday, phone's local time.
+function ladderWeekKey(now = new Date()) {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function useRoleLadder() {
+  const [ladder, setLadder] = useState(null);
+  useEffect(() => onSnapshot(doc(db, "settings", "ladder"), s => setLadder(s.exists() ? s.data() : null), () => setLadder(null)), []);
+  return ladder;
+}
+const RL_ACC = "#2F5BD9", RL_SOFT = "#EAF0FC";
+function RoleLadderIcon({ size = 24, color = RL_ACC }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M7 3v18M17 3v18M7 7h10M7 12h10M7 17h10"/></svg>;
+}
+// The "My role" card at the top of My Day.
+function MyRoleCard({ level, onOpen }) {
+  if (!level) return null;
+  return (
+    <button type="button" onClick={onOpen} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+      border: `1px solid ${RL_ACC}`, background: RL_SOFT, borderRadius: 14, padding: "12px 14px", marginBottom: 10, minHeight: 56, color: C.text }}>
+      <RoleLadderIcon size={26}/>
+      <span style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+        <b style={{ fontSize: 15 }}>My role</b>
+        <small style={{ color: C.dim, fontSize: 13 }}>{level.name} responsibilities</small>
+      </span>
+      <span style={{ color: RL_ACC, fontWeight: 700, fontSize: 14 }}>Open</span>
+    </button>
+  );
+}
+// The pop-up: name, level, what that level is responsible for, and the next step up.
+function MyRolePopup({ firstName, level, next, onClose, preview = false }) {
+  const [openNext, setOpenNext] = useState(false);
+  useEffect(() => { const k = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  if (!level) return null;
+  const h = new Date().getHours();
+  const hi = (h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening") + (firstName ? ", " + firstName : "");
+  const check = <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={RL_ACC} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}><circle cx="12" cy="12" r="9.5"/><path d="M8 12.4l2.7 2.6L16 9.6"/></svg>;
+  return createPortal(
+    <div className="he-scrim" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(13,18,32,.45)", zIndex: 99990, display: "flex", flexDirection: "column", justifyContent: ON_MOBILE ? "flex-end" : "center", alignItems: ON_MOBILE ? "stretch" : "center" }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="myrole-hi" onClick={e => e.stopPropagation()}
+        style={{ background: C.card, color: C.text, width: ON_MOBILE ? "auto" : "min(460px, calc(100vw - 32px))", maxHeight: "88vh", overflowY: "auto", boxSizing: "border-box",
+          borderRadius: ON_MOBILE ? "22px 22px 0 0" : 18, padding: `12px 20px calc(20px + env(safe-area-inset-bottom, 0px))`, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 18px 50px rgba(10,20,50,.25)" }}>
+        {ON_MOBILE && <div style={{ width: 40, height: 5, borderRadius: 3, background: C.border, alignSelf: "center" }}/>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+          <span style={{ color: C.faint, fontSize: 13, fontWeight: 600 }}>{preview ? "Preview" : new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}</span>
+          <h2 id="myrole-hi" style={{ ...GROUP_TITLE, fontSize: 24, margin: 0, color: B.ink }}>{hi}</h2>
+          <div><span style={{ display: "inline-flex", borderRadius: 99, padding: "3px 10px", fontSize: 13, fontWeight: 700, background: RL_SOFT, color: RL_ACC }}>{level.name}</span></div>
+          <p style={{ margin: 0, color: C.dim, fontSize: 14 }}>{level.summary}</p>
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.faint, letterSpacing: "0.07em", textTransform: "uppercase" }}>Your responsibilities</div>
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 9 }}>
+          {level.expectations.map((x, i) => <li key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: 15, lineHeight: 1.4 }}>{check}<span>{x}</span></li>)}
+        </ul>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+          {next ? <>
+            <button type="button" aria-expanded={openNext} onClick={() => setOpenNext(o => !o)}
+              style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, border: 0, background: C.surface, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 14, color: C.text, textAlign: "left", minHeight: 44 }}>
+              <span>Next step: <b>{next.name}</b></span><span style={{ color: RL_ACC, fontWeight: 600, whiteSpace: "nowrap" }}>{openNext ? "Hide" : "See what it takes"}</span>
+            </button>
+            {openNext && <ul style={{ margin: 0, padding: "10px 14px 12px 30px", display: "flex", flexDirection: "column", gap: 5, color: C.dim, fontSize: 14 }}>{next.expectations.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+          </> : <p style={{ margin: 0, padding: "12px 14px", fontSize: 14, color: C.dim, background: C.surface }}>Top of the ladder. Your next step is building the guys under you.</p>}
+        </div>
+        <button type="button" onClick={onClose} autoFocus style={{ border: 0, borderRadius: 14, background: RL_ACC, color: "#fff", fontWeight: 700, fontSize: 16, minHeight: 50, cursor: "pointer", fontFamily: "inherit" }}>{preview ? "Close" : "Got it"}</button>
+      </section>
+    </div>, document.body);
+}
+// Settings → ROLE LADDER (admins). One box per level; responsibilities one per line.
+function RoleLadderEditor({ identity }) {
+  const ladder = useRoleLadder();
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [peek, setPeek] = useState(null);
+  const fromLadder = (l) => Object.fromEntries(LADDER_KEYS.map(k => { const v = ladderLevel(l, k); return [k, { name: v.name, summary: v.summary, text: v.expectations.join("\n") }]; }));
+  useEffect(() => { if (!draft) setDraft(fromLadder(ladder)); }, [ladder]);
+  if (!draft) return <div style={{ color: C.faint, fontSize: 14 }}>Loading…</div>;
+  const set = (k, f, v) => setDraft(d => ({ ...d, [k]: { ...d[k], [f]: v } }));
+  const toLevels = () => Object.fromEntries(LADDER_KEYS.map(k => [k, { name: draft[k].name.trim(), summary: draft[k].summary.trim(), expectations: draft[k].text.split("\n").map(s => s.trim()).filter(Boolean) }]));
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setDoc(doc(db, "settings", "ladder"), { levels: toLevels(), updatedAt: new Date().toISOString(), updatedBy: (identity && identity.name) || "" });
+      toast.success("Role ladder saved. Everyone sees it next time they open it.");
+    } catch (e) { toast.error("Couldn’t save: " + (e.message || e)); }
+    setSaving(false);
+  };
+  const inp = { width: "100%", boxSizing: "border-box", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, padding: "8px 10px", fontSize: 14, fontFamily: "inherit" };
+  const lbl = { fontSize: 12, color: C.dim, fontWeight: 700, letterSpacing: "0.06em", marginBottom: 4 };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ fontSize: 13, color: C.dim }}>What each level sees in the My role pop-up. A person’s level is their Title in Team Members. {ladder && ladder.updatedAt ? `Last saved ${new Date(ladder.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}${ladder.updatedBy ? " by " + ladder.updatedBy : ""}.` : "Showing the draft from the One-on-Ones tracker; nothing saved yet."}</div>
+      {LADDER_KEYS.map(k => (
+        <div key={k} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <b style={{ fontSize: 15 }}>{TITLE_LABELS[k]} title</b>
+            <button type="button" onClick={() => setPeek(k)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 10px", fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: RL_ACC, cursor: "pointer" }}>Preview</button>
+          </div>
+          <div><div style={lbl}>LEVEL NAME</div><input type="text" value={draft[k].name} onChange={e => set(k, "name", e.target.value)} style={inp}/></div>
+          <div><div style={lbl}>ONE-LINE SUMMARY</div><input type="text" value={draft[k].summary} onChange={e => set(k, "summary", e.target.value)} style={inp}/></div>
+          <div><div style={lbl}>RESPONSIBILITIES · ONE PER LINE</div><textarea rows={5} value={draft[k].text} onChange={e => set(k, "text", e.target.value)} style={{ ...inp, resize: "vertical", lineHeight: 1.4 }}/></div>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button type="button" disabled={saving} onClick={save} style={{ background: RL_ACC, color: "#fff", border: 0, borderRadius: 10, padding: "0 18px", minHeight: 44, fontWeight: 700, fontSize: 14, fontFamily: "inherit", cursor: "pointer", opacity: saving ? .6 : 1 }}>{saving ? "Saving…" : "Save ladder"}</button>
+        <button type="button" onClick={() => setDraft(fromLadder(ladder))} style={{ background: C.card, color: C.dim, border: `1px solid ${C.border}`, borderRadius: 10, padding: "0 16px", minHeight: 44, fontWeight: 600, fontSize: 14, fontFamily: "inherit", cursor: "pointer" }}>Undo my edits</button>
+      </div>
+      {peek && (() => { const lv = { key: peek, ...toLevels()[peek] }; const nk = ladderNextKey(peek); const nl = nk ? { key: nk, ...toLevels()[nk] } : null;
+        const clean = l => l && ({ ...l, name: l.name || ladderLevel(null, l.key).name, summary: l.summary || ladderLevel(null, l.key).summary, expectations: l.expectations.length ? l.expectations : ladderLevel(null, l.key).expectations });
+        return <MyRolePopup preview firstName="" level={clean(lv)} next={clean(nl)} onClose={() => setPeek(null)}/>; })()}
+    </div>
+  );
+}
+
 function App() {
   // Link opens: count this load if it's a share link (no-op for the app itself).
   recordLinkOpen();
@@ -73769,6 +73929,20 @@ function App() {
   // must read this, never `identity.caps` (Koy 2026-09-29: the QC tracker
   // vanished from his own My Day because his stored identity had no hats).
   const myLiveRec = (identity && (users || []).find(u => u && (u.id === identity.id || sameName(u.name, identity.name)))) || identity;
+  // v638 My role: the viewer's ladder level is their Team title (crew / lead /
+  // jrforeman / foreman). Pops once a week, the first open on or after Monday.
+  const roleLadder = useRoleLadder();
+  const myLadderKey = myLiveRec && myLiveRec.active !== false && getAccess(myLiveRec) !== "contractor" ? ladderKeyOf(myLiveRec) : null;
+  const myLadderLevel = myLadderKey ? ladderLevel(roleLadder, myLadderKey) : null;
+  const myLadderNext = myLadderKey && ladderNextKey(myLadderKey) ? ladderLevel(roleLadder, ladderNextKey(myLadderKey)) : null;
+  const [roleOpen, setRoleOpen] = useState(false);
+  const roleSeenKey = "myrole.seen." + userKeyOf(identity);
+  useEffect(() => {
+    if (!myLadderKey || !Array.isArray(users) || !users.length) return;
+    let seen = ""; try { seen = localStorage.getItem(roleSeenKey) || ""; } catch {}
+    if (seen !== ladderWeekKey()) setRoleOpen(true);
+  }, [myLadderKey, roleSeenKey, users]);
+  const closeRole = useCallback(() => { try { localStorage.setItem(roleSeenKey, ladderWeekKey()); } catch {} setRoleOpen(false); }, [roleSeenKey]);
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
   // the inbox UI; this one is intentionally duplicated rather than lifted to
@@ -78723,6 +78897,7 @@ function App() {
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
           jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)} msgsJump={officeJump} msgCounts={officeMsgCounts(officeMsgs)}
+          roleSlot={myLadderLevel ? <MyRoleCard level={myLadderLevel} onOpen={() => setRoleOpen(true)}/> : null}
           pinsSlot={announcePins.length > 0 ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}
           messagesSlot={(officeMsgs.length || canBroadcast(identity)) ? <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/> : null}/>
       )}
@@ -78906,11 +79081,19 @@ function App() {
               <SettingsSection title="TEAM MEMBERS" defaultOpen={false}>
                 <UserManagement users={users} onSave={saveUsers} embedded={true} getPersonColor={getPersonColor}/>
               </SettingsSection>
+              {getAccess(identity)==="admin" && (
+                <SettingsSection title="ROLE LADDER · MY ROLE POP-UP" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
+                  <RoleLadderEditor identity={identity}/>
+                </SettingsSection>
+              )}
             </div>
           )}
         </div>
       )}
 
+      {roleOpen && myLadderLevel && (
+        <MyRolePopup firstName={String((myLiveRec && myLiveRec.name) || "").trim().split(/\s+/)[0]} level={myLadderLevel} next={myLadderNext} onClose={closeRole}/>
+      )}
       <Analytics />
       {openProjectId && !selected && (
         <ProjectSheet projectId={openProjectId} onClose={() => setOpenProjectId(null)} />

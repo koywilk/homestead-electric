@@ -4,8 +4,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-11-13 · App SW version: v637
+**Last manifest update:** 2026-11-13 · App SW version: v638
 ---
+
+- **My role: once a week a pop-up shows each field person their ladder level, its responsibilities and the next step up; a My role card at the top of My Day opens it again; admins edit the words in Settings → Role Ladder** · `in-flight 2026-11-13` · `SW v638` · `LADDER_DRAFT` · `ladderLevel` · `useRoleLadder` · `MyRolePopup` · `MyRoleCard` · `RoleLadderEditor` · Josh's idea, Koy 2026-11-13: put the ladder from the Residential One-on-Ones tracker "in the app for all the guys to see", "more in their face", popping up "every Mondays", and "in an obvious spot that they can find it if they want to see it again"; "Ready to build" to the mock-up. **Who:** anyone active whose Team title is crew, lead, jrforeman or foreman and who isn't a contractor; the title is the level (same four keys as the tracker, so nothing is copied). Admins and people with no title never see it. **When:** the first open on or after Monday each week (phone's local time); Got it saves that week on the phone (`localStorage myrole.seen.<user>`). **Words:** `settings/ladder` `{ levels: { crew|lead|jrforeman|foreman: { name, summary, expectations[] } }, updatedAt, updatedBy }`; a missing doc, level or blank field falls back to `LADDER_DRAFT` (the tracker's draft). **Why it won't lose data:** one new settings doc, written only from the admin editor; no job, user, rules or function change.
 
 - **Automations on the Claude tab grouped: Scheduling & crews, Meetings, Margins & reports, Jobs, COs & POs, Email, asks & briefs, Plans & app upkeep, and Off or paused at the bottom, each folded with a count, plus a find box** · `in-flight 2026-11-13` · `SW v637` · `OD_ROUTINE_GROUPS` · `odRoutineGroup` · Koy 2026-11-13: "can we Separate the automations in the Claude section into the different categories. It's really hard to find what I'm looking for in there because there's a lot of them". A routine lands in a group by its name first, then its channel; anything that matches none goes in Other. A group header says how many need a look. Typing in the find box opens every group with a match. Hosting only, no function deploy.
 
