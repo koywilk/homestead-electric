@@ -4396,10 +4396,58 @@ const PRINT_WM_CSS = `
     .wm { position: fixed; top: 50%; left: 50%; width: ${PRINT_WM_WIDTH_IN}in; max-width: 92vw; height: auto; transform: translate(-50%, -50%); opacity: ${PRINT_WM_OPACITY}; pointer-events: none; z-index: 5; }
     @media print { .wm { max-width: none; } }`;
 const PRINT_WM_HTML = `<img class="wm" src="${PRINT_LOGO}" alt="" aria-hidden="true" onerror="this.style.display='none'"/>`;
-// Centered header logo with the old text line as the fallback: the logo
-// already reads HOMESTEAD ELECTRIC, so the heading only shows if the image
-// fails to load.
-const PRINT_LOGO_ONERROR = `this.style.display='none';var f=this.parentNode.querySelector('.brand-fallback');if(f)f.style.display='block';`;
+// SCHEDULE SHEET LOOK (v640). Koy picked this from mockups on the real
+// Miller job: "bad ass eye catching", Homestead, not a form, and easy on
+// ink (the office printer is black and white). So: no solid black fills
+// anywhere, just heavy rules, big condensed numbers and the logo in its own
+// cell of a title block. PRINT_BRAND_CSS is self-contained (the Savant V2
+// pages have no reset of their own).
+const PRINT_FONTS = `<link rel="preconnect" href="https://fonts.googleapis.com"/><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet"/>`;
+const PRINT_BODY_FONT = `'DM Sans', Arial, "Helvetica Neue", sans-serif`;
+const PRINT_COND_FONT = `'Barlow Condensed', 'Arial Narrow', Arial, sans-serif`;
+const PRINT_BRAND_CSS = `
+    .ph, .ph * , .pf, .pf * { box-sizing: border-box; margin: 0; padding: 0; }
+    .ph { display: grid; grid-template-columns: 128px 1fr; border: 2px solid #000; margin-bottom: 7px; color: #000; font-family: ${PRINT_BODY_FONT}; }
+    .ph .ph-logo { border-right: 2px solid #000; display: flex; align-items: center; justify-content: center; padding: 6px; }
+    .ph .ph-logo img { width: 112px; height: auto; filter: grayscale(1) contrast(1.2); }
+    .ph .ph-main { display: flex; flex-direction: column; min-width: 0; }
+    .ph .ph-top { display: flex; align-items: flex-end; gap: 10px; padding: 7px 9px 6px; border-bottom: 1.5px solid #000; flex: 1; }
+    .ph .ph-title { font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: 46px; line-height: 0.8; text-transform: uppercase; overflow-wrap: anywhere; }
+    .ph .ph-title.long { font-size: 30px; line-height: 0.9; }
+    .ph .ph-title.xlong { font-size: 21px; line-height: 0.95; }
+    .ph .ph-kind { font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; line-height: 1.15; flex-shrink: 0; }
+    .ph .ph-cells { display: flex; }
+    .ph .ph-cells > div { flex: 1 1 0; padding: 3px 9px 4px; border-left: 1px solid #000; font-size: 8.5px; font-weight: 600; line-height: 1.2; min-width: 0; overflow-wrap: anywhere; }
+    .ph .ph-cells > div:first-child { border-left: 0; flex-grow: 1.7; }
+    .ph .ph-cells > div:nth-child(2) { flex-grow: 1.9; }
+    .ph .ph-lb, .pkey { font-family: ${PRINT_COND_FONT}; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; }
+    .ph .ph-lb { display: block; font-size: 6px; color: #444; }
+    .pkey { font-size: 7px; letter-spacing: 0.14em; margin: 0 0 4px; color: #000; }
+    .pkey i { display: inline-block; width: 3px; height: 9px; background: #000; vertical-align: -1px; margin-right: 4px; }
+    .pf { border-top: 3px solid #000; border-bottom: 1px solid #000; display: flex; justify-content: space-between; align-items: center; padding: 3px 2px; margin-top: 5px; font-size: 6.5px; letter-spacing: 0.08em; color: #000; font-family: ${PRINT_BODY_FONT}; }
+    .pf b { font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: 10px; letter-spacing: 0.22em; }`;
+// Title block: logo cell, the panel name big, what kind of sheet it is, then
+// labeled cells (Job, Address, and whatever `cells` adds). `kind` is one or
+// two short lines. A long panel name steps down in size rather than wrap wide.
+function printBrandHead({ title, kind = [], jobName, jobAddress, cells = [] }) {
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const t = String(title || "");
+  const size = t.length > 22 ? " xlong" : t.length > 11 ? " long" : "";
+  const all = [["Job", jobName || ""], ["Address", jobAddress || ""], ...cells].filter(c => c && String(c[1] == null ? "" : c[1]).trim());
+  return `<div class="ph">
+    <div class="ph-logo"><img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/></div>
+    <div class="ph-main">
+      <div class="ph-top"><div class="ph-title${size}">${esc(t)}</div><div class="ph-kind">${kind.map(esc).join("<br/>")}</div></div>
+      ${all.length ? `<div class="ph-cells">${all.map(c => `<div><span class="ph-lb">${esc(c[0])}</span>${esc(c[1])}</div>`).join("")}</div>` : ""}
+    </div>
+  </div>`;
+}
+function printBrandFoot(note) {
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<div class="pf"><b>HOMESTEAD ELECTRIC</b><span>${note ? esc(note) + " &middot; " : ""}PRINTED ${new Date().toLocaleDateString("en-US")}</span></div>`;
+}
 function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
                               // Optional Savant-only schedule data. When system is
                               // "Savant" and these are supplied we render the
@@ -4427,15 +4475,6 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
 
   const visibleMods = (modules || []).filter(m => m && (m.modNum || m.moduleType || m.slotA || (m.loads||[]).some(l => l && l.name)));
   const totalLoads = visibleMods.reduce((n, m) => n + (m.loads||[]).filter(l => l && (l.name||"").trim()).length, 0);
-
-  const renderModuleHeaderMeta = (m) => {
-    const bits = [];
-    if (m.moduleType) bits.push(`<span class="badge">${esc(m.moduleType)}</span>`);
-    if (isSav)  { if (m.panel)   bits.push(`Panel <b>${esc(m.panel)}</b>`); if (m.breaker) bits.push(`Bkr <b>${esc(m.breaker)}</b>`); if (m.phase) bits.push(`Phase <b>${esc(m.phase)}</b>`); }
-    if (isLut)  { if (m.bus)     bits.push(`Bus <b>${esc(m.bus)}</b>`);     if (m.pdu)    bits.push(`PDU <b>${esc(m.pdu)}</b>`); }
-    if (isCres) { if (m.chainPos) bits.push(`Chain <b>${esc(m.chainPos)}</b>`); }
-    return bits.join(" · ");
-  };
 
   // ── Savant: Square-D-style panel schedule HTML (built only when needed) ──
   // Renders odd slots in the left column, even on the right. 2-pole smart
@@ -4507,85 +4546,113 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
   // ("the pulled column isn't necessary on this"); Control 4 / Crestron
   // followed 2026-11-14 (Koy: "remove the pulled column from the lighting
   // control panel print out"). Pulled stays in the app, just not on paper.
+  //
+  // CARDS (v640). Each module is a card: its number big in the left cell,
+  // its channels as rows. A column nobody filled in on this panel (Type,
+  // Watts, Keypad / Notes) is left off the sheet entirely. With none of them
+  // in use the cards go two across on a true grid, every card the same
+  // height and every row level with its neighbor (Koy: "i dont like how the
+  // modules arent evenly lined up with each other"), short modules padded
+  // with numbered blank rows. With any of them in use, or a module too long
+  // to pad to (a 64-row bus module, a big "No module yet" block), the cards
+  // run one per row at their natural height.
+  const named = (m) => (m.loads || []).filter(l => l && (l.name||"").trim());
+  const allLoads = visibleMods.reduce((a, m) => a.concat(named(m)), []);
+  const has = {
+    type:   allLoads.some(l => String(l.loadType || "").trim()),
+    watts:  allLoads.some(l => String(l.watts || "").trim()),
+    keypad: allLoads.some(l => String(l.keypad || "").trim()),
+  };
+  const maxCh = visibleMods.reduce((n, m) => Math.max(n, named(m).length), 0);
+  const twoUp = !has.type && !has.watts && !has.keypad && visibleMods.length > 1 && maxCh > 0 && maxCh <= 8;
+  const metaText = (m) => {
+    const bits = [];
+    if (m.moduleType) bits.push(esc(m.moduleType));
+    if (isSav)  { if (m.panel) bits.push(`Panel ${esc(m.panel)}`); if (m.breaker) bits.push(`Bkr ${esc(m.breaker)}`); if (m.phase) bits.push(`Phase ${esc(m.phase)}`); }
+    if (isLut)  { if (m.bus) bits.push(`Bus ${esc(m.bus)}`); if (m.pdu) bits.push(`PDU ${esc(m.pdu)}`); }
+    if (isCres) { if (m.chainPos) bits.push(`Chain ${esc(m.chainPos)}`); }
+    return bits.join(" &middot; ");
+  };
+  const extraCells = (l) =>
+    (has.type   ? `<span class="x xt">${l ? esc(l.loadType || "") : ""}</span>` : "") +
+    (has.watts  ? `<span class="x xw">${l && l.watts ? esc(l.watts) + "W" : ""}</span>` : "") +
+    (has.keypad ? `<span class="x xk">${l ? esc(l.keypad || "") : ""}</span>` : "");
+  const colLabels = (has.type || has.watts || has.keypad)
+    ? `<div class="r lab"><span class="c">Ch</span><span class="nm">Load name</span>${has.type ? `<span class="x xt">Type</span>` : ""}${has.watts ? `<span class="x xw">Watts</span>` : ""}${has.keypad ? `<span class="x xk">Keypad / Notes</span>` : ""}</div>`
+    : "";
   const moduleHtml = visibleMods.length === 0
     ? `<div style="padding:24px;text-align:center;color:#666;font-style:italic">No modules on this panel yet.</div>`
-    : visibleMods.map(m => {
-        const namedLoads = (m.loads || []).filter(l => l && (l.name||"").trim());
-        const rows = namedLoads.length === 0
-          ? `<tr><td colspan="5" style="text-align:center;color:#888;font-style:italic;padding:8px">No channels named on this module yet</td></tr>`
-          : namedLoads.map(l => `
-              <tr>
-                <td class="ch">${esc(l.num || "")}</td>
-                <td>${esc(stripTags(l.name))}</td>
-                <td>${esc(l.loadType || "")}</td>
-                <td>${esc(l.watts || "")}${l.watts ? "W" : ""}</td>
-                <td>${esc(l.keypad || "")}</td>
-              </tr>
-            `).join("");
+    : `<div class="grid${twoUp ? " two" : ""}"${twoUp ? ` style="grid-template-rows:repeat(${Math.ceil(visibleMods.length / 2)},auto)"` : ""}>` + visibleMods.map(m => {
+        const namedLoads = named(m);
+        const num = String(m.modNum || "?");
+        const rowCount = twoUp ? maxCh : namedLoads.length;
+        const rows = namedLoads.length === 0 && !twoUp
+          ? `<div class="r none">No channels named on this module yet</div>`
+          : Array.from({ length: rowCount }, (_, i) => {
+              const l = namedLoads[i];
+              return l
+                ? `<div class="r"><span class="c">${esc(l.num || "")}</span><span class="nm">${esc(stripTags(l.name))}</span>${extraCells(l)}</div>`
+                : `<div class="r pad"><span class="c">${i + 1}</span><span class="nm"></span>${extraCells(null)}</div>`;
+            }).join("");
         // A module with more rows than fit on one page (bus modules hold 64)
         // is "tall": it may flow across pages row by row instead of being
         // pushed whole onto a fresh page and leaving page 1 header-only.
         const tall = namedLoads.length > 40;
         return `
           <div class="module${tall ? " tall" : ""}">
-            <div class="module-header">
-              <span class="modnum">${esc(devLabel)} ${esc(m.modNum || "?")}</span>
-              ${renderModuleHeaderMeta(m) ? `<span class="meta">${renderModuleHeaderMeta(m)}</span>` : ""}
-              <span class="count">${namedLoads.length} channel${namedLoads.length === 1 ? "" : "s"}</span>
+            <div class="badge"><span class="l">${esc(devLabel === "Device" ? "DEV" : "MOD")}</span><span class="n${num.length > 2 ? " sm" : ""}">${esc(num)}</span></div>
+            <div class="rows">
+              <div class="t"><span>${metaText(m)}</span><span>${namedLoads.length} ch</span></div>
+              ${colLabels}${rows}
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th class="ch">Ch</th>
-                  <th>Load Name</th>
-                  <th>Type</th>
-                  <th>Watts</th>
-                  <th>Keypad / Notes</th>
-                </tr>
-              </thead>
-              <tbody>${rows}</tbody>
-            </table>
           </div>
         `;
-      }).join("");
+      }).join("") + `</div>`;
 
+  const smartN = (modules||[]).filter(m=>Number(m.slotA)>0).length;
+  const regN = (regularBreakers||[]).filter(r=>Number(r.slot)>0).length;
   const html = `<!DOCTYPE html>
 <html lang="en"><head>
   <meta charset="utf-8"/>
   <title>${esc(panelLabel)} — ${esc(jobName)} — Panel Schedule</title>
+  ${PRINT_FONTS}
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    /* PANEL-COVER FIT — 5.5" wide layout sized to drop into the schedule
-       slot on the inside of a residential panel cover. Compact fonts +
-       padding so a typical Control 4 / Lutron / Crestron job fits on one
-       page (or two for very large jobs). */
-    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; }
-    .header { border-bottom: 1.5px solid #000; padding-bottom: 5px; margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
-    .header .logo-block { display:flex; align-items:center; gap:8px; }
-    .header img { height: 52px; width: auto; flex-shrink: 0; }
-    .header h1 { font-size: 13px; letter-spacing:0.03em; }
-    .header .sys { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; color: #444; text-transform: uppercase; margin-top: 1px; }
-    .header .meta { font-size: 8px; color: #444; margin-top: 2px; }
-    .header .totals { font-size: 8px; color: #555; text-align:right; line-height: 1.2; }
+    /* PANEL-COVER FIT — 5.25" wide layout sized to drop into the schedule
+       slot on the inside of a residential panel cover. */
+    body { font-family: ${PRINT_BODY_FONT}; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; }
+${PRINT_BRAND_CSS}
     /* PAGINATION (v475) — the schedule flows onto as many letter pages as it
-       needs (10 modules is ~1.5 pages). Each module block stays whole: a
-       module that won't fit at the bottom of a page starts the next one, so
-       no table is ever cut mid-row. A .tall module (more rows than a page)
-       can't stay whole, so it flows — but never splits a row, and the column
-       headers repeat at the top of each page. Header stays on page 1. */
-    .module { border: 0.75px solid #000; margin-bottom: 6px; page-break-inside: avoid; break-inside: avoid; }
+       needs. Each module card stays whole: one that won't fit at the bottom
+       of a page starts the next, so no card is ever cut mid-row. A .tall
+       module (more rows than a page) can't stay whole, so it flows — but
+       never splits a row. Header stays on page 1. */
+    .grid { display: grid; grid-template-columns: 1fr; gap: 6px 8px; }
+    /* Two across, read DOWN each column (module 1..5 left, 6..10 right) the
+       way the mockup Koy approved does. When the sheet has to paginate the
+       script below adds .paged and the cards read ACROSS instead, so a page
+       break never lands in the middle of a column. */
+    .grid.two { grid-template-columns: 1fr 1fr; grid-auto-flow: column; }
+    .paged .grid.two { grid-auto-flow: row; grid-template-rows: none !important; }
+    .module { display: flex; border: 1.5px solid #000; page-break-inside: avoid; break-inside: avoid; min-width: 0; }
     .module.tall { page-break-inside: auto; break-inside: auto; }
-    tr { page-break-inside: avoid; break-inside: avoid; }
-    thead { display: table-header-group; }
-    .module-header { background: #f0f0f0; padding: 2px 6px; font-size: 9px; display: flex; gap: 6px; align-items: center; border-bottom: 0.75px solid #000; flex-wrap: wrap; }
-    .module-header .modnum { font-weight: 700; }
-    .module-header .meta { font-size: 8px; color: #333; }
-    .module-header .badge { background:#fff; border:0.5px solid #888; border-radius:2px; padding:0 4px; font-size: 7px; }
-    .module-header .count { margin-left:auto; font-size: 7px; color: #666; }
-    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    th, td { border: 0.5px solid #999; padding: 1px 4px; font-size: 8px; text-align: left; vertical-align: top; word-wrap: break-word; }
-    th { background: #fafafa; font-size: 7px; text-transform: uppercase; letter-spacing: 0.04em; color: #444; }
-    .ch { width: 22px; text-align: center; font-weight: 700; }
+    .badge { width: 34px; flex-shrink: 0; border-right: 1.5px solid #000; text-align: center; display: flex; flex-direction: column; justify-content: center; padding: 3px 0; font-family: ${PRINT_COND_FONT}; }
+    .badge .l { font-weight: 700; font-size: 5.5px; letter-spacing: 0.22em; }
+    .badge .n { font-weight: 800; font-size: 27px; line-height: 0.9; }
+    .badge .n.sm { font-size: 15px; line-height: 1; overflow-wrap: anywhere; }
+    .rows { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .rows .t { font-family: ${PRINT_COND_FONT}; font-weight: 700; font-size: 6.5px; letter-spacing: 0.16em; text-transform: uppercase; padding: 1.5px 6px; border-bottom: 1px solid #000; display: flex; justify-content: space-between; gap: 8px; }
+    .r { display: flex; align-items: center; gap: 5px; padding: 2.5px 6px; border-bottom: 0.5px solid #777; font-size: 8.5px; font-weight: 600; line-height: 1.15; page-break-inside: avoid; break-inside: avoid; }
+    .r:last-child { border-bottom: 0; }
+    .grid.two .r { flex: 1 0 21px; padding: 0 6px; }
+    .r .c { font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: 11px; width: 13px; flex-shrink: 0; line-height: 1; }
+    .r .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .r .x { flex-shrink: 0; font-weight: 500; font-size: 8px; padding-left: 5px; border-left: 0.5px solid #999; align-self: stretch; display: flex; align-items: center; overflow-wrap: anywhere; min-width: 0; }
+    .r .xt { width: 17%; } .r .xw { width: 11%; } .r .xk { width: 27%; }
+    .r.lab { font-family: ${PRINT_COND_FONT}; font-weight: 700; font-size: 6px; letter-spacing: 0.14em; text-transform: uppercase; color: #333; padding-top: 1px; padding-bottom: 1px; border-bottom: 0.75px solid #000; }
+    .r.lab .c, .r.lab .x { font: inherit; }
+    .r.pad .c { color: #999; }
+    .r.none { color: #666; font-style: italic; font-weight: 400; justify-content: center; padding: 8px; }
     /* Savant schedule grid — used only when savUseSchedule is true */
     .sav-stats { font-size: 8px; color: #444; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
     .sav-grid { display: grid; grid-template-columns: 22px 1fr 22px 1fr; border: 0.75px solid #000; }
@@ -4612,12 +4679,11 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     @media print {
       .toolbar { display:none; }
       /* FIT ONE SHEET (v476) — Koy: "I'd really like these to fit on one
-         sheet if possible." The @page margin is the only margin (the old
-         extra 0.4in body padding cost 15% of the page), and the sheet is
-         zoomed by --fit, which the script at the bottom sets from a clone
-         measured at the print width: 1 when it already fits, down to 0.7
-         to squeeze onto one page, and back to 1 (paginate) when it would
-         have to go smaller than that. zoom reflows, so the module
+         sheet if possible." The @page margin is the only margin, and the
+         sheet is zoomed by --fit, which the script at the bottom sets from a
+         clone measured at the print width: 1 when it already fits, down to
+         0.7 to squeeze onto one page, and back to 1 (paginate) when it
+         would have to go smaller than that. zoom reflows, so the card
          keep-together rules above still hold when it does paginate. */
       body { padding: 0; max-width: 5.25in; }
       @page { size: letter portrait; margin: 0.4in; }
@@ -4628,50 +4694,49 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
   ${PRINT_WM_HTML}
   <div class="sheet">
-  <div class="header">
-    <div class="logo-block">
-      <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/>
-      <div>
-        <h1>${esc(panelLabel || "Panel Schedule")}</h1>
-        <div class="sys">${esc(sys)} Panel Schedule</div>
-        <div class="meta">${esc(jobName || "")}${jobAddress ? " · " + esc(jobAddress) : ""}</div>
-      </div>
-    </div>
-    <div class="totals">
-      ${savUseSchedule
-        ? `${(modules||[]).filter(m=>Number(m.slotA)>0).length} smart breaker${(modules||[]).filter(m=>Number(m.slotA)>0).length===1?"":"s"}<br/>${(regularBreakers||[]).filter(r=>Number(r.slot)>0).length} regular breaker${(regularBreakers||[]).filter(r=>Number(r.slot)>0).length===1?"":"s"}`
-        : `${visibleMods.length} ${devLabel.toLowerCase()}${visibleMods.length === 1 ? "" : "s"}<br/>${totalLoads} channel${totalLoads === 1 ? "" : "s"}`}
-    </div>
-  </div>
+  ${printBrandHead({
+    title: panelLabel || "Panel Schedule", kind: [sys, savUseSchedule ? "panel schedule" : "lighting panel"], jobName, jobAddress,
+    cells: [savUseSchedule
+      ? ["Smart / regular breakers", `${smartN} / ${regN}`]
+      : [`${devLabel}s / channels`, `${visibleMods.length} / ${totalLoads}`]],
+  })}
   ${savUseSchedule ? savScheduleHtml : moduleHtml}
+  ${printBrandFoot(`${sys} panelized lighting`)}
   </div>
   <script>
     // Fit-to-one-sheet scale for print (see the @media print note above).
     // Measures a clone of the sheet at the print strip width, so a phone's
-    // narrower screen layout doesn't skew the number. Screen is untouched.
+    // narrower screen layout doesn't skew the number. Runs once the web
+    // fonts are in (they change every height), and again on load.
     (function () {
       var PAGE_H = (11 - 0.8) * 96, STRIP_W = 5.25 * 96, FLOOR = 0.7;
-      var sheet = document.querySelector(".sheet"); if (!sheet) return;
-      var probe = document.createElement("div"), clone = sheet.cloneNode(true);
-      probe.style.cssText = "position:absolute;left:-99999px;top:0;width:" + STRIP_W + "px;";
-      probe.appendChild(clone);
-      document.body.appendChild(probe);
-      var h = probe.scrollHeight;
-      var fit = h > PAGE_H ? PAGE_H / h : 1;
-      // Shrinking re-wraps a few load names, so the zoomed sheet can come out
-      // a line or two taller than the arithmetic says and push the last
-      // module onto a second page (Miller LCP 1 did once the header grew).
-      // Check the clone AT that zoom and ease down until it really fits.
-      var ROOM = PAGE_H * 0.995;
-      for (var i = 0; i < 6 && fit < 1 && fit >= FLOOR; i++) {
-        clone.style.zoom = String(fit);
-        var zh = probe.scrollHeight;
-        if (zh <= ROOM) break;
-        fit = fit * (ROOM / zh) - 0.002;
+      function run() {
+        var sheet = document.querySelector(".sheet"); if (!sheet) return;
+        sheet.classList.remove("paged");
+        var probe = document.createElement("div"), clone = sheet.cloneNode(true);
+        probe.style.cssText = "position:absolute;left:-99999px;top:0;width:" + STRIP_W + "px;";
+        probe.appendChild(clone);
+        document.body.appendChild(probe);
+        var h = probe.scrollHeight;
+        var fit = h > PAGE_H ? PAGE_H / h : 1;
+        // Shrinking re-wraps a few load names, so the zoomed sheet can come
+        // out a line or two taller than the arithmetic says and push the
+        // last card onto a second page. Check the clone AT that zoom and
+        // ease down until it really fits.
+        var ROOM = PAGE_H * 0.995;
+        for (var i = 0; i < 6 && fit < 1 && fit >= FLOOR; i++) {
+          clone.style.zoom = String(fit);
+          var zh = probe.scrollHeight;
+          if (zh <= ROOM) break;
+          fit = fit * (ROOM / zh) - 0.002;
+        }
+        probe.remove();
+        if (fit < FLOOR) { fit = 1; sheet.classList.add("paged"); }
+        document.documentElement.style.setProperty("--fit", String(Math.floor(fit * 1000) / 1000));
       }
-      probe.remove();
-      if (fit < FLOOR) fit = 1;
-      document.documentElement.style.setProperty("--fit", String(Math.floor(fit * 1000) / 1000));
+      run();
+      window.addEventListener("load", run);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(run);
     })();
   </script>
 </body></html>`;
@@ -4714,7 +4779,7 @@ async function downloadPanelSchedule(args) {
     // stylesheet's --fit); otherwise pages with every module (and every row
     // of a .tall one) kept whole across the cuts. The on-screen Print button
     // is dropped the way the print stylesheet does.
-    await _saveHtmlAsPdfPaged(captured, filename, { fitOne: 0.7, avoid: ".module:not(.tall), .module tr", hide: ".toolbar", scale: 3 });
+    await _saveHtmlAsPdfPaged(captured, filename, { fitOne: 0.7, avoid: ".module:not(.tall), .module .r", hide: ".toolbar", scale: 3 });
     if (typeof toast !== "undefined" && toast.success) toast.success(`Saved ${filename}`);
     return true;
   } catch (e) {
@@ -4812,6 +4877,28 @@ async function _pdfWatermark(doc) {
     return img.naturalWidth ? img : null;
   } catch { return null; }   // no logo is better than no PDF
 }
+// The schedule sheets use web fonts; a capture taken before they arrive
+// comes out in the fallback face with every height slightly off. Wait for
+// them (bounded, so being offline can't hang a download), then one more
+// beat for the sheet's own fit script to re-run.
+// html2canvas measures text in the iframe but DRAWS it on a canvas that
+// belongs to the app page, so the app page needs the same faces loaded or
+// the words land in a fallback font at the other font's positions ("LCP 1"
+// lost its space). The app's index.html links both families; this makes
+// sure the weights the sheet uses are actually in before the capture.
+// Sheets without the title block (loads list, home runs) skip all of it.
+async function _pdfFontsReady(doc) {
+  if (!doc.querySelector(".ph")) return;
+  const wait = (p) => Promise.race([p, new Promise(r => setTimeout(r, 2500))]);
+  try {
+    if (doc.fonts && doc.fonts.ready) await wait(doc.fonts.ready);
+    if (document.fonts && document.fonts.load) {
+      const faces = ["600", "700", "800"].map(w => `${w} 20px 'Barlow Condensed'`).concat(["400", "500", "600", "700"].map(w => `${w} 12px 'DM Sans'`));
+      await wait(Promise.all(faces.map(f => document.fonts.load(f).catch(() => null))));
+    }
+    await new Promise(r => setTimeout(r, 120));
+  } catch {}
+}
 // pxPerIn: canvas pixels per printed inch on this page. cy: page center, px.
 // Returns the canvas to put in the PDF. The mark goes on a fresh copy, never
 // on html2canvas's own canvas: that one comes back with its scale and clip
@@ -4863,6 +4950,7 @@ async function _saveHtmlAsPdfPaged(html, filename, opts = {}) {
     iframe.contentDocument.close();
     await new Promise(r => setTimeout(r, 350));
     const doc = iframe.contentDocument, bodyEl = doc.body;
+    await _pdfFontsReady(doc);
     if (opts.hide) { const st = doc.createElement("style"); st.textContent = `${opts.hide}{display:none !important}`; doc.head.appendChild(st); }
     const wm = await _pdfWatermark(doc);
     const fullH = Math.max(bodyEl.scrollHeight, 1056);
@@ -5025,12 +5113,20 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   const get = (n, pos) => circuits[`${n}${pos}`] || {};
   // Print shows amps but NOT wire size — Koy wants the printed schedule
   // to read clean for the panel label, and wire size lives in the app.
+  // A 240V two-pole breaker takes two slots on one side: FILL writes the
+  // first with notes "240V" and the second as the same name + "(240V cont.)".
+  // Both halves get a bar down the outside edge so the pair reads as one
+  // breaker, and the first carries a 240V tag.
+  const isTwoPole = (c) => c.notes === "240V" || /\(240V cont\.\)\s*$/.test(c.name || "");
+  let anyTwoPole = false;
   const cellName = (c) => {
     const bits = [];
-    if (c.name) bits.push(esc(c.name));
     if (c.amps) bits.push(`<span class="amps">${esc(c.amps)}A</span>`);
-    return bits.join(" ");
+    if (c.notes === "240V") bits.push(`<span class="v">240V</span>`);
+    if (c.name) bits.push(esc(c.name));
+    return bits.join("");
   };
+  const cls = (c, side) => { if (!isTwoPole(c)) return ""; anyTwoPole = true; return side === "L" ? " p2l" : " p2r"; };
 
   // Pair slots (1,2), (3,4), ... into rows. Each pair gets two physical rows
   // (top + bottom) so tandems have their own line.
@@ -5041,14 +5137,14 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
     const rt = get(evenNum, "A"), rb = get(evenNum, "B");
     rows.push(`
       <tr>
-        <td class="name">${cellName(lt)}</td>
+        <td class="name${cls(lt, "L")}">${cellName(lt)}</td>
         <td class="num" rowspan="2">${oddNum}</td>
         <td class="num" rowspan="2">${evenNum <= slotCount ? evenNum : ""}</td>
-        <td class="name">${cellName(rt)}</td>
+        <td class="name${cls(rt, "R")}">${cellName(rt)}</td>
       </tr>
       <tr>
-        <td class="name bottom">${cellName(lb)}</td>
-        <td class="name bottom">${cellName(rb)}</td>
+        <td class="name bottom${cls(lt, "L")}">${cellName(lb)}</td>
+        <td class="name bottom${cls(rt, "R")}">${cellName(rb)}</td>
       </tr>
     `);
   }
@@ -5059,65 +5155,52 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   // Larger panels (60-80 slot) shrink the row height inline below.
   const _rowHeight = slotCount <= 40 ? 16 : slotCount <= 60 ? 12 : 10;
   const _nameFs    = slotCount <= 40 ? 9  : slotCount <= 60 ? 8  : 7;
-  const _numFs     = slotCount <= 40 ? 10 : slotCount <= 60 ? 9  : 8;
-  // Header logo: big on the usual 40-slot sheet, held to the old header's
-  // height on 60-80 slot panels so they still land on one page.
-  const _logoH     = slotCount <= 40 ? 64 : 48;
+  const _numFs     = slotCount <= 40 ? 17 : slotCount <= 60 ? 13 : 11;
   const html = `<!DOCTYPE html>
 <html lang="en"><head>
   <meta charset="utf-8"/>
   <title>${esc(panel?.label || "Panel Schedule")} — ${esc(jobName)}</title>
+  ${PRINT_FONTS}
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; }
+    body { font-family: ${PRINT_BODY_FONT}; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .toolbar { margin-bottom: 10px; text-align: right; }
     .toolbar button { padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
-    .header { text-align: center; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1.5px solid #000; }
-    .header img { display: block; height: ${_logoH}px; width: auto; margin: 0 auto 3px; }
-    .header h1 { font-size: 13px; letter-spacing: 0.04em; }
-    .header .brand-fallback { display: none; }
-    .header .meta { font-size: 8px; color: #444; margin-top: 1px; }
-    .panel-meta { margin-bottom: 6px; font-size: 9px; line-height: 1.3; }
-    .panel-meta .left strong { font-size: 12px; letter-spacing: 0.03em; }
-    .panel-meta .right { color: #555; font-size: 8px; }
-    table.schedule { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    table.schedule td { border: 0.75px solid #000; padding: 1px 4px; font-size: ${_nameFs}px; height: ${_rowHeight}px; vertical-align: middle; overflow: hidden; }
-    table.schedule td.name { width: 40%; word-wrap: break-word; }
-    table.schedule td.num { width: 10%; text-align: center; font-weight: 700; background: #EEF0F3; font-size: ${_numFs}px; }
-    table.schedule td.bottom { border-top: 0.5px dashed #888; }
-    table.schedule td .amps { color: #444; font-size: ${_nameFs - 1}px; margin-left: 3px; }
-    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }${PRINT_WM_CSS}
+${PRINT_BRAND_CSS}
+    /* Slot numbers big between heavy rules, no fills (easy on toner). */
+    table.schedule { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1.5px solid #000; }
+    table.schedule td { padding: 1px 6px; font-size: ${_nameFs}px; font-weight: 600; height: ${_rowHeight}px; vertical-align: middle; overflow: hidden; }
+    table.schedule td.name { width: 41%; word-wrap: break-word; border-bottom: 0.5px dashed #888; }
+    table.schedule td.bottom { border-bottom: 1px solid #000; font-weight: 500; }
+    table.schedule td.num { width: 9%; text-align: center; font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: ${_numFs}px; border-bottom: 1px solid #000; border-left: 1.5px solid #000; padding: 0; }
+    table.schedule td.num + td.num { border-left: 0.5px solid #000; border-right: 1.5px solid #000; }
+    table.schedule td .amps { float: right; font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: ${_nameFs + 1}px; margin-left: 4px; }
+    table.schedule td.name.p2l { border-left: 3px solid #000; }
+    table.schedule td.name.p2r { border-right: 3px solid #000; }
+    table.schedule td .v { float: right; font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: 6.5px; letter-spacing: 0.06em; border: 0.75px solid #000; padding: 0 3px; margin: 1px 0 0 4px; }
+    .footer-note { display: none; }
+${PRINT_WM_CSS}
     @media print {
       .toolbar { display: none; }
-      body { padding: 0.4in; max-width: 5.25in; }
+      body { padding: 0; max-width: 5.25in; }
       /* Letter portrait — what every printer in the shop expects. The
          schedule itself stays narrow (5.25in body) and centered, so you
          can trim a panel-cover-sized strip out of a regular letter sheet
-         after printing. */
+         after printing. The @page margin is the only margin. */
       @page { size: letter portrait; margin: 0.4in; }
     }
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
   ${PRINT_WM_HTML}
-  <div class="header">
-    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="${PRINT_LOGO_ONERROR}"/>
-    <h1 class="brand-fallback">HOMESTEAD ELECTRIC</h1>
-    <div class="meta">Panel Schedule</div>
-  </div>
-  <div class="panel-meta">
-    <div class="left">
-      <strong>${esc(panel?.label || "Panel")}</strong>
-      ${panel?.location ? ` &middot; ${esc(panel.location)}` : ""}
-      ${panel?.size ? ` &middot; ${esc(panel.size)}` : ""}
-    </div>
-    <div class="right">
-      ${esc(jobName || "")}${jobAddress ? " &middot; " + esc(jobAddress) : ""}
-    </div>
-  </div>
+  ${printBrandHead({
+    title: panel?.label || "Panel", kind: ["Panel", "schedule"], jobName, jobAddress,
+    cells: [...(panel?.location ? [["Location", panel.location]] : []), ["Size / slots", `${panel?.size ? panel.size + " / " : ""}${slotCount}`]],
+  })}
+  ${anyTwoPole ? `<div class="pkey"><i></i>240V two-pole breaker</div>` : ""}
   <table class="schedule">${rows.join("")}</table>
-  <div class="footer">Slots: ${slotCount} &middot; Tandem capable</div>
+  ${printBrandFoot(`Slots: ${slotCount} · Tandem capable`)}
 </body></html>`;
 
   const win = window.open("", "_blank");
@@ -5215,10 +5298,10 @@ function printSavantPanelHomeRunsStyle({ jobName, jobAddress, panelLabel, module
   const get = (n, pos) => circuits[`${n}${pos}`] || {};
   const cellName = (c) => {
     const bits = [];
+    if (c.amps) bits.push(`<span class="amps">${esc(c.amps)}${/^\d+$/.test(String(c.amps).trim())?"A":""}</span>`);
     if (c.kindBadge) bits.push(`<span class="kind">${esc(c.kindBadge)}</span>`);
     if (c.name) bits.push(esc(stripTags(c.name)));
-    if (c.amps) bits.push(`<span class="amps">${esc(c.amps)}${/^\d+$/.test(String(c.amps).trim())?"A":""}</span>`);
-    return bits.join(" ");
+    return bits.join("");
   };
   const cellStyle = (c) => {
     if (!c.feederColor) return "";
@@ -5246,60 +5329,48 @@ function printSavantPanelHomeRunsStyle({ jobName, jobAddress, panelLabel, module
 
   const _rowHeight = panelSize <= 40 ? 16 : panelSize <= 60 ? 12 : 10;
   const _nameFs    = panelSize <= 40 ? 9  : panelSize <= 60 ? 8  : 7;
-  const _numFs     = panelSize <= 40 ? 10 : panelSize <= 60 ? 9  : 8;
-  const _logoH     = panelSize <= 40 ? 64 : 48;
-
+  const _numFs     = panelSize <= 40 ? 17 : panelSize <= 60 ? 13 : 11;
   const html = `<!DOCTYPE html>
 <html lang="en"><head>
   <meta charset="utf-8"/>
   <title>${esc(panelLabel || "Savant Panel")} — ${esc(jobName)}</title>
+  ${PRINT_FONTS}
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body { font-family: ${PRINT_BODY_FONT}; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .toolbar { margin-bottom: 10px; text-align: right; }
     .toolbar button { padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
-    .header { text-align: center; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1.5px solid #000; }
-    .header img { display: block; height: ${_logoH}px; width: auto; margin: 0 auto 3px; }
-    .header h1 { font-size: 13px; letter-spacing: 0.04em; }
-    .header .brand-fallback { display: none; }
-    .header .meta { font-size: 8px; color: #444; margin-top: 1px; }
-    .panel-meta { margin-bottom: 6px; font-size: 9px; line-height: 1.3; }
-    .panel-meta .left strong { font-size: 12px; letter-spacing: 0.03em; }
-    .panel-meta .right { color: #555; font-size: 8px; }
-    table.schedule { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    table.schedule td { border: 0.75px solid #000; padding: 1px 4px; font-size: ${_nameFs}px; height: ${_rowHeight}px; vertical-align: middle; overflow: hidden; }
-    table.schedule td.name { width: 40%; word-wrap: break-word; }
-    table.schedule td.num { width: 10%; text-align: center; font-weight: 700; background: #EEF0F3; font-size: ${_numFs}px; }
-    table.schedule td.bottom { border-top: 0.5px dashed #888; }
-    table.schedule td .amps { color: #444; font-size: ${_nameFs - 1}px; margin-left: 3px; }
-    table.schedule td .kind { font-weight: 700; font-size: ${_nameFs - 2}px; opacity: 0.65; margin-right: 3px; letter-spacing: 0.03em; }
-    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }${PRINT_WM_CSS}
+${PRINT_BRAND_CSS}
+    /* Slot numbers big between heavy rules, no fills (easy on toner). */
+    table.schedule { width: 100%; border-collapse: collapse; table-layout: fixed; border: 1.5px solid #000; }
+    table.schedule td { padding: 1px 6px; font-size: ${_nameFs}px; font-weight: 600; height: ${_rowHeight}px; vertical-align: middle; overflow: hidden; }
+    table.schedule td.name { width: 41%; word-wrap: break-word; border-bottom: 0.5px dashed #888; }
+    table.schedule td.bottom { border-bottom: 1px solid #000; font-weight: 500; }
+    table.schedule td.num { width: 9%; text-align: center; font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: ${_numFs}px; border-bottom: 1px solid #000; border-left: 1.5px solid #000; padding: 0; }
+    table.schedule td.num + td.num { border-left: 0.5px solid #000; border-right: 1.5px solid #000; }
+    table.schedule td .amps { float: right; font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: ${_nameFs + 1}px; margin-left: 4px; }
+    table.schedule td .kind { font-family: ${PRINT_COND_FONT}; font-weight: 800; font-size: ${_nameFs - 2}px; margin-right: 4px; letter-spacing: 0.04em; }
+${PRINT_WM_CSS}
     @media print {
       .toolbar { display: none; }
-      body { padding: 0.4in; max-width: 5.25in; }
+      body { padding: 0; max-width: 5.25in; }
+      /* Letter portrait — what every printer in the shop expects. The
+         schedule itself stays narrow (5.25in body) and centered, so you
+         can trim a panel-cover-sized strip out of a regular letter sheet
+         after printing. The @page margin is the only margin. */
       @page { size: letter portrait; margin: 0.4in; }
     }
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
   ${PRINT_WM_HTML}
-  <div class="header">
-    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="${PRINT_LOGO_ONERROR}"/>
-    <h1 class="brand-fallback">HOMESTEAD ELECTRIC</h1>
-    <div class="meta">Savant Panel Schedule</div>
-  </div>
-  <div class="panel-meta">
-    <div class="left">
-      <strong>${esc(panelLabel || "Lighting Panel")}</strong>
-      &middot; ${panelSize} slot
-    </div>
-    <div class="right">
-      ${esc(jobName || "")}${jobAddress ? " &middot; " + esc(jobAddress) : ""}
-    </div>
-  </div>
+  ${printBrandHead({
+    title: panelLabel || "Lighting Panel", kind: ["Savant", "panel schedule"], jobName, jobAddress,
+    cells: [["Slots", String(panelSize)]],
+  })}
   <table class="schedule">${rows.join("")}</table>
-  <div class="footer">Slots: ${panelSize} &middot; Savant smart breakers</div>
+  ${printBrandFoot(`Slots: ${panelSize} · Savant smart breakers`)}
 </body></html>`;
 
   const win = window.open("", "_blank");
@@ -5425,6 +5496,7 @@ function printSavantV2PanelCover({ jobName, jobAddress, panelLabel, v2 }) {
 
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
 <title>${esc(panelLabel)} — ${esc(jobName||"")}</title>
+${PRINT_FONTS}
 <style>
   @page { size: letter portrait; margin: 0.4in; }
   * { box-sizing:border-box; }
@@ -5433,10 +5505,6 @@ function printSavantV2PanelCover({ jobName, jobAddress, panelLabel, v2 }) {
   .toolbar button { font-family:inherit; font-size:13px; padding:4px 12px; cursor:pointer; }
   @media print { .toolbar { display:none; } }
   .page { max-width:5.25in; margin:0 auto; padding:0.15in 0; }
-  .hdr { position:relative; min-height:50px; padding:6px 1.05in 8px 0; border-bottom:1.5px solid #1B1F24; margin-bottom:8px; }
-  .hdr img { position:absolute; right:0; top:2px; height:44px; width:auto; }
-  .hdr h1 { margin:0; font-size:14px; letter-spacing:0.04em; }
-  .hdr .meta { font-size:10px; color:#5E6670; margin-top:2px; }
   table.schedule { width:100%; border-collapse:collapse; table-layout:fixed; }
   table.schedule td { border:0.5px solid #E1E4E9; padding:0; vertical-align:top; font-size:9px; line-height:1.2; }
   td.slot-num { width:18px; text-align:right; padding:3px 4px; color:#5E6670; font-variant-numeric:tabular-nums; font-size:9px; background:#F4F6F8; }
@@ -5445,19 +5513,14 @@ function printSavantV2PanelCover({ jobName, jobAddress, panelLabel, v2 }) {
   .lbl { font-weight:500; font-size:9px; }
   .sub { font-size:8px; color:#5E6670; margin-top:1px; }
   .sub.muted { font-style:italic; }
-  .mod-head { font-size:8px; font-weight:600; color:#475569; margin-bottom:1px; text-transform:uppercase; letter-spacing:0.04em; }
-  .footer { font-size:9px; color:#5E6670; margin-top:8px; padding-top:4px; border-top:0.5px solid #E1E4E9; text-align:center; }${PRINT_WM_CSS}
+  .mod-head { font-size:8px; font-weight:600; color:#475569; margin-bottom:1px; text-transform:uppercase; letter-spacing:0.04em; }${PRINT_BRAND_CSS}${PRINT_WM_CSS}
 </style></head><body>
 <div class="toolbar"><button onclick="window.print()">Print</button></div>
 ${PRINT_WM_HTML}
 <div class="page">
-  <div class="hdr">
-    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/>
-    <h1>${esc(panelLabel||"Lighting panel")}</h1>
-    <div class="meta">${esc(jobName||"")}${jobAddress?` &middot; ${esc(jobAddress)}`:""} &middot; ${panelSize} slots &middot; ${modules.length} modules &middot; ${feeders.length} feeders</div>
-  </div>
+  ${printBrandHead({ title: panelLabel || "Lighting panel", kind: ["Savant", "panel cover"], jobName, jobAddress, cells: [["Slots / modules / feeders", `${panelSize} / ${modules.length} / ${feeders.length}`]] })}
   <table class="schedule">${rows.join("")}</table>
-  <div class="footer">Homestead Electric — Savant panelized lighting</div>
+  ${printBrandFoot("Savant panelized lighting")}
 </div></body></html>`;
 
   const win = window.open("", "_blank");
@@ -5539,6 +5602,7 @@ function printSavantV2PullList({ jobName, jobAddress, panelLabel, v2 }) {
 
   const html = `<!doctype html><html><head><meta charset="utf-8"/>
 <title>Pull list — ${esc(panelLabel)} — ${esc(jobName||"")}</title>
+${PRINT_FONTS}
 <style>
   @page { size: letter portrait; margin: 0.5in; }
   body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color:#1B1F24; margin:0; padding:0; }
@@ -5546,10 +5610,6 @@ function printSavantV2PullList({ jobName, jobAddress, panelLabel, v2 }) {
   .toolbar button { font-family:inherit; font-size:13px; padding:4px 12px; cursor:pointer; }
   @media print { .toolbar { display:none; } }
   .page { max-width:7.5in; margin:0 auto; padding:0.15in 0; }
-  .hdr { position:relative; min-height:60px; padding:6px 1.25in 10px 0; border-bottom:2px solid #1B1F24; margin-bottom:14px; }
-  .hdr img { position:absolute; right:0; top:2px; height:52px; width:auto; }
-  .hdr h1 { margin:0; font-size:18px; letter-spacing:0.02em; }
-  .hdr .meta { font-size:11px; color:#5E6670; margin-top:3px; }
   .room-block { margin-bottom:18px; page-break-inside:avoid; }
   .room-block h2 { font-size:13px; font-weight:600; margin:0 0 6px; padding:4px 8px; background:#1B1F24; color:#fff; border-radius:3px; display:flex; justify-content:space-between; align-items:center; }
   .room-block h2 .count { font-size:10px; opacity:0.7; font-weight:400; }
@@ -5559,20 +5619,15 @@ function printSavantV2PullList({ jobName, jobAddress, panelLabel, v2 }) {
   td.r-name { font-weight:500; }
   td.r-type { width:90px; color:#5E6670; font-size:10px; }
   td.r-watts { width:60px; text-align:right; color:#5E6670; font-variant-numeric:tabular-nums; font-size:10px; }
-  td.r-bkr { width:120px; color:#5E6670; font-size:10px; }
-  .footer { font-size:10px; color:#5E6670; margin-top:14px; padding-top:6px; border-top:0.5px solid #E1E4E9; text-align:center; }${PRINT_WM_CSS}
+  td.r-bkr { width:120px; color:#5E6670; font-size:10px; }${PRINT_BRAND_CSS}${PRINT_WM_CSS}
 </style></head><body>
 <div class="toolbar"><button onclick="window.print()">Print</button></div>
 ${PRINT_WM_HTML}
 <div class="page">
-  <div class="hdr">
-    <img src="${PRINT_LOGO}" alt="Homestead Electric" onerror="this.style.display='none'"/>
-    <h1>Pull list — ${esc(panelLabel||"Lighting panel")}</h1>
-    <div class="meta">${esc(jobName||"")}${jobAddress?` &middot; ${esc(jobAddress)}`:""} &middot; ${rows.length} switch leg${rows.length===1?"":"s"} across ${roomNames.length} room${roomNames.length===1?"":"s"}</div>
-  </div>
+  ${printBrandHead({ title: panelLabel || "Lighting panel", kind: ["Savant", "pull list"], jobName, jobAddress, cells: [["Switch legs / rooms", `${rows.length} / ${roomNames.length}`]] })}
   ${roomNames.length > 0 ? roomNames.map(renderRoomBlock).join("") :
     `<div style="padding:30px;text-align:center;color:#5E6670;font-style:italic;">No outputs to print yet.</div>`}
-  <div class="footer">Homestead Electric — Savant pull list</div>
+  ${printBrandFoot("Savant pull list")}
 </div></body></html>`;
 
   const win = window.open("", "_blank");
@@ -5628,6 +5683,7 @@ async function _saveHtmlAsPdf(html, filename) {
     iframe.contentDocument.write(html);
     iframe.contentDocument.close();
     await new Promise(r => setTimeout(r, 350));
+    await _pdfFontsReady(iframe.contentDocument);
     const wm = await _pdfWatermark(iframe.contentDocument);
     // The on-screen Print button is not part of the sheet (the print
     // stylesheet hides it; a capture has to be told).
@@ -62940,6 +62996,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Last manifest update:** 2026-11-14 · App SW version: v639
 ---
+
+- **Printed panel schedules redesigned: a title block with the logo, module cards two across, big slot numbers, 240V breakers marked, empty columns left off, all easy on toner** · 'in-flight 2026-11-14' · 'SW v639' · 'printBrandHead' · 'printBrandFoot' · 'PRINT_BRAND_CSS' · 'PRINT_FONTS' · 'printPanelSchedule' · 'printElectricalPanel' · 'printSavantPanelHomeRunsStyle' · 'printSavantV2PanelCover' · 'printSavantV2PullList' · '_pdfFontsReady' · Koy: *"how can we make these panel schedules a little cooler looking"*, then, across nine mockups on the real Miller job: *"we do not have color printer so they need to be made to look good balck and white"*, *"bad ass eye catching"*, *"needs to be easier on ink when printing"*, *"i dont like how the modules arent evenly lined up with each other"*, and of the four headers, *"i like c"*. **Title block (every schedule sheet):** a boxed header with the logo in its own cell, the panel name large in Barlow Condensed (it steps down in size for a long name), the kind of sheet beside it, and labeled cells for Job, Address and the sheet's counts (modules / channels, size / slots, and so on). A footer rule carries HOMESTEAD ELECTRIC and the print date. No solid black anywhere: measured on Miller, the sheets are about 8 to 9 percent dark against 5 to 6 percent for the old table and 36 to 40 percent for the black-banner mockup Koy turned down. **Lighting control schedule:** each module is a card, its number big in a left cell and its channels as rows. A column nobody filled in on that panel (Type, Watts, Keypad / Notes) is left off the sheet. With none in use and no module over 8 channels the cards print two across on a true grid, read down each column, every card the same height and every row level, a short module padded with numbered blank rows. With a column in use, or a module too long to pad to, the cards run one per row with only the used columns. A sheet that has to paginate reads across instead, so a page break never lands mid-column; a card is still never cut in half ('.tall' modules over 40 rows still flow row by row). The fit-to-one-sheet script waits for the web fonts and re-measures. **Electrical panel and Savant panel sheets:** large slot numbers between heavy rules instead of a shaded column, amps right-aligned in bold. On the electrical sheet a 240V two-pole breaker (FILL writes notes '240V' on the first slot and the same name plus '(240V cont.)' on the second) gets a bar down the outside edge of both slots and a 240V tag on the first, with a one-line key above the table. The Savant sheet keeps its feeder colors. The Savant V2 panel cover and pull list get the title block and footer. **PDF download:** the savers wait for the fonts and load the same faces in the app page (html2canvas measures in the iframe but draws on the app's canvas; without that the title lost its space), and the keep-whole rule now follows cards and rows. **Not in this ship:** highlighting chosen loads (shown in the mockups) needs a new saved value on each load and a control in several load editors; it is a separate decision. **Verified** on Miller Residence - Alpine (1438): Lutron LCP 1 and LCP 2 and electrical Panel A on Print (headless Chrome print-to-PDF of the real builder output) and Download (the real savers in a browser, 'jsPDF.save' captured), each on one page. Layout-only checks with Miller's rows: the Control 4 layout, made-up Type / Watts / Keypad values for the one-per-row cards, and LCP 1 repeated four times for pagination (3 pages, cards whole). The three Savant printouts were checked on an empty panel only. Guides 'panelizedlighting.html' and 'homeruns.html' updated. **Why it won't lose data:** print and PDF rendering only; nothing new is read and nothing is written; no job field, loader, function or rules change. The popup now requests two Google font families the app already loads; offline it falls back to Arial and still prints.
 
 - **Lighting control panel printout: no Pulled column on any system** · 'in-flight 2026-11-14' · 'SW v639' · 'printPanelSchedule' · 'downloadPanelSchedule' · Koy: *"remove the pulled column from the lighting control panel print out"*. Lutron sheets lost the Pulled column in v476; Control 4 and Crestron sheets kept a Pulled column of check boxes on the right. It is now gone on every system, on **Print** and **Download**, and Keypad / Notes gets the width. Pulled is still tracked and shown in the app; only the paper changes. Guide 'panelizedlighting.html' updated. **Why it won't lose data:** print and PDF rendering only; the 'pulled' value on each load is not read differently, not written and not removed; no job field, loader, function or rules change.
 
