@@ -66,8 +66,9 @@ ok(has(r.lines, /^Matterport scan: needed now\.$/), "Miller 85%: Matterport line
 ok(has(r.lines, /^QC walk: already scheduled \(2026-10-15\), no change\.$/), "Miller 85%: QC line says no change");
 ok(r.title === "Rough 85% · here's what that set off", "Miller 85%: title");
 r = plan(miller, "rough", "100%", { openPunch: 21 });
-ok(r.blocked && r.blocked.count === 21 && !r.patch, "Miller 100% with 21 open punch is refused");
-ok(/21 punch items are still open on Miller Residence - Alpine\./.test(r.blocked.text), "refusal text has the count and job");
+ok(!r.blocked && r.patch.roughStage === "100%" && r.patch.roughStatus === "complete", "v641: Miller 100% with 21 open punch is allowed");
+ok(has(r.lines, /^21 rough punch items still open\. They stay on the rough punch list and the job card shows them until they're closed\.$/), "v641: the summary says what is still open");
+ok(!has(plan(miller, "rough", "100%", { openPunch: 0 }).lines, /still open/), "v641: nothing open, no still-open line");
 r = plan(miller, "rough", "75%", { openPunch: 21 });
 ok(r.lines.length === 1 && r.lines[0] === "Nothing else changed." && r.title === "Rough 75%", "no side effects says so");
 
@@ -93,7 +94,7 @@ ok(!("readyToInvoice" in plan(fin, "finish", "80%", {}).patch), "finish drop kee
 ok(!("readyToInvoice" in plan({ ...fin, invoiceSent: true }, "finish", "80%", {}).patch), "v553: finish drop never touches RTI");
 ok(!("readyToInvoice" in plan({ ...fin, readyToInvoice: false, invoiceSent: true }, "finish", "80%", {}).patch), "an already-cleared invoice is never touched");
 r = plan(fin, "finish", "100%", { openPunch: 2, openQc: 1 });
-ok(r.blocked && r.blocked.count === 3 && /2 finish punch items and 1 QC item still open on Webb\./.test(r.blocked.text), "finish 100% refused with both counts");
+ok(!r.blocked && r.patch.finishStatus === "complete" && has(r.lines, /^2 finish punch items and 1 QC item still open\. The job stays on Punch List until they're closed\.$/), "v641: finish 100% allowed, both counts named");
 ok(plan({ ...fin, finishOnHold: true }, "finish", "95%", {}).patch.finishStatus === undefined, "finish on hold keeps status");
 
 // ── Parity sweep: a job not on hold gets exactly the old side effects (plus only the invoice clear) ──

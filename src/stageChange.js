@@ -70,14 +70,24 @@ const parseStage = (s) => s==='Scheduled' ? 1 : (parseInt(s)||0);
 // other phase still justifies it (an invoice already sent has
 // readyToInvoice=false anyway, so it is never touched); (2) a job on hold keeps
 // its hold and its status — only 100% (complete) moves it. Returns
-// { blocked:{count, text} } when 100% is refused, else
 // { patch, title, lines } where lines are the plain-words summary.
+// v641 (Koy, 2026-11-16: "change it so it can be marked complete with open
+// items, but flag the job so they aren't forgotten"): 100% is never refused for
+// open punch any more; the summary names what is still open. Before v641 it
+// returned { blocked:{count, text} } instead.
 // Pure; exercised by scripts/stage-change-test.js.
 // v553 (Koy, 2026-10-17: "nobody uses the notification ready to invoice anyway"):
 // the Ready to invoice nudge is retired everywhere — the stage % no longer turns it on
 // or off, and no push, My Day task, Tasks section or Kanban card reads it. Invoicing is
 // tracked from Simpro (functions/simproSync.js). The old fields stay on the jobs.
 const READY_TO_INVOICE_ALERTS = false;
+// v641: "3 punch items" / "2 finish punch items and 1 QC item".
+function openLine(punch, qc, phase) {
+  const parts = [];
+  if (punch > 0) parts.push(`${punch} ${phase} punch item${punch !== 1 ? "s" : ""}`);
+  if (qc > 0) parts.push(`${qc} QC item${qc !== 1 ? "s" : ""}`);
+  return parts.join(" and ");
+}
 function stageChangePlan(job, phase, v, counts = {}) {
   const j = job || {};
   const pct = parseInt(v) || 0;
@@ -87,15 +97,9 @@ function stageChangePlan(job, phase, v, counts = {}) {
   const today = new Date().toLocaleDateString("en-US");
   const lines = [];
   if (phase === "finish") {
-    if (v === "100%") {
-      const fo = counts.openPunch || 0, qo = counts.openQc || 0;
-      if (fo + qo > 0) {
-        const parts = [];
-        if (fo > 0) parts.push(`${fo} finish punch item${fo !== 1 ? "s" : ""}`);
-        if (qo > 0) parts.push(`${qo} QC item${qo !== 1 ? "s" : ""}`);
-        return { blocked: { count: fo + qo, text: `${parts.join(" and ")} still open on ${j.name || "this job"}.` } };
-      }
-    }
+    // v641: 100% is allowed with items open (Koy 2026-11-16). They stay on the
+    // punch list, the job sits in Punch List, and the summary says so.
+    const fo = counts.openPunch || 0, qo = counts.openQc || 0;
     const onHold = !!j.finishOnHold || j.finishStatus === "waiting";
     const invoiceFire = READY_TO_INVOICE_ALERTS && pct >= 85 && !j.finishInvoiceFired ? { finishInvoiceFired: true, finishInvoiceDismissed: false, readyToInvoice: true, readyToInvoiceDate: today } : {};
     const invoiceReset = READY_TO_INVOICE_ALERTS && pct < 85 ? { finishInvoiceFired: false, finishInvoiceDismissed: false } : {};
@@ -107,13 +111,14 @@ function stageChangePlan(job, phase, v, counts = {}) {
     if (invoiceClear.readyToInvoice === false) lines.push(`Ready to invoice is off.${j.readyToInvoiceDate ? " It was on since " + j.readyToInvoiceDate + "." : ""}`);
     if (finishQcFlip.finishQcStatus) lines.push("Final QC walk: needs scheduling now.");
     if (v === "100%") lines.push("Finish marked complete.");
+    if (v === "100%" && fo + qo > 0) lines.push(`${openLine(fo, qo, "finish")} still open. The job stays on Punch List until they're closed.`);
     else if (onHold && pct > 0) lines.push("Still on hold. Take it off in Status when the crew is back.");
     return { patch, title: lines.length ? `${P} ${v} · here's what that set off` : `${P} ${v}`, lines: lines.length ? lines : ["Nothing else changed."] };
   }
-  if (v === "100%" && (counts.openPunch || 0) > 0) {
-    const n = counts.openPunch;
-    return { blocked: { count: n, text: `${n} punch item${n !== 1 ? "s are" : " is"} still open on ${j.name || "this job"}.` } };
-  }
+  // v641: rough 100% is allowed with rough punch open (Koy 2026-11-16); the job
+  // card shows a red "N rough items left" chip and the foreman's My Day keeps
+  // the "Open Rough Punch Items" task until the last one closes.
+  const ro = counts.openPunch || 0;
   const onHold = !!j.roughOnHold || j.roughStatus === "waiting";
   const qcFire = pct >= 80 && !j.roughQCTaskFired ? { roughQCTaskFired: true } : {};
   const prepDone = pct > 0 && j.prepStage !== "Job Prep Complete" ? { prepStage: "Job Prep Complete" } : {};
@@ -134,6 +139,7 @@ function stageChangePlan(job, phase, v, counts = {}) {
   if (matterportFlip.matterportStatus) lines.push("Matterport scan: needed now.");
   if (prepDone.prepStage) lines.push("Job Prep marked complete.");
   if (v === "100%") lines.push("Rough marked complete.");
+  if (v === "100%" && ro > 0) lines.push(`${openLine(ro, 0, "rough")} still open. They stay on the rough punch list and the job card shows them until they're closed.`);
   else if (onHold && pct > 0) lines.push("Still on hold. Take it off in Status when the crew is back.");
   return { patch, title: lines.length ? `${P} ${v} · here's what that set off` : `${P} ${v}`, lines: lines.length ? lines : ["Nothing else changed."] };
 }

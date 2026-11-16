@@ -176,11 +176,11 @@ await ok("phase.setStatus rough: every status value writes the select's exact pa
   assert.ok(/status must be one of/.test(SG.planSetPhaseStatus({ phase: "rough", status: "done" }, J()).refused)); assert.ok(/phase must be/.test(SG.planSetPhaseStatus({ phase: "qc", status: "" }, J()).refused));
   assert.ok(/archived/.test(SG.planSetPhaseStatus({ phase: "rough", status: "" }, jobCtx(GONE)).refused));
 });
-await ok("phase.setStatus complete: refused while the phase's punch has open items — counted with the slots laid over (a slot-closed item does not block); finish counts finish + Legacy QC; the first complete on rough flips Matterport + QC (finish never does)", () => {
+await ok("phase.setStatus complete: v641 allowed while the phase's punch has open items, the answer says how many — counted with the slots laid over (a slot-closed item does not block); finish counts finish + Legacy QC; the first complete on rough flips Matterport + QC (finish never does)", () => {
   const r = SG.planSetPhaseStatus({ phase: "rough", status: "complete" }, J());
-  assert.ok(/Cannot mark Rough as complete — 4 open punch items remaining on Forth/.test(r.refused), r.refused);   // PU1, PR1, PR2 (voided counts: the app's countFloor only tests done), PR4
+  assert.ok(!r.refused && r.fields.roughStatus === "complete" && /^4 rough punch items still open on Forth/.test(r.result.stillOpen), r.refused || r.result.stillOpen);   // PU1, PR1, PR2 (voided counts: the app's countFloor only tests done), PR4
   const f = SG.planSetPhaseStatus({ phase: "finish", status: "complete" }, J());
-  assert.ok(/Cannot mark Finish as complete — 1 finish punch item and 1 QC item still open/.test(f.refused), f.refused);
+  assert.ok(!f.refused && f.fields.finishStatus === "complete" && /^1 finish punch item and 1 QC item still open on Forth/.test(f.result.stillOpen), f.refused || f.result.stillOpen);
   // SLOT: raw tree open, slot says done → allowed (applyPunchTicks first, as normalizeJob does).
   assert.strictEqual(applyPunchTicks(JOBS()["jobs/" + SLOT].data).roughPunch.upper.general[0].done, true);
   const s = SG.planSetPhaseStatus({ phase: "rough", status: "complete" }, jobCtx(SLOT));
@@ -230,11 +230,11 @@ await ok("phase.setStage pushes + refusals", () => {
   const noMap = SG.planSetStage({ phase: "rough", stage: "5%" }, J({ prepChecklist: undefined, prepNA: undefined }));
   assert.deepStrictEqual(noMap.result.pushes.map(x => x.push), ["prep_complete"], "no map → prepStage decides → prep_complete");
   const r = SG.planSetStage({ phase: "rough", stage: "100%" }, J());
-  assert.ok(/Rough can't be 100% yet\. 4 punch items are still open on Forth\./.test(r.refused), r.refused);
+  assert.ok(!r.refused && r.fields.roughStatus === "complete" && r.result.lines.some(l => /^4 rough punch items still open\./.test(l)), r.refused || JSON.stringify(r.result.lines));   // v641
   const s = SG.planSetStage({ phase: "rough", stage: "100" }, jobCtx(SLOT));
   assert.strictEqual(s.fields.roughStage, "100%"); assert.strictEqual(s.fields.roughStatus, "complete"); assert.deepStrictEqual(s.result.pushes.map(x => x.push), ["milestone_complete"]); assert.deepStrictEqual(s.result.gcEmail, ["Rough complete (gcNotify)"]);
   const f = SG.planSetStage({ phase: "finish", stage: "100%" }, J());
-  assert.ok(/1 finish punch item and 1 QC item still open on Forth/.test(f.refused), f.refused);
+  assert.ok(!f.refused && f.fields.finishStatus === "complete" && f.result.lines.some(l => /^1 finish punch item and 1 QC item still open\./.test(l)), f.refused || JSON.stringify(f.result.lines));   // v641
   const f2 = SG.planSetStage({ phase: "finish", stage: "80%" }, J());
   assert.deepStrictEqual(f2.fields, { finishStage: "80%", finishQcStatus: "needs", finishStatus: "inprogress" });
   assert.ok(SG.planSetStage({ phase: "rough", stage: "75%" }, J({ prepStage: "Job Prep Complete" })).noop, "same stage, nothing else → noop");
@@ -521,8 +521,8 @@ await ok("handle: stage, inspection (fail → failedAgain → trip), QC fail →
   // Refusals.
   const gone = await call(io, "phase.setStatus", { phase: "rough", status: "" }, GONE); assert.strictEqual(gone.status, 400); assert.ok(/archived/.test(gone.body.refused));
   const miss = await call(io, "prep.tick", { key: "redlinePlans", state: "done" }, "1700000000000"); assert.strictEqual(miss.status, 404);
-  const bad = await call(io, "phase.setStage", { phase: "rough", stage: "100%" }); assert.strictEqual(bad.status, 400); assert.ok(/can't be 100% yet/.test(bad.body.refused));
-  assert.ok(auditOf(io, rid).ok === false && /can't be 100%/.test(auditOf(io, rid).why), "a refusal is audited too");
+  const bad = await call(io, "phase.setStage", { phase: "rough", stage: "101%" }); assert.strictEqual(bad.status, 400); assert.ok(/stage must be one of/.test(bad.body.refused));   // v641: open punch no longer refuses, so a bad stage stands in
+  assert.ok(auditOf(io, rid).ok === false && /stage must be one of/.test(auditOf(io, rid).why), "a refusal is audited too");
   const badId = await call(io, "prep.tick", { key: "redlinePlans", state: "done" }, "abc"); assert.strictEqual(badId.status, 400); assert.ok(/jobId must be/.test(badId.body.refused));
   const busy = fakeIo({ recent: 60 });
   await assert.rejects(call(busy, "prep.tick", { key: "redlinePlans", state: "done" }), (e) => e.status === 429);

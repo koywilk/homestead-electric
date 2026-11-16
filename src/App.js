@@ -34044,9 +34044,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         })()}
                         <select value={job.roughStatus||""} onChange={e=>{
                           const v=e.target.value;
+                          // v641: Complete is allowed with rough punch open; the card's red chip and the foreman's My Day task keep them in sight.
                           if(v==="complete"){
                             const open=punchOpen(job.roughPunch);
-                            if(open>0){toast.warn(`Cannot mark Rough as complete — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}
+                            if(open>0) toast.info(`Rough complete. ${open} rough punch item${open!==1?"s are":" is"} still open — the job card shows them until they're closed.`);
                           }
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           // Auto-flip matterport to "needs" when rough goes
@@ -34455,6 +34456,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         <select value={fsShown} onChange={e=>{
                           const pick=punchListPick(job, effFS(job), e.target.value);
                           const v=pick.status;
+                          // v641: Complete is allowed with finish punch / QC open; the job sits on Punch List until they close.
                           if(v==="complete"){
                             const finishOpen=punchOpen(job.finishPunch);
                             const qcOpen=punchOpen(job.qcPunch);
@@ -34463,8 +34465,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               const parts=[];
                               if(finishOpen>0) parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);
                               if(qcOpen>0) parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);
-                              toast.warn(`Cannot mark Finish as complete — ${parts.join(" and ")} still open. Clear them first.`);
-                              return;
+                              toast.info(`Finish complete. ${parts.join(" and ")} still open — the job stays on Punch List until they're closed.`);
                             }
                           }
                           const def=getStatusDef(FINISH_STATUSES,v);
@@ -38736,6 +38737,9 @@ const effFS = j => {
 // (finish punch, QC items, failed final items, a return trip). Derived only:
 // nothing is written; it reads the same effective finish status as the board.
 const isPunchList = j => isPunchListJob(j, effFS(j));
+// v641: open rough punch items (done and voided don't count) — the board's
+// "N rough items left" chip on a job whose rough is marked Complete.
+const roughItemsLeft = j => PunchListStage.openPunchItems(j && j.roughPunch).length;
 
 // ── Simplified scheduling state (3 values: needsSched | scheduled | ongoing) ──
 // Derives a single indicator from whatever the user's current status + mode is,
@@ -62994,8 +62998,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-14 · App SW version: v639
+**Last manifest update:** 2026-11-16 · App SW version: v641
 ---
+
+- **Rough and Finish can be marked Complete with punch still open; a red "N rough items left" chip on the Job Board keeps the leftovers in sight** · 'in-flight 2026-11-16' · 'SW v641' · 'stageChangePlan' · 'openLine' · 'roughItemsLeft' · 'planSetPhaseStatus' · 'stillOpen' · Koy, 2026-11-16, after Stratton #959 (rough inspection passed 5/26, 12 rough punch open) and Brandt #1430 (passed 11/12, 4 items waiting on framing) could not be set to 100%: *"change it so it can be marked complete with open items, but flag the job or something so they aren't forgotten about"* (Rough and Finish; the flag is a chip on the Job Board card). **What changed:** the 100% stage select, the Rough status select and the Finish status select no longer refuse while punch is open. 'stageChangePlan' (src/stageChange.js, copied byte for byte to functions/) never returns 'blocked' for punch; it saves the same patch it saves with nothing open and adds a line, *"4 rough punch items still open. They stay on the rough punch list and the job card shows them until they're closed."* / *"2 finish punch items and 1 QC item still open. The job stays on Punch List until they're closed."* The two status selects show the same news as a toast instead of the old "Cannot mark … Clear them first" warning. Duet / the Homestead connector ('functions/duetWrites/stages.js'): 'phase.setStatus' complete is allowed and answers 'stillOpen'; 'phase.setStage' 100% returns the plan's lines. **The flag:** a job whose rough is Complete with open rough punch (done and voided items don't count) shows a red **N rough items left** pill on its Job Board row; tap opens the job on Rough, press-and-hold filters the board to every such job. The foreman's existing red My Day task *N Open Rough Punch Items* (FIX 5, unchanged) still fires. A Finish Complete with items open already lands in **Punch List** (v624 rule, unchanged), so Simpro reads Punch List, not Ready to Invoice. The stage sync files a Complete rough as In Between → Rough-In Complete. Guides 'rough.html' + 'finish.html' updated. Tests: 'scripts/stage-change-test.js' and 'scripts/duet-stages-test.js' now pin "allowed, and says what is open". Crew brief 'docs/crew-briefs/v641.md'. **Needs 'firebase deploy --only functions:duetApi' for the Duet / connector side** (the app side works without it). **Why it won't lose data:** no new field; the saves are the same patches the selects already wrote when nothing was open, through the same 'u' / 'updateJob' funnel and version lock; the punch trees are not touched, so every open item stays exactly where it was; the chip only reads.
 
 - **Printed panel schedules redesigned: a title block with the logo, module cards two across, big slot numbers, 240V breakers marked, empty columns left off, all easy on toner** · 'in-flight 2026-11-14' · 'SW v639' · 'printBrandHead' · 'printBrandFoot' · 'PRINT_BRAND_CSS' · 'PRINT_FONTS' · 'printPanelSchedule' · 'printElectricalPanel' · 'printSavantPanelHomeRunsStyle' · 'printSavantV2PanelCover' · 'printSavantV2PullList' · '_pdfFontsReady' · Koy: *"how can we make these panel schedules a little cooler looking"*, then, across nine mockups on the real Miller job: *"we do not have color printer so they need to be made to look good balck and white"*, *"bad ass eye catching"*, *"needs to be easier on ink when printing"*, *"i dont like how the modules arent evenly lined up with each other"*, and of the four headers, *"i like c"*. **Title block (every schedule sheet):** a boxed header with the logo in its own cell, the panel name large in Barlow Condensed (it steps down in size for a long name), the kind of sheet beside it, and labeled cells for Job, Address and the sheet's counts (modules / channels, size / slots, and so on). A footer rule carries HOMESTEAD ELECTRIC and the print date. No solid black anywhere: measured on Miller, the sheets are about 8 to 9 percent dark against 5 to 6 percent for the old table and 36 to 40 percent for the black-banner mockup Koy turned down. **Lighting control schedule:** each module is a card, its number big in a left cell and its channels as rows. A column nobody filled in on that panel (Type, Watts, Keypad / Notes) is left off the sheet. With none in use and no module over 8 channels the cards print two across on a true grid, read down each column, every card the same height and every row level, a short module padded with numbered blank rows. With a column in use, or a module too long to pad to, the cards run one per row with only the used columns. A sheet that has to paginate reads across instead, so a page break never lands mid-column; a card is still never cut in half ('.tall' modules over 40 rows still flow row by row). The fit-to-one-sheet script waits for the web fonts and re-measures. **Electrical panel and Savant panel sheets:** large slot numbers between heavy rules instead of a shaded column, amps right-aligned in bold. On the electrical sheet a 240V two-pole breaker (FILL writes notes '240V' on the first slot and the same name plus '(240V cont.)' on the second) gets a bar down the outside edge of both slots and a 240V tag on the first, with a one-line key above the table. The Savant sheet keeps its feeder colors. The Savant V2 panel cover and pull list get the title block and footer. **PDF download:** the savers wait for the fonts and load the same faces in the app page (html2canvas measures in the iframe but draws on the app's canvas; without that the title lost its space), and the keep-whole rule now follows cards and rows. **Not in this ship:** highlighting chosen loads (shown in the mockups) needs a new saved value on each load and a control in several load editors; it is a separate decision. **Verified** on Miller Residence - Alpine (1438): Lutron LCP 1 and LCP 2 and electrical Panel A on Print (headless Chrome print-to-PDF of the real builder output) and Download (the real savers in a browser, 'jsPDF.save' captured), each on one page. Layout-only checks with Miller's rows: the Control 4 layout, made-up Type / Watts / Keypad values for the one-per-row cards, and LCP 1 repeated four times for pagination (3 pages, cards whole). The three Savant printouts were checked on an empty panel only. Guides 'panelizedlighting.html' and 'homeruns.html' updated. **Why it won't lose data:** print and PDF rendering only; nothing new is read and nothing is written; no job field, loader, function or rules change. The popup now requests two Google font families the app already loads; offline it falls back to Arial and still prints.
 
@@ -76644,6 +76650,8 @@ function App() {
             {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim} onClick={()=>openJobById(job.id,"Rough")} onHold={()=>setPillFilter({label:"Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs), test:j=>effRS(j)===rs})}/>}
             {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):isPunchList(job)?"Finish: Punch List":("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={isPunchList(job)?"#A8505E":(getStatusDef(FINISH_STATUSES,fs).color||C.dim)} onClick={()=>openJobById(job.id,"Finish")} onHold={()=>setPillFilter({label:"Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs), test:j=>effFS(j)===fs})}/>}
             {job.matterportStatus&&job.matterportStatus!=="complete"&&<Pill label={job.matterportStatus==="scheduled"&&job.matterportStatusDate?"Matterport: "+fmtDisplay(job.matterportStatusDate):("Matterport: "+(getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).label||job.matterportStatus))} color={getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).color||C.dim} onClick={()=>openJobById(job.id,"Plans & Links")}/>}
+            {/* v641: rough marked complete with rough punch still open — it can be, now; this keeps the leftovers in sight until the last one closes. */}
+            {rs==="complete"&&(()=>{ const rl=roughItemsLeft(job); return rl>0&&<Pill label={`${rl} rough item${rl!==1?"s":""} left`} color={C.red} onClick={()=>openJobById(job.id,"Rough")} onHold={()=>setPillFilter({label:"Rough complete, items left", test:j=>effRS(j)==="complete"&&roughItemsLeft(j)>0})}/>; })()}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}

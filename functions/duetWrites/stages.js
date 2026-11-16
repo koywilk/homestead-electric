@@ -9,14 +9,15 @@
 //     <p>StatusDate kept only when the status takes a date, <p>ProjectedStart
 //     written back as it is, <p>DepositDismissed:false on scheduled, and for
 //     ROUGH the matterportFlip + qcFlip on the first move to complete;
-//     complete refused while the phase's punch has open items (rough: the
-//     rough tree; finish: finish + Legacy QC) — counted on the job as the app
-//     SHOWS it, with the punchTicks slots laid over the trees (normalizeJob =
+//     v641: complete is allowed with open punch (it was refused before); the
+//     answer says how many are still open (rough: the rough tree; finish:
+//     finish + Legacy QC), counted on the job as the app SHOWS it, with the
+//     punchTicks slots laid over the trees (normalizeJob =
 //     applyPunchTicks(...)). WaitingOnInput (~L48885): trimmed, 140 chars.
 //   • the STAGE select → applyStage (~L33128) → stageChangePlan: the app's
 //     own function, moved to src/stageChange.js and required here as the
 //     byte-identical functions/stageChange.js; the counts are punchOpen on the
-//     shown trees, the patch is written whole, a blocked plan refuses.
+//     shown trees, the patch is written whole (v641: never blocked for punch).
 //   • Pass / Fail (~L33870 rough, ~L34258 final): a new non-empty result
 //     appends an attempt {id, date:"M/D/YYYY", result, items:[{text}], by};
 //     clearing writes only the result. InspFailAgain (~L48916): while the
@@ -131,18 +132,20 @@ function planSetPhaseStatus(args, ctx) {
   if (!STATUS_VALUES.includes(v)) return refuse(`status must be one of ${STATUS_VALUES.map(s => (s === "" ? '"" (unset)' : s)).join(", ")}.`);
   const p = phase, k = (s) => `${p}${s}`;
   const shown = shownJob(data);
+  // v641: complete is allowed with punch open, as in the app's select; the
+  // answer names what is still open (counted on the job as the app shows it).
+  let stillOpen = "";
   if (v === "complete") {
-    // The select's guard, counted on the job as the app shows it (slots applied).
     if (phase === "rough") {
       const open = punchOpen(shown.roughPunch);
-      if (open > 0) return refuse(`Cannot mark Rough as complete — ${open} open punch item${open !== 1 ? "s" : ""} remaining on ${name}. Clear them first. Nothing was written.`);
+      if (open > 0) stillOpen = `${open} rough punch item${open !== 1 ? "s" : ""} still open on ${name}; the job card shows them until they're closed.`;
     } else {
       const finishOpen = punchOpen(shown.finishPunch), qcOpen = punchOpen(shown.qcPunch);
       if (finishOpen + qcOpen > 0) {
         const parts = [];
         if (finishOpen > 0) parts.push(`${finishOpen} finish punch item${finishOpen !== 1 ? "s" : ""}`);
         if (qcOpen > 0) parts.push(`${qcOpen} QC item${qcOpen !== 1 ? "s" : ""}`);
-        return refuse(`Cannot mark Finish as complete — ${parts.join(" and ")} still open on ${name}. Clear them first. Nothing was written.`);
+        stillOpen = `${parts.join(" and ")} still open on ${name}; the job stays on Punch List until they're closed.`;
       }
     }
   }
@@ -185,7 +188,7 @@ function planSetPhaseStatus(args, ctx) {
   const gcEmail = v === "complete" && from !== "complete" ? [`${P(phase)} complete (gcNotify)`] : [];
   return { fields, before, after,
     result: { phase, from, to: v, label: def.label || "", changed, statusDate: fields[k("StatusDate")], waitingOn, onHold: fields[k("OnHold")], startConfirmed: fields[k("StartConfirmed")],
-      matterportFlipped: !!matterportFlip.matterportStatus, qcFlipped: !!qcFlip.qcStatus, pushes, pushTo: [...new Set(pushes.flatMap(x => x.to))], gcEmail: gcEmail.length ? gcEmail : undefined } };
+      matterportFlipped: !!matterportFlip.matterportStatus, qcFlipped: !!qcFlip.qcStatus, pushes, pushTo: [...new Set(pushes.flatMap(x => x.to))], gcEmail: gcEmail.length ? gcEmail : undefined, stillOpen: stillOpen || undefined } };
 }
 
 // ── 2. stage (the % select) ──────────────────────────────────────────────────
@@ -203,7 +206,7 @@ function planSetStage(args, ctx) {
   // applyStage: the counts from the shown trees, then the app's own plan.
   const counts = phase === "finish" ? { openPunch: punchOpen(shown.finishPunch), openQc: punchOpen(shown.qcPunch) } : { openPunch: punchOpen(shown.roughPunch) };
   const plan = ST.stageChangePlan(shown, phase, v, counts);
-  if (plan.blocked) return refuse(`${P(phase)} can't be ${v} yet. ${plan.blocked.text} Nothing was written.`);
+  if (plan.blocked) return refuse(`${P(phase)} can't be ${v} yet. ${plan.blocked.text} Nothing was written.`);   // v641: stageChangePlan no longer blocks for punch; kept for any future block
   const fields = sanitize(plan.patch);
   const changed = changedKeys(fields, data);
   const stageKey = `${phase}Stage`;
