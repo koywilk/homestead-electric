@@ -31311,6 +31311,74 @@ function QuickJobMenu({ job, onOpen, onPanel, onApply, onNote, onDelete, flush }
   );
 }
 
+// v644: Bid items + Material orders on a quick job (Koy 2026-11-16: "there is no bid items in
+// quick jobs or ability to send PO in them. they need this too"). The same two Simpro loaders as
+// JobDetail's (cost centers, then required-vs-assigned), the same 12 h cache on the job doc and
+// the same additive u() write, so BidItemsPanel / MaterialOrders get exactly the props they get
+// on a full job. The one difference: LAZY. Nothing is fetched until `wanted` (one of the two
+// sections is open), so opening a quick job costs no Simpro calls. JobDetail keeps its own copy
+// of this logic untouched.
+function useQuickJobBid(job, u, wanted) {
+  const TTL = 12 * 60 * 60 * 1000;
+  const [costCenters, setCostCenters] = useState(null);       // null | "loading" | {sections, costCenters, fetchedAt}
+  const [costCentersErr, setCostCentersErr] = useState(null);
+  const [costCentersRefreshing, setCostCentersRefreshing] = useState(false);
+  const [ccTick, setCcTick] = useState(0);
+  const [stock, setStock] = useState(null);
+  const [stockErr, setStockErr] = useState(null);
+  const [stockRefreshing, setStockRefreshing] = useState(false);
+  const [stockTick, setStockTick] = useState(0);
+  const simproNo = simproJobNoOf(job);
+
+  useEffect(() => {
+    if (!wanted) return;
+    if (!simproNo) { setCostCenters(null); setCostCentersErr(null); return; }
+    const cached = job.simproCostCentersCache;
+    const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0;
+    const stale = !fetchedAt || (Date.now() - fetchedAt) > TTL;
+    if (cached && Array.isArray(cached.costCenters)) setCostCenters(cached); else setCostCenters("loading");
+    setCostCentersErr(null);
+    if (!cached || stale || ccTick > 0) {
+      setCostCentersRefreshing(!!cached);
+      httpsCallable(functions, "getSimproJobCostCenters")({ simproJobNo: simproNo })
+        .then(res => { setCostCenters(res.data); setCostCentersRefreshing(false); u({ simproCostCentersCache: res.data }); })
+        .catch(e => {
+          console.error("[quickJob costCenters error]", e);
+          setCostCentersRefreshing(false);
+          setCostCentersErr(e.message || "Failed to load cost centers");
+          if (!cached) setCostCenters(null);
+        });
+    }
+    // job.simproCostCentersCache is deliberately NOT a dep: the cache write above would re-run this effect.
+  }, [simproNo, ccTick, wanted]);
+
+  useEffect(() => {
+    if (!wanted) return;
+    if (!simproNo) { setStock(null); setStockErr(null); return; }
+    const cached = job.simproStockCache;
+    const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0;
+    const stale = !fetchedAt || (Date.now() - fetchedAt) > TTL;
+    if (cached && Array.isArray(cached.costCenters)) setStock(cached); else setStock("loading");
+    setStockErr(null);
+    if (!cached || stale || stockTick > 0) {
+      setStockRefreshing(!!cached);
+      httpsCallable(functions, "getSimproJobStock", { timeout: 120000 })({ simproJobNo: simproNo })
+        .then(res => { setStock(res.data); setStockRefreshing(false); u({ simproStockCache: res.data }); })
+        .catch(e => {
+          console.error("[quickJob stock error]", e);
+          setStockRefreshing(false);
+          setStockErr(e.message || "Failed to load required vs assigned");
+          if (!cached) setStock(null);
+        });
+    }
+  }, [simproNo, stockTick, wanted]);
+
+  return {
+    costCenters, costCentersErr, costCentersRefreshing, refetchCostCenters: () => setCcTick(n => n + 1),
+    stock, stockErr, stockRefreshing, refetchStock: () => setStockTick(n => n + 1),
+  };
+}
+
 function QuickJobDetail({ job: rawJob, onUpdate, onClose, onDelete, foremenList, leadsList }) {
   const [job, setJob] = useState(()=>({...normalizeJob(rawJob), quickJob:true}));
   const jobRef = useRef(job);
@@ -31334,7 +31402,15 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, onDelete, foremenList,
   const [menu, setMenu] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [editing, setEditing] = useState(null); // which section is in edit mode
-  const [fold, setFold] = useState({});         // Material / Notes / Photos / Job details start folded
+  const [fold, setFold] = useState({});         // Material / Bid items / Material orders / Notes / Photos / Job details start folded
+
+  // v644: Bid items + Material orders. Simpro is only asked once one of the two is opened.
+  const bid = useQuickJobBid(job, u, !!(fold.bid || fold.orders));
+  const [builderOpen, setBuilderOpen] = useState(false);   // "Order from the bid" in Bid items opens the order screen inside Material orders
+  const bidSimproNo = simproJobNoOf(job);
+  const canOrderFromBid = !!(bidSimproNo && can(getIdentity(), "materials.sendPO"));
+  const poCards = Array.isArray(job.commMaterials) ? job.commMaterials : [];
+  const poOpen = poCards.filter(o => !o.pickedUp && !o.deliveredToShop).length;
 
   // Photo handling — upload to Firebase Storage
   const [qjUploading, setQjUploading] = useState(false);
@@ -31529,6 +31605,44 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, onDelete, foremenList,
               {editing === "material"
                 ? <TA value={job.material || ""} onChange={e => u({ material: e.target.value })} placeholder="List materials needed..." rows={3} />
                 : materialText ? <div style={richBody}><RichText html={job.material}/></div> : <div style={noneBody}>None listed</div>}
+            </div>
+          )}
+
+          {/* v644: Bid items — the job's Simpro bid, the same panel as a full job's Bid Items tab. */}
+          {foldHead("bid", "Bid items", null, bidSimproNo ? "From the Simpro bid" : "Add a Simpro job # to see them")}
+          {fold.bid && (
+            <div style={secStyle}>
+              {canOrderFromBid && (
+                <button type="button" onClick={() => { setFold(f => ({ ...f, orders: true })); setBuilderOpen(true); }}
+                  style={{ ...qjFilledBtn(C.accent), flex: "none", width: "100%", minHeight: 44 }}>Order from the bid</button>
+              )}
+              <BidItemsPanel
+                simproNo={bidSimproNo}
+                data={bid.costCenters} error={bid.costCentersErr} refreshing={bid.costCentersRefreshing} onRefresh={bid.refetchCostCenters}
+                stock={bid.stock} stockErr={bid.stockErr} stockRefreshing={bid.stockRefreshing} onRefreshStock={bid.refetchStock}
+              />
+            </div>
+          )}
+
+          {/* v644: Material orders — Material Tracking, one list for the job (job.commMaterials, phase "comm"),
+              exactly the commercial Materials tab: each order is charged to a Simpro cost center you pick. */}
+          {foldHead("orders", "Material orders", poCards.length || null, poCards.length ? (poOpen ? `${poOpen} open` : "All picked up") : "None yet")}
+          {fold.orders && (
+            <div style={secStyle}>
+              <MaterialOrders orders={job.commMaterials} onChange={v => u({ commMaterials: v })}
+                simproNo={job.simproNo} jobId={job.id} phase="comm"
+                onPatchOrder={(id, p) => { /* reconcile against the live job copy, never this render's list (v523 rule) */
+                  const cur = Array.isArray(jobRef.current.commMaterials) ? jobRef.current.commMaterials : [];
+                  if (!cur.some(x => x.id === id)) { console.warn("[PO] card not on this job any more", id); if (typeof toast !== "undefined" && toast.info) toast.info("The PO was made. Open that job again to see its number on the card."); return; }
+                  u({ commMaterials: cur.map(x => x.id === id ? { ...x, ...(typeof p === "function" ? p(x) : p) } : x) }); }}
+                bid={bid.stock} onRefreshBid={bid.refetchStock}
+                openBuilder={builderOpen} onBuilderClosed={() => setBuilderOpen(false)}
+                onUpsertCards={!bidSimproNo ? null : (cards) => { /* v524 dedupe by order + cost center, on the live copy */
+                  const cur = Array.isArray(jobRef.current.commMaterials) ? jobRef.current.commMaterials : [];
+                  const same = (a, b) => a.poOrderId && a.poOrderId === b.poOrderId && String(a.poCcId) === String(b.poCcId);
+                  const next = cur.map(x => { const c = cards.find(n => same(x, n)); return c ? { ...x, ...c, id: x.id } : x; });
+                  for (const c of cards) if (!cur.some(x => same(x, c))) next.push(c);
+                  u({ commMaterials: next }); }}/>
             </div>
           )}
 
@@ -63138,8 +63252,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-16 · App SW version: v642
+**Last manifest update:** 2026-11-16 · App SW version: v644
 ---
+
+- **Quick jobs get Bid items and Material orders: see the Simpro bid and send POs to CED from a quick job** · 'in-flight 2026-11-16' · 'SW v644' · 'useQuickJobBid' · 'QuickJobDetail' · 'BidItemsPanel' · 'MaterialOrders' · 'commMaterials' · 'public/sops/biditems.html' · 'public/sops/materials.html' · Koy, 2026-11-16: *"why is there no bid items in quick jobs or ability to send po in them. they need this too"*. Two folded sections under Material on the quick job screen (start collapsed, count on the header). **Bid items** is the same 'BidItemsPanel' a full job's Bid Items tab shows (cost centers, Required vs Assigned); if you can send POs, an **Order from the bid** button at its top opens the order screen inside **Material orders**. **Material orders** is the commercial Materials tab's 'MaterialOrders' with phase "comm" and the list stored in 'job.commMaterials': each order is charged to a Simpro cost center you pick, one PO per cost center, one email to CED, same receipts and CC box. No server change: 'sendMaterialOrder' / 'sendMaterialPO' have no job-type check, they need the Simpro job # and, for "comm", a named cost center. Simpro is asked only when one of the two sections is first opened ('useQuickJobBid', same 12 h 'simproCostCentersCache' / 'simproStockCache' as a full job), so opening a quick job costs no extra Simpro calls. Quick-job POs show in the existing Up Next / Huddle PO reminders for free (they already read 'commMaterials' on any job). Guides: 'materials.html' gets a "Quick jobs have it too" section, 'biditems.html' a Q&A row. **Why it won't lose data:** additive only. One new field on quick jobs ('commMaterials', already in 'normalizeJob' and the loader) and the two existing cache fields; no existing field, rules, functions or loader changes; full jobs' own Bid Items / Material Tracking code is untouched.
 
 - **Move items: open Rough punch goes to the Finish punch list or onto a return trip (new or open) in one step, with a record on both ends** · 'in-flight 2026-11-16' · 'SW v642' · 'punchMove.js' · 'PunchMoveSheet' · 'planMoveToFinish' · 'undoMoveToFinish' · 'planLinkToTrip' · 'undoLinkToTrip' · 'runPunchMove' · 'scheduledRTMap' · Koy, 2026-11-16: *"have the option to send the punchlist items to the finished punchlist or send them to a new return trip … so I don't have to manually copy and paste them over, and we have a record of them being moved"*; mockup 'docs/mockups/punch-move.html' (claude.ai/artifact/PJRBcbY7BiUSFaudPKxt9h) on Stratton #959 / Brandt #1430's real items, approved *"Build it as shown"*. **Where:** a bar above the Rough punch list, *N open · Move items ▸*, only while something is open; the sheet picks where (Finish punch list / new Return Trip #N / each open trip, numbered as the Return Trips tab does) and which (grouped by floor and room, Select all), then *Move N to …*; one Undo bar. **To Finish:** each item is copied into the same floor and room on Finish (an extras floor is added to Finish with the same key + label, a room matched by its name key or added) as an open item carrying its words, photos, material, who added it and assignment, plus 'movedFrom {phase, itemId, by, at}'; the Rough original stays put, done, with 'movedTo {phase, itemId, by, at}', drawn greyed with a *Moved to Finish · who · date* tag and a disabled checkbox (the Finish copy shows *From Rough · who · date*). Because the original is done, every open count (the v641 board chip, My Day's Open Rough Punch task, Punch List, the dashboard) stops counting it, and 'u()' writes its 'punchTicks' slot exactly like a check-off. Items on an open trip are left out of a Finish move. **To a trip:** the link trips already use (PunchLinker): an entry '{id, text:"[Rough · Floor · Room] item", done:false, originItemId, originPhase:"rough", addedAt, addedAtTs, movedBy}' per item, so the existing two-way done cascade applies; the Rough item itself is not changed. A new trip is the app's literal with scope *Rough punch leftovers*, 'needsSchedule:true', 'rtStatus:"needs"', 'fromPunchMove:true'. An item already on that trip is skipped. The punch row's trip chip now also shows unscheduled open trips (*Return Trip #N · needs a date*); scheduled trips keep their date chip. **Undo** reverses only what the move did, on the freshest copy: originals open again with the record cleared, the Finish copies removed by id (a room or floor the move added stays, empty); trip entries removed by id and a trip the move made removed only while nobody has added to, assigned or dated it. Tests: new 'scripts/punch-move-test.js' (37 checks in prebuild: picks, placement by room key, extras floor, copy shape, the slot 'punchTickPatches' derives, open counts before/after, both undos, trip literal, numbering, no double link, signed-off trips refused, App.js wiring). Guides 'rough.html', 'finish.html', 'returntrips.html'. Crew brief 'docs/crew-briefs/v642.md'. **Why it won't lose data:** no item is ever deleted except the copies a move made, and only by its own Undo; the originals are flagged (done + 'movedTo'), never removed; every write goes through JobDetail's 'u()' from the freshest copy ('jobRef'), the same funnel, version lock and slot writer every check-off uses; trips are only appended to; no loader, rules or functions change.
 
