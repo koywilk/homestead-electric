@@ -69,6 +69,10 @@ r = plan(miller, "rough", "100%", { openPunch: 21 });
 ok(!r.blocked && r.patch.roughStage === "100%" && r.patch.roughStatus === "complete", "v641: Miller 100% with 21 open punch is allowed");
 ok(has(r.lines, /^21 rough punch items still open\. They stay on the rough punch list and the job card shows them until they're closed\.$/), "v641: the summary says what is still open");
 ok(!has(plan(miller, "rough", "100%", { openPunch: 0 }).lines, /still open/), "v641: nothing open, no still-open line");
+ok(!has(plan({ ...miller, roughOnHold: true }, "rough", "100%", { openPunch: 0 }).lines, /Still on hold/), "v641: 100% on a held job never says still on hold (rough)");
+ok(!has(plan({ ...miller, roughOnHold: true }, "rough", "100%", { openPunch: 3 }).lines, /Still on hold/), "v641: 100% with items open on a held job never says still on hold (rough)");
+ok(!has(plan({ name: "H", finishOnHold: true }, "finish", "100%", {}).lines, /Still on hold/), "v641: 100% on a held job never says still on hold (finish)");
+ok(has(plan({ name: "H", roughOnHold: true }, "rough", "60%", {}).lines, /Still on hold/), "a held job below 100% still says so");
 r = plan(miller, "rough", "75%", { openPunch: 21 });
 ok(r.lines.length === 1 && r.lines[0] === "Nothing else changed." && r.title === "Rough 75%", "no side effects says so");
 

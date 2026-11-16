@@ -110,8 +110,10 @@ function stageChangePlan(job, phase, v, counts = {}) {
     if (invoiceFire.readyToInvoice) lines.push(`Ready to invoice: on. The office${firstName ? " and " + firstName : ""} get a push.`);
     if (invoiceClear.readyToInvoice === false) lines.push(`Ready to invoice is off.${j.readyToInvoiceDate ? " It was on since " + j.readyToInvoiceDate + "." : ""}`);
     if (finishQcFlip.finishQcStatus) lines.push("Final QC walk: needs scheduling now.");
-    if (v === "100%") lines.push("Finish marked complete.");
-    if (v === "100%" && fo + qo > 0) lines.push(`${openLine(fo, qo, "finish")} still open. The job stays on Punch List until they're closed.`);
+    if (v === "100%") {
+      lines.push("Finish marked complete.");
+      if (fo + qo > 0) lines.push(`${openLine(fo, qo, "finish")} still open. The job stays on Punch List until they're closed.`);
+    }
     else if (onHold && pct > 0) lines.push("Still on hold. Take it off in Status when the crew is back.");
     return { patch, title: lines.length ? `${P} ${v} · here's what that set off` : `${P} ${v}`, lines: lines.length ? lines : ["Nothing else changed."] };
   }
@@ -138,8 +140,10 @@ function stageChangePlan(job, phase, v, counts = {}) {
   }
   if (matterportFlip.matterportStatus) lines.push("Matterport scan: needed now.");
   if (prepDone.prepStage) lines.push("Job Prep marked complete.");
-  if (v === "100%") lines.push("Rough marked complete.");
-  if (v === "100%" && ro > 0) lines.push(`${openLine(ro, 0, "rough")} still open. They stay on the rough punch list and the job card shows them until they're closed.`);
+  if (v === "100%") {
+    lines.push("Rough marked complete.");
+    if (ro > 0) lines.push(`${openLine(ro, 0, "rough")} still open. They stay on the rough punch list and the job card shows them until they're closed.`);
+  }
   else if (onHold && pct > 0) lines.push("Still on hold. Take it off in Status when the crew is back.");
   return { patch, title: lines.length ? `${P} ${v} · here's what that set off` : `${P} ${v}`, lines: lines.length ? lines : ["Nothing else changed."] };
 }
