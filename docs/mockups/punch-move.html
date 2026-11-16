@@ -1,0 +1,226 @@
+<title>Move Punch Items</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700;800&display=swap">
+<style>
+/* Layout: one phone-width app column per job, the move sheet slides over it; notes beside it on wide screens. */
+:root{
+  --bg:#EEF0F3; --surface:#F4F6F8; --card:#FFFFFF; --border:#E1E4E9; --text:#1B1F24; --dim:#5E6670; --faint:#666E79;
+  --rough:#2F5BD9; --finish:#6A7BAA; --green:#1F7A3F; --red:#C62828; --purple:#6A3FB5; --slate:#56657A; --slateBg:#E8ECF2;
+  --steelBg:#EAF0FC; --steelLine:#C7D5F5; --shade:rgba(20,24,33,.45);
+  --display:'Bebas Neue',Impact,'Arial Narrow',sans-serif; --body:Inter,system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141821; --surface:#1B2030; --card:#202636; --border:#2E3440; --text:#E6EAF1; --dim:#9AA3B2; --faint:#9AA3B2;
+  --rough:#6E93FF; --finish:#9AA8D4; --green:#4CC27A; --red:#FF6B6B; --purple:#A98BF0; --slate:#9AA8BC; --slateBg:#262D3B;
+  --steelBg:#1F2A44; --steelLine:#34477A; --shade:rgba(0,0,0,.6); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141821; --surface:#1B2030; --card:#202636; --border:#2E3440; --text:#E6EAF1; --dim:#9AA3B2; --faint:#9AA3B2;
+  --rough:#6E93FF; --finish:#9AA8D4; --green:#4CC27A; --red:#FF6B6B; --purple:#A98BF0; --slate:#9AA8BC; --slateBg:#262D3B;
+  --steelBg:#1F2A44; --steelLine:#34477A; --shade:rgba(0,0,0,.6); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--body);font-size:14px;line-height:1.45;padding-block:20px 40px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-family:var(--display);font-size:34px;letter-spacing:.05em;margin:0;text-wrap:balance}
+.lede{color:var(--dim);max-width:68ch;margin:4px 0 14px}
+.jobs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.jobs button{font:700 13px var(--body);padding:8px 14px;border-radius:99px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer}
+.jobs button[aria-pressed="true"]{background:var(--rough);border-color:var(--rough);color:#fff}
+.grid{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+.phone{flex:0 1 400px;min-width:0;width:100%;background:var(--card);border:1px solid var(--border);border-radius:22px;padding:14px;position:relative;overflow:hidden;min-height:560px}
+.notes{flex:1 1 300px;min-width:0}
+.notes h2{font-family:var(--display);font-size:20px;letter-spacing:.06em;margin:0 0 6px;color:var(--rough)}
+.notes ol,.notes ul{margin:0 0 14px;padding-left:20px}
+.notes li{margin-bottom:6px}
+.notes .q{background:var(--slateBg);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.boardrow{border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:12px}
+.boardrow .nm{font-weight:800}
+.pills{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.pill{font-size:11.5px;font-weight:800;border-radius:99px;padding:2px 9px;border:1px solid currentColor;white-space:nowrap}
+.pill.red{color:var(--red)} .pill.fin{color:var(--finish)} .pill.rt{color:var(--purple)} .pill.ok{color:var(--green)}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tab{font:700 12.5px var(--body);padding:6px 11px;border-radius:8px;background:var(--surface);color:var(--dim);border:0;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--rough);color:#fff}
+.tab.fin[aria-selected="true"]{background:var(--finish)}
+.tab.rt[aria-selected="true"]{background:var(--purple)}
+.sec{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:2px solid var(--steelLine);padding-bottom:6px;margin:4px 0 10px}
+.sec .lbl{font-family:var(--display);font-size:20px;letter-spacing:.08em;color:var(--rough)}
+.sec .cnt{font-size:12px;color:var(--dim);font-weight:700}
+.movebtn{font:800 12.5px var(--body);border-radius:8px;padding:7px 11px;border:0;background:var(--rough);color:#fff;cursor:pointer;white-space:nowrap}
+.floor{font-size:11.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin:10px 0 4px}
+.room{font-size:12.5px;font-weight:700;color:var(--text);margin:6px 0 3px}
+.item{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--border);border-radius:8px;margin-bottom:4px;background:var(--card)}
+.item .box{width:18px;height:18px;border:2px solid var(--muted,#9AA3B2);border-radius:5px;flex-shrink:0;margin-top:1px}
+.item .t{flex:1;min-width:0}
+.item .sub{font-size:11.5px;color:var(--dim);margin-top:1px}
+.item.moved{background:var(--surface)}
+.item.moved .t>span{text-decoration:line-through;color:var(--dim)}
+.item.moved .box{border-color:var(--finish);background:var(--finish)}
+.tag{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.04em;border-radius:99px;padding:1px 7px;margin-top:3px}
+.tag.fin{background:var(--steelBg);color:var(--finish)} .tag.rt{background:var(--slateBg);color:var(--purple)} .tag.wait{background:var(--slateBg);color:var(--slate)}
+.empty{color:var(--dim);font-size:13px;padding:10px 2px}
+.tripcard{border:1px solid var(--border);border-left:4px solid var(--purple);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.tripcard .ttl{font-weight:800}
+.tripcard .meta{font-size:12px;color:var(--dim);margin:2px 0 6px}
+/* sheet */
+.shade{position:absolute;inset:0;background:var(--shade);display:flex;align-items:flex-end}
+.sheet{background:var(--card);width:100%;border-radius:18px 18px 0 0;padding:14px;max-height:92%;overflow:auto;border-top:1px solid var(--border)}
+.sheet h3{font-family:var(--display);font-size:22px;letter-spacing:.06em;margin:0 0 2px}
+.sheet .hint{font-size:12.5px;color:var(--dim);margin:0 0 10px}
+.dest{display:grid;gap:6px;margin-bottom:12px}
+.dest label{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:10px;padding:9px 10px;cursor:pointer}
+.dest label:has(input:checked){border-color:var(--rough);background:var(--steelBg)}
+.dest b{display:block}
+.dest small{color:var(--dim)}
+.pick{display:flex;gap:8px;align-items:flex-start;padding:5px 2px;cursor:pointer}
+.pick input{margin-top:3px;width:17px;height:17px;flex-shrink:0}
+.row{display:flex;gap:8px;justify-content:space-between;align-items:center;margin:8px 0 4px}
+.link{font:700 12.5px var(--body);background:none;border:0;color:var(--rough);cursor:pointer;padding:4px 0}
+.go{width:100%;font:800 15px var(--body);padding:12px;border-radius:10px;border:0;background:var(--rough);color:#fff;cursor:pointer;margin-top:10px;min-height:44px}
+.go:disabled{opacity:.45;cursor:default}
+.cancel{width:100%;font:700 14px var(--body);padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;margin-top:6px}
+.toast{position:absolute;left:14px;right:14px;bottom:14px;background:#1B1F24;color:#fff;border-radius:10px;padding:10px 12px;font-size:13px;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.toast button{font:800 13px var(--body);background:none;border:0;color:#9EC0FF;cursor:pointer}
+.reset{font:700 12px var(--body);background:none;border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--dim);cursor:pointer}
+button:focus-visible,label:focus-within{outline:2px solid var(--rough);outline-offset:2px}
+@media (prefers-reduced-motion:no-preference){.sheet{animation:up .18s ease-out}@keyframes up{from{transform:translateY(30px);opacity:.6}}}
+</style>
+
+<div class="wrap">
+  <h1>Move punch items</h1>
+  <p class="lede">A clickable mockup on the real open rough items for Stratton #959 and Brandt #1430. Nothing here touches the app. Tap <b>Move items</b> on the Rough punch list, pick where they go, pick the items, then look at the Finish and Return Trip tabs and the Job Board row.</p>
+  <div class="jobs" role="group" aria-label="Job">
+    <button type="button" id="j-stratton" aria-pressed="true">Stratton #959 · 12 open</button>
+    <button type="button" id="j-brandt" aria-pressed="false">Brandt #1430 · 4 open</button>
+    <button type="button" class="reset" id="reset">Start over</button>
+  </div>
+  <div class="grid">
+    <div class="phone" id="phone"></div>
+    <div class="notes">
+      <h2>How it works</h2>
+      <ol>
+        <li><b>Move items</b> shows on the Rough punch header whenever something is open. Nothing else on the list changes.</li>
+        <li>Pick where they go: <b>Finish punch list</b>, a <b>new return trip</b>, or an <b>open trip</b> already on the job.</li>
+        <li>Tick the items (or <b>Select all</b>) and tap <b>Move</b>. One Undo bar for ten seconds.</li>
+      </ol>
+      <h2>The record</h2>
+      <ul>
+        <li><b>To Finish:</b> the item lands in the same floor and room on the Finish list, tagged <i>From Rough · Koy · 11/16</i>. On Rough it stays in place, greyed, tagged <i>Moved to Finish · Koy · 11/16</i>, and no longer counts as open, so the red chip drops.</li>
+        <li><b>To a return trip:</b> it uses the link trips already have. The item stays on Rough tagged <i>On Return Trip #3</i>; checking it off on the trip checks it off here too. It still counts as open until it's done, because it is.</li>
+      </ul>
+      <div class="q"><b>To decide:</b> should moved-to-Finish items still show on Rough (greyed, as here), or disappear from Rough with the record only on the Finish copy?</div>
+      <div class="q"><b>To decide:</b> who can move items: anyone on the job, or foremen and office only?</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const JOBS = {
+  stratton: { name:"Stratton Residence", no:"959", foreman:"Colby Fogh",
+    trips:[{n:2, scope:"Neighbors Meter upgrade", when:"Scheduled 10/28 · Abraham Tristan", items:["Ground rods done; be on site for the power disconnect"]}],
+    items:[
+      ["Upper","Laundry Mech","Second Panel"],["Upper","Laundry Mech","LCP Panel"],
+      ["Main","South Garage Mech","Make up Panel"],["Main","South Garage Mech","Move washer outlet down in baseboard"],["Main","South Garage Mech","Move bottle filler GFI outlet in baseboard"],
+      ["Basement","Mid mech room","Make up Gutter box"],["Basement","Mid mech room","LCP Panel"],["Basement","North Mech","LCP Panel"],
+      ["Fieldhouse basement","General","Make up Hoop Switches"],["Fieldhouse basement","General","Outlets"],["Fieldhouse basement","General","Junction box for soccer side lights"],
+      ["Pool house","General","Fix connector in future barn exterior box"]]},
+  brandt: { name:"Brandt Residence", no:"1430", foreman:"Gage Lund",
+    trips:[{n:3, scope:"Service wire pulls", when:"Scheduled 11/16 · Abraham Tristan", items:["2x service wire pulls","Install 20A receptacle for sump pump","Install and turn on 20A breaker for sump pump"]}],
+    items:[
+      ["Main","Garage","Box lights downstairs","Ceiling frame"],
+      ["Basement","Cold storage","Box lights","Framing"],["Basement","Cold storage","Rope lights","Framing"],["Basement","Cold storage","Box switch and jump power","Framing"]]}
+};
+let state;
+function fresh(){
+  state = {};
+  for (const k in JOBS) state[k] = { items: JOBS[k].items.map((x,i)=>({id:k+i, floor:x[0], room:x[1], text:x[2], waiting:x[3]||"", movedTo:null, trip:null})),
+    finish: [], trips: JOBS[k].trips.map(t=>({...t, linked:[]})) };
+  ui = { job: ui ? ui.job : "stratton", tab:"rough", sheet:null, toast:null };
+}
+let ui = null; fresh();
+
+const $ = (h)=>{const d=document.createElement("div");d.innerHTML=h;return d.firstElementChild;};
+const esc = (s)=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const today = "11/16";
+
+function openCount(js){ return js.items.filter(i=>!i.movedTo).length; }
+
+function groups(list){ const out=[]; list.forEach(i=>{ let f=out.find(g=>g.floor===i.floor); if(!f){f={floor:i.floor,rooms:[]};out.push(f);} let r=f.rooms.find(x=>x.room===i.room); if(!r){r={room:i.room,items:[]};f.rooms.push(r);} r.items.push(i); }); return out; }
+
+function render(){
+  const J = JOBS[ui.job], js = state[ui.job], ph = document.getElementById("phone");
+  const open = openCount(js), onTrip = js.items.filter(i=>i.trip && !i.movedTo).length;
+  let h = `<div><div class="boardrow" aria-label="Job Board row"><div class="nm">${esc(J.name)} <span style="color:var(--dim);font-weight:600">#${J.no} · ${esc(J.foreman)}</span></div><div class="pills">
+    <span class="pill ok">Rough: Complete</span>
+    ${open?`<span class="pill red">${open} rough item${open!==1?"s":""} left${onTrip?` · ${onTrip} on a trip`:""}</span>`:""}
+    ${js.finish.length?`<span class="pill fin">${js.finish.length} moved to Finish</span>`:""}</div></div>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" data-tab="rough" aria-selected="${ui.tab==="rough"}">Rough</button>
+      <button class="tab fin" role="tab" data-tab="finish" aria-selected="${ui.tab==="finish"}">Finish${js.finish.length?` (${js.finish.length})`:""}</button>
+      <button class="tab rt" role="tab" data-tab="trips" aria-selected="${ui.tab==="trips"}">Return Trips (${js.trips.length})</button>
+    </div>`;
+  if (ui.tab==="rough"){
+    h += `<div class="sec"><span class="lbl">Punch List</span><span class="cnt">${open} open</span>${open?`<button class="movebtn" id="movebtn">Move items ▸</button>`:""}</div>`;
+    groups(js.items).forEach(g=>{ h+=`<div class="floor">${esc(g.floor)}</div>`; g.rooms.forEach(r=>{ h+=`<div class="room">${esc(r.room)}</div>`; r.items.forEach(i=>{
+      h+=`<div class="item ${i.movedTo?"moved":""}"><span class="box"></span><div class="t"><span>${esc(i.text)}</span>
+        ${i.waiting&&!i.movedTo?`<div><span class="tag wait">Waiting on ${esc(i.waiting)}</span></div>`:""}
+        ${i.movedTo?`<div><span class="tag fin">Moved to Finish · Koy · ${today}</span></div>`:""}
+        ${i.trip&&!i.movedTo?`<div><span class="tag rt">On Return Trip #${i.trip}</span></div>`:""}</div></div>`; }); }); });
+  } else if (ui.tab==="finish"){
+    h += `<div class="sec"><span class="lbl" style="color:var(--finish)">Punch List</span><span class="cnt">${js.finish.length} open</span></div>`;
+    if (!js.finish.length) h += `<div class="empty">Nothing on the Finish punch list yet. Move items here from Rough.</div>`;
+    groups(js.finish).forEach(g=>{ h+=`<div class="floor">${esc(g.floor)}</div>`; g.rooms.forEach(r=>{ h+=`<div class="room">${esc(r.room)}</div>`; r.items.forEach(i=>{
+      h+=`<div class="item"><span class="box"></span><div class="t"><span>${esc(i.text)}</span><div><span class="tag fin">From Rough · Koy · ${today}</span></div></div></div>`; }); }); });
+  } else {
+    js.trips.forEach(t=>{ h+=`<div class="tripcard"><div class="ttl">Return Trip #${t.n} · ${esc(t.scope)}</div><div class="meta">${esc(t.when)}</div>`;
+      t.items.forEach(x=>{ h+=`<div class="item"><span class="box"></span><div class="t"><span>${esc(x)}</span></div></div>`; });
+      t.linked.forEach(i=>{ h+=`<div class="item"><span class="box"></span><div class="t"><span>[Rough · ${esc(i.floor)} · ${esc(i.room)}] ${esc(i.text)}</span><div><span class="tag rt">Linked to Rough · checks it off there too</span></div></div></div>`; });
+      h+=`</div>`; });
+  }
+  if (ui.sheet) h += sheetHtml(js);
+  if (ui.toast) h += `<div class="toast" role="status"><span>${esc(ui.toast)}</span><button id="undo">Undo</button></div>`;
+  h += `</div>`;
+  ph.replaceChildren($(h));
+  wire();
+}
+
+function sheetHtml(js){
+  const s = ui.sheet, open = js.items.filter(i=>!i.movedTo && !(s.dest!=="finish" && i.trip===(s.dest==="new"?-1:+s.dest)));
+  const nextN = Math.max(...js.trips.map(t=>t.n))+1;
+  let h = `<div class="shade"><div class="sheet" role="dialog" aria-label="Move punch items"><h3>Move rough items</h3><p class="hint">Pick where they go, then which ones.</p><div class="dest" role="radiogroup">
+    <label><input type="radio" name="dest" value="finish" ${s.dest==="finish"?"checked":""}><span><b>Finish punch list</b><small>Same floor and room. Leaves Rough as "Moved to Finish".</small></span></label>
+    <label><input type="radio" name="dest" value="new" ${s.dest==="new"?"checked":""}><span><b>New return trip (#${nextN})</b><small>Scope "Rough punch leftovers", needs scheduling. Items stay linked to Rough.</small></span></label>`;
+  js.trips.forEach(t=>{ h+=`<label><input type="radio" name="dest" value="${t.n}" ${s.dest===String(t.n)?"checked":""}><span><b>Return Trip #${t.n} · ${esc(t.scope)}</b><small>${esc(t.when)}</small></span></label>`; });
+  h += `</div><div class="row"><b>${s.picked.size} of ${open.length} picked</b><button class="link" id="all">${s.picked.size===open.length?"Clear":"Select all"}</button></div>`;
+  groups(open).forEach(g=>{ h+=`<div class="floor">${esc(g.floor)}</div>`; g.rooms.forEach(r=>{ h+=`<div class="room">${esc(r.room)}</div>`; r.items.forEach(i=>{
+    h+=`<label class="pick"><input type="checkbox" data-id="${i.id}" ${s.picked.has(i.id)?"checked":""}><span>${esc(i.text)}${i.trip?` <span class="tag rt">On Trip #${i.trip}</span>`:""}</span></label>`; }); }); });
+  const where = s.dest==="finish"?"Finish punch":s.dest==="new"?`new Return Trip #${nextN}`:`Return Trip #${s.dest}`;
+  h += `<button class="go" id="go" ${s.picked.size?"":"disabled"}>Move ${s.picked.size||""} to ${where}</button><button class="cancel" id="cancel">Cancel</button></div></div>`;
+  return h;
+}
+
+let undoSnap = null;
+function wire(){
+  const ph = document.getElementById("phone"), js = state[ui.job];
+  ph.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab; ui.toast=null; render();});
+  const mb = ph.querySelector("#movebtn"); if (mb) mb.onclick=()=>{ ui.sheet={dest:"finish",picked:new Set()}; ui.toast=null; render(); };
+  if (!ui.sheet) { const u=ph.querySelector("#undo"); if(u) u.onclick=()=>{ state=undoSnap; ui.toast=null; render(); }; return; }
+  ph.querySelectorAll('input[name="dest"]').forEach(r=>r.onchange=()=>{ ui.sheet.dest=r.value; ui.sheet.picked=new Set(); render(); });
+  ph.querySelectorAll("input[data-id]").forEach(c=>c.onchange=()=>{ c.checked?ui.sheet.picked.add(c.dataset.id):ui.sheet.picked.delete(c.dataset.id); render(); });
+  ph.querySelector("#all").onclick=()=>{ const open=[...ph.querySelectorAll("input[data-id]")].map(c=>c.dataset.id); ui.sheet.picked = ui.sheet.picked.size===open.length?new Set():new Set(open); render(); };
+  ph.querySelector("#cancel").onclick=()=>{ ui.sheet=null; render(); };
+  ph.querySelector("#go").onclick=()=>{
+    undoSnap = JSON.parse(JSON.stringify(state,(k,v)=>v instanceof Set?[...v]:v));
+    const s = ui.sheet, picked = js.items.filter(i=>s.picked.has(i.id));
+    if (s.dest==="finish"){ picked.forEach(i=>{ i.movedTo="finish"; js.finish.push({...i}); }); ui.tab="finish"; ui.toast=`Moved ${picked.length} to the Finish punch list`; }
+    else { let t; if (s.dest==="new"){ t={n:Math.max(...js.trips.map(t=>t.n))+1, scope:"Rough punch leftovers", when:"Needs scheduling · nobody assigned", items:[], linked:[]}; js.trips.push(t);} else t=js.trips.find(x=>String(x.n)===s.dest);
+      picked.forEach(i=>{ i.trip=t.n; t.linked.push(i); }); ui.tab="trips"; ui.toast=`Put ${picked.length} on Return Trip #${t.n}`; }
+    ui.sheet=null; render();
+  };
+}
+document.getElementById("j-stratton").onclick=()=>{ui.job="stratton";ui.tab="rough";ui.sheet=null;ui.toast=null;syncJobs();render();};
+document.getElementById("j-brandt").onclick=()=>{ui.job="brandt";ui.tab="rough";ui.sheet=null;ui.toast=null;syncJobs();render();};
+document.getElementById("reset").onclick=()=>{fresh();render();};
+function syncJobs(){ document.getElementById("j-stratton").setAttribute("aria-pressed",ui.job==="stratton"); document.getElementById("j-brandt").setAttribute("aria-pressed",ui.job==="brandt"); }
+render();
+</script>

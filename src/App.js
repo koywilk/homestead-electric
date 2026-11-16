@@ -14,6 +14,7 @@ import NeedShape from "./needShape";
 import JobNotesShape from "./jobNotesShape";
 import StageChange from "./stageChange";
 import PunchListStage from "./punchListStage";   // v624: the derived Punch List stage (Josh, 2026-11-11)
+import PunchMove from "./punchMove";   // v642: move Rough punch items to Finish or a return trip
 import SchedMode from "./schedMode";   // v627: the scheduling pill reads Simpro live (Koy, 2026-11-11)
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import inspAtt from "./inspAttempts";
@@ -48,6 +49,7 @@ const { sameName, needAssignee, needUpdates, dueBucketFromDate, needWorkReset, n
 // test pins the two lines equal).
 const { stageChangePlan, READY_TO_INVOICE_ALERTS } = StageChange;
 const { punchListOpen, isPunchListJob, punchListLine, finishStatusOptions, finishStatusShown, punchListPick } = PunchListStage;
+const { planMoveToFinish, undoMoveToFinish, planLinkToTrip, undoLinkToTrip } = PunchMove;
 // Open a stored URL only if it is actually navigable. React does NOT block
 // javascript: URLs, and photo/attachment records live in anonymously-writable
 // collections — so an unsafe value must simply do nothing, not open a tab.
@@ -13411,7 +13413,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
 
             <input type="checkbox" checked={!!item.done}
               className={doneFx === item.id ? "he-check-pop" : undefined}
+              disabled={!!item.movedTo}
+              title={item.movedTo ? "Moved to the Finish punch list — check it off there" : undefined}
               onChange={() => {
+                if (item.movedTo) return;   // v642: the open copy lives on Finish
                 const nowDone = !item.done;
                 if (nowDone) { setDoneFx(item.id); setTimeout(() => setDoneFx(n => n === item.id ? null : n), 900); }
                 const who = getIdentity();
@@ -13460,10 +13465,12 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   onMouseLeave={e=>e.target.style.background='transparent'}>
                   <RichText html={item.text}/>
                 </HeStrikeSpan>
-                {(item.addedBy||item.checkedBy||(filterIds!=null)||(scheduledRTMap&&scheduledRTMap[item.id]&&!item.done))&&(
+                {(item.addedBy||item.checkedBy||item.movedTo||item.movedFrom||(filterIds!=null)||(scheduledRTMap&&scheduledRTMap[item.id]&&!item.done))&&(
                   <span style={{fontSize:11,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                     {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
-                    {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
+                    {item.checkedBy&&item.done&&!item.movedTo&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
+                    {item.movedTo&&<span title="Moved with Move items (v642). The open copy is on the Finish punch list." style={{fontSize:11,fontWeight:700,background:C.steelBg,color:"#4A5A86",borderRadius:99,padding:'1px 7px',border:`1px solid ${C.steelLine}`,lineHeight:1.6,whiteSpace:'nowrap'}}>Moved to Finish{item.movedTo.by?` · ${item.movedTo.by}`:""}{item.movedTo.at?` · ${item.movedTo.at}`:""}</span>}
+                    {item.movedFrom&&<span title="Moved here from the Rough punch list (v642)." style={{fontSize:11,fontWeight:700,background:C.steelBg,color:"#4A5A86",borderRadius:99,padding:'1px 7px',border:`1px solid ${C.steelLine}`,lineHeight:1.6,whiteSpace:'nowrap'}}>From Rough{item.movedFrom.by?` · ${item.movedFrom.by}`:""}{item.movedFrom.at?` · ${item.movedFrom.at}`:""}</span>}
                     {item.fromQC&&!item.voided&&<span style={{fontSize:11,fontWeight:700,background:'#F4ECE2',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
                     {item.fromGC&&!item.voided&&<span title={item.addedBy||"From the general contractor"} style={{fontSize:11,fontWeight:700,background:'#EAEEF6',color:'#2E477D',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD9EC',lineHeight:1.6}}>GC</span>}
                     {item.voided&&(
@@ -13478,7 +13485,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                         style={{fontSize:11,fontWeight:700,background:'#EAEEF6',color:'#34507F',
                           borderRadius:99,padding:'1px 7px',border:'1px solid #CDD9EC',lineHeight:1.6,
                           cursor: onJumpToRT ? 'pointer':'default',whiteSpace:'nowrap'}}>
-                        <Icon name="calendar" size={11} style={{verticalAlign:'-1px',marginRight:3}}/>{scheduledRTMap[item.id].date || 'scheduled'}{scheduledRTMap[item.id].crew?` · ${scheduledRTMap[item.id].crew}`:''}
+                        <Icon name="calendar" size={11} style={{verticalAlign:'-1px',marginRight:3}}/>{scheduledRTMap[item.id].unscheduled ? `Return Trip #${scheduledRTMap[item.id].tripNo} · needs a date` : (scheduledRTMap[item.id].date || 'scheduled')}{scheduledRTMap[item.id].crew?` · ${scheduledRTMap[item.id].crew}`:''}
                       </span>
                     )}
                     {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
@@ -18346,6 +18353,89 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
           </SheetShell>
         );
       })()}
+    </div>
+  );
+}
+
+// ── PunchMoveSheet (v642) ─────────────────────────────────────────────
+// Koy, 2026-11-16: move open Rough punch items to the Finish punch list or put
+// them on a return trip, with a record (src/punchMove.js; mockup
+// docs/mockups/punch-move.html, approved as shown). Pick where, then which,
+// then Move. Items already on an open trip are left out of a Finish move (their
+// check-off belongs to the trip) and out of a move to that same trip.
+function PunchMoveSheet({ roughPunch, returnTrips, onMove, onClose }) {
+  const items = PunchMove.openItems(roughPunch);
+  const trips = PunchMove.openTrips(returnTrips);
+  const onTrip = new Map();
+  trips.forEach(x => (x.trip.punch || []).forEach(p => { if (p && p.originItemId && (p.originPhase || "rough") === "rough" && !onTrip.has(p.originItemId)) onTrip.set(p.originItemId, x.no); }));
+  const [dest, setDest] = useState("finish");
+  const [picked, setPicked] = useState(() => new Set());
+  const nextNo = (Array.isArray(returnTrips) ? returnTrips.length : 0) + 1;
+  const destNo = dest === "finish" || dest === "new" ? 0 : ((trips.find(x => x.trip.id === dest) || {}).no || 0);
+  const list = items.filter(o => dest === "finish" ? !onTrip.has(o.item.id) : onTrip.get(o.item.id) !== destNo);
+  const leftOut = items.length - list.length;
+  const ids = list.map(o => o.item.id);
+  const pickedHere = ids.filter(id => picked.has(id));
+  const strip = (s) => String(s || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+  const groups = [];
+  list.forEach(o => {
+    let g = groups.find(x => x.floor === o.floorLabel); if (!g) { g = { floor: o.floorLabel, rooms: [] }; groups.push(g); }
+    let r = g.rooms.find(x => x.room === o.roomName); if (!r) { r = { room: o.roomName, items: [] }; g.rooms.push(r); }
+    r.items.push(o);
+  });
+  const where = dest === "finish" ? "the Finish punch list" : dest === "new" ? `new Return Trip #${nextNo}` : `Return Trip #${destNo}`;
+  const pick = (v) => { setDest(v); setPicked(new Set()); };
+  const toggle = (id) => setPicked(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const destRow = (value, title, sub) => (
+    <label key={value} style={{display:"flex",gap:10,alignItems:"flex-start",border:`1px solid ${dest===value?C.rough:C.border}`,background:dest===value?C.steelBg:C.card,borderRadius:10,padding:"9px 10px",cursor:"pointer",minHeight:"var(--he-tap, 40px)"}}>
+      <input type="radio" name="he-punch-move-dest" checked={dest===value} onChange={()=>pick(value)} style={{marginTop:3,accentColor:C.rough}}/>
+      <span><b style={{display:"block",fontSize:14}}>{title}</b><span style={{fontSize:12.5,color:C.dim}}>{sub}</span></span>
+    </label>
+  );
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:9200,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 16px",overflowY:"auto"}}>
+      <div role="dialog" aria-label="Move rough punch items" onClick={e=>e.stopPropagation()}
+        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,maxWidth:560,width:"100%",padding:18,boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:"0.06em",color:C.rough,lineHeight:1}}>Move rough items</div>
+        <div style={{fontSize:13,color:C.dim,margin:"4px 0 12px"}}>Pick where they go, then which ones.</div>
+        <div style={{display:"grid",gap:6,marginBottom:12}}>
+          {destRow("finish", "Finish punch list", "Same floor and room. Stays on Rough as \"Moved to Finish\".")}
+          {destRow("new", `New return trip (#${nextNo})`, "Scope \"Rough punch leftovers\", needs scheduling. Items stay on Rough until done on the trip.")}
+          {trips.map(x => destRow(x.trip.id, `Return Trip #${x.no}${strip(x.trip.scope) ? " · " + strip(x.trip.scope).slice(0, 60) : ""}`,
+            [x.trip.rtStatus === "scheduled" || x.trip.scheduledDate ? `Scheduled${x.trip.scheduledDate ? " " + x.trip.scheduledDate : ""}` : "Needs a date", x.trip.assignedTo].filter(Boolean).join(" · ")))}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",margin:"4px 0 6px"}}>
+          <b style={{fontSize:13.5}}>{pickedHere.length} of {list.length} picked</b>
+          {list.length > 0 && <button type="button" onClick={()=>setPicked(pickedHere.length===list.length ? new Set() : new Set(ids))}
+            style={{background:"none",border:"none",color:C.rough,fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit",minHeight:"var(--he-tap, 40px)"}}>{pickedHere.length===list.length ? "Clear" : "Select all"}</button>}
+        </div>
+        {leftOut > 0 && <div style={{fontSize:12.5,color:C.dim,marginBottom:6}}>{leftOut} item{leftOut!==1?"s":""} already on {dest==="finish" ? "a return trip" : "this trip"} {leftOut!==1?"aren't":"isn't"} listed.</div>}
+        {!list.length && <div style={{fontSize:13,color:C.dim,padding:"8px 0"}}>Nothing to move here.</div>}
+        <div style={{maxHeight:"45vh",overflowY:"auto"}}>
+          {groups.map(g => (
+            <div key={g.floor}>
+              <div style={{fontSize:11.5,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",color:C.dim,margin:"10px 0 2px"}}>{g.floor}</div>
+              {g.rooms.map(r => (
+                <div key={r.room}>
+                  <div style={{fontSize:12.5,fontWeight:700,margin:"6px 0 2px"}}>{r.room}</div>
+                  {r.items.map(o => (
+                    <label key={o.item.id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"6px 2px",cursor:"pointer",minHeight:"var(--he-tap, 40px)"}}>
+                      <input type="checkbox" checked={picked.has(o.item.id)} onChange={()=>toggle(o.item.id)} style={{marginTop:3,width:17,height:17,accentColor:C.rough,flexShrink:0}}/>
+                      <span style={{fontSize:13.5}}>{strip(o.item.text)}{o.item.waiting&&o.item.waitingOn ? <span style={{fontSize:11.5,color:C.slate}}> · waiting on {strip(o.item.waitingOn)}</span> : null}{onTrip.has(o.item.id) ? <span style={{fontSize:11.5,color:C.purple}}> · on Return Trip #{onTrip.get(o.item.id)}</span> : null}</span>
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <button type="button" disabled={!pickedHere.length} onClick={()=>onMove({ dest, ids: pickedHere })}
+          style={{width:"100%",marginTop:12,minHeight:44,borderRadius:10,border:"none",background:C.rough,color:"#fff",fontWeight:800,fontSize:15,fontFamily:"inherit",cursor:pickedHere.length?"pointer":"default",opacity:pickedHere.length?1:0.45}}>
+          Move {pickedHere.length || ""} to {where}
+        </button>
+        <button type="button" onClick={onClose}
+          style={{width:"100%",marginTop:6,minHeight:"var(--he-tap, 40px)",borderRadius:10,border:`1px solid ${C.border}`,background:C.card,color:C.text,fontWeight:700,fontSize:14,fontFamily:"inherit",cursor:"pointer"}}>Cancel</button>
+      </div>
     </div>
   );
 }
@@ -32652,6 +32742,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // v549: what the last stage change set off (summary card under the stage
   // select), and a bump counter that opens + scrolls to that phase's punch list.
   const [stageNote, setStageNote] = useState(null);
+  const [punchMoveOpen, setPunchMoveOpen] = useState(false);   // v642: the Move items sheet (Rough punch)
   const [punchOpenSig, setPunchOpenSig] = useState({ rough: 0, finish: 0 });
   const [qcAsk, setQcAsk] = useState(null); // v549: the QC verdict → return trip sheet
 
@@ -33482,6 +33573,33 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     setStageNote({ phase, phaseLabel, title: plan.title, lines: plan.lines });
     heUndo(`${phaseLabel} ${v} saved`, () => { u(prev); setStageNote(null); });
   };
+  // v642: Move items (Rough punch → Finish punch, or onto a return trip). Built on
+  // the FRESHEST copy (jobRef, stale-copy rule) and saved through u(), which adds
+  // the check-off slot for each moved original. Undo reverses exactly what this
+  // move did, again on the freshest copy, so edits made in between survive.
+  const runPunchMove = ({ dest, ids }) => {
+    const cur = jobRef.current;
+    const who = (getIdentity && getIdentity()?.name) || identity?.name || "";
+    setPunchMoveOpen(false);
+    if (dest === "finish") {
+      const plan = planMoveToFinish(cur.roughPunch, cur.finishPunch, ids, uid, who, new Date().toLocaleDateString("en-US"), new Date().toISOString());
+      if (!plan.moved.length) return;
+      u({ roughPunch: plan.roughPunch, finishPunch: plan.finishPunch });
+      const n = plan.moved.length;
+      heUndo(`Moved ${n} item${n !== 1 ? "s" : ""} to the Finish punch list`, () => {
+        const c = jobRef.current;
+        const back = undoMoveToFinish(c.roughPunch, c.finishPunch, plan.moved);
+        u({ roughPunch: back.roughPunch, finishPunch: back.finishPunch });
+      });
+      return;
+    }
+    const plan = planLinkToTrip(cur.roughPunch, cur.returnTrips, ids, dest, uid, who, punchStamp());
+    if (!plan.added) { toast.info("Those items are already on that trip."); return; }
+    u({ returnTrips: plan.returnTrips });
+    heUndo(`Put ${plan.added} item${plan.added !== 1 ? "s" : ""} on Return Trip #${plan.tripNo}${plan.newTripId ? " (new, needs a date)" : ""}`, () => {
+      u({ returnTrips: undoLinkToTrip(jobRef.current.returnTrips, plan.addedIds, plan.newTripId) });
+    });
+  };
   // v549: one runner for both QC pickers. A non-clean verdict asks (sheet, no
   // tap-outside), then writes the verdict + the phase-suffixed choice stamp in
   // ONE u() patch exactly as before; "rt" makes a trip from THIS phase's open
@@ -33614,6 +33732,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Safety: pure read — never mutates the trip list, purely derives a lookup.
   const scheduledRTMap = (() => {
     const map = {};
+    // v642: an open trip with no date yet also tags its linked items
+    // ("Return Trip #N · needs a date"), after every scheduled trip has had its turn.
+    (job.returnTrips||[]).forEach((rt, ti) => {
+      if (!rt || rt.signedOff || rt.rtStatus === "complete") return;
+      const isScheduled = rt.rtStatus === "scheduled" || !!rt.scheduledDate;
+      if (isScheduled) return;
+      (rt.punch||[]).forEach(p => {
+        if (!p || !p.originItemId || map["__u" + p.originItemId]) return;
+        map["__u" + p.originItemId] = { date: "", crew: rt.assignedTo || "", rtId: rt.id, phase: p.originPhase || "rough", tripNo: ti + 1, unscheduled: true };
+      });
+    });
     (job.returnTrips||[]).forEach(rt => {
       if (!rt || rt.signedOff) return;
       const isScheduled = rt.rtStatus === "scheduled" || (!!rt.scheduledDate && rt.rtStatus !== "complete");
@@ -33629,6 +33758,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         }
       });
     });
+    // v642: fold in the unscheduled trips' links where no scheduled trip claimed the item.
+    Object.keys(map).filter(k => k.startsWith("__u")).forEach(k => { const id = k.slice(3); if (!map[id]) map[id] = map[k]; delete map[k]; });
     return map;
   })();
   const scheduledRTMapRough  = Object.fromEntries(Object.entries(scheduledRTMap).filter(([,v]) => v.phase === "rough"));
@@ -34330,6 +34461,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
 
                 <ApprovedCOsPunch job={job} onUpdate={u} assigneeOptions={punchAssigneeOptions} phase="rough"/>
+                {/* v642: Move items — open Rough punch to the Finish list or a return trip, with a record on both ends. */}
+                {(()=>{ const nOpen = PunchMove.openItems(job.roughPunch).length; return nOpen>0 && (
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,margin:"2px 0 10px",padding:"6px 10px",border:`1px solid ${C.steelLine}`,background:C.steelBg,borderRadius:10}}>
+                    <span style={{fontSize:13,fontWeight:700,color:C.text}}>{nOpen} open</span>
+                    <button type="button" onClick={()=>setPunchMoveOpen(true)}
+                      style={{minHeight:"var(--he-tap, 40px)",padding:"6px 12px",borderRadius:8,border:"none",background:C.rough,color:"#fff",fontWeight:800,fontSize:13,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap"}}>Move items ▸</button>
+                  </div>
+                ); })()}
+                {punchMoveOpen && <PunchMoveSheet roughPunch={job.roughPunch} returnTrips={job.returnTrips} onMove={runPunchMove} onClose={()=>setPunchMoveOpen(false)}/>}
                 <PunchNotesCtx.Provider value={punchNotesCtx('roughPunch')}>
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData} ccRooms={ccRoomOffersByFloor}
@@ -62998,8 +63138,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-16 · App SW version: v641
+**Last manifest update:** 2026-11-16 · App SW version: v642
 ---
+
+- **Move items: open Rough punch goes to the Finish punch list or onto a return trip (new or open) in one step, with a record on both ends** · 'in-flight 2026-11-16' · 'SW v642' · 'punchMove.js' · 'PunchMoveSheet' · 'planMoveToFinish' · 'undoMoveToFinish' · 'planLinkToTrip' · 'undoLinkToTrip' · 'runPunchMove' · 'scheduledRTMap' · Koy, 2026-11-16: *"have the option to send the punchlist items to the finished punchlist or send them to a new return trip … so I don't have to manually copy and paste them over, and we have a record of them being moved"*; mockup 'docs/mockups/punch-move.html' (claude.ai/artifact/PJRBcbY7BiUSFaudPKxt9h) on Stratton #959 / Brandt #1430's real items, approved *"Build it as shown"*. **Where:** a bar above the Rough punch list, *N open · Move items ▸*, only while something is open; the sheet picks where (Finish punch list / new Return Trip #N / each open trip, numbered as the Return Trips tab does) and which (grouped by floor and room, Select all), then *Move N to …*; one Undo bar. **To Finish:** each item is copied into the same floor and room on Finish (an extras floor is added to Finish with the same key + label, a room matched by its name key or added) as an open item carrying its words, photos, material, who added it and assignment, plus 'movedFrom {phase, itemId, by, at}'; the Rough original stays put, done, with 'movedTo {phase, itemId, by, at}', drawn greyed with a *Moved to Finish · who · date* tag and a disabled checkbox (the Finish copy shows *From Rough · who · date*). Because the original is done, every open count (the v641 board chip, My Day's Open Rough Punch task, Punch List, the dashboard) stops counting it, and 'u()' writes its 'punchTicks' slot exactly like a check-off. Items on an open trip are left out of a Finish move. **To a trip:** the link trips already use (PunchLinker): an entry '{id, text:"[Rough · Floor · Room] item", done:false, originItemId, originPhase:"rough", addedAt, addedAtTs, movedBy}' per item, so the existing two-way done cascade applies; the Rough item itself is not changed. A new trip is the app's literal with scope *Rough punch leftovers*, 'needsSchedule:true', 'rtStatus:"needs"', 'fromPunchMove:true'. An item already on that trip is skipped. The punch row's trip chip now also shows unscheduled open trips (*Return Trip #N · needs a date*); scheduled trips keep their date chip. **Undo** reverses only what the move did, on the freshest copy: originals open again with the record cleared, the Finish copies removed by id (a room or floor the move added stays, empty); trip entries removed by id and a trip the move made removed only while nobody has added to, assigned or dated it. Tests: new 'scripts/punch-move-test.js' (37 checks in prebuild: picks, placement by room key, extras floor, copy shape, the slot 'punchTickPatches' derives, open counts before/after, both undos, trip literal, numbering, no double link, signed-off trips refused, App.js wiring). Guides 'rough.html', 'finish.html', 'returntrips.html'. Crew brief 'docs/crew-briefs/v642.md'. **Why it won't lose data:** no item is ever deleted except the copies a move made, and only by its own Undo; the originals are flagged (done + 'movedTo'), never removed; every write goes through JobDetail's 'u()' from the freshest copy ('jobRef'), the same funnel, version lock and slot writer every check-off uses; trips are only appended to; no loader, rules or functions change.
 
 - **Rough and Finish can be marked Complete with punch still open; a red "N rough items left" chip on the Job Board keeps the leftovers in sight** · 'in-flight 2026-11-16' · 'SW v641' · 'stageChangePlan' · 'openLine' · 'roughItemsLeft' · 'planSetPhaseStatus' · 'stillOpen' · Koy, 2026-11-16, after Stratton #959 (rough inspection passed 5/26, 12 rough punch open) and Brandt #1430 (passed 11/12, 4 items waiting on framing) could not be set to 100%: *"change it so it can be marked complete with open items, but flag the job or something so they aren't forgotten about"* (Rough and Finish; the flag is a chip on the Job Board card). **What changed:** the 100% stage select, the Rough status select and the Finish status select no longer refuse while punch is open. 'stageChangePlan' (src/stageChange.js, copied byte for byte to functions/) never returns 'blocked' for punch; it saves the same patch it saves with nothing open and adds a line, *"4 rough punch items still open. They stay on the rough punch list and the job card shows them until they're closed."* / *"2 finish punch items and 1 QC item still open. The job stays on Punch List until they're closed."* The two status selects show the same news as a toast instead of the old "Cannot mark … Clear them first" warning. Duet / the Homestead connector ('functions/duetWrites/stages.js'): 'phase.setStatus' complete is allowed and answers 'stillOpen'; 'phase.setStage' 100% returns the plan's lines. **The flag:** a job whose rough is Complete with open rough punch (done and voided items don't count) shows a red **N rough items left** pill on its Job Board row; tap opens the job on Rough, press-and-hold filters the board to every such job. The foreman's existing red My Day task *N Open Rough Punch Items* (FIX 5, unchanged) still fires. A Finish Complete with items open already lands in **Punch List** (v624 rule, unchanged), so Simpro reads Punch List, not Ready to Invoice. The stage sync files a Complete rough as In Between → Rough-In Complete. Guides 'rough.html' + 'finish.html' updated. Tests: 'scripts/stage-change-test.js' and 'scripts/duet-stages-test.js' now pin "allowed, and says what is open". Crew brief 'docs/crew-briefs/v641.md'. **Needs 'firebase deploy --only functions:duetApi' for the Duet / connector side** (the app side works without it). **Why it won't lose data:** no new field; the saves are the same patches the selects already wrote when nothing was open, through the same 'u' / 'updateJob' funnel and version lock; the punch trees are not touched, so every open item stays exactly where it was; the chip only reads.
 
