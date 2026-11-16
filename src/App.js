@@ -19179,7 +19179,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
                 <button
 
-                  onClick={()=>upd(t.id,{signedOff:true, rtStatus:"complete"})}
+                  onClick={()=>upd(t.id,{signedOff:true, rtStatus:"complete", needsSchedule:false})}
 
                   disabled={!t.signedOffBy||!t.signedOffDate}
 
@@ -42185,6 +42185,7 @@ function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremen
         ...r,
         signedOff: true,
         rtStatus: "complete",
+        needsSchedule: false,
         signedOffBy: r.signedOffBy || who,
         signedOffDate: r.signedOffDate || today,
         punch: (r.punch||[]).map(p => p && !p.done
@@ -63290,9 +63291,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-17 · App SW version: v646
+**Last manifest update:** 2026-11-17 · App SW version: v647
 ---
 
+- **Signing off a return trip clears its "needs scheduling" flag** · 'in-flight 2026-11-17' · 'SW v647' · 'handleSignOffRT' · 'ReturnTripsEditor' Sign off button · Found by the Homestead connector's Needs-you sweep: QC trips are created with 'needsSchedule:true', and both sign-off paths set 'signedOff:true, rtStatus:"complete"' but left 'needsSchedule' true, so Kweller #1107 and Bohannan #989 showed finished trips as still needing a date to anything reading the raw field. Both writes now also set 'needsSchedule:false'. 'rtScheduled' is left as is (it records that the trip was scheduled; every reader already checks '!signedOff' first). Trips signed off before this keep the stale flag; the connector ignores it by 'rtStatus'. **Why it won't lose data:** one extra key in a patch that already rewrites the same trip object through the same save path; nothing is deleted, no other field or trip changes, no loader, rules or functions change.
 - **Dashboard Overview artifacts block gains a Meetings group: Weekly Scramble, Lead Meeting, Resi Foreman Meeting, Strategy & Scheduling** · 'in-flight 2026-11-17' · 'SW v646' · 'OD_ARTIFACTS' · 'od-arts-h' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"add these four to the CC dashboard too"*. The four weekly meeting dashboards sit in a Meetings group in meeting order, each with its day and time under the name (Tue 4:00 PM, Wed 6:30 AM, Wed 7:00 AM, Fri 8:00 AM). The Operations Overview stays on top, bigger; the five whiteboards move under a Whiteboards heading. The header count is now 10. Same sign-in-to-Claude note. Still the one 'OD_ARTIFACTS' constant; no data, rules or server change.
 - **Dashboard Overview: a folded "Meeting and planning artifacts" block with links to Koy's Claude artifacts** · 'in-flight 2026-11-17' · 'SW v645' · 'OD_ARTIFACTS' · 'od-arts' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"I want them in the dashboard of the CC"*. One folded block at the top of the Overview tab (starts closed, count on the header) listing the Homestead Operations Overview (drawn bigger), the move-vs-keep whiteboard, Automations cleanup, Job retro, FieldInk ship steps and Crew week. Each opens in a new tab ('rel=noopener'). They are private claude.ai pages, so the block says *opens in Claude, sign-in required* and a person not signed in to Koy's Claude account cannot open them unless Koy shares them. The list is the one 'OD_ARTIFACTS' constant in src/App.js. No data, rules or server change.
 - **Quick jobs get Bid items and Material orders: see the Simpro bid and send POs to CED from a quick job** · 'in-flight 2026-11-16' · 'SW v644' · 'useQuickJobBid' · 'QuickJobDetail' · 'BidItemsPanel' · 'MaterialOrders' · 'commMaterials' · 'public/sops/biditems.html' · 'public/sops/materials.html' · Koy, 2026-11-16: *"why is there no bid items in quick jobs or ability to send po in them. they need this too"*. Two folded sections under Material on the quick job screen (start collapsed, count on the header). **Bid items** is the same 'BidItemsPanel' a full job's Bid Items tab shows (cost centers, Required vs Assigned); if you can send POs, an **Order from the bid** button at its top opens the order screen inside **Material orders**. **Material orders** is the commercial Materials tab's 'MaterialOrders' with phase "comm" and the list stored in 'job.commMaterials': each order is charged to a Simpro cost center you pick, one PO per cost center, one email to CED, same receipts and CC box. No server change: 'sendMaterialOrder' / 'sendMaterialPO' have no job-type check, they need the Simpro job # and, for "comm", a named cost center. Simpro is asked only when one of the two sections is first opened ('useQuickJobBid', same 12 h 'simproCostCentersCache' / 'simproStockCache' as a full job), so opening a quick job costs no extra Simpro calls. Quick-job POs show in the existing Up Next / Huddle PO reminders for free (they already read 'commMaterials' on any job). Guides: 'materials.html' gets a "Quick jobs have it too" section, 'biditems.html' a Q&A row. **Why it won't lose data:** additive only. One new field on quick jobs ('commMaterials', already in 'normalizeJob' and the loader) and the two existing cache fields; no existing field, rules, functions or loader changes; full jobs' own Bid Items / Material Tracking code is untouched.
