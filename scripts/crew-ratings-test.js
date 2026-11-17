@@ -148,4 +148,11 @@ assert.ok(SY.run({ ...base, requests: [{ id: "r8", op: "round" }], round: round1
   assert.deepStrictEqual(c.feedback.items.map(f => f.text), ["Better trucks please"], "only this round's field notes");
   assert.strictEqual(c.status.lastAnswerAt, "2026-11-21T00:00:00Z", "a new field note counts as news for the sync check");
 }
+// a sync fed answers with the scores stripped must refuse, not write an empty picture
+{
+  const base = { users: [{ id: "a", name: "Ann A", title: "crew", foremanId: "f", active: true }, { id: "f", name: "Fred F", title: "foreman", active: true }], raters: [{ token: "t", raterId: "f", name: "Fred F", people: ["a"] }], round: { id: "2026-11-16", startsOn: "2026-11-16", endsOn: "2026-11-29" }, artifactPeople: [{ id: "ann-a" }], requests: [], existingRatingIds: [], today: "2026-11-17", nowIso: "n" };
+  assert.throws(() => SY.run({ ...base, answers: [{ roundId: "2026-11-16", raterId: "f", personId: "a", updatedAt: "x" }] }), /missing scores or why/, "stripped answers are refused");
+  assert.throws(() => SY.run({ ...base, answers: [], feedback: [{ roundId: "2026-11-16", raterId: "f", updatedAt: "x" }] }), /missing text/, "stripped field notes are refused");
+  assert.doesNotThrow(() => SY.run({ ...base, answers: [] }), "no answers at all is fine");
+}
 console.log("crew-ratings-test: ok");

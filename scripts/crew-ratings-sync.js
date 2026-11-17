@@ -163,6 +163,12 @@ function compute({ users, raters, round, answers, feedback, artifactPeople, nowI
 }
 
 function run(input, mint = () => crypto.randomBytes(16).toString("hex")) {
+  // Refuse to build anything from answers that lost their scores or reasons (an upstream fetch that
+  // trimmed fields). Writing "nobody has rated anyone" over good data is worse than writing nothing.
+  const bad = (input.answers || []).filter(a => !a || typeof a.scores !== "object" || a.scores === null || typeof a.why !== "object" || a.why === null);
+  if (bad.length) throw new Error(`${bad.length} of ${(input.answers || []).length} answers are missing scores or why: list crewRatings again WITHOUT a field mask. Nothing was written.`);
+  const badFb = (input.feedback || []).filter(f => !f || typeof f.text !== "string");
+  if (badFb.length) throw new Error(`${badFb.length} field notes are missing text: list crewFeedback again WITHOUT a field mask. Nothing was written.`);
   const h = handleRequests({ ...input, mint });
   const art = compute({ ...input, raters: h.raters, round: h.round });
   return { results: h.results, firestore: { writes: h.writes, deletes: h.deletes }, artifact: art };
