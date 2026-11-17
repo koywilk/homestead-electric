@@ -140,8 +140,8 @@ function renderList() {
       el("span", { class: "who" }, el("b", { text: p.name }), el("small", { text: p.title === "foreman" ? "Foreman" : p.title === "jrforeman" ? "Jr. foreman" : p.title === "lead" ? "Lead" : "Crew" })),
       el("span", { class: complete(S.saved[p.id]) ? "pill done" : "pill", text: complete(S.saved[p.id]) ? "Done ✓" : "To do" })))));
   }
-  kids.push(upwardCard());
   kids.push(companyCard());
+  kids.splice(2, 0, upwardCard()); /* right under the note, so it is the first thing after the privacy line */
   root.replaceChildren(...kids);
   window.scrollTo(0, 0);
 }
@@ -166,7 +166,7 @@ function companyCard() {
 
 const upDone = () => !!S.up && S.up.scores && UPWARD.every(([k]) => Number.isInteger(S.up.scores[k]));
 function upwardCard() {
-  return el("button", { class: "prow card", type: "button", style: "border:1px solid var(--line);border-radius:14px;margin-top:2px;background:var(--surface)", onclick: renderUpward },
+  return el("button", { class: "prow card", type: "button", style: "border:2px solid var(--accent);border-radius:14px;margin-top:2px;background:var(--surface)", onclick: renderUpward },
     el("span", { class: "who" }, el("b", { text: "How is Koy doing?" }), el("small", { text: "Anonymous. Seven quick ratings and one thing to start and stop." })),
     el("span", { class: upDone() ? "pill done" : "pill", text: upDone() ? "Done ✓" : "To do" }));
 }
