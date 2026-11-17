@@ -288,6 +288,63 @@ service cloud.firestore {
       allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen', 'seenAt', 'seenBy']);
     }
 
+    // ── RATE YOUR CREW (SW v645, 2026-11-16) ──────────────────────────────────
+    // Foremen, leads and jr. foremen rate their crew from a standalone page
+    // (/rate/?r=<token>), not from inside the app. The page can WRITE answers
+    // and read only what its own link opens; nothing on the client can LIST or
+    // read another rater's answers. Koy reads them with the admin SDK.
+    //   crewRaters/{token}      one per rater; the token IS the secret (like
+    //                           gc_links): direct get only, never list, no writes.
+    //                           Holds { raterId, name, people[ids], peopleCards[] }.
+    //   crewRatingRounds/current  { id, startsOn, closesAt }: get only, no writes.
+    //   crewRatings/{round__token__personId}  one answer per rater + person + round.
+    //                           The doc id carries the rater's secret token, so a
+    //                           get needs that token; list and delete are denied.
+    //                           A write must: use a real token, name someone on
+    //                           that rater's list, hit the open round, rate all 5
+    //                           areas 1-4 with a why, and carry nothing else. No
+    //                           pay, margin or dollar field can be stored.
+    match /crewRaters/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+    }
+    match /crewRatingRounds/{id} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+    }
+    match /crewRatings/{docId} {
+      allow get: if true;
+      allow list: if false;
+      allow delete: if false;
+      allow create, update: if ratingWriteOk(docId, request.resource.data);
+    }
+    function ratingScoreOk(v) { return v is int && v >= 1 && v <= 4; }
+    function ratingWhyOk(v) { return v is string && v.size() >= 3 && v.size() <= 500; }
+    function ratingWriteOk(docId, d) {
+      let p = docId.split('__');
+      return p.size() == 3
+        && exists(/databases/$(database)/documents/crewRaters/$(p[1]))
+        && p[2] in get(/databases/$(database)/documents/crewRaters/$(p[1])).data.people
+        && get(/databases/$(database)/documents/crewRatingRounds/current).data.id == p[0]
+        && request.time < get(/databases/$(database)/documents/crewRatingRounds/current).data.closesAt
+        && d.keys().hasOnly(['roundId', 'raterToken', 'raterId', 'personId', 'scores', 'why', 'other', 'updatedAt'])
+        && d.keys().hasAll(['roundId', 'raterToken', 'raterId', 'personId', 'scores', 'why', 'other', 'updatedAt'])
+        && d.roundId == p[0] && d.raterToken == p[1] && d.personId == p[2]
+        && d.raterId == get(/databases/$(database)/documents/crewRaters/$(p[1])).data.raterId
+        && d.scores is map && d.scores.keys().hasOnly(['quality', 'pace', 'reliability', 'attitude', 'leading'])
+        && d.scores.keys().hasAll(['quality', 'pace', 'reliability', 'attitude', 'leading'])
+        && ratingScoreOk(d.scores.quality) && ratingScoreOk(d.scores.pace) && ratingScoreOk(d.scores.reliability)
+        && ratingScoreOk(d.scores.attitude) && ratingScoreOk(d.scores.leading)
+        && d.why is map && d.why.keys().hasOnly(['quality', 'pace', 'reliability', 'attitude', 'leading'])
+        && d.why.keys().hasAll(['quality', 'pace', 'reliability', 'attitude', 'leading'])
+        && ratingWhyOk(d.why.quality) && ratingWhyOk(d.why.pace) && ratingWhyOk(d.why.reliability)
+        && ratingWhyOk(d.why.attitude) && ratingWhyOk(d.why.leading)
+        && d.other is string && d.other.size() <= 1000
+        && d.updatedAt is string && d.updatedAt.size() <= 40;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {

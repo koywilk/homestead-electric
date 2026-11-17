@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Rate your crew</title>
+<style>
+/* Standalone page (not part of the React app). One blue accent, cool neutrals, no yellow. */
+:root{--bg:#F3F5FA;--surface:#fff;--surface-2:#ECEFF6;--fg:#131A2B;--muted:#5A6377;--line:#DCE1EB;--accent:#2C58E6;--accent-ink:#fff;--accent-soft:#E5EBFD;--good:#1C8752;--good-soft:#E1F3E8;--bad:#C7342A;--bad-soft:#FBE6E4}
+@media (prefers-color-scheme:dark){:root{--bg:#0D1220;--surface:#151B2A;--surface-2:#1D2536;--fg:#E7EBF4;--muted:#97A1B6;--line:#283146;--accent:#7C9AFF;--accent-ink:#0D1220;--accent-soft:#1F2C55;--good:#4BC387;--good-soft:#163427;--bad:#FF7B70;--bad-soft:#3A1C1B;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(40px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+.wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font-size:1.45rem;line-height:1.15;margin:0}
+h2{font-size:1.05rem;margin:0}
+p{margin:0}
+.muted{color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px}
+.top{display:flex;flex-direction:column;gap:4px;padding-top:8px}
+.note{display:flex;gap:10px;background:var(--accent-soft);border-radius:12px;padding:12px 14px;font-size:.92rem}
+.list{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.prow{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:14px;cursor:pointer;font:inherit;color:inherit;min-height:60px}
+.prow:first-child{border-top:0}
+.prow:active{background:var(--surface-2)}
+.av{width:40px;height:40px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-weight:700;font-size:.85rem;color:var(--muted);flex:none}
+.who{flex:1;min-width:0;display:flex;flex-direction:column}
+.who b{font-weight:600}
+.who small{color:var(--muted)}
+.pill{border-radius:999px;padding:4px 11px;font-size:.8rem;font-weight:600;white-space:nowrap;background:var(--surface-2);color:var(--muted)}
+.pill.done{background:var(--good-soft);color:var(--good)}
+.back{background:none;border:0;color:var(--muted);font:inherit;font-weight:600;padding:8px 0;cursor:pointer;text-align:left}
+.area{display:flex;flex-direction:column;gap:8px;padding:16px 0;border-top:1px solid var(--line)}
+.area:first-of-type{border-top:0;padding-top:4px}
+.scale{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media (min-width:480px){.scale{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.sv{border:1px solid var(--line);background:var(--surface);border-radius:10px;min-height:48px;padding:6px 4px;font:inherit;font-weight:600;font-size:.9rem;cursor:pointer;color:inherit}
+.sv[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+label{font-size:.82rem;font-weight:600;color:var(--muted)}
+textarea{width:100%;min-height:80px;border:1px solid var(--line);background:var(--surface);color:inherit;border-radius:10px;padding:10px 12px;font:inherit;resize:vertical}
+textarea.bad{border-color:var(--bad)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+.btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);border-radius:12px;padding:12px 18px;font:inherit;font-weight:700;min-height:48px;cursor:pointer;width:100%}
+.btn[disabled]{opacity:.55}
+.err{background:var(--bad-soft);color:var(--bad);border-radius:10px;padding:10px 12px;font-weight:600;font-size:.92rem}
+.hint{font-size:.85rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><p class="muted" style="padding-top:24px">Loading…</p></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp({ apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q", authDomain: "homestead-electric.firebaseapp.com", projectId: "homestead-electric" });
+const db = getFirestore(app);
+
+const AREAS = [
+  ["quality", "Quality", "Is their work clean and right the first time?"],
+  ["pace", "Pace against hours", "Do they get it done in the hours we planned?"],
+  ["reliability", "Reliability", "On time, tools ready, does what they said they'd do?"],
+  ["attitude", "Attitude", "How do they show up when the day is messy or long?"],
+  ["leading", "Leading others", "Do they help and teach the people next to them?"],
+];
+const WORDS = ["Needs work", "Getting there", "Solid", "Strong"];
+const token = (new URLSearchParams(location.search).get("r") || "").trim();
+const root = document.getElementById("app");
+const S = { rater: null, round: null, saved: {}, open: null, form: null, saving: false, err: "" };
+
+const el = (tag, props = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") n.className = v; else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+  }
+  kids.flat().forEach(c => { if (c != null) n.append(c.nodeType ? c : document.createTextNode(c)); });
+  return n;
+};
+const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
+const docId = (pid) => `${S.round.id}__${token}__${pid}`;
+const complete = (d) => !!d && d.scores && d.why && AREAS.every(([k]) => Number.isInteger(d.scores[k]) && String(d.why[k] || "").trim().length >= 3);
+const fmtDay = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
+
+function message(title, body) {
+  root.replaceChildren(el("div", { class: "top" }, el("h1", { text: title })), el("div", { class: "card" }, el("p", { class: "muted", text: body })));
+}
+
+async function load() {
+  if (!/^[A-Za-z0-9]{16,64}$/.test(token)) return message("This link isn't right", "Ask Koy to text you your link again.");
+  try {
+    const [r, rd] = await Promise.all([getDoc(doc(db, "crewRaters", token)), getDoc(doc(db, "crewRatingRounds", "current"))]);
+    if (!r.exists()) return message("This link isn't right", "Ask Koy to text you your link again.");
+    S.rater = r.data();
+    const round = rd.exists() ? rd.data() : null;
+    if (!round || !round.closesAt || round.closesAt.toMillis() <= Date.now()) return message("No round is open right now", "Koy will text you when the next one starts.");
+    S.round = round;
+    await Promise.all((S.rater.peopleCards || []).map(async p => {
+      try { const s = await getDoc(doc(db, "crewRatings", docId(p.id))); if (s.exists()) S.saved[p.id] = s.data(); } catch (e) { /* not rated yet */ }
+    }));
+    renderList();
+  } catch (e) {
+    message("Couldn't load", "Check your signal and reload this page.");
+  }
+}
+
+function renderList() {
+  const people = S.rater.peopleCards || [];
+  const done = people.filter(p => complete(S.saved[p.id])).length;
+  S.open = null;
+  const kids = [
+    el("div", { class: "top" }, el("h1", { text: `Hi ${String(S.rater.name || "").split(" ")[0]}` }),
+      el("p", { class: "muted", text: `Rate your crew. Round of ${fmtDay(S.round.startsOn)}. You can change your answers until it closes.` })),
+    el("div", { class: "note" }, el("span", { text: "Only Koy sees these. Nobody on your crew sees what you wrote, and you can't see anyone else's." })),
+  ];
+  if (!people.length) kids.push(el("div", { class: "card" }, el("p", { class: "muted", text: "No one to rate yet. Koy will text you if that changes." })));
+  else {
+    kids.push(el("p", { class: "hint", text: `${done} of ${people.length} done` }));
+    kids.push(el("div", { class: "list" }, people.map(p => el("button", { class: "prow", type: "button", onclick: () => renderForm(p) },
+      el("span", { class: "av", text: initials(p.name) }),
+      el("span", { class: "who" }, el("b", { text: p.name }), el("small", { text: p.title === "foreman" ? "Foreman" : p.title === "jrforeman" ? "Jr. foreman" : p.title === "lead" ? "Lead" : "Crew" })),
+      el("span", { class: complete(S.saved[p.id]) ? "pill done" : "pill", text: complete(S.saved[p.id]) ? "Done ✓" : "To do" })))));
+  }
+  root.replaceChildren(...kids);
+  window.scrollTo(0, 0);
+}
+
+function renderForm(p) {
+  const prev = S.saved[p.id] || {};
+  S.open = p;
+  S.err = "";
+  S.form = { scores: Object.assign({}, prev.scores || {}), why: Object.assign({}, prev.why || {}), other: prev.other || "" };
+  const err = el("div", { class: "err", hidden: "" });
+  const save = el("button", { class: "btn", type: "button", text: "Save " + p.name.split(" ")[0] });
+  const areas = AREAS.map(([k, label, prompt]) => {
+    const btns = WORDS.map((w, i) => el("button", { class: "sv", type: "button", "aria-pressed": String(S.form.scores[k] === i + 1), text: w, onclick: (ev) => {
+      S.form.scores[k] = i + 1;
+      ev.target.parentNode.querySelectorAll(".sv").forEach((b, j) => b.setAttribute("aria-pressed", String(j === i)));
+    } }));
+    const ta = el("textarea", { id: "why-" + k, maxlength: "500", placeholder: "Why? A sentence or two." });
+    ta.value = S.form.why[k] || "";
+    ta.addEventListener("input", () => { S.form.why[k] = ta.value; ta.classList.remove("bad"); });
+    return el("div", { class: "area" }, el("h2", { text: label }), el("p", { class: "hint", text: prompt }), el("div", { class: "scale", role: "group", "aria-label": label }, btns), el("label", { for: "why-" + k, text: "Why" }), ta);
+  });
+  const other = el("textarea", { id: "other", maxlength: "1000", placeholder: "Optional" });
+  other.value = S.form.other;
+  other.addEventListener("input", () => { S.form.other = other.value; });
+  save.addEventListener("click", async () => {
+    err.hidden = true;
+    for (const [k, label] of AREAS) {
+      if (!S.form.scores[k]) { err.textContent = `Pick a rating for ${label}.`; err.hidden = false; err.scrollIntoView({ block: "center" }); return; }
+      if (String(S.form.why[k] || "").trim().length < 3) { document.getElementById("why-" + k).classList.add("bad"); err.textContent = `Add a short why for ${label}.`; err.hidden = false; document.getElementById("why-" + k).scrollIntoView({ block: "center" }); return; }
+    }
+    save.disabled = true; save.textContent = "Saving…";
+    const scores = {}, why = {};
+    AREAS.forEach(([k]) => { scores[k] = S.form.scores[k]; why[k] = String(S.form.why[k]).trim().slice(0, 500); });
+    const data = { roundId: S.round.id, raterToken: token, raterId: S.rater.raterId, personId: p.id, scores, why, other: String(S.form.other || "").trim().slice(0, 1000), updatedAt: new Date().toISOString() };
+    try {
+      await setDoc(doc(db, "crewRatings", docId(p.id)), data);
+      S.saved[p.id] = data;
+      renderList();
+    } catch (e) {
+      save.disabled = false; save.textContent = "Save " + p.name.split(" ")[0];
+      err.textContent = "Couldn't save. Check your signal and tap Save again."; err.hidden = false;
+    }
+  });
+  root.replaceChildren(
+    el("button", { class: "back", type: "button", text: "← Back to your crew", onclick: renderList }),
+    el("div", { class: "top" }, el("h1", { text: p.name }), el("p", { class: "muted", text: "Pick a rating in each area and tell Koy why." })),
+    el("div", { class: "card" }, areas, el("div", { class: "area" }, el("h2", { text: "Anything else Koy should know?" }), other)),
+    err, save);
+  window.scrollTo(0, 0);
+}
+
+load();
+</script>
+</body>
+</html>
