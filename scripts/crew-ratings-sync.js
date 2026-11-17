@@ -95,11 +95,29 @@ const mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : nul
 const r1 = (v) => v == null ? null : Math.round(v * 10) / 10;
 const clamp14 = (v) => Math.max(1, Math.min(4, v));
 
-function compute({ users, raters, round, answers, feedback, artifactPeople, nowIso, existingRatingIds }) {
+// Upward feedback summary: averages, spread, by-role (only groups of 2+, so one person can't be picked out),
+// and the start/stop comments with NO names. History keeps every round.
+function upwardSummary(upward, round, users, nowIso) {
+  const complete = (upward || []).filter(d => d && R.isUpwardComplete(d));
+  const roleOf = (rid) => { const u = (users || []).find(x => x.id === rid); const t = u ? R.titleOf(u) : "crew"; return ["foreman", "jrforeman", "lead", "crew"].includes(t) ? t : "crew"; };
+  const cur = round ? complete.filter(d => d.roundId === round.id) : [];
+  const avgs = (ds) => Object.fromEntries(R.UPWARD_KEYS.map(k => [k, r1(mean(ds.map(d => d.scores[k])))]));
+  const overall = (ds) => r1(mean(ds.flatMap(d => R.UPWARD_KEYS.map(k => d.scores[k]))));
+  const areas = {};
+  R.UPWARD_KEYS.forEach(k => { const c = [0, 0, 0, 0]; cur.forEach(d => c[d.scores[k] - 1]++); areas[k] = { avg: r1(mean(cur.map(d => d.scores[k]))), dist: c }; });
+  const byRole = {};
+  for (const role of ["foreman", "jrforeman", "lead", "crew"]) { const ds = cur.filter(d => roleOf(d.raterId) === role); if (ds.length >= 2) byRole[role] = { n: ds.length, overall: overall(ds), areas: avgs(ds) }; }
+  const text = (key) => cur.map(d => String(d[key] || "").trim()).filter(Boolean).map(t => ({ text: t, key: hash(key + "|" + t) }));
+  const rounds = {}; complete.forEach(d => (rounds[d.roundId] = rounds[d.roundId] || []).push(d));
+  const history = Object.keys(rounds).sort().slice(-12).map(rid => ({ roundId: rid, n: rounds[rid].length, overall: overall(rounds[rid]), areas: avgs(rounds[rid]) }));
+  return { roundId: round ? round.id : null, n: cur.length, overall: cur.length ? overall(cur) : null, areas, byRole, starts: text("start"), stops: text("stop"), history, syncedAt: nowIso };
+}
+
+function compute({ users, raters, round, answers, feedback, upward, artifactPeople, nowIso, existingRatingIds }) {
   const known = new Set((artifactPeople || []).map(p => p.id));
   const pidOf = (uid) => { const u = (users || []).find(x => x.id === uid); const s = u ? slug(u.name) : ""; return known.has(s) ? s : null; };
   const nameOf = (uid) => { const u = (users || []).find(x => x.id === uid); return u ? String(u.name || uid) : uid; };
-  const empty = { ratings: {}, deleteRatings: (existingRatingIds || []).slice(), status: { noRound: true, syncedAt: nowIso, outstanding: [], ratersTotal: 0, ratersDone: 0 }, links: { links: [] }, feedback: { items: [], syncedAt: nowIso } };
+  const empty = { ratings: {}, deleteRatings: (existingRatingIds || []).slice(), status: { noRound: true, syncedAt: nowIso, outstanding: [], ratersTotal: 0, ratersDone: 0 }, links: { links: [] }, feedback: { items: [], syncedAt: nowIso }, upward: upwardSummary([], null, users, nowIso) };
   const links = { links: raters.map(x => ({ name: x.name, personId: pidOf(x.raterId) || "", count: x.people.length, url: BASE + x.token, rates: x.people.map(pidOf).filter(Boolean) })).sort((a, b) => a.name.localeCompare(b.name)) };
   if (!round) return { ...empty, links };
 
@@ -151,13 +169,14 @@ function compute({ users, raters, round, answers, feedback, artifactPeople, nowI
   Object.values(recs).forEach(r => r.pending.sort());
   const outstanding = raters.map(x => { const left = x.people.filter(id => !done.has(`${x.raterId}|${id}`)).length; return { name: x.name, left, of: x.people.length }; }).filter(o => o.left > 0).sort((a, b) => a.name.localeCompare(b.name));
   const fb = (feedback || []).filter(f => f && f.roundId === round.id && String(f.text || "").trim());
-  const lastAnswerAt = ok.map(d => String(d.updatedAt || "")).concat(fb.map(f => String(f.updatedAt || ""))).sort().pop() || "";
+  const lastAnswerAt = ok.map(d => String(d.updatedAt || "")).concat(fb.map(f => String(f.updatedAt || ""))).concat((upward || []).filter(u => u && u.roundId === round.id).map(u => String(u.updatedAt || ""))).sort().pop() || "";
   return {
     ratings: recs,
     deleteRatings: (existingRatingIds || []).filter(id => !recs[id]),
     status: { roundId: round.id, startsOn: round.startsOn, endsOn: round.endsOn, ratersTotal: raters.length, ratersDone: raters.length - outstanding.length, outstanding, lastAnswerAt, syncedAt: nowIso },
     links,
     // "From the field": anonymous notes about what would make the job better (rater shown only when Koy turns names on)
+    upward: upwardSummary(upward, round, users, nowIso),
     feedback: { roundId: round.id, items: fb.map(f => ({ rater: nameOf(f.raterId), text: String(f.text).trim(), key: hash("fb|" + String(f.text).trim()) })).sort((x, y) => x.rater.localeCompare(y.rater)), syncedAt: nowIso },
   };
 }
@@ -167,6 +186,8 @@ function run(input, mint = () => crypto.randomBytes(16).toString("hex")) {
   // trimmed fields). Writing "nobody has rated anyone" over good data is worse than writing nothing.
   const bad = (input.answers || []).filter(a => !a || typeof a.scores !== "object" || a.scores === null || typeof a.why !== "object" || a.why === null);
   if (bad.length) throw new Error(`${bad.length} of ${(input.answers || []).length} answers are missing scores or why: list crewRatings again WITHOUT a field mask. Nothing was written.`);
+  const badUp = (input.upward || []).filter(u => !u || typeof u.scores !== "object" || u.scores === null);
+  if (badUp.length) throw new Error(`${badUp.length} upward answers are missing scores: list crewUpward again WITHOUT a field mask. Nothing was written.`);
   const badFb = (input.feedback || []).filter(f => !f || typeof f.text !== "string");
   if (badFb.length) throw new Error(`${badFb.length} field notes are missing text: list crewFeedback again WITHOUT a field mask. Nothing was written.`);
   const h = handleRequests({ ...input, mint });
@@ -188,4 +209,5 @@ if (require.main === module) {
   put("ratings_meta", "status", out.artifact.status);
   put("ratings_meta", "links", out.artifact.links);
   put("ratings_meta", "feedback", out.artifact.feedback);
+  put("ratings_meta", "upward", out.artifact.upward);
 }

@@ -1,4 +1,4 @@
-# Rate Your Crew rules test (22 cases). Needs the Firestore emulator + Java, so it is NOT in prebuild.
+# Rate Your Crew rules test (34 cases). Needs the Firestore emulator + Java, so it is NOT in prebuild.
 # Run: firebase emulators:exec --only firestore --project demo-hz "python3 scripts/crew-ratings-rules-emulator.py"
 # (with a firebase.json whose firestore.rules points at firestore.rules, emulator port 8085)
 import json,urllib.request,sys
@@ -54,6 +54,28 @@ tests=[
  ("denied: feedback delete",403,lambda:call("DELETE",fb)),
  ("denied: answers list",403,lambda:call("GET","/crewRatings")),
  ("get own answer",200,lambda:call("GET",doc)),
+]
+
+UK=["direction","available","obstacles","fair","followthrough","listens","setup"]
+up="/crewUpward/2026-11-16__%s"%T
+def updoc(sc=3,start="Give more notice",stop="",token=T,rid="u_1788878028060",extra=None,scores=None):
+    f={"roundId":s("2026-11-16"),"raterToken":s(token),"raterId":s(rid),
+       "scores":m(scores if scores is not None else {k:i(sc) for k in UK}),"start":s(start),"stop":s(stop),"updatedAt":s("2026-11-16T22:00:00Z")}
+    if extra: f.update(extra)
+    return {"fields":f}
+tests+=[
+ ("upward valid",200,lambda:call("PATCH",up,updoc())),
+ ("upward valid (edit, empty start/stop)",200,lambda:call("PATCH",up,updoc(4,"",""))),
+ ("denied: upward score 5",403,lambda:call("PATCH",up,updoc(scores={**{k:i(3) for k in UK},"listens":i(5)}))),
+ ("denied: upward missing a question",403,lambda:call("PATCH",up,updoc(scores={k:i(3) for k in UK[:-1]}))),
+ ("denied: upward extra question",403,lambda:call("PATCH",up,updoc(scores={**{k:i(3) for k in UK},"pay":i(3)}))),
+ ("denied: upward start over 500",403,lambda:call("PATCH",up,updoc(start="x"*501))),
+ ("denied: upward fake token",403,lambda:call("PATCH","/crewUpward/2026-11-16__deadbeef",updoc(token="deadbeef"))),
+ ("denied: upward wrong rater id",403,lambda:call("PATCH",up,updoc(rid="u_other"))),
+ ("denied: upward extra field",403,lambda:call("PATCH",up,updoc(extra={"name":s("Zane")}))),
+ ("denied: upward list",403,lambda:call("GET","/crewUpward")),
+ ("denied: upward delete",403,lambda:call("DELETE",up)),
+ ("get own upward answer",200,lambda:call("GET",up)),
 ]
 bad=0
 for name,want,fn in tests:

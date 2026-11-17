@@ -80,6 +80,7 @@ for (const f of [rules, p2]) {
   assert.ok(/match \/crewRatingRounds\/\{id\} \{\s*allow get: if true;\s*allow list: if false;\s*allow write: if false;/.test(blk), "rounds: get only");
   assert.ok(/match \/crewRatings\/\{docId\} \{\s*allow get: if true;\s*allow list: if false;\s*allow delete: if false;/.test(blk), "answers: no list, no delete");
   assert.ok(/crewRatingRounds\/current\)\.data\.closesAt/.test(blk), "writes stop when the round closes");
+  assert.ok(/match \/crewUpward\/\{docId\} \{\s*allow get: if true;\s*allow list: if false;\s*allow delete: if false;/.test(blk), "upward: no list, no delete");
   assert.ok(!/dollar|margin|pay\b/i.test(blk.replace(/No pay, margin or dollar field/, "")), "no money field in the rules");
 }
 assert.ok(rules.indexOf("match /crewRatings/") < rules.indexOf("match /{document=**}"), "catch-all deny stays last");
@@ -154,5 +155,29 @@ assert.ok(SY.run({ ...base, requests: [{ id: "r8", op: "round" }], round: round1
   assert.throws(() => SY.run({ ...base, answers: [{ roundId: "2026-11-16", raterId: "f", personId: "a", updatedAt: "x" }] }), /missing scores or why/, "stripped answers are refused");
   assert.throws(() => SY.run({ ...base, answers: [], feedback: [{ roundId: "2026-11-16", raterId: "f", updatedAt: "x" }] }), /missing text/, "stripped field notes are refused");
   assert.doesNotThrow(() => SY.run({ ...base, answers: [] }), "no answers at all is fine");
+}
+// ── upward feedback (how Koy is doing) ──
+{
+  assert.strictEqual(R.UPWARD.length, 7, "seven scored questions");
+  assert.deepStrictEqual(R.UPWARD_KEYS, ["direction", "available", "obstacles", "fair", "followthrough", "listens", "setup"]);
+  const sc = (n) => Object.fromEntries(R.UPWARD_KEYS.map(k => [k, n]));
+  assert.ok(R.validateUpward({ scores: sc(3), start: " more notice ", stop: "" }).ok);
+  assert.strictEqual(R.validateUpward({ scores: sc(3), start: " more notice " }).start, "more notice");
+  assert.ok(!R.validateUpward({ scores: { ...sc(3), listens: 5 } }).ok, "1-4 only");
+  assert.ok(!R.validateUpward({ scores: { direction: 3 } }).ok, "all seven needed");
+  const us = [{ id: "f1", name: "F One", title: "foreman", active: true }, { id: "f2", name: "F Two", title: "foreman", active: true }, { id: "l1", name: "L One", title: "lead", active: true }, { id: "c1", name: "C One", title: "crew", active: true }];
+  const rd = { id: "2026-11-16", startsOn: "2026-11-16", endsOn: "2026-11-29" };
+  const U = (rid, n, round, start, stop) => ({ roundId: round || rd.id, raterToken: "t" + rid, raterId: rid, scores: sc(n), start, stop, updatedAt: "2026-11-20T00:00:00Z" });
+  const sm = SY.compute({ users: us, raters: [], round: rd, answers: [], upward: [U("f1", 4, null, "Give more notice", "Interrupting"), U("f2", 2, null, "", "Interrupting"), U("l1", 3, null, "More notice on schedule", ""), U("c1", 3, "2026-11-02")], artifactPeople: [], nowIso: "n", existingRatingIds: [] }).upward;
+  assert.strictEqual(sm.n, 3, "only this round counts toward the summary");
+  assert.strictEqual(sm.overall, 3, "mean of 4, 2, 3");
+  assert.deepStrictEqual(sm.areas.direction.dist, [0, 1, 1, 1]);
+  assert.deepStrictEqual(Object.keys(sm.byRole), ["foreman"], "a role needs 2+ raters to be shown, so no one is singled out");
+  assert.strictEqual(sm.byRole.foreman.n, 2);
+  assert.deepStrictEqual(sm.starts.map(x => x.text).sort(), ["Give more notice", "More notice on schedule"]);
+  assert.strictEqual(sm.stops.length, 2);
+  assert.ok(!JSON.stringify(sm).match(/F One|F Two|L One|raterId|raterToken/), "no rater names or ids in what the artifact sees");
+  assert.strictEqual(sm.history.length, 2, "history keeps both rounds");
+  assert.throws(() => SY.run({ users: us, raters: [], round: rd, answers: [], upward: [{ roundId: rd.id, raterId: "f1" }], artifactPeople: [], requests: [], existingRatingIds: [], today: "2026-11-17", nowIso: "n" }), /missing scores/, "stripped upward answers are refused");
 }
 console.log("crew-ratings-test: ok");

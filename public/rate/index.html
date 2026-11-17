@@ -5,16 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>Rate your crew</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Rokkitt:wght@700;800&display=swap">
 <style>
 /* Standalone page (not part of the React app). One blue accent, cool neutrals, no yellow. */
-:root{--bg:#F3F5FA;--surface:#fff;--surface-2:#ECEFF6;--fg:#131A2B;--muted:#5A6377;--line:#DCE1EB;--accent:#2C58E6;--accent-ink:#fff;--accent-soft:#E5EBFD;--good:#1C8752;--good-soft:#E1F3E8;--bad:#C7342A;--bad-soft:#FBE6E4}
-@media (prefers-color-scheme:dark){:root{--bg:#0D1220;--surface:#151B2A;--surface-2:#1D2536;--fg:#E7EBF4;--muted:#97A1B6;--line:#283146;--accent:#7C9AFF;--accent-ink:#0D1220;--accent-soft:#1F2C55;--good:#4BC387;--good-soft:#163427;--bad:#FF7B70;--bad-soft:#3A1C1B;color-scheme:dark}}
+:root{--bg:#F7F4EE;--surface:#fff;--surface-2:#EFEBE4;--fg:#2B1F18;--muted:#6B5240;--line:#E2DBD0;--accent:#2F5BD9;--accent-ink:#fff;--accent-soft:#E6ECFB;--good:#1C8752;--good-soft:#E1F3E8;--bad:#C7342A;--bad-soft:#FBE6E4;--display:"Rokkitt",Georgia,serif}
+@media (prefers-color-scheme:dark){:root{--bg:#141821;--surface:#1B2030;--surface-2:#222732;--fg:#E6EAF1;--muted:#9AA3B2;--line:#2A2F3A;--accent:#7C9AFF;--accent-ink:#141821;--accent-soft:#1F2C55;--good:#4BC387;--good-soft:#163427;--bad:#FF7B70;--bad-soft:#3A1C1B;color-scheme:dark}}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--fg)}
-body{font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(40px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+body{font:16px/1.45 "DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(40px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
 .wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
-h1{font-size:1.45rem;line-height:1.15;margin:0}
-h2{font-size:1.05rem;margin:0}
+h1,h2{font-family:var(--display);font-weight:800}
+h1{font-size:2rem;line-height:1.05;margin:0}
+h2{font-size:1.25rem;line-height:1.1;margin:0}
+.brandbar{max-width:640px;margin:0 auto 4px}
+.brandbar img{display:block;width:132px;height:auto}
 p{margin:0}
 .muted{color:var(--muted)}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px}
@@ -48,6 +54,7 @@ textarea.bad{border-color:var(--bad)}
 </style>
 </head>
 <body>
+<header class="brandbar"><picture><source srcset="/hs-logo-white.png" media="(prefers-color-scheme: dark)"><img src="/hs-logo-dark.png" alt="Homestead Electric" width="132" height="76"></picture></header>
 <div class="wrap" id="app"><p class="muted" style="padding-top:24px">Loading…</p></div>
 
 <script type="module">
@@ -65,9 +72,18 @@ const AREAS = [
   ["leading", "Leading others", "Do they help and teach the people next to them?"],
 ];
 const WORDS = ["Needs work", "Getting there", "Solid", "Strong"];
+const UPWARD = [
+  ["direction", "Clear direction", "Does Koy make it clear what a good job looks like and what's expected of you?"],
+  ["available", "Available when needed", "When you need Koy or an answer, do you get it quickly?"],
+  ["obstacles", "Removes obstacles", "When material, plans, schedule or a GC is slowing you down, does Koy get it fixed?"],
+  ["fair", "Fair and recognizes", "Does Koy hold everyone to the same standard, and do you hear it when you do good work?"],
+  ["followthrough", "Follows through", "When Koy says he'll do something, does he do it?"],
+  ["listens", "Listens and acts", "Does Koy hear you out and then change something?"],
+  ["setup", "Jobs set up before you start", "Are plans, material, scope and change orders ready before you start a job?"],
+];
 const token = (new URLSearchParams(location.search).get("r") || "").trim();
 const root = document.getElementById("app");
-const S = { rater: null, round: null, saved: {}, open: null, form: null, saving: false, err: "", fb: "" };
+const S = { rater: null, round: null, saved: {}, open: null, form: null, saving: false, err: "", fb: "", up: null };
 
 const el = (tag, props = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -100,6 +116,7 @@ async function load() {
       try { const s = await getDoc(doc(db, "crewRatings", docId(p.id))); if (s.exists()) S.saved[p.id] = s.data(); } catch (e) { /* not rated yet */ }
     }));
     try { const f = await getDoc(doc(db, "crewFeedback", `${S.round.id}__${token}`)); if (f.exists()) S.fb = f.data().text || ""; } catch (e) { /* none yet */ }
+    try { const u = await getDoc(doc(db, "crewUpward", `${S.round.id}__${token}`)); if (u.exists()) S.up = u.data(); } catch (e) { /* none yet */ }
     renderList();
   } catch (e) {
     message("Couldn't load", "Check your signal and reload this page.");
@@ -123,6 +140,7 @@ function renderList() {
       el("span", { class: "who" }, el("b", { text: p.name }), el("small", { text: p.title === "foreman" ? "Foreman" : p.title === "jrforeman" ? "Jr. foreman" : p.title === "lead" ? "Lead" : "Crew" })),
       el("span", { class: complete(S.saved[p.id]) ? "pill done" : "pill", text: complete(S.saved[p.id]) ? "Done ✓" : "To do" })))));
   }
+  kids.push(upwardCard());
   kids.push(companyCard());
   root.replaceChildren(...kids);
   window.scrollTo(0, 0);
@@ -144,6 +162,49 @@ function companyCard() {
     btn.disabled = false;
   });
   return el("div", { class: "card", style: "display:flex;flex-direction:column;gap:8px" }, el("h2", { text: "What would make your job better?" }), ta, msg, btn);
+}
+
+const upDone = () => !!S.up && S.up.scores && UPWARD.every(([k]) => Number.isInteger(S.up.scores[k]));
+function upwardCard() {
+  return el("button", { class: "prow card", type: "button", style: "border:1px solid var(--line);border-radius:14px;margin-top:2px;background:var(--surface)", onclick: renderUpward },
+    el("span", { class: "who" }, el("b", { text: "How is Koy doing?" }), el("small", { text: "Anonymous. Seven quick ratings and one thing to start and stop." })),
+    el("span", { class: upDone() ? "pill done" : "pill", text: upDone() ? "Done ✓" : "To do" }));
+}
+
+function renderUpward() {
+  const prev = S.up || {};
+  const form = { scores: Object.assign({}, prev.scores || {}), start: prev.start || "", stop: prev.stop || "" };
+  const err = el("div", { class: "err", hidden: "" });
+  const save = el("button", { class: "btn", type: "button", text: "Save" });
+  const qs = UPWARD.map(([k, label, prompt]) => {
+    const btns = WORDS.map((w, i) => el("button", { class: "sv", type: "button", "aria-pressed": String(form.scores[k] === i + 1), text: w, onclick: (ev) => {
+      form.scores[k] = i + 1;
+      ev.target.parentNode.querySelectorAll(".sv").forEach((b, j) => b.setAttribute("aria-pressed", String(j === i)));
+    } }));
+    return el("div", { class: "area" }, el("h2", { text: label }), el("p", { class: "hint", text: prompt }), el("div", { class: "scale", role: "group", "aria-label": label }, btns));
+  });
+  const start = el("textarea", { id: "up-start", maxlength: "500", placeholder: "Optional. One thing Koy should start doing." });
+  const stop = el("textarea", { id: "up-stop", maxlength: "500", placeholder: "Optional. One thing Koy should stop doing." });
+  start.value = form.start; stop.value = form.stop;
+  start.addEventListener("input", () => { form.start = start.value; });
+  stop.addEventListener("input", () => { form.stop = stop.value; });
+  save.addEventListener("click", async () => {
+    err.hidden = true;
+    for (const [k, label] of UPWARD) {
+      if (!form.scores[k]) { err.textContent = `Pick a rating for ${label}.`; err.hidden = false; err.scrollIntoView({ block: "center" }); return; }
+    }
+    save.disabled = true; save.textContent = "Saving…";
+    const scores = {}; UPWARD.forEach(([k]) => { scores[k] = form.scores[k]; });
+    const data = { roundId: S.round.id, raterToken: token, raterId: S.rater.raterId, scores, start: String(form.start || "").trim().slice(0, 500), stop: String(form.stop || "").trim().slice(0, 500), updatedAt: new Date().toISOString() };
+    try { await setDoc(doc(db, "crewUpward", `${S.round.id}__${token}`), data); S.up = data; renderList(); }
+    catch (e) { save.disabled = false; save.textContent = "Save"; err.textContent = "Couldn't save. Check your signal and tap Save again."; err.hidden = false; }
+  });
+  root.replaceChildren(
+    el("button", { class: "back", type: "button", text: "← Back", onclick: renderList }),
+    el("div", { class: "top" }, el("h1", { text: "How is Koy doing?" }), el("p", { class: "muted", text: "Anonymous. Koy sees averages and comments, not names. Be honest, it helps him get better." })),
+    el("div", { class: "card" }, qs, el("div", { class: "area" }, el("h2", { text: "One thing Koy should start" }), start), el("div", { class: "area" }, el("h2", { text: "One thing Koy should stop" }), stop)),
+    err, save);
+  window.scrollTo(0, 0);
 }
 
 function renderForm(p) {

@@ -176,9 +176,34 @@ function outstanding(users, docs, extrasByRater) {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+
+// ── Upward feedback: how Koy is doing, scored by the people he leads ──────────────
+// Two doors, same questions: the meeting form (face to face) and the anonymous rater page.
+const UPWARD = [
+  { key: "direction", label: "Clear direction", prompt: "Does Koy make it clear what a good job looks like and what's expected of you?" },
+  { key: "available", label: "Available when needed", prompt: "When you need Koy or an answer, do you get it quickly?" },
+  { key: "obstacles", label: "Removes obstacles", prompt: "When material, plans, schedule or a GC is slowing you down, does Koy get it fixed?" },
+  { key: "fair", label: "Fair and recognizes", prompt: "Does Koy hold everyone to the same standard, and do you hear it when you do good work?" },
+  { key: "followthrough", label: "Follows through", prompt: "When Koy says he'll do something, does he do it?" },
+  { key: "listens", label: "Listens and acts", prompt: "Does Koy hear you out and then change something?" },
+  { key: "setup", label: "Jobs set up before you start", prompt: "Are plans, material, scope and change orders ready before you start a job?" },
+];
+const UPWARD_KEYS = UPWARD.map(u => u.key);
+const isUpwardComplete = (d) => !!d && !!d.scores && UPWARD_KEYS.every(k => Number.isInteger(d.scores[k]) && d.scores[k] >= 1 && d.scores[k] <= 4);
+function validateUpward(input) {
+  const scores = {};
+  for (const u of UPWARD) {
+    const v = Number(input && input.scores && input.scores[u.key]);
+    if (!Number.isInteger(v) || v < 1 || v > 4) return { ok: false, err: `Pick a rating for ${u.label}.` };
+    scores[u.key] = v;
+  }
+  return { ok: true, scores, start: clean(input && input.start).slice(0, WHY_MAX), stop: clean(input && input.stop).slice(0, WHY_MAX) };
+}
+
 module.exports = {
   AREAS, AREA_KEYS, WORDS, RATER_TITLES, ROUND_DAYS, WHY_MAX, OTHER_MAX, ROUND_ID, PERSON_ID,
   titleOf, canRate, whoIRate, personCard, onTheCrew,
   mondayOf, addDays, newRound, roundIsOpen, docId,
   validateAnswer, isComplete, byPerson, outstanding,
+  UPWARD, UPWARD_KEYS, isUpwardComplete, validateUpward,
 };

@@ -382,6 +382,36 @@ service cloud.firestore {
         && d.updatedAt is string && d.updatedAt.size() <= 40;
     }
 
+    // crewUpward/{round__token}: a rater's anonymous scores for how Koy is doing (seven questions,
+    // 1-4, plus one thing to start and one to stop). Same token + open-round checks as crewRatings.
+    // The artifact never shows who wrote what; only the sync reads these.
+    match /crewUpward/{docId} {
+      allow get: if true;
+      allow list: if false;
+      allow delete: if false;
+      allow create, update: if upwardWriteOk(docId, request.resource.data);
+    }
+    function upwardScoreOk(v) { return v is int && v >= 1 && v <= 4; }
+    function upwardWriteOk(docId, d) {
+      let p = docId.split('__');
+      return p.size() == 2
+        && exists(/databases/$(database)/documents/crewRaters/$(p[1]))
+        && get(/databases/$(database)/documents/crewRatingRounds/current).data.id == p[0]
+        && request.time < get(/databases/$(database)/documents/crewRatingRounds/current).data.closesAt
+        && d.keys().hasOnly(['roundId', 'raterToken', 'raterId', 'scores', 'start', 'stop', 'updatedAt'])
+        && d.keys().hasAll(['roundId', 'raterToken', 'raterId', 'scores', 'start', 'stop', 'updatedAt'])
+        && d.roundId == p[0] && d.raterToken == p[1]
+        && d.raterId == get(/databases/$(database)/documents/crewRaters/$(p[1])).data.raterId
+        && d.scores is map
+        && d.scores.keys().hasOnly(['direction', 'available', 'obstacles', 'fair', 'followthrough', 'listens', 'setup'])
+        && d.scores.keys().hasAll(['direction', 'available', 'obstacles', 'fair', 'followthrough', 'listens', 'setup'])
+        && upwardScoreOk(d.scores.direction) && upwardScoreOk(d.scores.available) && upwardScoreOk(d.scores.obstacles)
+        && upwardScoreOk(d.scores.fair) && upwardScoreOk(d.scores.followthrough) && upwardScoreOk(d.scores.listens)
+        && upwardScoreOk(d.scores.setup)
+        && d.start is string && d.start.size() <= 500 && d.stop is string && d.stop.size() <= 500
+        && d.updatedAt is string && d.updatedAt.size() <= 40;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
