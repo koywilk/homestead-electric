@@ -18,17 +18,17 @@ const users = [
 ];
 const names = (r) => R.whoIRate(users.find(u => u.id === r), users).map(p => p.name);
 assert.deepStrictEqual(names("k"), ["Austin", "Gage", "Payton"], "a foreman rates the crew under them");
-assert.deepStrictEqual(names("g"), ["Austin", "Payton"], "a jr foreman rates crewmates, not self and not the foreman");
-assert.deepStrictEqual(names("t"), ["Callen", "Louis"]);
+assert.deepStrictEqual(names("g"), ["Austin", "Keegan", "Payton"], "a jr foreman rates crewmates and their own foreman, never self");
+assert.deepStrictEqual(names("t"), ["Callen", "Daegan", "Louis"]);
 assert.deepStrictEqual(names("z"), ["Braden"]);
-assert.deepStrictEqual(names("b"), [], "an only child has no one to rate");
+assert.deepStrictEqual(names("b"), ["Zane"], "a lone lead still rates their foreman");
 assert.deepStrictEqual(names("j"), [], "no foreman set → nobody yet");
 assert.deepStrictEqual(names("x"), [], "contractors never rate");
 assert.deepStrictEqual(names("kk"), [], "office never rates");
 assert.ok(!names("k").includes("Old"), "deactivated people are never rated");
 
 const raters = plan(users, (() => { let n = 0; return () => "tok" + String(++n).padStart(14, "0"); })());
-assert.deepStrictEqual(raters.map(r => r.name), ["Keegan", "Gage", "Daegan", "Louis", "Trever", "Zane"], "only raters with someone to rate get a link");
+assert.deepStrictEqual(raters.map(r => r.name), ["Keegan", "Gage", "Daegan", "Louis", "Trever", "Zane", "Braden"], "only raters with someone to rate get a link");
 assert.ok(raters.every(r => r.peopleCards.length === r.people.length));
 assert.ok(!JSON.stringify(raters).match(/"(pin|pay|wage|margin|cost|price|amount)[A-Za-z]*":/i), "no pay, pin or dollar field anywhere");
 
@@ -41,8 +41,8 @@ assert.ok(!R.validateAnswer({ scores: good.scores }).ok);
 
 // extras: Koy adds someone off the crew; never self, never a contractor, never a duplicate
 const withExtra = (r, ex) => R.whoIRate(users.find(u => u.id === r), users, ex).map(p => p.name);
-assert.deepStrictEqual(withExtra("g", ["c", "g", "x", "a", "nope", "o"]), ["Austin", "Callen", "Payton"], "extra added once; self, contractor, unknown and deactivated ignored");
-assert.deepStrictEqual(withExtra("b", ["a"]), ["Austin"], "an only child can still get an extra");
+assert.deepStrictEqual(withExtra("g", ["c", "g", "x", "a", "nope", "o"]), ["Austin", "Callen", "Keegan", "Payton"], "extra added once; self, contractor, unknown and deactivated ignored");
+assert.deepStrictEqual(withExtra("b", ["a"]), ["Austin", "Zane"], "an extra is added beside the foreman");
 assert.deepStrictEqual(plan(users, () => "t".repeat(16), { z: ["a"] }).find(r => r.name === "Zane").people, ["a", "b"]);
 assert.deepStrictEqual(R.outstanding(users, [], { z: ["a"] }).find(o => o.name === "Zane"), { raterId: "z", name: "Zane", left: 2, of: 2 });
 
@@ -67,7 +67,7 @@ assert.strictEqual(bp.a.overall, 1.8);
 assert.strictEqual(bp.a.areas.quality.entries[0].word, "Needs work");
 const out = R.outstanding(users, docs);
 assert.deepStrictEqual(out.find(o => o.name === "Keegan"), { raterId: "k", name: "Keegan", left: 2, of: 3 });
-assert.ok(!out.find(o => o.name === "Braden"));
+assert.deepStrictEqual(out.find(o => o.name === "Braden"), { raterId: "b", name: "Braden", left: 1, of: 1 });
 
 // the Firestore rules: client can create/update with a valid token only; never list/delete/read broadly
 const rules = fs.readFileSync(path.join(__dirname, "..", "firestore.rules"), "utf8");

@@ -59,8 +59,8 @@ function canRate(u) {
   return isActive(u) && !isContractor(u) && RATER_TITLES.includes(titleOf(u));
 }
 
-// The people `rater` rates: everyone on their foreman's crew except themselves and
-// except the foreman (a foreman rates the crew under them; a lead rates their crewmates).
+// The people `rater` rates: everyone on their foreman's crew except themselves (a foreman
+// rates the crew under them; a lead or jr foreman rates their crewmates AND their own foreman).
 // `extras` = people Koy added by hand for this rater (someone off their crew who works
 // beside them a lot): an array of user ids. Anyone active and not a contractor can be
 // added, never the rater themself.
@@ -68,6 +68,8 @@ function whoIRate(rater, users, extras) {
   if (!canRate(rater)) return [];
   const key = crewKeyOf(rater);
   const crew = key ? (users || []).filter(u => onTheCrew(u) && titleOf(u) !== "foreman" && clean(u.foremanId) === key && idOf(u) !== idOf(rater)) : [];
+  const boss = key && titleOf(rater) !== "foreman" ? (users || []).find(u => idOf(u) === key && isActive(u) && !isContractor(u)) : null;
+  if (boss) crew.push(boss);
   const have = new Set(crew.map(idOf));
   const added = (Array.isArray(extras) ? extras : [])
     .map(id => (users || []).find(u => idOf(u) === clean(id)))
