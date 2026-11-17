@@ -49734,14 +49734,19 @@ const OD_A = "#8E6336", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6
 // v645 (Koy 2026-11-17, "I want them in the dashboard of the CC"): the meeting and planning artifacts,
 // shown as one folded block on the Overview tab. EDIT THIS LIST to add, remove or reorder a link; the
 // count on the block header follows it. They are private claude.ai pages (Koy's account), so each
-// person who taps one has to be signed in to Claude. `main` = the one drawn bigger.
+// person who taps one has to be signed in to Claude. `main` = the one drawn bigger; `group` puts a small heading above the first item of each group.
 const OD_ARTIFACTS = [
   { title: "Homestead Operations Overview", url: "https://claude.ai/artifact/4BCWs7NBjFRQsZdTXf32ek", main: true },
-  { title: "Whiteboard: move vs keep verdicts", url: "https://claude.ai/artifact/G9bP3QY6pcjaNBauiTScT4" },
-  { title: "Automations cleanup", url: "https://claude.ai/artifact/QhekzrMSWnBeBchjeE79pD" },
-  { title: "Job retro", url: "https://claude.ai/artifact/9DETiuHL34WCfHF8nrx3FL" },
-  { title: "FieldInk ship steps", url: "https://claude.ai/artifact/WxKNu91Um5zZxLiMoCsDUZ" },
-  { title: "Crew week", url: "https://claude.ai/artifact/LSbNULH23Yv77VszJmwkvr" },
+  // v646: the four weekly meeting dashboards, in meeting order. `when` shows under the name.
+  { group: "Meetings", title: "Weekly Scramble", when: "Tue 4:00 PM", url: "https://claude.ai/artifact/Vn5TTbjeXmThgLHjUit5au" },
+  { group: "Meetings", title: "Weekly Lead Meeting", when: "Wed 6:30 AM", url: "https://claude.ai/artifact/2J6w44A5VWqQdoRnrM8rKi" },
+  { group: "Meetings", title: "Weekly Resi Foreman Meeting", when: "Wed 7:00 AM", url: "https://claude.ai/artifact/QqpMUWLpyg7sqPUu5uRwWo" },
+  { group: "Meetings", title: "Weekly Strategy & Scheduling", when: "Fri 8:00 AM", url: "https://claude.ai/artifact/PKCSuq9UUtQSw82GGUseji" },
+  { group: "Whiteboards", title: "Whiteboard: move vs keep verdicts", url: "https://claude.ai/artifact/G9bP3QY6pcjaNBauiTScT4" },
+  { group: "Whiteboards", title: "Automations cleanup", url: "https://claude.ai/artifact/QhekzrMSWnBeBchjeE79pD" },
+  { group: "Whiteboards", title: "Job retro", url: "https://claude.ai/artifact/9DETiuHL34WCfHF8nrx3FL" },
+  { group: "Whiteboards", title: "FieldInk ship steps", url: "https://claude.ai/artifact/WxKNu91Um5zZxLiMoCsDUZ" },
+  { group: "Whiteboards", title: "Crew week", url: "https://claude.ai/artifact/LSbNULH23Yv77VszJmwkvr" },
 ];
 // Foreman filter value for "jobs with no foreman" (blank, Unassigned, TBD, Paul, or
 // someone no longer on the team). Never a real name.
@@ -52457,10 +52462,13 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       <details className="od-white od-pad od-fold od-arts">
         <summary>Meeting and planning artifacts<small>opens in Claude, sign-in required</small><span className="cnt">{OD_ARTIFACTS.length}</span></summary>
         <div className="od-arts-list">
-          {OD_ARTIFACTS.map(x => (
-            <a key={x.url} className={"od-art" + (x.main ? " main" : "")} href={x.url} target="_blank" rel="noopener noreferrer">
-              <span>{x.title}</span><Icon name="external" size={x.main ? 15 : 13}/>
-            </a>
+          {OD_ARTIFACTS.map((x, i) => (
+            <Fragment key={x.url}>
+              {x.group && x.group !== (OD_ARTIFACTS[i - 1] || {}).group ? <div className="od-arts-h">{x.group}</div> : null}
+              <a className={"od-art" + (x.main ? " main" : "")} href={x.url} target="_blank" rel="noopener noreferrer">
+                <span>{x.title}{x.when ? <small>{x.when}</small> : null}</span><Icon name="external" size={x.main ? 15 : 13}/>
+              </a>
+            </Fragment>
           ))}
         </div>
       </details>
@@ -54136,6 +54144,8 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-art svg{flex:none;color:var(--cdim)}
         .odash .od-art.main{background:var(--o-soft);color:var(--o-ink);font-weight:800;font-size:15px;min-height:48px;margin-bottom:4px}
         .odash .od-art.main svg{color:var(--o-ink)}
+        .odash .od-arts-h{margin:10px 10px 2px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim)}
+        .odash .od-art small{margin-left:8px;font-weight:500;font-size:12px;color:var(--cdim)}
         .odash .od-stack{display:flex;flex-direction:column;gap:12px;min-width:0}
         .odash .od-money{display:flex;align-items:center;gap:10px;border:1px solid rgba(196,59,59,.28);background:rgba(196,59,59,.06);border-radius:12px;padding:10px 12px;cursor:pointer;text-align:left;font:inherit;color:var(--cink)}
         .odash .od-money:hover{background:rgba(196,59,59,.1)}.odash .od-money b{font-size:18px;font-weight:800;color:${OD_R};font-variant-numeric:tabular-nums}.odash .od-money span{flex:1;font-size:12.5px;font-weight:600}.odash .od-money small{display:block;color:var(--cdim);font-size:11.5px;font-weight:500}
@@ -63280,9 +63290,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-17 · App SW version: v645
+**Last manifest update:** 2026-11-17 · App SW version: v646
 ---
 
+- **Dashboard Overview artifacts block gains a Meetings group: Weekly Scramble, Lead Meeting, Resi Foreman Meeting, Strategy & Scheduling** · 'in-flight 2026-11-17' · 'SW v646' · 'OD_ARTIFACTS' · 'od-arts-h' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"add these four to the CC dashboard too"*. The four weekly meeting dashboards sit in a Meetings group in meeting order, each with its day and time under the name (Tue 4:00 PM, Wed 6:30 AM, Wed 7:00 AM, Fri 8:00 AM). The Operations Overview stays on top, bigger; the five whiteboards move under a Whiteboards heading. The header count is now 10. Same sign-in-to-Claude note. Still the one 'OD_ARTIFACTS' constant; no data, rules or server change.
 - **Dashboard Overview: a folded "Meeting and planning artifacts" block with links to Koy's Claude artifacts** · 'in-flight 2026-11-17' · 'SW v645' · 'OD_ARTIFACTS' · 'od-arts' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"I want them in the dashboard of the CC"*. One folded block at the top of the Overview tab (starts closed, count on the header) listing the Homestead Operations Overview (drawn bigger), the move-vs-keep whiteboard, Automations cleanup, Job retro, FieldInk ship steps and Crew week. Each opens in a new tab ('rel=noopener'). They are private claude.ai pages, so the block says *opens in Claude, sign-in required* and a person not signed in to Koy's Claude account cannot open them unless Koy shares them. The list is the one 'OD_ARTIFACTS' constant in src/App.js. No data, rules or server change.
 - **Quick jobs get Bid items and Material orders: see the Simpro bid and send POs to CED from a quick job** · 'in-flight 2026-11-16' · 'SW v644' · 'useQuickJobBid' · 'QuickJobDetail' · 'BidItemsPanel' · 'MaterialOrders' · 'commMaterials' · 'public/sops/biditems.html' · 'public/sops/materials.html' · Koy, 2026-11-16: *"why is there no bid items in quick jobs or ability to send po in them. they need this too"*. Two folded sections under Material on the quick job screen (start collapsed, count on the header). **Bid items** is the same 'BidItemsPanel' a full job's Bid Items tab shows (cost centers, Required vs Assigned); if you can send POs, an **Order from the bid** button at its top opens the order screen inside **Material orders**. **Material orders** is the commercial Materials tab's 'MaterialOrders' with phase "comm" and the list stored in 'job.commMaterials': each order is charged to a Simpro cost center you pick, one PO per cost center, one email to CED, same receipts and CC box. No server change: 'sendMaterialOrder' / 'sendMaterialPO' have no job-type check, they need the Simpro job # and, for "comm", a named cost center. Simpro is asked only when one of the two sections is first opened ('useQuickJobBid', same 12 h 'simproCostCentersCache' / 'simproStockCache' as a full job), so opening a quick job costs no extra Simpro calls. Quick-job POs show in the existing Up Next / Huddle PO reminders for free (they already read 'commMaterials' on any job). Guides: 'materials.html' gets a "Quick jobs have it too" section, 'biditems.html' a Q&A row. **Why it won't lose data:** additive only. One new field on quick jobs ('commMaterials', already in 'normalizeJob' and the loader) and the two existing cache fields; no existing field, rules, functions or loader changes; full jobs' own Bid Items / Material Tracking code is untouched.
 
