@@ -321,7 +321,8 @@ service cloud.firestore {
       allow create, update: if ratingWriteOk(docId, request.resource.data);
     }
     function ratingScoreOk(v) { return v is int && v >= 1 && v <= 4; }
-    function ratingWhyOk(v) { return v is string && v.size() >= 3 && v.size() <= 500; }
+    // a plain Solid (3) needs no why; every other rating must say why
+    function ratingWhyOk(v, s) { return v is string && v.size() <= 500 && (s == 3 || v.size() >= 3); }
     function ratingWriteOk(docId, d) {
       let p = docId.split('__');
       return p.size() == 3
@@ -329,7 +330,7 @@ service cloud.firestore {
         && p[2] in get(/databases/$(database)/documents/crewRaters/$(p[1])).data.people
         && get(/databases/$(database)/documents/crewRatingRounds/current).data.id == p[0]
         && request.time < get(/databases/$(database)/documents/crewRatingRounds/current).data.closesAt
-        && d.keys().hasOnly(['roundId', 'raterToken', 'raterId', 'personId', 'scores', 'why', 'other', 'updatedAt'])
+        && d.keys().hasOnly(['roundId', 'raterToken', 'raterId', 'personId', 'scores', 'why', 'other', 'kudos', 'updatedAt'])
         && d.keys().hasAll(['roundId', 'raterToken', 'raterId', 'personId', 'scores', 'why', 'other', 'updatedAt'])
         && d.roundId == p[0] && d.raterToken == p[1] && d.personId == p[2]
         && d.raterId == get(/databases/$(database)/documents/crewRaters/$(p[1])).data.raterId
@@ -339,9 +340,32 @@ service cloud.firestore {
         && ratingScoreOk(d.scores.attitude) && ratingScoreOk(d.scores.leading)
         && d.why is map && d.why.keys().hasOnly(['quality', 'pace', 'reliability', 'attitude', 'leading'])
         && d.why.keys().hasAll(['quality', 'pace', 'reliability', 'attitude', 'leading'])
-        && ratingWhyOk(d.why.quality) && ratingWhyOk(d.why.pace) && ratingWhyOk(d.why.reliability)
-        && ratingWhyOk(d.why.attitude) && ratingWhyOk(d.why.leading)
+        && ratingWhyOk(d.why.quality, d.scores.quality) && ratingWhyOk(d.why.pace, d.scores.pace) && ratingWhyOk(d.why.reliability, d.scores.reliability)
+        && ratingWhyOk(d.why.attitude, d.scores.attitude) && ratingWhyOk(d.why.leading, d.scores.leading)
         && d.other is string && d.other.size() <= 1000
+        && (!('kudos' in d) || (d.kudos is string && d.kudos.size() <= 500))
+        && d.updatedAt is string && d.updatedAt.size() <= 40;
+    }
+
+    // crewFeedback/{round__token}: a rater's one anonymous note on what would make the job better.
+    // Same token + open-round checks as crewRatings; Koy reads it through the sync, never a client.
+    match /crewFeedback/{docId} {
+      allow get: if true;
+      allow list: if false;
+      allow delete: if false;
+      allow create, update: if feedbackWriteOk(docId, request.resource.data);
+    }
+    function feedbackWriteOk(docId, d) {
+      let p = docId.split('__');
+      return p.size() == 2
+        && exists(/databases/$(database)/documents/crewRaters/$(p[1]))
+        && get(/databases/$(database)/documents/crewRatingRounds/current).data.id == p[0]
+        && request.time < get(/databases/$(database)/documents/crewRatingRounds/current).data.closesAt
+        && d.keys().hasOnly(['roundId', 'raterToken', 'raterId', 'text', 'updatedAt'])
+        && d.keys().hasAll(['roundId', 'raterToken', 'raterId', 'text', 'updatedAt'])
+        && d.roundId == p[0] && d.raterToken == p[1]
+        && d.raterId == get(/databases/$(database)/documents/crewRaters/$(p[1])).data.raterId
+        && d.text is string && d.text.size() >= 3 && d.text.size() <= 1000
         && d.updatedAt is string && d.updatedAt.size() <= 40;
     }
 

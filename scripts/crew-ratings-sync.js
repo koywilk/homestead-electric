@@ -89,33 +89,76 @@ function handleRequests({ users, raters, round, requests, artifactPeople, today,
 }
 
 // ── what the artifact shows ──────────────────────────────────────────────────
-function compute({ users, raters, round, answers, artifactPeople, nowIso, existingRatingIds }) {
+// small helpers for the extra numbers
+const hash = (str) => { let h = 5381; for (const ch of String(str)) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0; return h.toString(36); };
+const mean = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+const r1 = (v) => v == null ? null : Math.round(v * 10) / 10;
+const clamp14 = (v) => Math.max(1, Math.min(4, v));
+
+function compute({ users, raters, round, answers, feedback, artifactPeople, nowIso, existingRatingIds }) {
   const known = new Set((artifactPeople || []).map(p => p.id));
   const pidOf = (uid) => { const u = (users || []).find(x => x.id === uid); const s = u ? slug(u.name) : ""; return known.has(s) ? s : null; };
-  const empty = { ratings: {}, deleteRatings: (existingRatingIds || []).slice(), status: { noRound: true, syncedAt: nowIso, outstanding: [], ratersTotal: 0, ratersDone: 0 }, links: { links: [] } };
+  const nameOf = (uid) => { const u = (users || []).find(x => x.id === uid); return u ? String(u.name || uid) : uid; };
+  const empty = { ratings: {}, deleteRatings: (existingRatingIds || []).slice(), status: { noRound: true, syncedAt: nowIso, outstanding: [], ratersTotal: 0, ratersDone: 0 }, links: { links: [] }, feedback: { items: [], syncedAt: nowIso } };
   const links = { links: raters.map(x => ({ name: x.name, personId: pidOf(x.raterId) || "", count: x.people.length, url: BASE + x.token, rates: x.people.map(pidOf).filter(Boolean) })).sort((a, b) => a.name.localeCompare(b.name)) };
   if (!round) return { ...empty, links };
-  const ok = (answers || []).filter(d => d && d.roundId === round.id && R.isComplete(d));
+
+  const complete = (answers || []).filter(d => d && R.isComplete(d));
+  const ok = complete.filter(d => d.roundId === round.id);
   const done = new Set(ok.map(d => `${d.raterId}|${d.personId}`));
   const by = R.byPerson(ok, users);
+
+  // Fairness: some raters score everyone hard and some score everyone easy. Each rater's own
+  // average (against the team's) is nudged out, more strongly the more people they rated.
+  const gAll = mean(ok.flatMap(d => R.AREA_KEYS.map(k => d.scores[k])));
+  const byRater = {};
+  ok.forEach(d => (byRater[d.raterId] = byRater[d.raterId] || []).push(d));
+  const off = {};
+  for (const [rid, ds] of Object.entries(byRater)) off[rid] = (mean(ds.flatMap(d => R.AREA_KEYS.map(k => d.scores[k]))) - gAll) * (ds.length / (ds.length + 3));
+  const adj = {};
+  ok.forEach(d => { const a = adj[d.personId] = adj[d.personId] || { all: [], areas: {} };
+    R.AREA_KEYS.forEach(k => { const v = clamp14(d.scores[k] - (off[d.raterId] || 0)); a.all.push(v); (a.areas[k] = a.areas[k] || []).push(v); }); });
+
+  // History: every finished round, per person.
+  const hist = {};
+  complete.forEach(d => { const h = (hist[d.personId] = hist[d.personId] || {}); (h[d.roundId] = h[d.roundId] || []).push(d); });
+  const historyOf = (personId) => Object.entries(hist[personId] || {}).sort((a, b) => a[0].localeCompare(b[0])).slice(-12).map(([roundId, ds]) => ({
+    roundId, n: ds.length,
+    overall: r1(mean(ds.flatMap(d => R.AREA_KEYS.map(k => d.scores[k])))),
+    areas: Object.fromEntries(R.AREA_KEYS.map(k => [k, r1(mean(ds.map(d => d.scores[k])))])),
+  }));
+
   const recs = {};
+  const newRec = (personId) => ({ name: nameOf(personId), roundId: round.id, raters: [], pending: [], areas: {}, overall: null, adjAreas: {}, adjOverall: null, other: [], kudos: [], history: historyOf(personId), syncedAt: nowIso });
   for (const x of raters) for (const personId of x.people) {
     const pid = pidOf(personId); if (!pid) continue;
-    const rec = recs[pid] || (recs[pid] = { name: (users.find(u => u.id === personId) || {}).name || pid, roundId: round.id, raters: [], pending: [], areas: {}, overall: null, other: [], syncedAt: nowIso });
+    const rec = recs[pid] || (recs[pid] = newRec(personId));
     if (!done.has(`${x.raterId}|${personId}`)) rec.pending.push(x.name);
   }
+  for (const personId of Object.keys(hist)) { const pid = pidOf(personId); if (pid && !recs[pid]) recs[pid] = newRec(personId); }
   for (const [personId, p] of Object.entries(by)) {
     const pid = pidOf(personId); if (!pid || !recs[pid]) continue;
-    Object.assign(recs[pid], { raters: p.raters, areas: p.areas, overall: p.overall, other: p.other });
+    // a stable key per comment lets Koy's approvals survive every re-sync
+    const areas = {};
+    for (const [k, ar] of Object.entries(p.areas)) areas[k] = { avg: ar.avg, entries: ar.entries.map(e => ({ ...e, key: hash(k + "|" + e.why) })) };
+    const a = adj[personId];
+    Object.assign(recs[pid], {
+      raters: p.raters, areas, overall: p.overall, other: p.other,
+      adjAreas: a ? Object.fromEntries(R.AREA_KEYS.map(k => [k, r1(mean(a.areas[k] || []))])) : {}, adjOverall: a ? r1(mean(a.all)) : null,
+      kudos: ok.filter(d => d.personId === personId && String(d.kudos || "").trim()).map(d => ({ rater: nameOf(d.raterId), text: String(d.kudos).trim(), key: hash("kudos|" + String(d.kudos).trim()) })).sort((x, y) => x.rater.localeCompare(y.rater)),
+    });
   }
   Object.values(recs).forEach(r => r.pending.sort());
   const outstanding = raters.map(x => { const left = x.people.filter(id => !done.has(`${x.raterId}|${id}`)).length; return { name: x.name, left, of: x.people.length }; }).filter(o => o.left > 0).sort((a, b) => a.name.localeCompare(b.name));
-  const lastAnswerAt = ok.map(d => String(d.updatedAt || "")).sort().pop() || "";
+  const fb = (feedback || []).filter(f => f && f.roundId === round.id && String(f.text || "").trim());
+  const lastAnswerAt = ok.map(d => String(d.updatedAt || "")).concat(fb.map(f => String(f.updatedAt || ""))).sort().pop() || "";
   return {
     ratings: recs,
     deleteRatings: (existingRatingIds || []).filter(id => !recs[id]),
     status: { roundId: round.id, startsOn: round.startsOn, endsOn: round.endsOn, ratersTotal: raters.length, ratersDone: raters.length - outstanding.length, outstanding, lastAnswerAt, syncedAt: nowIso },
     links,
+    // "From the field": anonymous notes about what would make the job better (rater shown only when Koy turns names on)
+    feedback: { roundId: round.id, items: fb.map(f => ({ rater: nameOf(f.raterId), text: String(f.text).trim(), key: hash("fb|" + String(f.text).trim()) })).sort((x, y) => x.rater.localeCompare(y.rater)), syncedAt: nowIso },
   };
 }
 
@@ -138,4 +181,5 @@ if (require.main === module) {
   Object.entries(out.artifact.ratings).forEach(([pid, d]) => put("ratings", pid, d));
   put("ratings_meta", "status", out.artifact.status);
   put("ratings_meta", "links", out.artifact.links);
+  put("ratings_meta", "feedback", out.artifact.feedback);
 }

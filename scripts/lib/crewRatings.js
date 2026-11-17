@@ -115,18 +115,19 @@ const PERSON_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const docId = (roundId, raterId, personId) => `${roundId}__${raterId}__${personId}`;
 
 // ── Answers ───────────────────────────────────────────────────────────────────
-// Every area needs a 1-4 rating AND a why. Koy does not want number-only answers.
+// Every area needs a 1-4 rating. A why is required unless the rating is Solid (3): a plain
+// "Solid" needs no explaining, and every other answer (1, 2 or 4) must say why.
 function validateAnswer(input) {
   const scores = {}, why = {};
   for (const k of AREA_KEYS) {
     const s = Number(input && input.scores && input.scores[k]);
     if (!Number.isInteger(s) || s < 1 || s > 4) return { ok: false, err: `Pick a rating for ${AREAS.find(a => a.key === k).label}.` };
     const w = clean(input && input.why && input.why[k]);
-    if (!w) return { ok: false, err: `Add a short why for ${AREAS.find(a => a.key === k).label}.` };
+    if (!w && s !== 3) return { ok: false, err: `Add a short why for ${AREAS.find(a => a.key === k).label}.` };
     scores[k] = s;
     why[k] = w.slice(0, WHY_MAX);
   }
-  return { ok: true, scores, why, other: clean(input && input.other).slice(0, OTHER_MAX) };
+  return { ok: true, scores, why, other: clean(input && input.other).slice(0, OTHER_MAX), kudos: clean(input && input.kudos).slice(0, WHY_MAX) };
 }
 const isComplete = (doc) => !!doc && validateAnswer(doc).ok;
 

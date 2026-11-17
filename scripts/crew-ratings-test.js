@@ -36,7 +36,9 @@ const good = { scores: { quality: 3, pace: 2, reliability: 4, attitude: 3, leadi
 assert.ok(R.validateAnswer(good).ok);
 assert.strictEqual(R.validateAnswer(good).other, "hi");
 assert.ok(!R.validateAnswer({ ...good, scores: { ...good.scores, pace: 5 } }).ok, "rating 1-4 only");
-assert.ok(!R.validateAnswer({ ...good, why: { ...good.why, attitude: "  " } }).ok, "a why is required");
+assert.ok(!R.validateAnswer({ ...good, why: { ...good.why, pace: "  " } }).ok, "a why is required for a 2");
+assert.ok(!R.validateAnswer({ ...good, why: { ...good.why, reliability: "" } }).ok, "a why is required for a 4");
+assert.ok(R.validateAnswer({ ...good, why: { ...good.why, attitude: "" } }).ok, "a plain Solid needs no why");
 assert.ok(!R.validateAnswer({ scores: good.scores }).ok);
 
 // extras: Koy adds someone off the crew; never self, never a contractor, never a duplicate
@@ -121,4 +123,29 @@ assert.deepStrictEqual(o.results.map(r => r.status), ["done", "error"]);
 assert.deepStrictEqual(o.firestore.deletes, ["projects/homestead-electric/databases/(default)/documents/crewRaters/tokA"]);
 assert.deepStrictEqual(o.artifact.links.links, []);
 assert.ok(SY.run({ ...base, requests: [{ id: "r8", op: "round" }], round: round1 }, mint).results[0].note.includes("already open"), "a second tap in the same week changes nothing");
+
+// ── history, fairness, kudos, the field feedback ──
+{
+  const us = [{ id: "a", name: "Ann A", title: "crew", foremanId: "f", active: true }, { id: "f", name: "Fred F", title: "foreman", active: true },
+              { id: "h", name: "Hard H", title: "lead", foremanId: "f", active: true }, { id: "e", name: "Easy E", title: "lead", foremanId: "f", active: true }];
+  const rs = [{ token: "t1", raterId: "h", name: "Hard H", people: ["a"] }, { token: "t2", raterId: "e", name: "Easy E", people: ["a"] }];
+  const W = (w) => ({ quality: w, pace: w, reliability: w, attitude: w, leading: w });
+  const mk = (rid, pid, sc, round, other, kudos) => ({ roundId: round, raterId: rid, personId: pid, scores: { quality: sc, pace: sc, reliability: sc, attitude: sc, leading: sc }, why: W("ok " + rid), other: other || "", kudos, updatedAt: "2026-11-20T00:00:00Z" });
+  const old = { id: "2026-11-02", startsOn: "2026-11-02", endsOn: "2026-11-15" }, cur = { id: "2026-11-16", startsOn: "2026-11-16", endsOn: "2026-11-29" };
+  const answers = [mk("h", "a", 1, cur.id, "", "Stayed late to finish the rough"), mk("e", "a", 4, cur.id, "", ""), mk("h", "a", 2, old.id), mk("e", "a", 2, old.id),
+                   mk("h", "e", 1, cur.id), mk("e", "h", 4, cur.id)];
+  const c = SY.compute({ users: us, raters: rs, round: cur, answers, feedback: [{ roundId: cur.id, raterId: "h", text: "Better trucks please", updatedAt: "2026-11-21T00:00:00Z" }, { roundId: old.id, raterId: "h", text: "old", updatedAt: "2026-11-03T00:00:00Z" }], artifactPeople: ["ann-a", "fred-f", "hard-h", "easy-e"].map(id => ({ id })), nowIso: "n", existingRatingIds: [] });
+  const ra = c.ratings["ann-a"];
+  assert.strictEqual(ra.overall, 2.5, "plain average of a hard 1 and an easy 4");
+  assert.ok(ra.adjOverall > 2.4 && ra.adjOverall < 2.6 && Math.abs(ra.adjOverall - ra.overall) < 1, "adjustment stays in range");
+  assert.strictEqual(ra.history.length, 2, "both rounds are kept");
+  assert.deepStrictEqual(ra.history.map(h => h.roundId), ["2026-11-02", "2026-11-16"]);
+  assert.strictEqual(ra.history[0].overall, 2); assert.strictEqual(ra.history[1].overall, 2.5);
+  assert.strictEqual(ra.kudos.length, 1); assert.strictEqual(ra.kudos[0].rater, "Hard H");
+  assert.ok(ra.areas.quality.entries.every(e => /^[0-9a-z]+$/.test(e.key)), "every comment has a stable key");
+  const again = SY.compute({ users: us, raters: rs, round: cur, answers, artifactPeople: ["ann-a", "fred-f", "hard-h", "easy-e"].map(id => ({ id })), nowIso: "m", existingRatingIds: [] });
+  assert.deepStrictEqual(again.ratings["ann-a"].areas.quality.entries.map(e => e.key), ra.areas.quality.entries.map(e => e.key), "keys do not change between syncs");
+  assert.deepStrictEqual(c.feedback.items.map(f => f.text), ["Better trucks please"], "only this round's field notes");
+  assert.strictEqual(c.status.lastAnswerAt, "2026-11-21T00:00:00Z", "a new field note counts as news for the sync check");
+}
 console.log("crew-ratings-test: ok");

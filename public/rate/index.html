@@ -67,7 +67,7 @@ const AREAS = [
 const WORDS = ["Needs work", "Getting there", "Solid", "Strong"];
 const token = (new URLSearchParams(location.search).get("r") || "").trim();
 const root = document.getElementById("app");
-const S = { rater: null, round: null, saved: {}, open: null, form: null, saving: false, err: "" };
+const S = { rater: null, round: null, saved: {}, open: null, form: null, saving: false, err: "", fb: "" };
 
 const el = (tag, props = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -80,7 +80,7 @@ const el = (tag, props = {}, ...kids) => {
 };
 const initials = (n) => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
 const docId = (pid) => `${S.round.id}__${token}__${pid}`;
-const complete = (d) => !!d && d.scores && d.why && AREAS.every(([k]) => Number.isInteger(d.scores[k]) && String(d.why[k] || "").trim().length >= 3);
+const complete = (d) => !!d && d.scores && d.why && AREAS.every(([k]) => Number.isInteger(d.scores[k]) && (d.scores[k] === 3 || String(d.why[k] || "").trim().length >= 3));
 const fmtDay = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
 
 function message(title, body) {
@@ -99,6 +99,7 @@ async function load() {
     await Promise.all((S.rater.peopleCards || []).map(async p => {
       try { const s = await getDoc(doc(db, "crewRatings", docId(p.id))); if (s.exists()) S.saved[p.id] = s.data(); } catch (e) { /* not rated yet */ }
     }));
+    try { const f = await getDoc(doc(db, "crewFeedback", `${S.round.id}__${token}`)); if (f.exists()) S.fb = f.data().text || ""; } catch (e) { /* none yet */ }
     renderList();
   } catch (e) {
     message("Couldn't load", "Check your signal and reload this page.");
@@ -112,7 +113,7 @@ function renderList() {
   const kids = [
     el("div", { class: "top" }, el("h1", { text: `Hi ${String(S.rater.name || "").split(" ")[0]}` }),
       el("p", { class: "muted", text: `Rate your crew. Round of ${fmtDay(S.round.startsOn)}. You can change your answers until it closes.` })),
-    el("div", { class: "note" }, el("span", { text: "Only Koy sees these. Nobody on your crew sees what you wrote, and you can't see anyone else's." })),
+    el("div", { class: "note" }, el("span", { text: "Only Koy sees these. Nobody on your crew sees what you wrote, and you can't see anyone else's. This is for helping people grow and for one-on-one conversations." })),
   ];
   if (!people.length) kids.push(el("div", { class: "card" }, el("p", { class: "muted", text: "No one to rate yet. Koy will text you if that changes." })));
   else {
@@ -122,15 +123,34 @@ function renderList() {
       el("span", { class: "who" }, el("b", { text: p.name }), el("small", { text: p.title === "foreman" ? "Foreman" : p.title === "jrforeman" ? "Jr. foreman" : p.title === "lead" ? "Lead" : "Crew" })),
       el("span", { class: complete(S.saved[p.id]) ? "pill done" : "pill", text: complete(S.saved[p.id]) ? "Done ✓" : "To do" })))));
   }
+  kids.push(companyCard());
   root.replaceChildren(...kids);
   window.scrollTo(0, 0);
+}
+
+function companyCard() {
+  const ta = el("textarea", { id: "fb", maxlength: "1000", placeholder: "Optional. One thing that would make your job better." });
+  ta.value = S.fb || "";
+  const msg = el("p", { class: "hint", text: "Anonymous. Koy reads these and looks for what keeps coming up." });
+  const btn = el("button", { class: "btn", type: "button", text: S.fb ? "Update" : "Send" });
+  btn.addEventListener("click", async () => {
+    const text = ta.value.trim();
+    if (text.length < 3) { msg.textContent = "Type a few words first."; return; }
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      await setDoc(doc(db, "crewFeedback", `${S.round.id}__${token}`), { roundId: S.round.id, raterToken: token, raterId: S.rater.raterId, text: text.slice(0, 1000), updatedAt: new Date().toISOString() });
+      S.fb = text; msg.textContent = "Thanks. Saved."; btn.textContent = "Update";
+    } catch (e) { msg.textContent = "Couldn't save. Check your signal and tap again."; btn.textContent = S.fb ? "Update" : "Send"; }
+    btn.disabled = false;
+  });
+  return el("div", { class: "card", style: "display:flex;flex-direction:column;gap:8px" }, el("h2", { text: "What would make your job better?" }), ta, msg, btn);
 }
 
 function renderForm(p) {
   const prev = S.saved[p.id] || {};
   S.open = p;
   S.err = "";
-  S.form = { scores: Object.assign({}, prev.scores || {}), why: Object.assign({}, prev.why || {}), other: prev.other || "" };
+  S.form = { scores: Object.assign({}, prev.scores || {}), why: Object.assign({}, prev.why || {}), other: prev.other || "", kudos: prev.kudos || "" };
   const err = el("div", { class: "err", hidden: "" });
   const save = el("button", { class: "btn", type: "button", text: "Save " + p.name.split(" ")[0] });
   const areas = AREAS.map(([k, label, prompt]) => {
@@ -141,21 +161,24 @@ function renderForm(p) {
     const ta = el("textarea", { id: "why-" + k, maxlength: "500", placeholder: "Why? A sentence or two." });
     ta.value = S.form.why[k] || "";
     ta.addEventListener("input", () => { S.form.why[k] = ta.value; ta.classList.remove("bad"); });
-    return el("div", { class: "area" }, el("h2", { text: label }), el("p", { class: "hint", text: prompt }), el("div", { class: "scale", role: "group", "aria-label": label }, btns), el("label", { for: "why-" + k, text: "Why" }), ta);
+    return el("div", { class: "area" }, el("h2", { text: label }), el("p", { class: "hint", text: prompt }), el("div", { class: "scale", role: "group", "aria-label": label }, btns), el("label", { for: "why-" + k, text: "Why (not needed for Solid)" }), ta);
   });
   const other = el("textarea", { id: "other", maxlength: "1000", placeholder: "Optional" });
   other.value = S.form.other;
   other.addEventListener("input", () => { S.form.other = other.value; });
+  const kudos = el("textarea", { id: "kudos", maxlength: "500", placeholder: "Optional. A specific thing they did well." });
+  kudos.value = S.form.kudos;
+  kudos.addEventListener("input", () => { S.form.kudos = kudos.value; });
   save.addEventListener("click", async () => {
     err.hidden = true;
     for (const [k, label] of AREAS) {
       if (!S.form.scores[k]) { err.textContent = `Pick a rating for ${label}.`; err.hidden = false; err.scrollIntoView({ block: "center" }); return; }
-      if (String(S.form.why[k] || "").trim().length < 3) { document.getElementById("why-" + k).classList.add("bad"); err.textContent = `Add a short why for ${label}.`; err.hidden = false; document.getElementById("why-" + k).scrollIntoView({ block: "center" }); return; }
+      if (S.form.scores[k] !== 3 && String(S.form.why[k] || "").trim().length < 3) { document.getElementById("why-" + k).classList.add("bad"); err.textContent = `Add a short why for ${label}.`; err.hidden = false; document.getElementById("why-" + k).scrollIntoView({ block: "center" }); return; }
     }
     save.disabled = true; save.textContent = "Saving…";
     const scores = {}, why = {};
-    AREAS.forEach(([k]) => { scores[k] = S.form.scores[k]; why[k] = String(S.form.why[k]).trim().slice(0, 500); });
-    const data = { roundId: S.round.id, raterToken: token, raterId: S.rater.raterId, personId: p.id, scores, why, other: String(S.form.other || "").trim().slice(0, 1000), updatedAt: new Date().toISOString() };
+    AREAS.forEach(([k]) => { scores[k] = S.form.scores[k]; why[k] = String(S.form.why[k] || "").trim().slice(0, 500); });
+    const data = { roundId: S.round.id, raterToken: token, raterId: S.rater.raterId, personId: p.id, scores, why, other: String(S.form.other || "").trim().slice(0, 1000), kudos: String(S.form.kudos || "").trim().slice(0, 500), updatedAt: new Date().toISOString() };
     try {
       await setDoc(doc(db, "crewRatings", docId(p.id)), data);
       S.saved[p.id] = data;
@@ -168,7 +191,7 @@ function renderForm(p) {
   root.replaceChildren(
     el("button", { class: "back", type: "button", text: "← Back to your crew", onclick: renderList }),
     el("div", { class: "top" }, el("h1", { text: p.name }), el("p", { class: "muted", text: "Pick a rating in each area and tell Koy why." })),
-    el("div", { class: "card" }, areas, el("div", { class: "area" }, el("h2", { text: "Anything else Koy should know?" }), other)),
+    el("div", { class: "card" }, areas, el("div", { class: "area" }, el("h2", { text: "What did " + p.name.split(" ")[0] + " do well lately?" }), el("p", { class: "hint", text: "Optional. Koy may pass kind words along without your name." }), kudos), el("div", { class: "area" }, el("h2", { text: "Anything else Koy should know?" }), other)),
     err, save);
   window.scrollTo(0, 0);
 }
