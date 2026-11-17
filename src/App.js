@@ -18,6 +18,7 @@ import PunchMove from "./punchMove";   // v642: move Rough punch items to Finish
 import SchedMode from "./schedMode";   // v627: the scheduling pill reads Simpro live (Koy, 2026-11-11)
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import inspAtt from "./inspAttempts";
+import MeetingModel from "./meetingModel";   // v648: the Weekly Scramble on /dashboard › Meetings (Koy, 2026-11-17)
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
 import { syncPostHogIdentity, trackDash, heTrack, heCaptureError } from "./posthog";
 import { readableInk } from "./a11y";
@@ -49675,7 +49676,7 @@ function PlansCard({ identity, users = [] }) {
 // (planFileByHand / planDismissByHand callables, name + PIN), Ask <foreman> to
 // import (one My Day task through the stamped needs write) and Run now on the
 // Wednesday / Friday meeting-prep docs (their existing test-trigger callables).
-const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["cc","Automations"],["claude","Claude"],["goals","Goals"],["costs","Job Costs"]];
+const OD_TABS = [["overview","Overview"],["jobs","Jobs"],["activity","Activity"],["schedule","Schedule"],["quality","Quality"],["people","People"],["meetings","Meetings"],["cc","Automations"],["claude","Claude"],["goals","Goals"],["costs","Job Costs"]];
 const OD_TABS_MONEY = new Set(["goals"]);   // v569: hidden in Foreman view (the Goals tab is mostly revenue)
 // Automations tab (v533; tab key stays "cc" so a remembered tab still opens):
 // what Koy's two Claude Routines produced, read from where they already put it.
@@ -51839,6 +51840,341 @@ function odCostsCoHours(goalsDoc) {
   const m = new Map(); Object.keys(by).forEach(k => m.set(String(k), Number(by[k]) || 0)); return m;
 }
 
+// ── Meetings tab (SW v648, Koy 2026-11-17): the Weekly Scramble, in the dashboard ──────────
+// Koy: "can we make this in the dashboard though?" then "can I have the ability to add jobs or
+// things to each section and also hide jobs or things from sections". Mockup approved first
+// (claude.ai/artifact/LNkP6NgeXYmDzRKu17w6iA). Rows are live (jobs, Upcoming, Needs-you flags,
+// this week's Simpro bookings); what the meeting types is saved in /meetings (see meetingModel.js).
+// Past weeks open read only. Send to My Day writes one needs doc with a fixed id per action.
+const OD_CED_SHEET = "https://docs.google.com/spreadsheets/d/160vZ86F38-DpaDwW5JSDJt6DFsh1Qo-Zie8wGY9dYCA/edit";
+function OdMeetings({ jobs, needs = [], upcoming = [], identity, flags, onOpenJob, onGoTab }) {
+  const M = MeetingModel;
+  const me = (identity && identity.name) || "";
+  const thisWeek = M.meetingDate(new Date());
+  const [week, setWeek] = useState(thisWeek);
+  const [weeks, setWeeks] = useState([]);              // saved meeting dates, newest first
+  const [mdoc, setMdoc] = useState(undefined);         // this week's meeting doc (undefined = loading, null = none yet)
+  const [prev, setPrev] = useState(undefined);
+  const [prefs, setPrefs] = useState(null);
+  const [sched, setSched] = useState(undefined);       // Simpro bookings for the week (undefined = loading, null = failed)
+  const [open, setOpen] = useState(() => new Set());
+  const [drafts, setDrafts] = useState({});            // sec → notes text being typed
+  const [noteFor, setNoteFor] = useState(null);         // row key whose + Note line is open
+  const [noteText, setNoteText] = useState("");
+  const [addFor, setAddFor] = useState({});            // sec → text for "Add to this section"
+  const [actFor, setActFor] = useState({});            // sec → {text, who, due}
+  const [showHidden, setShowHidden] = useState({});
+  const [msg, setMsg] = useState("");
+  const timers = useRef({});
+  const ro = week !== thisWeek;
+  const mid = M.meetingId(week), prevDate = M.prevMeetingDate(week), pid = M.meetingId(prevDate);
+
+  useEffect(() => {
+    getDocs(query(collection(db, "meetings"), where("type", "==", "scramble"))).then(
+      s => setWeeks(s.docs.map(d => (d.data() || {}).date).filter(Boolean).sort().reverse()), () => {});
+  }, [mdoc && mdoc.updated_at]); // eslint-disable-line
+  useEffect(() => {
+    setMdoc(undefined); setPrev(undefined); setDrafts({});
+    const u1 = onSnapshot(doc(db, "meetings", mid), s => setMdoc(s.exists() ? s.data() : null), () => setMdoc(null));
+    const u2 = onSnapshot(doc(db, "meetings", pid), s => setPrev(s.exists() ? s.data() : (prevDate === "2026-11-10" ? M.SEED_2026_11_10 : null)), () => setPrev(null));
+    return () => { u1(); u2(); };
+  }, [mid]); // eslint-disable-line
+  useEffect(() => onSnapshot(doc(db, "meetings", "scramble__prefs"), s => setPrefs(s.exists() ? s.data() : {}), () => setPrefs({})), []);
+  useEffect(() => {
+    let dead = false; setSched(undefined);
+    const r = M.weekRange(week);
+    httpsCallable(functions, "getSimproSchedule")({ dateFrom: r.from, dateTo: r.to }).then(
+      x => { if (!dead) setSched(Array.isArray(x && x.data) ? x.data : []); }, () => { if (!dead) setSched(null); });
+    return () => { dead = true; };
+  }, [week]); // eslint-disable-line
+  useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+
+  const S = useMemo(() => M.buildSections({ jobs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], today: new Date(), effRS, effFS }),
+    [jobs, upcoming, flags, sched]); // eslint-disable-line
+  const nowIso = () => new Date().toISOString();
+  const say = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
+  const saveMtg = (patch) => setDoc(doc(db, "meetings", mid), { type: "scramble", date: week, ...patch, updated_at: nowIso(), saved_by: me }, { merge: true })
+    .catch(e => say("Didn't save: " + ((e && e.message) || "check the connection")));
+  const savePrefs = (patch) => setDoc(doc(db, "meetings", "scramble__prefs"), { type: "scramble_prefs", ...patch, updated_at: nowIso(), saved_by: me }, { merge: true })
+    .catch(e => say("Didn't save: " + ((e && e.message) || "check the connection")));
+  const id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const toggle = (k) => setOpen(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  // Section notes: saved a second after typing stops, and on leaving the box.
+  const typeNotes = (sec, v) => {
+    setDrafts(d => ({ ...d, [sec]: v }));
+    clearTimeout(timers.current[sec]);
+    timers.current[sec] = setTimeout(() => saveMtg({ notes: { [sec]: v } }), 900);
+  };
+  const flushNotes = (sec) => { if (drafts[sec] == null) return; clearTimeout(timers.current[sec]); saveMtg({ notes: { [sec]: drafts[sec] } }); };
+  const addRowNote = (key) => {
+    const t = noteText.trim(); if (!t) { setNoteFor(null); return; }
+    saveMtg({ rowNotes: { [key]: { [id()]: { text: t, by: me, at: nowIso() } } } });
+    setNoteText("");
+  };
+  const delRowNote = (key, nid) => saveMtg({ rowNotes: { [key]: { [nid]: deleteField() } } });
+  const hideRow = (sec, r) => savePrefs({ hidden: { [sec]: { [r.key]: { by: me, at: nowIso(), title: r.title || "" } } } });
+  const unhideRow = (sec, key) => savePrefs({ hidden: { [sec]: { [key]: deleteField() } } });
+  const addItem = (sec) => {
+    const t = String(addFor[sec] || "").trim(); if (!t) return;
+    const j = (jobs || []).find(x => x && (String(x.simproNo || "") === t.replace(/^#/, "").split(" ")[0] || String(x.name || "").toLowerCase() === t.toLowerCase()));
+    savePrefs({ added: { [id()]: { sec, text: j ? j.name : t, jobId: j ? j.id : "", jobNo: j ? String(j.simproNo || "") : "", by: me, at: nowIso() } } });
+    setAddFor(a => ({ ...a, [sec]: "" }));
+  };
+  const removeAdded = (aid) => savePrefs({ added: { [aid]: deleteField() } });
+  const addAction = (sec) => {
+    const f = actFor[sec] || {}; const t = String(f.text || "").trim(); if (!t) return;
+    saveMtg({ actions: { [id()]: { sec, text: t, who: f.who || "", due: f.due || "", by: me, at: nowIso() } } });
+    setActFor(a => ({ ...a, [sec]: { who: f.who || "", due: f.due || "" } }));
+  };
+  const setActWho = (aid, who) => saveMtg({ actions: { [aid]: { who } } });
+  const delAction = (aid) => saveMtg({ actions: { [aid]: deleteField() } });
+  // One tap: the task lands on that person's My Day (assigned by whoever tapped).
+  const sendAction = async (aid, a, onMeeting) => {
+    if (!a.who) return;
+    const mtg = onMeeting || mid;
+    const nid = M.needIdFor(mtg, aid), t = nowIso();
+    const need = NeedShape.buildNeed({ kind: "task", text: `${a.text} (Scramble ${mtg.replace("scramble_", "")})`, dueDate: a.due || "", assignedTo: a.who, dueBucket: "week" }, me, t, nid);
+    need.meetingId = mtg; need.meetingActionId = aid;
+    try {
+      await setDoc(doc(db, "needs", nid), stampWrite({ data: need, updated_at: t, saved_by: me }));
+      await setDoc(doc(db, "meetings", mtg), { actions: { [aid]: { needId: nid, sentAt: t, sentBy: me } }, updated_at: t, saved_by: me }, { merge: true });
+      say(`On ${M.firstOf(a.who)}'s My Day.`);
+    } catch (e) { say("Didn't send: " + ((e && e.message) || "check the connection")); }
+  };
+  const unsendAction = async (aid, a, onMeeting) => {
+    const mtg = onMeeting || mid;
+    const n = (needs || []).find(x => x && x.id === a.needId);
+    if (n && (n.status !== "open" || (n.updates || []).length)) { say("They've already worked it on My Day, so it stays."); return; }
+    try {
+      if (a.needId) await deleteDoc(doc(db, "needs", a.needId));
+      await setDoc(doc(db, "meetings", mtg), { actions: { [aid]: { needId: deleteField(), sentAt: deleteField(), sentBy: deleteField() } }, updated_at: nowIso(), saved_by: me }, { merge: true });
+      say("Taken back off My Day.");
+    } catch (e) { say("Couldn't undo: " + ((e && e.message) || "")); }
+  };
+  const setCarried = (k, v) => saveMtg({ carried: { [k]: v } });
+
+  const md = mdoc || {};
+  const people = M.ATTENDEES;
+  const fmtDue = (s) => { const d = M.parseYmd(s); return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" }) : ""; };
+  const pillCls = (tag) => /^Finish/.test(tag) ? "fin" : /^Rough/.test(tag) ? "rgh" : tag === "Booked" ? "ok" : /^Needs|^On hold|ordering/.test(tag) ? "bad" : "";
+
+  const rowView = (sec, r) => {
+    const notes = Object.entries((md.rowNotes || {})[r.key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
+    const job = r.jobId ? (jobs || []).find(j => j && j.id === r.jobId) : null;
+    return (
+      <div className="mt-r" key={r.key}>
+        <div className="mt-no">{r.no ? "#" + r.no : "—"}</div>
+        <div className="mt-tt">
+          {job ? <button type="button" className="mt-name" onClick={() => onOpenJob && onOpenJob(job)}>{r.title}</button> : <b>{r.title}</b>}
+          {r.detail ? <small className={r.detail === "Nothing booked in Simpro this week" ? "warn" : ""}>{r.detail}</small> : null}
+          {r.days && r.days.length ? <div className="mt-days">{r.days.map(d => <span key={d.d}><b>{d.d}</b>: {d.who.join(", ")}</span>)}</div> : null}
+          {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(r.key, nid)}>Remove</button> : null}</li>)}</ul> : null}
+          {!ro ? (noteFor === r.key ? (
+            <div className="mt-inl">
+              <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={`Note on ${r.title}…`} aria-label={`Note on ${r.title}`}
+                onKeyDown={e => { if (e.key === "Enter") addRowNote(r.key); if (e.key === "Escape") setNoteFor(null); }}/>
+              <button type="button" className="mt-btn" onClick={() => addRowNote(r.key)}>Save</button>
+              <button type="button" className="mt-lnk" onClick={() => setNoteFor(null)}>Done</button>
+            </div>
+          ) : (
+            <div className="mt-rowacts">
+              <button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
+              {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId)}>Remove from section</button>
+                : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}
+            </div>
+          )) : null}
+        </div>
+        <div className="mt-rt">
+          {r.tag ? <span className={"mt-pill " + pillCls(r.tag)}>{r.tag}</span> : null}
+          {sec === "schedule" && r.pct != null ? <span className="mt-big">{r.pct}%</span> : null}
+          {sec === "waiting" && r.pct != null ? <span className="mt-big">{r.pct}<small>days</small></span> : null}
+          {sec === "upcoming" && r.date ? <span className="mt-big">{r.date}</span> : null}
+        </div>
+      </div>
+    );
+  };
+
+  const actionsView = (sec) => {
+    const list = Object.entries(md.actions || {}).filter(([, a]) => a && a.sec === sec && a.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
+    const f = actFor[sec] || {};
+    return (
+      <div className="mt-acts">
+        <span className="mt-lab">Action items</span>
+        {list.length ? list.map(([aid, a]) => (
+          <div className="mt-act" key={aid}>
+            <div><span>{a.text}</span><small>{a.who || "No one yet"}{a.due ? " · due " + fmtDue(a.due) : ""}</small></div>
+            {a.sentAt ? <span className="mt-sent">On {M.firstOf(a.who)}'s My Day{!ro ? <button type="button" className="mt-lnk" onClick={() => unsendAction(aid, a)}>Undo</button> : null}</span>
+              : ro ? <span/> : (
+              <span className="mt-actbtns">
+                {!a.who ? <select value="" onChange={e => setActWho(aid, e.target.value)} aria-label="Who"><option value="">Who?</option>{people.map(p => <option key={p} value={p}>{M.firstOf(p)}</option>)}</select> : null}
+                <button type="button" className="mt-btn" disabled={!a.who} onClick={() => sendAction(aid, a)}>{a.who ? `Send to ${M.firstOf(a.who)}'s My Day` : "Pick who first"}</button>
+                <button type="button" className="mt-lnk dim" onClick={() => delAction(aid)}>Remove</button>
+              </span>)}
+          </div>
+        )) : <div className="mt-empty">{ro ? "None saved that week." : "None yet."}</div>}
+        {!ro ? (
+          <div className="mt-add">
+            <input value={f.text || ""} onChange={e => setActFor(a => ({ ...a, [sec]: { ...f, text: e.target.value } }))} onKeyDown={e => { if (e.key === "Enter") addAction(sec); }} placeholder="Action item…" aria-label="Action item"/>
+            <select value={f.who || ""} onChange={e => setActFor(a => ({ ...a, [sec]: { ...f, who: e.target.value } }))} aria-label="Who"><option value="">Who?</option>{people.map(p => <option key={p} value={p}>{M.firstOf(p)}</option>)}</select>
+            <input type="date" value={f.due || ""} onChange={e => setActFor(a => ({ ...a, [sec]: { ...f, due: e.target.value } }))} aria-label="Due date"/>
+            <button type="button" className="mt-btn ghost" onClick={() => addAction(sec)}>Add</button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const carried = M.carriedSteps(prev, prevDate, md);
+  const sections = M.SECS.map(([sec, label], i) => {
+    const base = sec === "nextsteps" ? [] : (S[sec] || []);
+    const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, prefs);
+    const hid = ((prefs && prefs.hidden) || {})[sec] || {};
+    const hiddenRows = Object.entries(hid).filter(([, h]) => h).map(([k, h]) => ({ key: k, title: (base.find(r => r.key === k) || {}).title || (h && h.title) || k }));
+    const n = sec === "nextsteps" ? carried.length : rows.length;
+    const nNotes = Object.keys(md.rowNotes || {}).filter(k => rows.some(r => r.key === k)).reduce((s, k) => s + Object.values(md.rowNotes[k] || {}).filter(x => x && x.text).length, 0)
+      + (String((md.notes || {})[sec] || "").trim() ? 1 : 0);
+    const nActs = Object.values(md.actions || {}).filter(a => a && a.sec === sec && a.text).length;
+    let badge = "";
+    if (sec === "schedule") { const k = rows.filter(r => r.detail === "Nothing booked in Simpro this week").length; badge = k ? `${k} not booked` : ""; }
+    if (sec === "trips") { const k = rows.filter(r => /^Needs/.test(r.tag)).length; badge = k ? `${k} need a crew or date` : ""; }
+    if (sec === "waiting") { const k = rows.filter(r => r.tag === "CO waiting on GC").length; badge = k ? `${k} COs waiting` : ""; }
+    if (sec === "watches") badge = n ? "answer in the Claude tab" : "";
+    if (sec === "material") badge = n ? `${n} cards to order` : "";
+    if (sec === "nextsteps") { const k = carried.filter(c => c.status !== "done").length; badge = n ? (k ? `${k} not done` : "all done") : ""; }
+    const isOpen = open.has(sec);
+    const noteVal = drafts[sec] != null ? drafts[sec] : ((md.notes || {})[sec] || "");
+    return (
+      <section className="od-fold od-white mt-sec" key={sec}>
+        <button type="button" className="od-foldh" aria-expanded={isOpen} onClick={() => toggle(sec)}>
+          <span className="mt-num">{i + 1}</span>{label}<span className="n">{n}</span>
+          {badge ? <span className={"mt-bdg" + (/not booked|need|not done|to order/.test(badge) ? " warn" : "")}>{badge}</span> : null}
+          {nNotes || nActs ? <small>{[nNotes ? `${nNotes} note${nNotes > 1 ? "s" : ""}` : "", nActs ? `${nActs} action item${nActs > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · ")}</small> : null}
+          <small className="tog">{isOpen ? "Hide" : "Show"}</small>
+        </button>
+        {isOpen ? (
+          <div className="od-foldb">
+            {sec === "schedule" && sched === undefined ? <div className="mt-empty">Reading this week's Simpro bookings…</div> : null}
+            {sec === "schedule" && sched === null ? <div className="mt-empty warn">Couldn't read Simpro bookings right now; jobs show without days.</div> : null}
+            {sec === "watches" ? <div className="mt-src">Open Needs-you flags from the Job issues watch and the CC and Simpro sync check. <button type="button" className="mt-lnk" onClick={() => onGoTab && onGoTab("claude")}>Answer them in the Claude tab ›</button></div> : null}
+            {sec === "watches" && flags === undefined ? <div className="mt-empty">Reading the flags…</div> : null}
+            {sec === "material" ? <div className="mt-src">Material cards in the app that still need ordering. <a className="mt-lnk" href={OD_CED_SHEET} target="_blank" rel="noopener noreferrer">Josh's CED material forecast ›</a></div> : null}
+            {sec === "nextsteps" ? (
+              carried.length ? carried.map(c => (
+                <div className="mt-r" key={c.key}>
+                  <div className="mt-no">—</div>
+                  <div className="mt-tt"><b>{c.title}</b><small>{c.who ? M.firstOf(c.who) : "No owner"}{c.due ? " · was due " + fmtDue(c.due) : ""}{c.sent ? " · was on My Day" : ""}</small>
+                    {!ro ? <div className="mt-rowacts">
+                      <span className="mt-seg">{[["done", "Done"], ["open", "Not done"]].map(([v, l]) => <button type="button" key={v} aria-pressed={c.status === v} onClick={() => setCarried(c.key, v)}>{l}</button>)}</span>
+                    </div> : null}
+                  </div>
+                  <div className="mt-rt">{c.status ? <span className={"mt-pill " + (c.status === "done" ? "ok" : "bad")}>{c.status === "done" ? "Done" : "Not done"}</span> : null}</div>
+                </div>
+              )) : <div className="mt-empty">Nothing carried from {prevDate.slice(5).replace("-", "/")}.</div>
+            ) : (rows.length ? rows.map(r => rowView(sec, r)) : <div className="mt-empty">Nothing here this week.</div>)}
+            {sec !== "nextsteps" && hiddenRows.length ? (
+              <div className="mt-hid">
+                <button type="button" className="mt-lnk dim" onClick={() => setShowHidden(h => ({ ...h, [sec]: !h[sec] }))}>{hiddenRows.length} hidden · {showHidden[sec] ? "close" : "show"}</button>
+                {showHidden[sec] ? hiddenRows.map(h => <div key={h.key} className="mt-hidr"><span>{h.title}</span>{!ro ? <button type="button" className="mt-lnk" onClick={() => unhideRow(sec, h.key)}>Unhide</button> : null}</div>) : null}
+              </div>
+            ) : null}
+            {sec !== "nextsteps" && !ro ? (
+              <div className="mt-add one">
+                <input list="mt-joblist" value={addFor[sec] || ""} onChange={e => setAddFor(a => ({ ...a, [sec]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addItem(sec); }}
+                  placeholder="Add a job or item to this section…" aria-label={`Add to ${label}`}/>
+                <button type="button" className="mt-btn ghost" onClick={() => addItem(sec)}>Add</button>
+              </div>
+            ) : null}
+            <div className="mt-box">
+              <span className="mt-lab">Section notes</span>
+              <textarea value={noteVal} disabled={ro} onChange={e => typeNotes(sec, e.target.value)} onBlur={() => flushNotes(sec)} placeholder={ro ? "" : "Type notes for this section…"} aria-label={`${label} notes`}/>
+              {actionsView(sec)}
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  });
+
+  const weekOpts = Array.from(new Set([thisWeek, ...weeks])).sort().reverse();
+  return (
+    <div className="od-mtg">
+      <style>{`
+        .od-mtg{display:flex;flex-direction:column;gap:10px}
+        .od-mtg .mt-head{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:2px 2px 4px}
+        .od-mtg .mt-head h2{font-family:${BRAND_SLAB};font-weight:800;font-size:24px;line-height:1.05;color:${B.ink};margin:0}
+        .od-mtg .mt-sub{color:var(--dim);font-size:13px;margin-top:3px}
+        .od-mtg .mt-wk{margin-left:auto;display:flex;flex-direction:column;gap:3px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+        .od-mtg select,.od-mtg input,.od-mtg textarea{font:inherit;color:var(--cink);border:1px solid var(--cline);background:var(--card);border-radius:10px;padding:7px 10px;font-size:13px;min-width:0;color-scheme:light}
+        .od-mtg .mt-wk select{border-radius:999px;font-weight:700;text-transform:none;letter-spacing:0}
+        .od-mtg .mt-ro{padding:9px 14px;border-radius:14px;background:${C.slateBg};color:${C.slateInk};font-size:13px}
+        .od-mtg .mt-msg{position:sticky;top:6px;z-index:5;align-self:center;background:${B.ink};color:#fff;border-radius:999px;padding:7px 14px;font-size:13px;font-weight:600}
+        .od-mtg .mt-num{font-family:${BRAND_SLAB};font-weight:800;color:var(--o);font-size:16px;width:16px}
+        .od-mtg .mt-bdg{font-weight:700;font-size:11.5px;border-radius:999px;padding:2px 8px;background:${C.slateBg};color:${C.slateInk}}
+        .od-mtg .mt-bdg.warn{background:rgba(196,59,59,.1);color:${OD_R}}
+        .od-mtg .mt-src{font-size:12px;color:var(--cdim)}
+        .od-mtg .mt-r{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 2px;border-bottom:1px solid var(--cline)}
+        .od-mtg .mt-no{font-family:'Barlow Condensed','Arial Narrow',sans-serif;font-weight:800;font-size:15px;color:var(--o-ink);padding-top:1px}
+        .od-mtg .mt-tt{min-width:0}
+        .od-mtg .mt-tt b,.od-mtg .mt-name{font-weight:700;font-size:14px}
+        .od-mtg .mt-name{all:unset;cursor:pointer;font-weight:700;color:var(--cink)}.od-mtg .mt-name:hover{text-decoration:underline}
+        .od-mtg .mt-tt small{display:block;color:var(--cdim);font-size:12.5px;margin-top:2px}
+        .od-mtg .mt-tt small.warn,.od-mtg .mt-empty.warn{color:${OD_O};font-weight:700}
+        .od-mtg .mt-days{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+        .od-mtg .mt-days span{font-size:11.5px;background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:2px 7px}
+        .od-mtg .mt-days b{color:var(--o-ink)}
+        .od-mtg .mt-rn{margin:6px 0 0;padding-left:18px;font-size:13px}.od-mtg .mt-rn li{margin:2px 0}.od-mtg .mt-rn small{display:inline;font-size:11.5px}
+        .od-mtg .mt-rowacts{display:flex;gap:14px;align-items:center;margin-top:5px;flex-wrap:wrap}
+        .od-mtg .mt-inl{display:flex;gap:6px;align-items:center;margin-top:6px}.od-mtg .mt-inl input{flex:1}
+        .od-mtg .mt-rt{display:flex;flex-direction:column;align-items:flex-end;gap:4px;text-align:right}
+        .od-mtg .mt-pill{font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;background:${C.slateBg};color:${C.slateInk};white-space:nowrap}
+        .od-mtg .mt-pill.rgh{background:rgba(37,99,201,.1);color:${OD_B}}.od-mtg .mt-pill.fin{background:rgba(106,123,170,.15);color:#4A5A86}
+        .od-mtg .mt-pill.bad{background:rgba(196,59,59,.1);color:${OD_R}}.od-mtg .mt-pill.ok{background:rgba(24,128,74,.1);color:${OD_G}}
+        .od-mtg .mt-big{font-family:'Barlow Condensed','Arial Narrow',sans-serif;font-weight:800;font-size:22px;line-height:1;font-variant-numeric:tabular-nums}
+        .od-mtg .mt-big small{display:block;font-family:inherit;font-size:10.5px;color:var(--cdim);text-transform:uppercase}
+        .od-mtg .mt-lnk{border:0;background:transparent;color:var(--o-ink);font-weight:700;font-size:12px;padding:0 0 0 6px;cursor:pointer;text-decoration:none}
+        .od-mtg .mt-lnk.dim{color:var(--cdim);font-weight:600}
+        .od-mtg .mt-btn{border:0;border-radius:999px;padding:7px 14px;font-weight:700;font-size:12.5px;cursor:pointer;background:var(--o);color:#fff;white-space:nowrap}
+        .od-mtg .mt-btn.ghost{background:var(--card);border:1px solid var(--cline);color:var(--o-ink)}.od-mtg .mt-btn:disabled{opacity:.5;cursor:default}
+        .od-mtg .mt-box{border:1px dashed var(--cline);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;background:#FDFBF8}
+        .od-mtg .mt-lab{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cdim)}
+        .od-mtg textarea{width:100%;min-height:64px;resize:vertical}
+        .od-mtg textarea:disabled{background:var(--inset)}
+        .od-mtg .mt-add{display:grid;grid-template-columns:minmax(0,1fr) 110px 150px auto;gap:6px}
+        .od-mtg .mt-add.one{grid-template-columns:minmax(0,1fr) auto}
+        .od-mtg .mt-acts{display:flex;flex-direction:column;gap:6px}
+        .od-mtg .mt-act{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--cline);font-size:13px}
+        .od-mtg .mt-act small{display:block;font-size:12px;color:var(--cdim)}
+        .od-mtg .mt-actbtns{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+        .od-mtg .mt-sent{font-size:12px;font-weight:700;color:${OD_G}}
+        .od-mtg .mt-empty{font-size:12.5px;color:var(--cdim);padding:4px 0}
+        .od-mtg .mt-hid{font-size:12.5px}.od-mtg .mt-hidr{display:flex;justify-content:space-between;gap:8px;padding:4px 0 4px 6px;color:var(--cdim)}
+        .od-mtg .mt-seg{display:inline-flex;border:1px solid var(--cline);border-radius:999px;overflow:hidden}
+        .od-mtg .mt-seg button{border:0;background:var(--card);padding:4px 11px;font-size:12px;font-weight:700;color:var(--cdim);cursor:pointer}
+        .od-mtg .mt-seg button[aria-pressed="true"]{background:var(--o);color:#fff}
+        @media (max-width:640px){.od-mtg .mt-r{grid-template-columns:44px minmax(0,1fr)}.od-mtg .mt-rt{grid-column:2;flex-direction:row;align-items:center;justify-content:flex-start}
+          .od-mtg .mt-add{grid-template-columns:1fr 1fr}.od-mtg .mt-add>input:first-child{grid-column:1 / -1}.od-mtg .mt-act{grid-template-columns:1fr}.od-mtg .mt-wk{margin-left:0}}
+      `}</style>
+      <div className="mt-head">
+        <div>
+          <h2>Weekly Scramble</h2>
+          <div className="mt-sub">Tuesdays 4:00 PM · Josh, Koy, Justin, Brady · rows are live; notes, adds, hides and action items save</div>
+        </div>
+        <label className="mt-wk">Meeting week
+          <select value={week} onChange={e => setWeek(e.target.value)} aria-label="Meeting week">
+            {weekOpts.map(w => <option key={w} value={w}>{"Tue " + w.slice(5).replace("-", "/") + (w === thisWeek ? " · this week" : " · read only")}</option>)}
+          </select>
+        </label>
+      </div>
+      {ro ? <div className="mt-ro"><b>{week.slice(5).replace("-", "/")} meeting, read only.</b> Notes and action items as saved that week. The rows are always today's.</div> : null}
+      {msg ? <div className="mt-msg" role="status">{msg}</div> : null}
+      {mdoc === undefined ? <div className="mt-empty">Opening this week's meeting…</div> : null}
+      <datalist id="mt-joblist">{(jobs || []).filter(j => j && !j.archived && j.name).slice(0, 400).map(j => <option key={j.id} value={j.simproNo ? `#${j.simproNo} ${j.name}` : j.name}/>)}</datalist>
+      {sections}
+    </div>
+  );
+}
+
 function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [], identity, mode = "resi", onSelectJob, onOpenApp, onUpdateJob }) {
   const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
   const read = (k, ok, dflt) => { try { const v = localStorage.getItem(k); return ok(v) ? v : dflt; } catch (e) { return dflt; } };
@@ -52108,7 +52444,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
   const [flagBusy, setFlagBusy] = useState(null);             // the flag id whose answer is in flight
   const [flagMsg, setFlagMsg] = useState({});                 // id → last message for that flag
   useEffect(() => {
-    if (tab !== "claude") return undefined;
+    if (tab !== "claude" && tab !== "meetings") return undefined;
     let dead = false;
     gcAdminCallable("claudeWork", identity)({}).then(
       r => { if (!dead) setClaudeWork((r && r.data) || { ok: false, err: "try Refresh" }); },
@@ -53018,6 +53354,9 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       <Sec right={`${d.qcRows.length}`}>QC walks</Sec>
       <div className="od-list">{d.qcRows.slice(0, 6).map((r, i) => <OdItem key={i} color={OD_B} icon="clipboard" tag={`${r.phase} · ${OD_QC_BUCKET[r.st]}`} title={r.job.name} sub={r.job.foreman || ""} when={r.at ? `${odDow(r.at)} ${odShort(r.at)}` : ""} onClick={() => openJob(r.job)}/>)}{!d.qcRows.length && <div className="od-empty dark">No QC walks open.</div>}</div>
     </>);
+  } else if (tab === "meetings") {
+    // v648: the Weekly Scramble (OdMeetings above). Full width, like Job Costs.
+    main = <OdMeetings jobs={jobs} needs={needs} upcoming={upcoming} identity={identity} flags={claudeWork} onOpenJob={openJob} onGoTab={pickTab}/>;
   } else if (tab === "people") {
     // v582 (dashboard audit): the team by crew with what each person is on today, from the Crew Planner.
     // Gone: the activity heat map, the "On the app, no job touched" list and the My Day load card; the
@@ -54651,7 +54990,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       {/* v626: the app's own data is live; the Simpro figures are this morning's copy. Say when. */}
       <div className={"od-asof" + (simAsOf.stale ? " old" : "")} role={simAsOf.stale ? "alert" : undefined}><Icon name={simAsOf.stale ? "alertTriangle" : "clock"} size={12}/><span>{simAsOf.text}</span></div>
       {fview ? <div className="od-fvbar"><Icon name="eyeOff" size={14}/><span><b>Foreman view.</b> No dollar amounts on this page; hours and percentages only.</span></div> : null}
-      {tab !== "cc" && tab !== "claude" && (
+      {tab !== "cc" && tab !== "claude" && tab !== "meetings" && (
         <div className={"od-ctrl" + (filtersOpen ? " open" : "")}>
           <button type="button" className="od-fbtn" aria-expanded={filtersOpen} aria-controls="od-fpanel" onClick={() => setFiltersOpen(o => !o)}>
             <Icon name="filter" size={14}/>Filters{nFilters ? <span className="ct" aria-label={`${nFilters} on`}>{nFilters}</span> : null}
@@ -54679,9 +55018,9 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
           </div>
         </div>
       )}
-      <div className={"od-grid" + (tab === "costs" ? " one" : "")}>
+      <div className={"od-grid" + (tab === "costs" || tab === "meetings" ? " one" : "")}>
         <div className="od-panel">{main}</div>
-        {tab === "costs" ? null : <div className="od-panel">{right}</div>}
+        {tab === "costs" || tab === "meetings" ? null : <div className="od-panel">{right}</div>}
       </div>
       {sheetEl}
     </div>
@@ -63291,9 +63630,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-17 · App SW version: v647
+**Last manifest update:** 2026-11-17 · App SW version: v648
 ---
 
+- **Dashboard Meetings tab: the Weekly Scramble, with notes, action items to My Day, and add / hide per section** · 'in-flight 2026-11-17' · 'SW v648' · 'OdMeetings' · 'src/meetingModel.js' · 'scripts/meeting-model-test.js' · 'meetings/{id}' · Koy, 2026-11-17: *"yes start the mockup, can we make this in the dashboard though?"*, then *"can I have the ability to add jobs or things to each section and also hide jobs or things from sections? And then go ahead and build it."* Mockup first on the real rows (claude.ai/artifact/LNkP6NgeXYmDzRKu17w6iA). **Where:** /dashboard › **Meetings** (between People and Automations), full width. **Sections, in the notes doc's order, all folded with a count and badge:** 1 Schedule this week (Rough / Finish jobs in progress or booked, with this week's Simpro booked days and first names via 'getSimproSchedule', and the job's %; "Nothing booked in Simpro this week" when none) · 2 Small jobs and return trips (open trips missing a crew or a date, quick jobs not scheduled; booked quick jobs last) · 3 Waiting on (phases On Hold, COs pending 7+ days with the day count) · 4 Upcoming starts (Upcoming rows and projected starts in the next six weeks) · 5 Open items from the watches (open Needs-you flags from the Job issues watch and the CC and Simpro sync check, read with 'claudeWork', answered in the Claude tab) · 6 Upcoming material (material cards still needing an order, plus a link to Josh's CED forecast sheet) · 7 Last Scramble's next steps (last week's action items with Done / Not done; the Nov 10 Granola next steps are built in until that week has a record). **Typed and saved:** Section notes (save a second after typing stops), **+ Note** on any row (a bullet under that job), **action items** with who (Josh, Koy, Justin, Brady) and a due date, **Send to <name>'s My Day** in one tap (a My Day task built by 'NeedShape.buildNeed', id 'need_mtg_<meeting>_<item>' so a double tap makes one task; Undo takes it back while still untouched), **Add a job or item** to any section (job picker or free text) and **Hide** on any row with "N hidden · show" to unhide. Adds and hides stick across weeks ('meetings/scramble__prefs'); notes and action items are per week ('meetings/scramble_<Tuesday>'). **Week picker:** this week is editable, earlier weeks open read only; the rows are always today's. **Rules:** new '/meetings/{id}' block (read open, create / update need type scramble or scramble_prefs and updated_at; no deletes). Guide 'dashboard.html' step 7. **Why it won't lose data:** a new collection only; every write is a merge of the one field changed (a note, an item, a hide), so two people typing in different sections never overwrite each other; nothing on a job is written; My Day tasks are ordinary needs docs through the same shape the app uses; no loader or function change.
 - **Signing off a return trip clears its "needs scheduling" flag** · 'in-flight 2026-11-17' · 'SW v647' · 'handleSignOffRT' · 'ReturnTripsEditor' Sign off button · Found by the Homestead connector's Needs-you sweep: QC trips are created with 'needsSchedule:true', and both sign-off paths set 'signedOff:true, rtStatus:"complete"' but left 'needsSchedule' true, so Kweller #1107 and Bohannan #989 showed finished trips as still needing a date to anything reading the raw field. Both writes now also set 'needsSchedule:false'. 'rtScheduled' is left as is (it records that the trip was scheduled; every reader already checks '!signedOff' first). Trips signed off before this keep the stale flag; the connector ignores it by 'rtStatus'. **Why it won't lose data:** one extra key in a patch that already rewrites the same trip object through the same save path; nothing is deleted, no other field or trip changes, no loader, rules or functions change.
 - **Dashboard Overview artifacts block gains a Meetings group: Weekly Scramble, Lead Meeting, Resi Foreman Meeting, Strategy & Scheduling** · 'in-flight 2026-11-17' · 'SW v646' · 'OD_ARTIFACTS' · 'od-arts-h' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"add these four to the CC dashboard too"*. The four weekly meeting dashboards sit in a Meetings group in meeting order, each with its day and time under the name (Tue 4:00 PM, Wed 6:30 AM, Wed 7:00 AM, Fri 8:00 AM). The Operations Overview stays on top, bigger; the five whiteboards move under a Whiteboards heading. The header count is now 10. Same sign-in-to-Claude note. Still the one 'OD_ARTIFACTS' constant; no data, rules or server change.
 - **Dashboard Overview: a folded "Meeting and planning artifacts" block with links to Koy's Claude artifacts** · 'in-flight 2026-11-17' · 'SW v645' · 'OD_ARTIFACTS' · 'od-arts' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"I want them in the dashboard of the CC"*. One folded block at the top of the Overview tab (starts closed, count on the header) listing the Homestead Operations Overview (drawn bigger), the move-vs-keep whiteboard, Automations cleanup, Job retro, FieldInk ship steps and Crew week. Each opens in a new tab ('rel=noopener'). They are private claude.ai pages, so the block says *opens in Claude, sign-in required* and a person not signed in to Koy's Claude account cannot open them unless Koy shares them. The list is the one 'OD_ARTIFACTS' constant in src/App.js. No data, rules or server change.

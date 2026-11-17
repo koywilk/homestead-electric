@@ -174,6 +174,18 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // ── MEETINGS (SW v648) ────────────────────────────────────────────────────
+    // /dashboard › Meetings: the Weekly Scramble's notes, row notes, action items
+    // and the section adds / hides (src/meetingModel.js has the shape). Same open
+    // posture as /needs; a write must say what it is and when. Never deleted from
+    // the app (a past week is history).
+    match /meetings/{meetingId} {
+      allow read: if true;
+      allow create, update: if request.resource.data.type in ['scramble', 'scramble_prefs']
+                    && request.resource.data.updated_at is string;
+      allow delete: if false;
+    }
+
     // ── NOTIFICATION INBOX ────────────────────────────────────────────────────
     // Per-user in-app notification inbox: notifications/{userKey}/items/{id}.
     // ONLY Cloud Functions create these (admin SDK bypasses rules), so client
