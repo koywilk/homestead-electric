@@ -49731,6 +49731,18 @@ function odAgo(at, now) {
 const OD_O = "#B4531A", OD_G = "#18804A", OD_R = "#C43B3B", OD_B = "#2563C9", OD_P = "#6A4FC8", OD_WARN = "#B23A6E";
 // v562 (Koy, Brand A): the page accent is Homestead copper (#8E6336, 5.3:1 on white, same for white on it); OD_B stays the blue DATA colour (to-do).
 const OD_A = "#8E6336", OD_SLATE = "#5B6B84", OD_CYAN = "#127A90", OD_GREY = "#6B7487", OD_ON_A = "#fff";
+// v645 (Koy 2026-11-17, "I want them in the dashboard of the CC"): the meeting and planning artifacts,
+// shown as one folded block on the Overview tab. EDIT THIS LIST to add, remove or reorder a link; the
+// count on the block header follows it. They are private claude.ai pages (Koy's account), so each
+// person who taps one has to be signed in to Claude. `main` = the one drawn bigger.
+const OD_ARTIFACTS = [
+  { title: "Homestead Operations Overview", url: "https://claude.ai/artifact/4BCWs7NBjFRQsZdTXf32ek", main: true },
+  { title: "Whiteboard: move vs keep verdicts", url: "https://claude.ai/artifact/G9bP3QY6pcjaNBauiTScT4" },
+  { title: "Automations cleanup", url: "https://claude.ai/artifact/QhekzrMSWnBeBchjeE79pD" },
+  { title: "Job retro", url: "https://claude.ai/artifact/9DETiuHL34WCfHF8nrx3FL" },
+  { title: "FieldInk ship steps", url: "https://claude.ai/artifact/WxKNu91Um5zZxLiMoCsDUZ" },
+  { title: "Crew week", url: "https://claude.ai/artifact/LSbNULH23Yv77VszJmwkvr" },
+];
 // Foreman filter value for "jobs with no foreman" (blank, Unassigned, TBD, Paul, or
 // someone no longer on the team). Never a real name.
 const OD_NOFM = "__none__";
@@ -52442,6 +52454,16 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
     const b = d.busy;
     main = (<>
       <div className="od-head"><div><h1>{greet}, {me}</h1><p>{dateLine} · {greetLine}{fmLabel ? ` · ${fmLabel} only` : ""}</p></div></div>
+      <details className="od-white od-pad od-fold od-arts">
+        <summary>Meeting and planning artifacts<small>opens in Claude, sign-in required</small><span className="cnt">{OD_ARTIFACTS.length}</span></summary>
+        <div className="od-arts-list">
+          {OD_ARTIFACTS.map(x => (
+            <a key={x.url} className={"od-art" + (x.main ? " main" : "")} href={x.url} target="_blank" rel="noopener noreferrer">
+              <span>{x.title}</span><Icon name="external" size={x.main ? 15 : 13}/>
+            </a>
+          ))}
+        </div>
+      </details>
       {needYou.length > 0 && (
         <div className="od-white od-pad od-needyou">
           <div className="od-ct">Needs you<small>decisions only you make · tap a line</small></div>
@@ -54108,6 +54130,12 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-fold summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;color:var(--cink)}.odash .od-fold summary::-webkit-details-marker{display:none}
         .odash .od-fold summary::before{content:"";width:0;height:0;border:5px solid transparent;border-left:7px solid var(--cdim);margin-right:2px;transition:transform .15s}.odash .od-fold[open] summary::before{transform:rotate(90deg)}
         .odash .od-fold summary small{font-weight:500;color:var(--cdim);font-size:11.5px}.odash .od-fold summary .cnt{margin-left:auto;font-weight:800;font-size:13px;font-variant-numeric:tabular-nums;background:var(--inset);border-radius:999px;padding:1px 9px}
+        .odash .od-arts-list{display:flex;flex-direction:column;gap:2px;margin-top:10px}
+        .odash .od-art{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:40px;padding:8px 10px;border-radius:12px;color:var(--cink);text-decoration:none;font-weight:600;font-size:13.5px}
+        .odash .od-art:hover,.odash .od-art:focus-visible{background:var(--inset)}
+        .odash .od-art svg{flex:none;color:var(--cdim)}
+        .odash .od-art.main{background:var(--o-soft);color:var(--o-ink);font-weight:800;font-size:15px;min-height:48px;margin-bottom:4px}
+        .odash .od-art.main svg{color:var(--o-ink)}
         .odash .od-stack{display:flex;flex-direction:column;gap:12px;min-width:0}
         .odash .od-money{display:flex;align-items:center;gap:10px;border:1px solid rgba(196,59,59,.28);background:rgba(196,59,59,.06);border-radius:12px;padding:10px 12px;cursor:pointer;text-align:left;font:inherit;color:var(--cink)}
         .odash .od-money:hover{background:rgba(196,59,59,.1)}.odash .od-money b{font-size:18px;font-weight:800;color:${OD_R};font-variant-numeric:tabular-nums}.odash .od-money span{flex:1;font-size:12.5px;font-weight:600}.odash .od-money small{display:block;color:var(--cdim);font-size:11.5px;font-weight:500}
@@ -63252,9 +63280,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-16 · App SW version: v644
+**Last manifest update:** 2026-11-17 · App SW version: v645
 ---
 
+- **Dashboard Overview: a folded "Meeting and planning artifacts" block with links to Koy's Claude artifacts** · 'in-flight 2026-11-17' · 'SW v645' · 'OD_ARTIFACTS' · 'od-arts' · 'public/sops/dashboard.html' · Koy, 2026-11-17: *"I want them in the dashboard of the CC"*. One folded block at the top of the Overview tab (starts closed, count on the header) listing the Homestead Operations Overview (drawn bigger), the move-vs-keep whiteboard, Automations cleanup, Job retro, FieldInk ship steps and Crew week. Each opens in a new tab ('rel=noopener'). They are private claude.ai pages, so the block says *opens in Claude, sign-in required* and a person not signed in to Koy's Claude account cannot open them unless Koy shares them. The list is the one 'OD_ARTIFACTS' constant in src/App.js. No data, rules or server change.
 - **Quick jobs get Bid items and Material orders: see the Simpro bid and send POs to CED from a quick job** · 'in-flight 2026-11-16' · 'SW v644' · 'useQuickJobBid' · 'QuickJobDetail' · 'BidItemsPanel' · 'MaterialOrders' · 'commMaterials' · 'public/sops/biditems.html' · 'public/sops/materials.html' · Koy, 2026-11-16: *"why is there no bid items in quick jobs or ability to send po in them. they need this too"*. Two folded sections under Material on the quick job screen (start collapsed, count on the header). **Bid items** is the same 'BidItemsPanel' a full job's Bid Items tab shows (cost centers, Required vs Assigned); if you can send POs, an **Order from the bid** button at its top opens the order screen inside **Material orders**. **Material orders** is the commercial Materials tab's 'MaterialOrders' with phase "comm" and the list stored in 'job.commMaterials': each order is charged to a Simpro cost center you pick, one PO per cost center, one email to CED, same receipts and CC box. No server change: 'sendMaterialOrder' / 'sendMaterialPO' have no job-type check, they need the Simpro job # and, for "comm", a named cost center. Simpro is asked only when one of the two sections is first opened ('useQuickJobBid', same 12 h 'simproCostCentersCache' / 'simproStockCache' as a full job), so opening a quick job costs no extra Simpro calls. Quick-job POs show in the existing Up Next / Huddle PO reminders for free (they already read 'commMaterials' on any job). Guides: 'materials.html' gets a "Quick jobs have it too" section, 'biditems.html' a Q&A row. **Why it won't lose data:** additive only. One new field on quick jobs ('commMaterials', already in 'normalizeJob' and the loader) and the two existing cache fields; no existing field, rules, functions or loader changes; full jobs' own Bid Items / Material Tracking code is untouched.
 
 - **Move items: open Rough punch goes to the Finish punch list or onto a return trip (new or open) in one step, with a record on both ends** · 'in-flight 2026-11-16' · 'SW v642' · 'punchMove.js' · 'PunchMoveSheet' · 'planMoveToFinish' · 'undoMoveToFinish' · 'planLinkToTrip' · 'undoLinkToTrip' · 'runPunchMove' · 'scheduledRTMap' · Koy, 2026-11-16: *"have the option to send the punchlist items to the finished punchlist or send them to a new return trip … so I don't have to manually copy and paste them over, and we have a record of them being moved"*; mockup 'docs/mockups/punch-move.html' (claude.ai/artifact/PJRBcbY7BiUSFaudPKxt9h) on Stratton #959 / Brandt #1430's real items, approved *"Build it as shown"*. **Where:** a bar above the Rough punch list, *N open · Move items ▸*, only while something is open; the sheet picks where (Finish punch list / new Return Trip #N / each open trip, numbered as the Return Trips tab does) and which (grouped by floor and room, Select all), then *Move N to …*; one Undo bar. **To Finish:** each item is copied into the same floor and room on Finish (an extras floor is added to Finish with the same key + label, a room matched by its name key or added) as an open item carrying its words, photos, material, who added it and assignment, plus 'movedFrom {phase, itemId, by, at}'; the Rough original stays put, done, with 'movedTo {phase, itemId, by, at}', drawn greyed with a *Moved to Finish · who · date* tag and a disabled checkbox (the Finish copy shows *From Rough · who · date*). Because the original is done, every open count (the v641 board chip, My Day's Open Rough Punch task, Punch List, the dashboard) stops counting it, and 'u()' writes its 'punchTicks' slot exactly like a check-off. Items on an open trip are left out of a Finish move. **To a trip:** the link trips already use (PunchLinker): an entry '{id, text:"[Rough · Floor · Room] item", done:false, originItemId, originPhase:"rough", addedAt, addedAtTs, movedBy}' per item, so the existing two-way done cascade applies; the Rough item itself is not changed. A new trip is the app's literal with scope *Rough punch leftovers*, 'needsSchedule:true', 'rtStatus:"needs"', 'fromPunchMove:true'. An item already on that trip is skipped. The punch row's trip chip now also shows unscheduled open trips (*Return Trip #N · needs a date*); scheduled trips keep their date chip. **Undo** reverses only what the move did, on the freshest copy: originals open again with the record cleared, the Finish copies removed by id (a room or floor the move added stays, empty); trip entries removed by id and a trip the move made removed only while nobody has added to, assigned or dated it. Tests: new 'scripts/punch-move-test.js' (37 checks in prebuild: picks, placement by room key, extras floor, copy shape, the slot 'punchTickPatches' derives, open counts before/after, both undos, trip literal, numbering, no double link, signed-off trips refused, App.js wiring). Guides 'rough.html', 'finish.html', 'returntrips.html'. Crew brief 'docs/crew-briefs/v642.md'. **Why it won't lose data:** no item is ever deleted except the copies a move made, and only by its own Undo; the originals are flagged (done + 'movedTo'), never removed; every write goes through JobDetail's 'u()' from the freshest copy ('jobRef'), the same funnel, version lock and slot writer every check-off uses; trips are only appended to; no loader, rules or functions change.
