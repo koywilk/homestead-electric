@@ -227,116 +227,179 @@ function needIdFor(mtgId, actionId) { return "need_mtg_" + safeKey(mtgId) + "_" 
 
 
 // ── Weekly Lead Meeting (SW v649, Koy 2026-11-17: "i want everything from the doc moved here") ──
-// Wednesdays 6:30 AM. Live lists first (the Lead artifact's order), then the Doc's typed sections.
+// Wednesdays 6:30 AM. v650 (Koy 2026-11-18, "all recs go": "make it more accurate to what the last
+// one, the doc, was"): the Nov 11 Doc's order, Notes, Highlight, Lowlight, Training, Schedule,
+// Upcoming, Hours and margin, Crew out, Action items. The watches, Needs, Hiring and "When it comes
+// up" sections are gone; a week that already has something typed in one of them still shows it, last.
 const LEAD_SECS = [
-  ["watches", "Open items from the watches"],
-  ["schedule", "Schedule, this week and next"],
-  ["upcoming", "Upcoming and past due starts"],
-  ["hours", "Hours vs bid"],
-  ["crewout", "Crew out"],
   ["notes", "Notes"],
   ["highlight", "Highlight"],
   ["lowlight", "Lowlight"],
   ["training", "Training"],
-  ["needs", "Needs"],
-  ["hiring", "Hiring"],
-  ["nextsteps", "Last week's action items"],
-  ["whenup", "When it comes up"],
+  ["schedule", "Schedule"],
+  ["upcoming", "Upcoming"],
+  ["hours", "Hours and margin"],
+  ["crewout", "Crew out"],
+  ["nextsteps", "Action items"],
 ];
+// v649 sections Koy cut on 2026-11-18. Shown only for a week whose record has something in them.
+const LEAD_OLD = [["needs", "Needs"], ["hiring", "Hiring"], ["watches", "Open items from the watches"], ["whenup", "When it comes up"]];
 const TYPED = ["notes", "highlight", "lowlight", "training", "needs", "hiring"];
 const LEAD_WATCHES = ["Asks watch", "Crew schedule watch"];
 const CFG = {
   scramble: { dow: 2, label: "Weekly Scramble", when: "Tuesdays 4:00 PM", who: "Josh, Koy, Justin, Brady", secs: SECS, weeks: 1 },
-  lead: { dow: 3, label: "Weekly Lead Meeting", when: "Wednesdays 6:30 AM", who: "Koy and the foremen and leads", secs: LEAD_SECS, weeks: 2 },
+  lead: { dow: 3, label: "Weekly Lead Meeting", when: "Wednesdays 6:30 AM", who: "Koy and the foremen and leads", secs: LEAD_SECS, weeks: 1 },
 };
-const KOY = "Koy Wilkinson";
 const sameName = (a, b) => { const x = String(a || "").trim().toLowerCase(), y = String(b || "").trim().toLowerCase(); return !!x && !!y && (x === y || x.startsWith(y + " ") || y.startsWith(x + " ")); };
-// Monday-to-Friday booked days only (the Lead Meeting's schedule grid).
-const weekday = (dd) => !/^(Sat|Sun) /.test(dd.d);
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayHead = (d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + " " + MON[d.getMonth()] + " " + d.getDate();
+const monDay = (d) => MON[d.getMonth()] + " " + d.getDate();
+// The Lead schedule runs from the meeting day to that week's Friday.
+function leadRange(dateYmd) { const d = parseYmd(dateYmd); const f = weekStart(d); f.setDate(f.getDate() + 4); return { from: ymd(d), to: ymd(f > d ? f : d) }; }
+// Did this week's record get anything typed into a section (notes, row notes, items, action items)?
+function secHasContent(md, sec) {
+  if (!md) return false;
+  if (String((md.notes || {})[sec] || "").trim()) return true;
+  if (Object.values(md.actions || {}).some(a => a && a.sec === sec && a.text)) return true;
+  if (Object.values(md.added || {}).some(a => a && a.sec === sec)) return true;
+  return false;
+}
+const MARGIN_FOREMEN = ["keegan", "daegan", "colby"];   // Koy's table order; everyone else after, A–Z
+const num = (v) => (typeof v === "number" && isFinite(v) ? v : Number(v) || 0);
+const cleanStatus = (s) => String((s && typeof s === "object" ? s.untrusted : s) || "").replace(/^Job\s*-\s*/i, "").trim();
+
+// One phase of a Job Costs row: net margin (sell − material − labor with overhead) ÷ sell, as the
+// Job Costs page works it, plus hours / labor / material used vs bid. "not started" until the phase
+// has real hours (10% of its bid hours), so a phase with a few hours in doesn't read 99%.
+function phaseOf(r, p) {
+  const est = num(r[p + "_hrsEst"]), used = num(r[p + "_hrsUsed"]), sell = num(r[p + "_sell"]);
+  const matA = num(r[p + "_matAct"]), labA = num(r[p + "_labAct"]), matE = num(r[p + "_matEst"]), labE = num(r[p + "_labEst"]);
+  if (!est && !used && !sell && !matA && !labA) return { state: "none", used, est };
+  const started = est > 0 ? used / est >= 0.1 : used > 0;
+  if (!started) return { state: "not started", used, est };
+  const m = sell > 0 ? Math.round((sell - matA - labA) / sell * 100) : null;
+  const flags = [];
+  [["hours", used, est], ["labor", labA, labE], ["materials", matA, matE]].forEach(([k, a, e]) => {
+    if (!(e > 0)) return; const pct = Math.round(a / e * 100);
+    if (pct > 100) flags.push({ k, pct, over: true }); else if (pct >= 90) flags.push({ k, pct, over: false });
+  });
+  return { state: "", m, used, est, flags };
+}
+const flagText = (ph, f) => {
+  const o = f.filter(x => x.over), c = f.filter(x => !x.over), out = [];
+  if (o.length) out.push({ over: true, text: ph + " over: " + o.map(x => x.k + " " + x.pct + "%").join(", ") });
+  if (c.length) out.push({ over: false, text: ph + " close: " + c.map(x => x.k + " " + x.pct + "%").join(", ") });
+  return out;
+};
 
 function buildLeadSections(input) {
-  const { jobs = [], needs = [], flags = [], schedules = [], upcoming = [], costs = [], requests = [], pto = [], today = new Date(), effRS, effFS } = input || {};
+  const { jobs = [], needs = [], flags = [], schedules = [], upcoming = [], costs = [], totals = {}, names = {}, users = [], requests = [], pto = [],
+    today = new Date(), meeting = "", effRS, effFS } = input || {};
   const now = today.getTime(), todayYmd = ymd(today), horizon = now + 42 * DAY;
-  const base = buildSections({ jobs, upcoming, flags: [], schedules, today, effRS, effFS });
   const byNo = {}; jobs.forEach(j => { const n = jobNo(j); if (n && (!byNo[n] || (byNo[n].archived && !j.archived))) byNo[n] = j; });
-  const people = (j) => j ? [j.foreman && !/^unassigned$/i.test(j.foreman) ? "Foreman " + firstOf(j.foreman) : "", j.lead && !/^lead tbd$/i.test(j.lead) ? "Lead " + firstOf(j.lead) : ""].filter(Boolean).join(" · ") : "";
-  const S = { watches: [], schedule: [], upcoming: base.upcoming, hours: [], crewout: [], whenup: [] };
+  const costByNo = {}; (costs || []).forEach(r => { if (r && r.no != null) costByNo[String(r.no).trim()] = r; });
+  // A job's number + name, wherever the name is: Command Center, the Job Costs pull, Simpro.
+  const nameOf = (no) => { const j = byNo[no]; return (j && j.name) || (costByNo[no] && costByNo[no].name) || names[no] || ""; };
+  const S = { schedule: [], upcoming: [], hours: [], crewout: [], watches: [], whenup: [] };
   TYPED.forEach(k => { S[k] = []; });
 
-  // 1 · Watches: Asks + Crew schedule, without My Day mirrors or Koy's own calendar-overlap flag.
+  // Schedule: the meeting day to Friday, one heading a day, each job booked that day with its crew.
+  const mtg = meeting || meetingDate(today, "lead"), rg = leadRange(mtg);
+  const book = bookingsByJob(schedules);
+  const byDay = {};
+  Object.keys(book).forEach(no => book[no].forEach(dd => { if (dd.at >= rg.from && dd.at <= rg.to) (byDay[dd.at] = byDay[dd.at] || []).push({ no, who: dd.who }); }));
+  for (let d = parseYmd(rg.from); ymd(d) <= rg.to; d.setDate(d.getDate() + 1)) {
+    const k = ymd(d), list = (byDay[k] || []).sort((a, b) => b.who.length - a.who.length || (+a.no || 0) - (+b.no || 0));
+    const group = dayHead(d);
+    if (!list.length) { S.schedule.push({ key: "e_" + k, group, empty: true, title: "Nothing booked in Simpro yet.", days: [] }); continue; }
+    list.forEach(x => { const j = byNo[x.no];
+      S.schedule.push({ key: "b_" + k.replace(/-/g, "") + "_" + safeKey(x.no), group, jobId: j && !j.archived ? j.id : "", no: x.no, title: nameOf(x.no) || "Simpro job", tag: "", detail: x.who.join(", "), days: [] }); });
+  }
+
+  // Upcoming: Command Center rough / finish starts and the Upcoming list, six weeks out, past due marked.
+  const seenNo = new Set();
+  const push = (row, d, confirmed) => {
+    const past = Math.floor((now - d.getTime()) / DAY);
+    S.upcoming.push({ ...row, when: d.getTime(), date: monDay(d), detail: [monDay(d) + (confirmed ? " confirmed" : " projected"), row.detail].filter(Boolean).join(" · "),
+      tag: past >= 1 && ymd(d) < todayYmd ? past + "d past" : row.tag, days: [] });
+  };
+  jobs.forEach(j => {
+    if (!j || j.archived || j.quickJob || j.tempPed) return;
+    const rs = effRS ? effRS(j) : j.roughStatus, fs = effFS ? effFS(j) : j.finishStatus;
+    [["Rough", rs, j.roughProjectedStart, j.roughStartConfirmed], ["Finish", fs, j.finishProjectedStart, j.finishStartConfirmed]].forEach(([ph, st, ps, conf]) => {
+      if (st === "inprogress" || ["complete", "invoice"].includes(st)) return;
+      if (ph === "Finish" && !["complete", "invoice"].includes(rs) && !ps) return;
+      const d = anyDate(ps); if (!d || d.getTime() > horizon || d.getTime() < now - 21 * DAY) return;
+      seenNo.add(jobNo(j));
+      push({ key: "p_" + safeKey(j.id) + "_" + ph.charAt(0), jobId: j.id, no: jobNo(j), title: j.name || "", tag: ph === "Finish" ? "Finish" : "" }, d, !!conf);
+    });
+  });
+  upcoming.forEach(u => {
+    if (!u) return;
+    const d = anyDate(u.projectedStart || u.startDate); if (!d || d.getTime() > horizon) return;
+    const raw = String(u.name || "").trim(), m = /^#?\s*(\d{3,6})\s*[-–:]\s*(.+)$/.exec(raw);
+    const no = m ? m[1] : "", title = m ? m[2].trim() : raw;
+    if (no && seenNo.has(no)) return;   // already listed from the job itself
+    push({ key: "u_" + safeKey(u.id), no, title, tag: "" }, d, !!u.startConfirmed);
+  });
+  S.upcoming.sort((a, b) => a.when - b.when);
+
+  // Hours and margin: every active residential job with hours in, grouped by foreman, worst total
+  // margin first. Rough / finish from the Job Costs pull; total margin and status straight from Simpro.
+  const userBy = (n) => (users || []).filter(u => u && sameName(u.name, n));
+  const boss = (name) => {
+    const u = userBy(name).find(x => x.active !== false) || userBy(name)[0];
+    if (!u) return String(name || "").trim();
+    if (u.title !== "foreman" && u.foremanId) { const b = (users || []).find(x => x && x.id === u.foremanId); if (b && b.name) return b.name; }
+    return u.name;
+  };
+  Object.keys(costByNo).forEach(no => {
+    const r = costByNo[no], j = byNo[no];
+    if (!j || j.archived || j.quickJob || j.tempPed || j.type === "quote" || j.division === "commercial") return;
+    const fs = effFS ? effFS(j) : j.finishStatus;
+    if (["complete", "invoice"].includes(fs)) return;
+    const t = totals[no] || null;
+    if (t && /^(invoiced|complete|archived)$/i.test(String(t.stage || ""))) return;
+    if (!(num(r.rough_hrsUsed) || num(r.finish_hrsUsed) || num(r.rough_matAct) || num(r.finish_matAct))) return;
+    const rough = phaseOf(r, "rough"), finish = phaseOf(r, "finish");
+    const fm = j.foreman && !/^unassigned$/i.test(j.foreman) ? boss(j.foreman) : "";
+    const total = t && typeof t.margin === "number" ? Math.round(t.margin) : null;
+    const fl = flagText("Rough", rough.flags || []).concat(flagText("Finish", finish.flags || []));
+    S.hours.push({ key: "w_" + safeKey(no), jobId: j.id, no, title: j.name || r.name || "", group: fm || "No foreman", status: cleanStatus(t && t.status) || cleanStatus(r.status),
+      rough, finish, total, totalEst: !!(t && t.isEstimate), flags: fl, over: fl.some(f => f.over), days: [] });
+  });
+  const gRank = (g) => { const i = MARGIN_FOREMEN.indexOf(firstOf(g).toLowerCase()); return g === "No foreman" ? 99 : i >= 0 ? i : 10; };
+  S.hours.sort((a, b) => gRank(a.group) - gRank(b.group) || (gRank(a.group) === 10 ? String(a.group).localeCompare(String(b.group)) : 0)
+    || (a.total == null ? 1 : 0) - (b.total == null ? 1 : 0) || (a.total || 0) - (b.total || 0) || (+a.no || 0) - (+b.no || 0));
+
+  // Crew out, six weeks: field crew names and dates only (no notes, no office, no approval tags).
+  // Dates are saved "11/20/2026" (anyDate reads both shapes). People out the same days share a line.
+  const office = (n) => { const us = userBy(n); return us.some(u => u.title === "admin" || !u.title) || (us.length > 0 && us.every(u => u.active === false)); };
+  const out = {};
+  const addOut = (name, a, b) => {
+    const s = anyDate(a), e = anyDate(b || a); if (!name || !s || !e) return;
+    if (ymd(e) < todayYmd || s.getTime() > horizon || office(name)) return;
+    const k = ymd(s) + "_" + ymd(e), o = (out[k] = out[k] || { s, e, names: [] });
+    if (!o.names.some(n => sameName(n, name))) o.names.push(String(name).trim());
+  };
+  (requests || []).forEach(r => { if (r && r.status === "pending") addOut(r.name, r.start, r.end); });
+  (pto || []).forEach(p => { if (p) addOut(p.name, p.start, p.end); });
+  Object.keys(out).sort().forEach(k => { const o = out[k];
+    S.crewout.push({ key: "o_" + safeKey(k), title: o.names.join(", "), tag: "", detail: rangeText(ymd(o.s), ymd(o.e)), start: ymd(o.s), days: [] }); });
+
+  // Cut on 2026-11-18, kept only so a week that already used them still shows what was typed there.
   (flags || []).forEach(f => {
     if (!f || (f.status && f.status !== "open") || !LEAD_WATCHES.includes(f.routine)) return;
     if (/^myday-/i.test(String(f.key || "")) || /overlap/i.test(String(f.title || "")) || /overlap/i.test(String(f.key || ""))) return;
     const j = f.jobNo ? byNo[String(f.jobNo)] : null;
-    S.watches.push({ key: "f_" + safeKey(f.id || f.key), jobId: j ? j.id : "", no: f.jobNo || "", title: f.title || "", tag: f.routine, at: String(f.firstSeen || f.updatedAt || ""), detail: "", days: [] });
+    S.watches.push({ key: "f_" + safeKey(f.id || f.key), jobId: j ? j.id : "", no: f.jobNo || "", title: f.title || "", tag: f.routine, detail: "", days: [] });
   });
-  S.watches.sort((a, b) => a.at < b.at ? -1 : 1);
-  // …and My Day asks to Koy from someone else, past due first.
-  (needs || []).forEach(n => {
-    if (!n || n.status === "done" || !sameName(n.assignedTo, KOY) || !n.assignedBy || sameName(n.assignedBy, KOY)) return;
-    const due = parseYmd(n.dueDate), late = due && ymd(due) < todayYmd;
-    const j = n.jobId ? jobs.find(x => x && x.id === n.jobId) : null;
-    S.watches.push({ key: "n_" + safeKey(n.id), jobId: j ? j.id : "", no: j ? jobNo(j) : "", title: String(n.text || "").replace(/<[^>]*>/g, " ").trim().slice(0, 160),
-      tag: late ? "Past due" : "Ask from " + firstOf(n.assignedBy), detail: (late ? "Ask from " + firstOf(n.assignedBy) + " · " : "") + (due ? "due " + (due.getMonth() + 1) + "/" + due.getDate() : "no date"), days: [] });
-  });
-
-  // 2 · Schedule, this week and next: every job booked in Simpro, Monday–Friday, with its people from CC.
-  const book = bookingsByJob(schedules);
-  Object.keys(book).forEach(no => {
-    const days = book[no].filter(weekday); if (!days.length) return;
-    const j = byNo[no];
-    S.schedule.push({ key: "b_" + safeKey(no), jobId: j ? j.id : "", no, title: j ? (j.name || "") : "Simpro #" + no, tag: "", detail: people(j), days, first: days[0].at });
-  });
-  S.schedule.sort((a, b) => a.first < b.first ? -1 : a.first > b.first ? 1 : String(a.title).localeCompare(String(b.title)));
-
-  // 4 · Hours vs bid: a phase at 90%+ of its bid hours that isn't done (hours only, never margins).
-  (costs || []).forEach(r => {
-    const j = byNo[String(r && r.no)]; if (!j || j.archived) return;
-    [["Rough", "rough", effRS], ["Finish", "finish", effFS]].forEach(([ph, p, eff]) => {
-      const est = Number(r[p + "_hrsEst"]) || 0, used = Number(r[p + "_hrsUsed"]) || 0;
-      if (est <= 0 || used / est < 0.9) return;
-      const st = eff ? eff(j) : "";
-      if (["complete", "invoice"].includes(st)) return;
-      S.hours.push({ key: "w_" + safeKey(j.id) + "_" + p.charAt(0), jobId: j.id, no: jobNo(j), title: j.name || "", tag: ph, pct: Math.round(used / est * 100),
-        detail: `${Math.round(used)} of ${Math.round(est)} bid hours` + (people(j) ? " · " + people(j) : ""), days: [] });
-    });
-  });
-  S.hours.sort((a, b) => b.pct - a.pct);
-
-  // 5 · Crew out, six weeks: requests waiting on Koy first, then approved time off.
-  (requests || []).forEach(r => {
-    if (!r || r.status !== "pending") return;
-    S.crewout.push({ key: "r_" + safeKey(r.id), title: r.name || "", tag: "Needs Koy's approval", detail: rangeText(r.start, r.end) + (r.note ? " · " + String(r.note).slice(0, 80) : ""), start: r.start || "", days: [] });
-  });
-  const pend = S.crewout.length;
-  (pto || []).forEach(p => {
-    if (!p) return;
-    const s = parseYmd(p.start), e = parseYmd(p.end || p.start); if (!s || !e) return;
-    if (ymd(e) < todayYmd || s.getTime() > horizon) return;
-    S.crewout.push({ key: "o_" + safeKey(p.id || (p.name + "_" + p.start)), title: p.name || "", tag: "Approved", detail: rangeText(p.start, p.end) + (p.note && p.note !== "Time off" ? " · " + String(p.note).slice(0, 80) : ""), start: p.start || "", days: [] });
-  });
-  const tail = S.crewout.slice(pend).sort((a, b) => a.start < b.start ? -1 : 1);
-  S.crewout = S.crewout.slice(0, pend).sort((a, b) => a.start < b.start ? -1 : 1).concat(tail);
-
-  // Folded · When it comes up: return trips missing a crew or date, failed inspections,
-  // and jobs marked Scheduled that nobody is booked on this week or next.
-  base.trips.filter(t => t.tag !== "Booked" && /^t_/.test(t.key)).forEach(t => S.whenup.push(t));
-  jobs.forEach(j => {
-    if (!j || j.archived) return;
-    const no = jobNo(j);
-    if (j.roughInspectionResult === "fail") S.whenup.push({ key: "i_" + safeKey(j.id) + "_r", jobId: j.id, no, title: j.name || "", tag: "Failed rough inspection", detail: people(j), days: [] });
-    if (j.finalInspectionResult === "fail") S.whenup.push({ key: "i_" + safeKey(j.id) + "_f", jobId: j.id, no, title: j.name || "", tag: "Failed final inspection", detail: people(j), days: [] });
-    if (j.quickJob || j.tempPed) return;
-    const rs = effRS ? effRS(j) : j.roughStatus, fs = effFS ? effFS(j) : j.finishStatus;
-    if ((rs === "scheduled" || fs === "scheduled") && no && !(book[no] || []).length)
-      S.whenup.push({ key: "x_" + safeKey(j.id), jobId: j.id, no, title: j.name || "", tag: "Scheduled, nobody booked", detail: (fs === "scheduled" ? "Finish" : "Rough") + (people(j) ? " · " + people(j) : ""), days: [] });
-  });
+  void needs;
   return S;
 }
 function rangeText(a, b) {
-  const s = parseYmd(a), e = parseYmd(b || a); if (!s) return "";
-  const f = (d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + " " + (d.getMonth() + 1) + "/" + d.getDate();
-  return !e || ymd(e) === ymd(s) ? f(s) : f(s) + " – " + f(e);
+  const s = anyDate(a), e = anyDate(b || a); if (!s) return "";
+  return !e || ymd(e) === ymd(s) ? monDay(s) : monDay(s) + "–" + monDay(e);
 }
 
 // Last meeting before this tab, from Koy's Doc (Nov 11): five notes, nothing else filled in.
@@ -355,4 +418,4 @@ function seedFor(kind, dateYmd) {
 }
 module.exports = { SECS, ATTENDEES, WATCHES, ymd, parseYmd, anyDate, meetingDate, meetingId, prevMeetingDate, weekRange, safeKey, firstOf,
   bookingsByJob, buildSections, applyPrefs, carriedSteps, SEED_2026_11_10, needIdFor,
-  CFG, LEAD_SECS, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11 };
+  CFG, LEAD_SECS, LEAD_OLD, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11, leadRange, secHasContent, phaseOf };

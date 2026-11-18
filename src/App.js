@@ -51848,6 +51848,8 @@ function odCostsCoHours(goalsDoc) {
 // Past weeks open read only. Send to My Day writes one needs doc with a fixed id per action.
 // A meeting photo link is shown only when it is a Firebase Storage https download URL (the
 // meetings collection is open-write, so a stored javascript: or other link is never rendered).
+// v650: when a nightly pull ran, for the Lead Meeting's source line ("Wed 6:15 AM").
+function odMtgAt(iso) { const d = new Date(iso); if (isNaN(d)) return ""; return d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }); }
 const odMtgPhotoUrl = (u) => { try { const x = new URL(String(u || "")); return x.protocol === "https:" && x.hostname === "firebasestorage.googleapis.com" ? x.href : null; } catch (_) { return null; } };
 const OD_CED_SHEET = "https://docs.google.com/spreadsheets/d/160vZ86F38-DpaDwW5JSDJt6DFsh1Qo-Zie8wGY9dYCA/edit";
 function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, flags, onOpenJob, onGoTab }) {
@@ -51859,7 +51861,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   const thisWeek = M.meetingDate(new Date(), kind);
   const [week, setWeek] = useState(thisWeek);
   const setKind = (k) => { try { localStorage.setItem("he_mtg_kind", k); } catch (_) {} setKindRaw(k); setWeek(M.meetingDate(new Date(), k)); setOpen(new Set()); };
-  const [leadSrc, setLeadSrc] = useState({ costs: [], requests: [], pto: [] });   // Lead Meeting: hours, time off
+  const [leadSrc, setLeadSrc] = useState({ costs: [], totals: {}, costsAt: "", totalsAt: "", requests: [], pto: [] });   // Lead Meeting: margins, time off
+  const [simNames, setSimNames] = useState({});        // v650: Simpro job names for booked jobs Command Center doesn't have
   const [weeks, setWeeks] = useState([]);              // saved meeting dates, newest first
   const [mdoc, setMdoc] = useState(undefined);         // this week's meeting doc (undefined = loading, null = none yet)
   const [prev, setPrev] = useState(undefined);
@@ -51891,23 +51894,42 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   useEffect(() => {
     if (kind !== "lead") return undefined;
     let dead = false;
-    Promise.all(["phaseCosts", "timeOffRequests", "crewPTO"].map(k => getDoc(doc(db, "settings", k)).then(x => x.exists() ? (x.data() || {}) : {}, () => ({}))))
-      .then(([c, r, p]) => { if (!dead) setLeadSrc({ costs: Array.isArray(c.rows) ? c.rows : [], requests: Array.isArray(r.list) ? r.list : [], pto: Array.isArray(p.list) ? p.list : [] }); });
+    // v650: settings/simproTotals (dailySimproTotals, weekdays 6:15) is Simpro's own job margin and status,
+    // the number the margin watch reads; settings/phaseCosts is the Job Costs page's rough / finish split.
+    Promise.all(["phaseCosts", "simproTotals", "timeOffRequests", "crewPTO"].map(k => getDoc(doc(db, "settings", k)).then(x => x.exists() ? (x.data() || {}) : {}, () => ({}))))
+      .then(([c, t, r, p]) => { if (!dead) setLeadSrc({ costs: Array.isArray(c.rows) ? c.rows : [], costsAt: String(c.at || c.generated_at || ""),
+        totals: (t && typeof t.byNo === "object" && t.byNo) || {}, totalsAt: String((t && t.at) || ""),
+        requests: Array.isArray(r.list) ? r.list : [], pto: Array.isArray(p.list) ? p.list : [] }); });
     return () => { dead = true; };
   }, [kind]);
   useEffect(() => {
     let dead = false; setSched(undefined);
-    const r = M.weekRange(week, cfg.weeks);
+    const r = kind === "lead" ? M.leadRange(week) : M.weekRange(week, cfg.weeks);   // v650: Lead runs meeting day to Friday
     httpsCallable(functions, "getSimproSchedule")({ dateFrom: r.from, dateTo: r.to }).then(
       x => { if (!dead) setSched(Array.isArray(x && x.data) ? x.data : []); }, () => { if (!dead) setSched(null); });
     return () => { dead = true; };
   }, [week, kind]); // eslint-disable-line
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
 
+  // v650: a job booked in Simpro that neither Command Center nor the Job Costs pull names gets its name
+  // from Simpro (getSimproJobBasics, read only; only the name is kept), once per visit.
+  useEffect(() => {
+    if (kind !== "lead" || !Array.isArray(sched)) return undefined;
+    const known = new Set((jobs || []).map(j => String((j && j.simproNo) || "").trim()).filter(Boolean));
+    (leadSrc.costs || []).forEach(r => { if (r && r.name) known.add(String(r.no).trim()); });
+    const miss = Array.from(new Set(sched.filter(x => x && x.Type === "job" && x.Reference).map(x => String(x.Reference).split("-")[0])))
+      .filter(no => no && !known.has(no) && simNames[no] === undefined).slice(0, 12);
+    if (!miss.length) return undefined;
+    let dead = false;
+    setSimNames(m => { const n = { ...m }; miss.forEach(no => { n[no] = ""; }); return n; });
+    miss.forEach(no => fetchSimproJobBasics(no).then(b => { if (!dead && b && b.name) setSimNames(m => ({ ...m, [no]: String(b.name).trim() })); }, () => {}));
+    return () => { dead = true; };
+  }, [kind, sched, jobs, leadSrc.costs]); // eslint-disable-line
   const S = useMemo(() => kind === "lead"
-    ? M.buildLeadSections({ jobs, needs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], costs: leadSrc.costs, requests: leadSrc.requests, pto: leadSrc.pto, today: new Date(), effRS, effFS })
+    ? M.buildLeadSections({ jobs, needs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], costs: leadSrc.costs, totals: leadSrc.totals, names: simNames,
+        users, requests: leadSrc.requests, pto: leadSrc.pto, today: new Date(), meeting: week, effRS, effFS })
     : M.buildSections({ jobs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], today: new Date(), effRS, effFS }),
-    [kind, jobs, needs, upcoming, flags, sched, leadSrc]); // eslint-disable-line
+    [kind, jobs, needs, upcoming, flags, sched, leadSrc, simNames, users, week]); // eslint-disable-line
   const nowIso = () => new Date().toISOString();
   const say = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
   const saveMtg = (patch) => setDoc(doc(db, "meetings", mid), { type: kind, date: week, ...patch, updated_at: nowIso(), saved_by: me }, { merge: true })
@@ -52006,7 +52028,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     ? Array.from(new Set(["Koy Wilkinson", ...(users || []).filter(u => u && u.active !== false && /^(foreman|jrforeman|lead)$/.test(String(u.title || "")) && u.access !== "contractor").map(u => u.name).filter(Boolean)]))
     : M.ATTENDEES;
   const fmtDue = (s) => { const d = M.parseYmd(s); return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" }) : ""; };
-  const pillCls = (tag) => /^Finish/.test(tag) ? "fin" : /^Rough/.test(tag) ? "rgh" : tag === "Booked" ? "ok" : /^Needs|^On hold|ordering/.test(tag) ? "bad" : "";
+  const pillCls = (tag) => /^Finish/.test(tag) ? "fin" : /^Rough/.test(tag) ? "rgh" : tag === "Booked" ? "ok" : /^Needs|^On hold|ordering|d past$/.test(tag) ? "bad" : "";
 
   const rowView = (sec, r) => {
     const notes = Object.entries((md.rowNotes || {})[r.key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
@@ -52043,10 +52065,58 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           {sec === "schedule" && r.pct != null ? <span className="mt-big">{r.pct}%</span> : null}
           {sec === "hours" && r.pct != null ? <span className="mt-big" style={{ color: r.pct >= 100 ? OD_R : undefined }}>{r.pct}%<small>of bid</small></span> : null}
           {sec === "waiting" && r.pct != null ? <span className="mt-big">{r.pct}<small>days</small></span> : null}
-          {sec === "upcoming" && r.date ? <span className="mt-big">{r.date}</span> : null}
+          {sec === "upcoming" && r.date && kind !== "lead" ? <span className="mt-big">{r.date}</span> : null}
         </div>
       </div>
     );
+  };
+
+  // v650 (Koy 2026-11-18): Hours and margin as the Nov 11 Doc's table. Job (number + name), Simpro status,
+  // rough and finish net margin (Job Costs), total margin (Simpro), flags. Percentages only, never dollars.
+  const pctTxt = (n) => n == null ? "—" : n + "%";
+  const phaseCell = (ph) => ph.state === "none" ? <span className="mt-dim">—</span>
+    : ph.state === "not started" ? <span className="mt-dim">not started{ph.used >= 1 ? <small>{Math.round(ph.used)} of {Math.round(ph.est)} h</small> : null}</span>
+    : <span><b style={{ color: ph.m != null && ph.m < 0 ? OD_R : undefined }}>{pctTxt(ph.m)}</b><small>{Math.round(ph.used)} of {Math.round(ph.est)} h</small></span>;
+  const hoursView = (sec, rows) => {
+    let last = null;
+    return (
+      <div className="mt-tblw"><table className="mt-tbl">
+        <thead><tr><th>Job</th><th>Simpro status</th><th>Rough net</th><th>Finish net</th><th>Total margin</th><th>Flags (used vs bid)</th></tr></thead>
+        <tbody>{rows.map(r => {
+          const head = r.group !== last ? (last = r.group, <tr className="mt-tg" key={"g_" + r.key}><td colSpan={6}>{r.group || "Added to this section"}</td></tr>) : null;
+          const notes = Object.entries((md.rowNotes || {})[r.key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
+          const job = r.jobId ? (jobs || []).find(j => j && j.id === r.jobId) : null;
+          return [head, (
+            <tr key={r.key}>
+              <td className="mt-tj">
+                <span className="mt-no">{r.no || ""}</span> {job ? <button type="button" className="mt-name" onClick={() => onOpenJob && onOpenJob(job)}>{r.title}</button> : <b>{r.title}</b>}
+                {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(r.key, nid)}>Remove</button> : null}</li>)}</ul> : null}
+                {!ro ? (noteFor === r.key ? (
+                  <div className="mt-inl">
+                    <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={`Note on ${r.title}…`} aria-label={`Note on ${r.title}`}
+                      onKeyDown={e => { if (e.key === "Enter") addRowNote(r.key); if (e.key === "Escape") setNoteFor(null); }}/>
+                    <button type="button" className="mt-btn" onClick={() => addRowNote(r.key)}>Save</button>
+                  </div>
+                ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
+                  {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId, sec)}>Remove</button> : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}</div>) : null}
+              </td>
+              <td>{r.status || (r.rough ? "" : r.tag || "")}</td>
+              <td>{r.rough ? phaseCell(r.rough) : null}</td>
+              <td>{r.finish ? phaseCell(r.finish) : null}</td>
+              <td><b className="mt-tot" style={{ color: r.total != null && r.total < 15 ? OD_R : undefined }}>{r.rough ? pctTxt(r.total) : ""}</b>{r.totalEst ? <small>Simpro estimate</small> : null}</td>
+              <td className="mt-fl">{r.flags ? (r.flags.length ? r.flags.map((f, i) => <div key={i} style={{ color: f.over ? OD_R : OD_O }}>{f.text}</div>) : <span className="mt-dim">OK</span>) : null}</td>
+            </tr>)];
+        })}</tbody>
+      </table></div>
+    );
+  };
+  // v650: the Lead schedule, a heading a day (meeting day to Friday) with each booked job and its crew.
+  const scheduleView = (sec, rows) => {
+    let last = null;
+    return rows.map(r => {
+      const head = r.group !== last ? (last = r.group, <div className="mt-day" key={"d_" + r.key}>{r.group || "Added to this section"}</div>) : null;
+      return [head, r.empty ? <div className="mt-empty" key={r.key}>{r.title}</div> : rowView(sec, r)];
+    });
   };
 
   const actionsView = (sec) => {
@@ -52080,13 +52150,15 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   };
 
   const carried = M.carriedSteps(prev, prevDate, md);
-  const sections = cfg.secs.map(([sec, label], i) => {
+  // v650: the Lead sections Koy cut still show, last, for a week that has something typed in them.
+  const secList = kind === "lead" ? cfg.secs.concat(M.LEAD_OLD.filter(([k]) => M.secHasContent(md, k))) : cfg.secs;
+  const sections = secList.map(([sec, label], i) => {
     const typed = kind === "lead" && M.TYPED.includes(sec);
     const base = sec === "nextsteps" ? [] : (S[sec] || []);
     const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, typed ? { hidden: (prefs && prefs.hidden) || {}, added: md.added || {} } : prefs);
     const hid = ((prefs && prefs.hidden) || {})[sec] || {};
     const hiddenRows = Object.entries(hid).filter(([, h]) => h).map(([k, h]) => ({ key: k, title: (base.find(r => r.key === k) || {}).title || (h && h.title) || k }));
-    const n = sec === "nextsteps" ? carried.length : rows.length;
+    const n = sec === "nextsteps" ? carried.length : kind === "lead" && sec === "schedule" ? new Set(rows.filter(r => !r.empty).map(r => r.no || r.key)).size : rows.length;
     const nNotes = Object.keys(md.rowNotes || {}).filter(k => rows.some(r => r.key === k)).reduce((s, k) => s + Object.values(md.rowNotes[k] || {}).filter(x => x && x.text).length, 0)
       + (String((md.notes || {})[sec] || "").trim() ? 1 : 0);
     const nActs = Object.values(md.actions || {}).filter(a => a && a.sec === sec && a.text).length;
@@ -52098,12 +52170,10 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     if (sec === "material") badge = n ? `${n} cards to order` : "";
     if (sec === "nextsteps") { const k = carried.filter(c => c.status !== "done").length; badge = n ? (k ? `${k} not done` : "all done") : ""; }
     if (kind === "lead") {
-      if (sec === "watches") { const k = rows.filter(r => r.tag === "Past due").length; badge = k ? `${k} past due` : n ? "answer in the Claude tab" : ""; }
-      if (sec === "schedule") badge = "";
-      if (sec === "upcoming") { const k = rows.filter(r => /has passed/.test(r.detail)).length; badge = k ? `${k} past due` : ""; }
-      if (sec === "hours") { const k = rows.filter(r => r.pct >= 100).length; badge = k ? `${k} over bid` : ""; }
-      if (sec === "crewout") { const k = rows.filter(r => r.tag === "Needs Koy's approval").length; badge = k ? `${k} need Koy's approval` : ""; }
-      if (sec === "whenup") badge = "";
+      badge = "";
+      if (sec === "nextsteps") { const k = carried.filter(c => c.status !== "done").length; badge = n ? (k ? `${k} not done` : "all done") : ""; }
+      if (sec === "upcoming") { const k = rows.filter(r => /d past$/.test(r.tag || "")).length; badge = k ? `${k} past due` : ""; }
+      if (sec === "hours") { const k = rows.filter(r => r.over).length; badge = k ? `${k} over bid` : ""; }
     }
     const isOpen = open.has(sec);
     const noteVal = drafts[sec] != null ? drafts[sec] : ((md.notes || {})[sec] || "");
@@ -52117,11 +52187,11 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         </button>
         {isOpen ? (
           <div className="od-foldb">
-            {sec === "schedule" && sched === undefined ? <div className="mt-empty">Reading {kind === "lead" ? "this week's and next week's" : "this week's"} Simpro bookings…</div> : null}
-            {kind === "lead" && sec === "schedule" ? <div className="mt-src">Every job booked in Simpro, Monday to Friday, with its foreman and lead from Command Center.</div> : null}
-            {kind === "lead" && sec === "hours" ? <div className="mt-src">Rough or finish at 90% or more of its bid hours and not done. Hours only. From last night's Simpro pull. The line is 100%.</div> : null}
-            {kind === "lead" && sec === "crewout" ? <div className="mt-src">Time off in the next six weeks. Requests waiting on Koy are first.</div> : null}
-            {kind === "lead" && sec === "whenup" ? <div className="mt-src">Return trips missing a crew or a date, failed inspections, and jobs marked Scheduled that nobody is booked on this week or next.</div> : null}
+            {sec === "schedule" && sched === undefined ? <div className="mt-empty">Reading {kind === "lead" ? "the" : "this week's"} Simpro bookings…</div> : null}
+            {kind === "lead" && sec === "schedule" ? <div className="mt-src">Booked in Simpro, the meeting day to Friday, with the crew on each job. + Note on a job to add a line under it.</div> : null}
+            {kind === "lead" && sec === "upcoming" ? <div className="mt-src">Rough and finish starts in Command Center and the Upcoming list, six weeks out.</div> : null}
+            {kind === "lead" && sec === "hours" ? <div className="mt-src">Every active job, by foreman, worst total margin first. Rough and finish net margin from the Job Costs page{leadSrc.costsAt ? " (" + odMtgAt(leadSrc.costsAt) + ")" : ""}; total margin and status straight from Simpro{leadSrc.totalsAt ? " (" + odMtgAt(leadSrc.totalsAt) + ")" : ""}. A phase shows "not started" until it has 10% of its bid hours. Flags: over is past the bid, close is 90% or more. Percentages only.</div> : null}
+            {kind === "lead" && sec === "crewout" ? <div className="mt-src">Field crew time off in the next six weeks, approved and asked for.</div> : null}
             {sec === "schedule" && sched === null ? <div className="mt-empty warn">Couldn't read Simpro bookings right now; jobs show without days.</div> : null}
             {sec === "watches" ? <div className="mt-src">{kind === "lead" ? "Open Needs-you flags from the Asks watch and the Crew schedule watch, oldest first, then My Day asks to Koy from someone else." : "Open Needs-you flags from the Job issues watch and the CC and Simpro sync check."} <button type="button" className="mt-lnk" onClick={() => onGoTab && onGoTab("claude")}>Answer them in the Claude tab ›</button></div> : null}
             {sec === "watches" && flags === undefined ? <div className="mt-empty">Reading the flags…</div> : null}
@@ -52138,7 +52208,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
                   <div className="mt-rt">{c.status ? <span className={"mt-pill " + (c.status === "done" ? "ok" : "bad")}>{c.status === "done" ? "Done" : "Not done"}</span> : null}</div>
                 </div>
               )) : <div className="mt-empty">Nothing carried from {prevDate.slice(5).replace("-", "/")}.</div>
-            ) : (rows.length ? rows.map(r => rowView(sec, r)) : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : "Nothing here this week."}</div>)}
+            ) : (rows.length ? (kind === "lead" && sec === "hours" ? hoursView(sec, rows) : kind === "lead" && sec === "schedule" ? scheduleView(sec, rows) : rows.map(r => rowView(sec, r)))
+              : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : kind === "lead" && sec === "hours" && !leadSrc.costs.length ? "Reading the Job Costs pull…" : "Nothing here this week."}</div>)}
             {sec !== "nextsteps" && hiddenRows.length ? (
               <div className="mt-hid">
                 <button type="button" className="mt-lnk dim" onClick={() => setShowHidden(h => ({ ...h, [sec]: !h[sec] }))}>{hiddenRows.length} hidden · {showHidden[sec] ? "close" : "show"}</button>
@@ -52170,6 +52241,17 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       <style>{`
         .od-mtg{display:flex;flex-direction:column;gap:10px}
         .od-mtg .mt-pick{display:flex;gap:6px;flex-wrap:wrap}
+        .od-mtg .mt-day{font-weight:800;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--cdim);padding:12px 2px 2px;border-bottom:1px solid var(--cline)}
+        .od-mtg .mt-tblw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:4px 0}
+        .od-mtg .mt-tbl{border-collapse:collapse;width:100%;min-width:720px;font-size:13px}
+        .od-mtg .mt-tbl th{text-align:left;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--cdim);padding:6px 8px;border-bottom:1px solid var(--cline);white-space:nowrap}
+        .od-mtg .mt-tbl td{padding:8px;border-bottom:1px solid var(--cline);vertical-align:top}
+        .od-mtg .mt-tbl td small{display:block;color:var(--cdim);font-size:11.5px;font-weight:500}
+        .od-mtg .mt-tbl .mt-tg td{background:var(--inset);font-weight:800;font-size:12.5px;color:var(--cink);padding:6px 8px}
+        .od-mtg .mt-tbl .mt-tj{min-width:180px}.od-mtg .mt-tbl .mt-tj .mt-no{display:inline;font-size:14px}
+        .od-mtg .mt-tbl .mt-fl{font-weight:700;font-size:12.5px;min-width:200px}
+        .od-mtg .mt-tbl .mt-tot{font-size:15px}
+        .od-mtg .mt-dim{color:var(--cdim)}
         .od-mtg .mt-file{position:relative;overflow:hidden;cursor:pointer}.od-mtg .mt-file input{position:absolute;inset:0;opacity:0;cursor:pointer}
         .od-mtg .mt-ph{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.od-mtg .mt-ph span{position:relative}
         .od-mtg .mt-ph img{width:88px;height:66px;object-fit:cover;border-radius:8px;border:1px solid var(--cline);display:block}
@@ -63711,9 +63793,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-17 · App SW version: v649
+**Last manifest update:** 2026-11-18 · App SW version: v650
 ---
 
+- **Lead Meeting laid out like Koy's Nov 11 Doc: Doc order, day-by-day schedule, Hours and margin table with total margin from Simpro** · 'in-flight 2026-11-18' · 'SW v650' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-18 ("all recs go" on 15 fixes): *"make it more accurate to what the last one, the doc, was"* and show *"the total overall margin"* in hours vs bid. Preview first on real numbers (claude.ai artifact, read only). **Order:** Notes, Highlight, Lowlight, Training, Schedule, Upcoming, Hours and margin, Crew out, Action items (last week's carried items, renamed). **Cut:** Open items from the watches, Needs, Hiring, When it comes up; a week whose record already has something typed in one of them still shows it, last ('secHasContent'). **Schedule:** the meeting day to that week's Friday ('leadRange', also the Simpro read's range), a heading per day, each booked job by number + name (CC, else the Job Costs row, else Simpro via the read-only 'getSimproJobBasics', name only) with its crew; one row (and so one + Note) per job per day; an empty day says so. **Upcoming:** CC rough / finish starts and the Upcoming list (its '#2547 - Name' number parsed out), six weeks, "projected" / "confirmed", past due tagged 'Nd past'; a CC start beats its Upcoming-list copy. **Hours and margin:** every active residential job (in CC, not archived / commercial / quick / temp ped, finish not complete, Simpro stage not Invoiced / Complete, hours or material in) as a table: Job, Simpro status, rough net and finish net margin from settings/phaseCosts ((sell − material − labor with overhead) ÷ sell, the Job Costs page's math), total margin from settings/simproTotals (Simpro's NettMargin, the number the margin watch reads), flags per phase for hours / labor / materials over the bid (red) or at 90%+ (orange, never yellow). A phase reads "not started" until it has 10% of its bid hours. Grouped by crew foreman (a jr. foreman's / lead's job sits with their foreman via foremanId): Keegan, Daegan, Colby, then the rest A–Z, then No foreman; worst total margin first. Percentages only, no dollar figure on the page (a test pins that the model carries none). **Crew out:** six weeks, approved ('settings/crewPTO') and pending requests, dates read in both '11/20/2026' and ISO shapes (the v649 bug that dropped all approved time off), names + dates only, people out the same days share a line, office (title admin or untitled roster record) and former crew left out. Tests: 'scripts/meeting-model-test.js'. Guide 'dashboard.html' step M. **Why it won't lose data:** read only everywhere new (settings/simproTotals and getSimproJobBasics are reads); the meeting record shape, ids and writes are unchanged; old sections' typed content still shows.
 - **Meetings tab: the Weekly Lead Meeting beside the Scramble, with the Doc's sections moved in** · 'in-flight 2026-11-17' · 'SW v649' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-17: *"it needs to be added to the meetings page, where weekly scramble currently is"*, *"i want everything from the doc moved here so i dont have to jump between them during the meeting"*, *"i need to be able to easily add and remove items from anywhere, add notes where i want to"*. Reference: the Lead Meeting Claude page (claude.ai/artifact/2J6w44A5VWqQdoRnrM8rKi v9). **Where:** /dashboard › Meetings now opens with a picker, **Weekly Scramble · Tue 4:00** / **Lead Meeting · Wed 6:30** (remembered on the device). **Lead sections, folded with counts:** 1 Open items from the watches (open Needs-you flags from the Asks watch and Crew schedule watch, oldest first, without the myday-* mirrors or a calendar-overlap flag; then My Day asks to Koy from someone else, past due marked) · 2 Schedule, this week and next (every job booked in Simpro Mon–Fri, two weeks, foreman and lead from CC; a booked job not in CC shows by its Simpro #) · 3 Upcoming and past due starts (six weeks) · 4 Hours vs bid (a rough or finish at 90%+ of bid hours and not done, from settings/phaseCosts, as bars with the 100% line; hours only) · 5 Crew out (six weeks; pending requests first, "Needs Koy's approval"; approved time off from settings/crewPTO) · 6–11 the Doc's sections as typed lists: Notes, Highlight, Lowlight, Training, Needs, Hiring · 12 Last week's action items · 13 When it comes up (return trips missing a crew or date, failed inspections, jobs marked Scheduled with nobody booked this week or next). **Everywhere (both meetings):** Add a job or item, Hide / Unhide, + Note on any row, section notes, action items with who and due date and Send to My Day. Lead owners: Koy plus active foremen, jr. foremen and leads. **Carried until done (both meetings):** marking last week's item Not done copies it into this week, so it shows again next week until marked Done; Done removes the copy. **Photos (Koy: "need to be able to put pics with highlight and low lights"):** + Photo on any Highlight or Lowlight item, uploaded like My Day task photos ('taskPhotoPath', 'jobs/_tasks/task-photos/mtg_<meeting>/…', same JPEG shrink), linked from the meeting doc under rowPhotos; tap a thumbnail to open it, × removes the link. Items added to the typed Lead sections belong to that week (meeting doc 'added'), not the sticky prefs. **Seeded:** Nov 11's five Doc notes stand in for that week (lead_2026-11-11) until a record exists. Calendar walks / inspections from the Lead page are not in the app (no calendar source). **Data:** meetings/lead_<Wednesday> and meetings/lead__prefs, same shape as the Scramble's; rules allow type lead / lead_prefs. Guide 'dashboard.html' step M. **Why it won't lose data:** same collection and merge-one-field writes as v648; the Scramble's ids and records are unchanged; settings/phaseCosts, timeOffRequests and crewPTO are only read.
 - **Dashboard Meetings tab: the Weekly Scramble, with notes, action items to My Day, and add / hide per section** · 'in-flight 2026-11-17' · 'SW v648' · 'OdMeetings' · 'src/meetingModel.js' · 'scripts/meeting-model-test.js' · 'meetings/{id}' · Koy, 2026-11-17: *"yes start the mockup, can we make this in the dashboard though?"*, then *"can I have the ability to add jobs or things to each section and also hide jobs or things from sections? And then go ahead and build it."* Mockup first on the real rows (claude.ai/artifact/LNkP6NgeXYmDzRKu17w6iA). **Where:** /dashboard › **Meetings** (between People and Automations), full width. **Sections, in the notes doc's order, all folded with a count and badge:** 1 Schedule this week (Rough / Finish jobs in progress or booked, with this week's Simpro booked days and first names via 'getSimproSchedule', and the job's %; "Nothing booked in Simpro this week" when none) · 2 Small jobs and return trips (open trips missing a crew or a date, quick jobs not scheduled; booked quick jobs last) · 3 Waiting on (phases On Hold, COs pending 7+ days with the day count) · 4 Upcoming starts (Upcoming rows and projected starts in the next six weeks) · 5 Open items from the watches (open Needs-you flags from the Job issues watch and the CC and Simpro sync check, read with 'claudeWork', answered in the Claude tab) · 6 Upcoming material (material cards still needing an order, plus a link to Josh's CED forecast sheet) · 7 Last Scramble's next steps (last week's action items with Done / Not done; the Nov 10 Granola next steps are built in until that week has a record). **Typed and saved:** Section notes (save a second after typing stops), **+ Note** on any row (a bullet under that job), **action items** with who (Josh, Koy, Justin, Brady) and a due date, **Send to <name>'s My Day** in one tap (a My Day task built by 'NeedShape.buildNeed', id 'need_mtg_<meeting>_<item>' so a double tap makes one task; Undo takes it back while still untouched), **Add a job or item** to any section (job picker or free text) and **Hide** on any row with "N hidden · show" to unhide. Adds and hides stick across weeks ('meetings/scramble__prefs'); notes and action items are per week ('meetings/scramble_<Tuesday>'). **Week picker:** this week is editable, earlier weeks open read only; the rows are always today's. **Rules:** new '/meetings/{id}' block (read open, create / update need type scramble or scramble_prefs and updated_at; no deletes). Guide 'dashboard.html' step 7. **Why it won't lose data:** a new collection only; every write is a merge of the one field changed (a note, an item, a hide), so two people typing in different sections never overwrite each other; nothing on a job is written; My Day tasks are ordinary needs docs through the same shape the app uses; no loader or function change.
 - **Signing off a return trip clears its "needs scheduling" flag** · 'in-flight 2026-11-17' · 'SW v647' · 'handleSignOffRT' · 'ReturnTripsEditor' Sign off button · Found by the Homestead connector's Needs-you sweep: QC trips are created with 'needsSchedule:true', and both sign-off paths set 'signedOff:true, rtStatus:"complete"' but left 'needsSchedule' true, so Kweller #1107 and Bohannan #989 showed finished trips as still needing a date to anything reading the raw field. Both writes now also set 'needsSchedule:false'. 'rtScheduled' is left as is (it records that the trip was scheduled; every reader already checks '!signedOff' first). Trips signed off before this keep the stale flag; the connector ignores it by 'rtStatus'. **Why it won't lose data:** one extra key in a patch that already rewrites the same trip object through the same save path; nothing is deleted, no other field or trip changes, no loader, rules or functions change.

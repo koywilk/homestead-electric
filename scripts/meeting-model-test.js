@@ -56,36 +56,92 @@ const steps = M.carriedSteps(M.SEED_2026_11_10, "2026-11-10", { carried: { "2026
 ok(steps.length === 5 && steps[1].status === "done" && steps[0].status === "", "Nov 10 next steps carry, with this week's marks");
 ok(M.needIdFor("scramble_2026-11-17", "abc") === M.needIdFor("scramble_2026-11-17", "abc"), "one task id per action (no doubles)");
 
-// ── Lead Meeting (v649) ──
+// ── Lead Meeting (v649, reworked v650 to match Koy's Nov 11 Doc) ──
 ok(M.meetingDate(today, "lead") === "2026-11-18" && M.meetingId("2026-11-18", "lead") === "lead_2026-11-18", "Lead Meeting is the week's Wednesday, lead_<date>");
 ok(M.meetingId("2026-11-17") === "scramble_2026-11-17", "Scramble ids unchanged");
-ok(M.weekRange("2026-11-18", 2).to === "2026-11-29", "Lead schedule reads this week and next");
-const lsched = sched.concat([{ Type: "job", Reference: "1291-17551", Date: "2026-11-21", Staff: { Name: "Jose Sanchez" } }, { Type: "job", Reference: "1476-19250", Date: "2026-11-24", Staff: { Name: "Noah Davis" } }]);
-const ljobs = jobs.concat([{ id: "j1260", simproNo: "1260", name: "Colton Residence", foreman: "Keegan Wilkinson", lead: "Lead TBD", roughStatus: "complete", finishStatus: "scheduled", finalInspectionResult: "fail" }]);
-ljobs[0].foreman = "Daegan Smith"; ljobs[0].lead = "Louis Hoffman";
-const L = M.buildLeadSections({ jobs: ljobs, today, effRS: eff("roughStatus"), effFS: eff("finishStatus"), schedules: lsched,
-  flags: [{ id: "a", key: "colby-text-20261116-535", routine: "Asks watch", status: "open", title: "Colby: schedule Treycen", firstSeen: "2026-11-16T22:42:16Z" },
-          { id: "b", key: "myday-need_1", routine: "Asks watch", status: "open", title: "mirror" },
-          { id: "c", key: "Tue 11/17 interview overlap", routine: "Crew schedule watch", status: "open", title: "Seth interview overlaps your 6pm" },
-          { id: "d", key: "1476 Chapman meter this week", routine: "Crew schedule watch", status: "open", jobNo: "1476", title: "Chapman meter", firstSeen: "2026-11-16T20:14:42Z" },
-          { id: "e", key: "1469-Q3373", routine: "Job issues watch", status: "open", title: "not this meeting" }],
-  needs: [{ id: "n1", text: "Remove England temp pedestal", assignedTo: "Koy Wilkinson", assignedBy: "Justin Cloward", dueDate: "2026-11-09", status: "open" },
-          { id: "n2", text: "my own", assignedTo: "Koy Wilkinson", assignedBy: "Koy Wilkinson", status: "open" },
-          { id: "n3", text: "done one", assignedTo: "Koy Wilkinson", assignedBy: "Josh Cloward", status: "done" }],
-  costs: [{ no: "1291", finish_hrsEst: 100, finish_hrsUsed: 112 }, { no: "1277", rough_hrsEst: 200, rough_hrsUsed: 120 }, { no: "1421", finish_hrsEst: 10, finish_hrsUsed: 30 }],
-  requests: [{ id: "to_1", name: "Treycen Rollene", start: "2026-11-25", end: "2026-12-01", status: "pending" }, { id: "to_2", name: "X", start: "2026-11-20", status: "denied" }],
-  pto: [{ id: "pto_1", name: "Zane Watkins", start: "2026-11-19", end: "2026-11-19" }, { id: "pto_2", name: "Old", start: "2026-10-01", end: "2026-10-02" }] });
-ok(L.watches.filter(r => /^f_/.test(r.key)).map(r => r.title).join("|") === "Chapman meter|Colby: schedule Treycen", "Lead watches: two routines, no mirrors, no overlap flag, oldest first... by first seen");
-ok(L.watches.some(r => r.tag === "Past due" && /England/.test(r.title)) && L.watches.filter(r => /^n_/.test(r.key)).length === 1, "My Day asks to Koy from others only, past due marked");
-const ash2 = L.schedule.find(r => r.no === "1291");
-ok(ash2 && ash2.days.length === 2 && ash2.detail === "Foreman Daegan · Lead Louis", "Saturday dropped; foreman and lead from CC");
-ok(L.schedule.some(r => r.no === "1476" && r.title === "Simpro #1476"), "a booked job not in CC still shows, by its Simpro number");
-ok(L.hours.length === 1 && L.hours[0].pct === 112 && L.hours[0].tag === "Finish", "hours: only phases 90%+ and not done (Hightower finish is complete)");
-ok(L.crewout[0].tag === "Needs Koy's approval" && L.crewout[0].title === "Treycen Rollene" && L.crewout.length === 2, "crew out: pending first, denied and past PTO left out");
-ok(L.crewout[1].detail === "Thu 11/19", "one-day PTO reads as one day");
-ok(L.whenup.some(r => r.tag === "Failed final inspection") && L.whenup.some(r => r.tag === "Scheduled, nobody booked" && r.no === "1260"), "when it comes up: failed inspection, scheduled with nobody booked");
-ok(L.whenup.some(r => /^t_/.test(r.key)), "when it comes up: return trips needing a crew or date");
+ok(M.LEAD_SECS.map(x => x[0]).join() === "notes,highlight,lowlight,training,schedule,upcoming,hours,crewout,nextsteps", "Doc order: typed sections first, Action items last");
+ok(M.leadRange("2026-11-18").from === "2026-11-18" && M.leadRange("2026-11-18").to === "2026-11-20", "schedule runs the meeting day to Friday");
+const lsched = [
+  { Type: "job", Reference: "1291-17551", Date: "2026-11-17", Staff: { Name: "Louis Hoffman" } },             // Tuesday: before the meeting, left out
+  { Type: "job", Reference: "1291-17551", Date: "2026-11-18", Staff: { Name: "Daegan Smith" } },
+  { Type: "job", Reference: "1291-17551", Date: "2026-11-18", Staff: { Name: "Louis Hoffman" } },
+  { Type: "job", Reference: "1412-18586", Date: "2026-11-18", Staff: { Name: "Braden Davis" } },
+  { Type: "job", Reference: "945-19230", Date: "2026-11-19", Staff: { Name: "Noah Davis" } },
+  { Type: "job", Reference: "1291-17551", Date: "2026-11-23", Staff: { Name: "Louis Hoffman" } },             // next week: left out
+];
+const ljobs = jobs.concat([
+  { id: "j1430", simproNo: "1430", name: "Brandt Residence", foreman: "Gage Lund", roughStatus: "complete", finishStatus: "waiting_date" },
+  { id: "j1107", simproNo: "1107", name: "Kweller", foreman: "Keegan Wilkinson", roughStatus: "complete", finishStatus: "" },
+  { id: "j535", simproNo: "535", name: "D32 Payne", foreman: "Colby Fogh", roughStatus: "complete", finishStatus: "inprogress" },
+  { id: "j989", simproNo: "989", name: "Bohannan", foreman: "Abraham Tristan", roughStatus: "complete", finishStatus: "" },
+  { id: "j1412", simproNo: "1412", name: "Battle Creek", division: "commercial", roughStatus: "inprogress" },
+  { id: "j1402", simproNo: "1402", name: "Cougar Moon Lot 84 - Kamas", roughStatus: "complete", finishStatus: "date_confirmed", finishProjectedStart: "11/16/2026", finishStartConfirmed: true },
+]);
+ljobs[0].foreman = "Louis Hoffman";   // Ashcraft: Louis is a jr. foreman under Daegan
+const users = [
+  { id: "keegan", name: "Keegan Wilkinson", title: "foreman", active: true }, { id: "daegan", name: "Daegan Smith", title: "foreman", active: true },
+  { id: "colby", name: "Colby Fogh", title: "foreman", active: true }, { id: "abe", name: "Abraham Tristan", title: "foreman", active: true },
+  { id: "gage", name: "Gage Lund", title: "jrforeman", foremanId: "keegan", active: true }, { id: "louis", name: "Louis Hoffman", title: "jrforeman", foremanId: "daegan", active: true },
+  { id: "justin1", name: "Justin Cloward", active: true }, { id: "justin2", name: "Justin Cloward", title: "crew", active: true },
+  { id: "james", name: "James Livingston", title: "crew", foremanId: "daegan", active: true }, { id: "noah", name: "Noah Davis", title: "crew", active: true },
+  { id: "bailey", name: "Bailey Smith", title: "crew", active: false },
+];
+const costs = [
+  // Brandt: rough way over; finish 6 of 233 h, so "not started" (it read 99% before)
+  { no: "1430", name: "Brandt Residence", rough_hrsEst: 342, rough_hrsUsed: 580, rough_sell: 100, rough_matEst: 30, rough_matAct: 45, rough_labEst: 50, rough_labAct: 74,
+    finish_hrsEst: 233, finish_hrsUsed: 6, finish_sell: 80, finish_matAct: 0, finish_labAct: 1 },
+  { no: "1107", name: "Kweller", rough_hrsEst: 394, rough_hrsUsed: 1248, rough_sell: 100, rough_matAct: 60, rough_labAct: 104, rough_matEst: 40, rough_labEst: 47, finish_hrsEst: 411, finish_hrsUsed: 29 },
+  { no: "1291", name: "Ashcraft", rough_hrsEst: 556, rough_hrsUsed: 920, rough_sell: 100, rough_matAct: 40, rough_labAct: 50, rough_matEst: 45, rough_labEst: 43,
+    finish_hrsEst: 478, finish_hrsUsed: 573, finish_sell: 100, finish_matAct: 20, finish_labAct: 28, finish_matEst: 21, finish_labEst: 24 },
+  { no: "535", name: "D32 Payne", rough_hrsEst: 729, rough_hrsUsed: 1611, rough_sell: 100, rough_matAct: 50, rough_labAct: 74, finish_hrsEst: 840, finish_hrsUsed: 209, finish_sell: 100, finish_matAct: 10, finish_labAct: 9 },
+  { no: "989", name: "Bohannan", rough_hrsEst: 274, rough_hrsUsed: 312, rough_sell: 100, rough_matAct: 30, rough_labAct: 30 },
+  { no: "1412", name: "Battle Creek Plaza A&B - Lindon", rough_hrsEst: 2014, rough_hrsUsed: 116, rough_sell: 100 },
+  { no: "1421", name: "Hightower Remodel", finish_hrsEst: 10, finish_hrsUsed: 30 },
+  { no: "1277", name: "Pierce Residence", rough_hrsEst: 0, rough_hrsUsed: 0 },
+];
+const totals = { "1430": { margin: 28.64, status: "Job - Rough-In Complete", stage: "Progress" }, "1107": { margin: 24.38, status: "Job - Rough-In Complete", stage: "Progress" },
+  "1291": { margin: 20.94, status: "Job - Finish", stage: "Progress" }, "535": { margin: 35.78, status: "Job - Rough-In Complete", stage: "Progress" }, "989": { margin: 46.75, status: "Job - Rough-In Complete", stage: "Progress" } };
+const L = M.buildLeadSections({ jobs: ljobs, today, meeting: "2026-11-18", effRS: eff("roughStatus"), effFS: eff("finishStatus"), schedules: lsched, users, costs, totals,
+  names: { "945": "Maddox Residence" },
+  upcoming: [{ id: "u1", name: "#2547 - Peterson Residence - Provo", projectedStart: "10/26/2026" }, { id: "u2", name: "#1402 - Cougar Moon", projectedStart: "12/1/2026" },
+             { id: "u3", name: "#2386 - Skyridge Lot 211", projectedStart: "11/19/2026", startConfirmed: true }],
+  requests: [{ id: "to_1", name: "Treycen Rollene", start: "11/25/2026", end: "12/1/2026", status: "pending", note: "Thanksgiving" }, { id: "to_2", name: "Zane Watkins", start: "11/19/2026", status: "denied" }],
+  pto: [{ id: "p1", name: "James Livingston", start: "11/20/2026", end: "11/27/2026", note: "Family vacation" }, { id: "p2", name: "Noah Davis", start: "11/23/2026", end: "11/23/2026" },
+        { id: "p3", name: "Justin Cloward", start: "11/25/2026", end: "11/27/2026" }, { id: "p4", name: "Colby Fogh", start: "12/10/2026", end: "12/10/2026" },
+        { id: "p5", name: "Noah Davis", start: "12/10/2026", end: "12/10/2026" }, { id: "p6", name: "Old", start: "10/01/2026", end: "10/02/2026" },
+        { id: "p7", name: "Bailey Smith", start: "11/24/2026" }] });
+// Schedule
+const heads = Array.from(new Set(L.schedule.map(r => r.group)));
+ok(heads.join("|") === "Wed Nov 18|Thu Nov 19|Fri Nov 20", "schedule: one heading a day, meeting day to Friday, no past days, no next week");
+const wed = L.schedule.filter(r => r.group === "Wed Nov 18");
+ok(wed[0].no === "1291" && wed[0].title === "Ashcraft" && wed[0].detail === "Daegan, Louis", "Wednesday: Ashcraft with its crew, biggest crew first");
+ok(wed.some(r => r.no === "1412" && r.title === "Battle Creek"), "a commercial job booked shows by number and name");
+ok(L.schedule.some(r => r.no === "945" && r.title === "Maddox Residence" && !r.jobId), "a booked job not in CC takes its name from Simpro");
+ok(L.schedule.some(r => r.group === "Fri Nov 20" && r.empty), "an empty day says nothing is booked yet");
+ok(new Set(L.schedule.map(r => r.key)).size === L.schedule.length, "every schedule row has its own key (one note per job per day)");
+// Upcoming
+const pete = L.upcoming.find(r => /Peterson/.test(r.title));
+ok(pete && pete.no === "2547" && pete.title === "Peterson Residence - Provo" && pete.tag === "22d past" && /^Oct 26 projected/.test(pete.detail), "Upcoming list rows carry their number; past due reads Nd past");
+const cm = L.upcoming.filter(r => r.no === "1402");
+ok(cm.length === 1 && cm[0].tag === "1d past" && /Nov 16 confirmed/.test(cm[0].detail), "a CC start wins over its Upcoming-list copy; confirmed reads confirmed");
+ok(L.upcoming.find(r => r.no === "2386").tag === "" && /confirmed/.test(L.upcoming.find(r => r.no === "2386").detail), "a future start has no past tag");
+// Hours and margin
+const H = L.hours, h = (no) => H.find(r => r.no === no);
+ok(H.map(r => r.no).join() === "1107,1430,1291,535,989", "every active residential job, by foreman (Keegan, Daegan, Colby, the rest), worst total first");
+ok(h("1430").group === "Keegan Wilkinson" && h("1291").group === "Daegan Smith", "a jr. foreman's job sits with their foreman");
+ok(h("1430").rough.m === -19 && h("1430").finish.state === "not started", "Brandt: rough net margin -19%, finish not started at 3% of its hours");
+ok(h("1430").total === 29 && h("1430").status === "Rough-In Complete", "total margin and status straight from Simpro, 'Job - ' dropped");
+ok(h("1430").flags[0].over && h("1430").flags[0].text === "Rough over: hours 170%, labor 148%, materials 150%", "flags read like the Doc: phase, over, each measure");
+ok(h("1291").flags.some(f => !f.over && f.text === "Rough close: materials 89%") === false && h("1291").flags.some(f => !f.over && /Finish close: materials 95%/.test(f.text)), "close is 90–100% of bid; under 90% is not flagged");
+ok(h("1291").finish.m === 52, "finish net margin = (sell − material − labor) ÷ sell");
+ok(!h("1412") && !h("1421") && !h("1277"), "commercial, finished and not-started jobs are left out");
+ok(JSON.stringify(H).indexOf("sell") === -1, "no dollar figure leaves the model");
+// Crew out
+const cout = L.crewout.map(r => r.title + " " + r.detail);
+ok(cout.join("|") === "James Livingston Nov 20–Nov 27|Noah Davis Nov 23|Treycen Rollene Nov 25–Dec 1|Colby Fogh, Noah Davis Dec 10", "crew out: field crew names and dates, same days on one line, pending included, office and former crew left out");
+ok(L.crewout.every(r => !r.tag && !/Thanksgiving|vacation/.test(r.detail)), "no approval tags and no personal notes");
 ok(Array.isArray(L.notes) && L.notes.length === 0, "typed sections start empty");
+ok(M.secHasContent({ notes: { hiring: "References" } }, "hiring") && !M.secHasContent({ notes: { hiring: " " } }, "hiring") && M.secHasContent({ added: { a: { sec: "needs" } } }, "needs"), "a cut section shows only for a week that has something typed in it");
 ok(M.seedFor("lead", "2026-11-11").notes.notes.split("\n").length === 5 && !M.seedFor("lead", "2026-11-18"), "Nov 11's five notes stand in for that week");
 const cs = M.carriedSteps({ actions: { a1: { text: "Call GC", who: "Koy Wilkinson", sec: "notes", at: "1", carriedFrom: "2026-11-04" } } }, "2026-11-11", {});
 ok(cs[0].sec === "notes" && cs[0].from === "2026-11-04", "a carried item keeps its section and how long it's been open");
