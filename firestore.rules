@@ -175,13 +175,13 @@ service cloud.firestore {
     }
 
     // ── MEETINGS (SW v648) ────────────────────────────────────────────────────
-    // /dashboard › Meetings: the Weekly Scramble's notes, row notes, action items
+    // /dashboard › Meetings: the Weekly Scramble's and (v649) Lead Meeting's notes, row notes, action items
     // and the section adds / hides (src/meetingModel.js has the shape). Same open
     // posture as /needs; a write must say what it is and when. Never deleted from
     // the app (a past week is history).
     match /meetings/{meetingId} {
       allow read: if true;
-      allow create, update: if request.resource.data.type in ['scramble', 'scramble_prefs']
+      allow create, update: if request.resource.data.type in ['scramble', 'scramble_prefs', 'lead', 'lead_prefs']
                     && request.resource.data.updated_at is string;
       allow delete: if false;
     }
