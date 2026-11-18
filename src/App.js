@@ -52193,11 +52193,354 @@ function OdScrambleCal({ jobs, upcoming = [], identity, prefs, savePrefs, onOpen
 function odMtgAt(iso) { const d = new Date(iso); if (isNaN(d)) return ""; return d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }); }
 const odMtgPhotoUrl = (u) => { try { const x = new URL(String(u || "")); return x.protocol === "https:" && x.hostname === "firebasestorage.googleapis.com" ? x.href : null; } catch (_) { return null; } };
 const OD_CED_SHEET = "https://docs.google.com/spreadsheets/d/160vZ86F38-DpaDwW5JSDJt6DFsh1Qo-Zie8wGY9dYCA/edit";
+// v652: the Job Costs tab, pulled out of OfficeDash so the Foreman Meeting can show the very same view.
+// embed (Foreman Meeting): foreman view forced on (percentages and hours, no dollars), Active jobs first, a slim
+// header, and per-job lines under each job in the table: embed.rowExtra(job) and embed.hidden (Simpro #s hidden).
+function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, onOpenJob, embed = null }) {
+  const now = useMemo(() => new Date(), []); // eslint-disable-line
+  // ── Job Costs tab (v564): settings/phaseCosts (phaseCostsNightly) is read when the tab opens or
+  // Refresh is pressed; an opened job's cost centers come from its settings/phaseCostsCc<N> shard.
+  // The what-if switches and the picked person live only on this page — nothing here writes.
+  const [costsDoc, setCostsDoc] = useState(undefined);     // undefined = loading, null = no pull yet, else the doc
+  const [costsGoals, setCostsGoals] = useState(null);      // settings/goalsSimpro — Josh's jobs (v566)
+  const [costsTick, setCostsTick] = useState(0);
+  const [costsPull, setCostsPull] = useState("");          // "" | "busy" | the last pull's result line
+  const [costsCc, setCostsCc] = useState({});              // shard index → { simproNo: cost centers } | "err"
+  const [cm, setCm] = useState("hrs");                     // hrs | mat | lab | margin
+  const [cStage, setCStage] = useState(embed ? "active" : "all");             // all | active | done (Invoiced)
+  const [cRole, setCRole] = useState("people");            // v572: people (by title, each name once) | crew
+  const [cWho, setCWho] = useState(null);                  // { role, person } picked in the rail
+  const [cOff, setCOff] = useState(() => new Set());       // Simpro #s switched off for a what-if
+  const [cSel, setCSel] = useState(null);                  // the opened job's Simpro #
+  const [cQ, setCQ] = useState("");
+  const [cSort, setCSort] = useState(null);                // { k, dir } — null = the tab's default order
+  useEffect(() => {
+    let dead = false;
+    getDoc(doc(db, "settings", "phaseCosts")).then(snap => { if (!dead) { setCostsDoc(snap.exists() ? (snap.data() || null) : null); setCostsCc({}); } }, () => { if (!dead) setCostsDoc(null); });
+    getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setCostsGoals(snap.exists() ? (snap.data() || null) : null); }, () => {});
+    return () => { dead = true; };
+  }, [costsTick]);
+  const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
+  useEffect(() => {
+    if (costShard == null || costsCc[costShard]) return undefined;
+    let dead = false;
+    getDoc(doc(db, "settings", "phaseCostsCc" + costShard)).then(snap => { if (!dead) setCostsCc(m => ({ ...m, [costShard]: snap.exists() ? ((snap.data() || {}).jobs || {}) : "err" })); },
+      () => { if (!dead) setCostsCc(m => ({ ...m, [costShard]: "err" })); });
+    return () => { dead = true; };
+  }, [costShard]); // eslint-disable-line
+  const costsView = useMemo(() => {
+    const rows = costsDoc && Array.isArray(costsDoc.rows) ? odCostsJoin(costsDoc.rows, jobs, costsGoals && costsGoals.jobs) : [];
+    const joshJob = (j) => !!(j.josh && j.josh.counts);
+    const inStage = (j) => cStage === "all" || (cStage === "josh" ? joshJob(j) : !joshJob(j) && j.status !== "Invoiced");
+    const ownerOf = (j, role) => j[role] || (role === "foreman" ? "No technician" : "No lead");
+    // v571: a crew pick keeps the crew's jobs (technician's crew, else lead's); a person pick keeps every job they run as technician or lead.
+    const crewsInfo = odCrews(users);
+    const mine = (j) => !cWho ? true : cWho.role === "crew" ? ((c) => c ? c.key === cWho.key : cWho.key === "__nocrew")(crewsInfo.crewOfJob(j)) : cWho.role === "person" ? (sameName(j.foreman, cWho.person) || (sameName(j.lead, cWho.person) && !crewsInfo.crewOf(j.foreman))) : ownerOf(j, cWho.role) === cWho.person;
+    const staged = rows.filter(inStage), counted = staged.filter(j => !cOff.has(j.no));
+    return { rows, staged, mine, ownerOf,
+      company: odCostsSummary(staged),                       // every job in this stage — the cited number
+      boxes: odCostsSummary(counted.filter(mine)),           // the picked person's, less switched-off jobs
+      crew: cRole === "crew" ? odCostsByCrew(staged, crewsInfo) : odCostsPeople(staged, users), crewWi: cOff.size ? (cRole === "crew" ? odCostsByCrew(counted, crewsInfo) : odCostsPeople(counted, users)) : null,
+      pct: new Map(rows.map(j => [j.no, odCostsJobPct(j)])) };
+  }, [costsDoc, costsGoals, jobs, users, cStage, cWho, cOff, cRole]);
+  // v564: every cost center (base bid and change orders) split item by item into rough / finish;
+  // credit and finished-job margins by Josh's rule (v566); margins weighted, plain average beside.
+  const v = costsView, s = v.boxes, co = v.company, isM = cm === "margin";
+  // v569 Foreman view: percentages and hours only. The sell columns, the $ used / estimate columns and the
+  // "$12k of $15k" lines come off; Materials and Labor show as a share of the estimate; margin % stays (Koy's pick).
+  const noM = fview || !!embed;   // v652: the Foreman Meeting always shows the foreman view
+  const moneyCol = (k) => noM && (isM ? /_sell$/.test(k) : cm !== "hrs" && !/_pct$/.test(k));
+  const scoped = !!cWho || cOff.size > 0;
+  const NOUN = { hrs: "hours", mat: "materials", lab: "labor" }, USED = { hrs: "used", mat: "spent", lab: "spent" };
+  const uKey = (m) => m === "hrs" ? "hrsUsed" : m + "Act";
+  const f$ = (x) => x == null ? "—" : "$" + Math.round(x).toLocaleString();
+  const fk = (x) => x == null ? "—" : Math.abs(x) >= 10000 ? "$" + Math.round(x / 1000).toLocaleString() + "k" : f$(x);
+  const fh = (x) => x == null ? "—" : Math.round(x).toLocaleString();
+  const fv = (m, x) => m === "hrs" ? fh(x) : f$(x);
+  const fvk = (m, x) => m === "hrs" ? fh(x) : fk(x);
+  const fp = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
+  const mC = (x) => x == null ? OD_GREY : x < 0 ? OD_R : x < OD_COST_GOAL ? OD_O : OD_G;
+  const fmtAt = (iso) => { const t = odDate(iso); return t ? `${odDow(t)} ${odTime(t)}` : "—"; };
+  // v626: how old the rows really are. The header time is only the last run; each row carries its own
+  // pulledAt (an invoiced job is re-read once a week), and nothing warned when the nightly pull stopped.
+  const costsAge = (() => {
+    const rows = (costsDoc && Array.isArray(costsDoc.rows)) ? costsDoc.rows : [], gen = odDate(costsDoc && costsDoc.generated_at);
+    if (!gen) return { note: "", old: false };
+    const at = (r) => odDate(r && r.pulledAt);
+    if (now - gen > 36 * 3600 * 1000) return { old: true, note: `The nightly pull has not run since ${odShort(gen)}.` };
+    const stuck = rows.filter(r => { const t = at(r); return t && now - t > 8 * OD_DAY; }).length;
+    if (stuck) return { old: true, note: `${odPlural(stuck, "job")} not re-read in over 8 days.` };
+    const earlier = rows.filter(r => { const t = at(r); return t && gen - t > 12 * 3600 * 1000; }).length;
+    return { old: false, note: earlier ? `${earlier} of ${rows.length} jobs were last read before that (invoiced jobs are re-read once a week).` : "" };
+  })();
+  const pullNow = async () => {
+    if (costsPull === "busy") return;
+    if (!window.confirm("Pull every job's cost centers from Simpro now? Read-only. The first pull takes several runs of up to 9 minutes; after that about a minute.")) return;
+    setCostsPull("busy");
+    try {
+      const r = await httpsCallable(functions, "sendTestPhaseCosts", { timeout: 540000 })({});
+      const x = r && r.data;
+      if (x && x.ok) { setCostsPull(`Pulled ${x.refreshed} jobs · ${x.jobs} on the tab${x.pending ? ` · ${x.pending} still to pull — press again or wait for tonight` : ""} · ${x.seconds}s`); setCostsTick(t => t + 1); }
+      else setCostsPull(`Pull failed: ${(x && x.error) || "unknown"}`);
+    } catch (e) { setCostsPull(`Pull failed: ${(e && e.message) || e}`); }
+  };
+  const seg = (val, set, opts, label) => (
+    <div className="jc-seg" role="group" aria-label={label}>{opts.map(([k, l]) => <button type="button" key={k} aria-pressed={val === k} onClick={() => set(k)}>{l}</button>)}</div>);
+  const hintCo = (txt) => scoped ? `Company, every job: ${txt}` : null;
+  const joshYear = (costsGoals && costsGoals.year) || new Date().getFullYear();
+  const PH_LIVE = cStage === "active";                                     // open jobs have no Josh numbers yet
+  const PH = (sum, p) => PH_LIVE ? sum[p + "Live"] : sum[p];
+  // v567 look (Koy picked it from three mockups): the Panel Schedule — steel, white label strips, red / blue
+  // wire for rough / finish, green ground for Josh's whole job, hi-vis orange tags for anything over — with the
+  // Night Shift chart (glowing dots on a dark panel) set into it. Every class here is jc-*, scoped to this tab.
+  const fu = (m) => m === "hrs" ? " h" : "";
+  const tag = (bad, text) => <span className={`jc-tag${bad ? " over" : " ok"}`}>{text}</span>;
+  const coLine = (txt) => scoped ? <small className="jc-co">Company, every job: {txt}</small> : null;
+  const phaseBox = (p) => {
+    const pct = s[`${p}_${cm}_pct`], over = s[`${p}_${cm}_over`], st = s[`${p}_started`];
+    return { key: p, wire: p === "rough" ? "r" : "f", title: `${p === "rough" ? "Rough" : "Finish"} ${NOUN[cm]}`, big: fp(pct), unit: "of estimate",
+      sub: noM && cm !== "hrs" ? "" : `${fvk(cm, s[`${p}_${cm}_used`])}${fu(cm)} of ${fvk(cm, s[`${p}_${cm}_est`])}${fu(cm)}`, tag: tag(over > 0, over ? `${over} of ${st} over` : `none of ${st} over`),
+      co: coLine(`${fp(co[`${p}_${cm}_pct`])}, ${co[`${p}_${cm}_over`]} of ${co[`${p}_started`]} over`) };
+  };
+  const fp1 = (x) => x == null ? "—" : `${(Math.round(x * 1000) / 10).toFixed(1)}%`;   // margins to a tenth, as the Goals tab shows them
+  const marginBox = (key, wire, title, m, cm0, note) => ({ key, wire, title, big: fp1(m.w), unit: key === "whole" ? "goal 15%" : "weighted",
+    sub: m.n ? `${m.n} ${note}, avg ${fp1(m.avg)}` : (PH_LIVE && key === "whole" ? "Finished jobs only: switch to All jobs or Invoiced" : "No jobs yet"),
+    tag: m.n ? tag(m.under > 0, `${m.under} under 15%`) : null, co: coLine(`${fp1(cm0.w)}, ${cm0.under} of ${cm0.n} under 15%`) });
+  const wholeBox = marginBox("whole", "g", "Whole job margin, Josh's numbers", s.whole, co.whole, `jobs invoiced in full ${joshYear}`);
+  const tiles = isM ? [wholeBox,
+    marginBox("rough", "r", `Rough margin${PH_LIVE ? ", open jobs" : ""}`, PH(s, "rough"), PH(co, "rough"), PH_LIVE ? "open jobs past rough" : "of Josh's jobs"),
+    marginBox("finish", "f", `Finish margin${PH_LIVE ? ", open jobs" : ""}`, PH(s, "finish"), PH(co, "finish"), PH_LIVE ? "open jobs at punch list or later" : "of Josh's jobs")]
+    : [phaseBox("rough"), phaseBox("finish"), wholeBox];
+  // The job table: the picked person's jobs in this stage; every job stays listed so it can be switched back on.
+  const q = cQ.trim().toLowerCase();
+  const coHrs = cm === "hrs" ? odCostsCoHours(costsGoals) : null;
+  const fh1 = (x) => x == null ? "—" : (Math.round(x * 10) / 10).toLocaleString();
+  const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q))
+    .filter(j => !(embed && embed.hidden && embed.hidden.has(String(j.no))))   // v652: jobs hidden in the Foreman Meeting
+    .map(j => coHrs ? { ...j, co_hrs: coHrs.has(String(j.no)) ? coHrs.get(String(j.no)) : null } : j);
+  const cols = (isM ? [
+    ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)],
+    ["rough_mAct", "Rough margin so far", "r", "mEst", "Rough sell less what has been spent and committed on rough, every cost center. Under it: the margin the estimate expected."],
+    ["finish_sell", "Finish sell", "f", (j) => fk(j.finish_sell)],
+    ["finish_mAct", "Finish margin so far", "f", "mEst", "Finish sell less what has been spent and committed on finish, every cost center. Under it: the margin the estimate expected."],
+    ["all_mAct", "Whole job", "", null],
+  ] : [
+    [`rough_${uKey(cm)}`, `Rough ${USED[cm]} / est`, "r", (j) => <>{fv(cm, j[`rough_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`rough_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on rough / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
+    [`rough_${cm}_pct`, "Rough %", "r", "bar"],
+    [`finish_${uKey(cm)}`, `Finish ${USED[cm]} / est`, "f", (j) => <>{fv(cm, j[`finish_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`finish_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on finish / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
+    [`finish_${cm}_pct`, "Finish %", "f", "bar"],
+  ]).filter(c => !moneyCol(c[0]))
+    // v583: hours booked to the job's own change-order cost centers, from the Goals pull's Phase 2; the column
+    // is not there until that pull has run. (The "Untagged est" column came off in the same audit.)
+    .concat(coHrs ? [["co_hrs", "CO hrs, own CC", "n", (j) => j.co_hrs == null ? "–" : <>{fh1(j.co_hrs)}<span className="dim"> h</span></>, "Hours booked to this job's own change-order cost centers (Simpro company cost center \"… - Change Order\"), from the nightly Goals pull. 0 means the job has change-order cost centers with no hours booked yet; – means it has none."]] : []);
+  const valOf = (j, k) => (k in j ? j[k] : (v.pct.get(j.no) || {})[k]);
+  const sort = cSort || (isM ? { k: "rough_profit", dir: 1 } : { k: `rough_${cm}_overBy`, dir: -1 });   // worst first
+  list.sort((a, b) => { const x = valOf(a, sort.k), y = valOf(b, sort.k); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir; });
+  const th = (k, l, cls, title) => (
+    <th key={k} className={cls} title={title} aria-sort={sort.k === k ? (sort.dir > 0 ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => setCSort(sort.k === k ? { k, dir: -sort.dir } : { k, dir: k === "name" || k === "foremanShown" || k === "status" ? 1 : -1 })}>{l}</button></th>);
+  const bar = (x) => x == null ? <span className="jc-dim">–</span> : <span className={`jc-pct${x > 1 ? " over" : ""}`}>{fp(x)}</span>;
+  const margin = (x) => x == null ? <span className="jc-dim">not started</span> : <span className={`jc-pct${x < OD_COST_GOAL ? " over" : " good"}`}>{fp(x)}</span>;
+  const toggle = (no) => setCOff(prev => { const n = new Set(prev); if (n.has(no)) n.delete(no); else n.add(no); return n; });
+  const ccs = cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
+  // Foreman view: a cost center's share of the sell going to each phase (Margin), or what's used as a share of its estimate.
+  const ccPct = (a, b) => b > 0 ? fp((a || 0) / b) : "–";
+  const ccCols = noM && isM ? [["rough_sh", "To rough", "r", (c) => ccPct(c.rough_sell, c.sell)], ["finish_sh", "To finish", "f", (c) => ccPct(c.finish_sell, c.sell)], ["other_sh", "Untagged", "n", (c) => ccPct(c.other_sell, c.sell)]]
+    : noM && cm !== "hrs" ? [["rough_p", `Rough % ${USED[cm]}`, "r", (c) => ccPct(c[`rough_${uKey(cm)}`], c[`rough_${cm}`])], ["finish_p", `Finish % ${USED[cm]}`, "f", (c) => ccPct(c[`finish_${uKey(cm)}`], c[`finish_${cm}`])]]
+    : isM ? [["sell", "Sell"], ["rough_sell", "To rough", "r"], ["finish_sell", "To finish", "f"], ["other_sell", "Untagged", "n"]]
+    : [[`rough_${cm}`, "Rough est", "r"], [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r"], [`finish_${cm}`, "Finish est", "f"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f"], [`other_${cm}`, "Untagged est", "n"]];
+  const detail = (j) => (
+    <tr className="jc-det"><td colSpan={4 + cols.length}>
+      <div className="jc-det-h"><b>{j.name}</b><span>Each cost center's estimate split item by item; what was {isM ? "sold" : USED[cm]} on a cost center splits the same way as its estimate.</span>
+        {j.jobId ? <button type="button" className="jc-btn" onClick={() => onOpenJob && onOpenJob((jobs || []).find(x => x.id === j.jobId))}>Open job</button> : null}</div>
+      {costShard == null ? <div className="jc-empty">No cost centers saved for this job yet.</div>
+        : costsCc[costShard] === "err" ? <div className="jc-empty">The cost centers could not be read. Press Refresh.</div>
+        : !ccs ? <div className="jc-empty">Reading cost centers…</div>
+        : <div className="jc-scroll"><table className="jc-cct">
+            <thead><tr><th className="l">Section</th><th className="l">Cost center</th><th className="l n">Type</th>{ccCols.map(([k, l, c]) => <th key={k} className={c}>{l}</th>)}</tr></thead>
+            <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job"><b>{c.cc}</b><small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n jc-dim">{c.type || "–"}</td>
+              {ccCols.map(([k, , cl, fn]) => <td key={k} className={cl}>{fn ? fn(c) : c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
+    </td></tr>);
+  const wiOf = (r) => { const w = v.crewWi || []; return (cRole === "crew" ? w : w.flatMap(x => x.people)).find(x => x.person === r.person) || null; };
+  const personVal = (r) => isM ? r.whole.w : r[`rough_${cm}_pct`];
+  const sortP = (a, b) => { const x = personVal(a), y = personVal(b); if (x == null && y == null) return b.jobs - a.jobs; if (x == null) return 1; if (y == null) return -1; return isM ? x - y : y - x; };
+  const crewRows = cRole === "crew" ? v.crew.slice().sort(sortP) : [];
+  // "Where every job stands" (Koy liked it on the artifact): each job's rough (red wire) and finish (blue wire) on
+  // one scale — share of estimate, or margin so far — biggest overrun (or $ lost) first, as the table sorts; the value
+  // turns orange when over / under 15%.
+  const cLo = isM ? -0.6 : 0, cHi = isM ? 0.8 : 2.5, cRef = isM ? OD_COST_GOAL : 1;
+  const cTicks = isM ? [-0.5, -0.25, 0, 0.25, 0.5, 0.75] : [0, 0.5, 1, 1.5, 2, 2.5];
+  const cPos = (x) => `${Math.min(Math.max((x - cLo) / (cHi - cLo), 0), 1) * 100}%`;
+  const cBad = (x) => x != null && (isM ? x < OD_COST_GOAL : x > 1);
+  const chartRows = list.map(j => { const p = v.pct.get(j.no) || {};
+    const r = isM ? p.rough_mAct : p[`rough_${cm}_pct`];
+    const f = isM ? p.finish_mAct : ((j[`finish_${uKey(cm)}`] || 0) > 0 ? p[`finish_${cm}_pct`] : null);
+    return { j, r, f, k: isM ? p.rough_profit : p[`rough_${cm}_overBy`] }; }).filter(x => x.r != null && (isM ? (x.j.josh && x.j.josh.counts) || OD_COST_DONE.rough.includes(x.j.status) : (x.j[`rough_${uKey(cm)}`] || 0) > 0))
+    .sort((a, b) => isM ? (a.k == null) - (b.k == null) || a.k - b.k : (b.k || 0) - (a.k || 0));   // like the table: most hours / $ over, or most $ lost, first
+  const openFromChart = (no) => { setCSel(no); setTimeout(() => { const el = document.getElementById(`cost-job-${no}`); if (el) el.scrollIntoView({ block: "center", behavior: "smooth" }); }, 60); };
+  const chart = (
+    <section className="jc-sec" id="cost-chart">
+      <h3 className="jc-h">Where every job stands<span className="jc-key"><i className="r"/>Rough<i className="f"/>Finish</span></h3>
+      <p className="jc-cap">{isM
+        ? "Margin so far, rough and finish, every cost center. The dashed line is the 15% goal. Tap a job to see its cost centers."
+        : `${NOUN[cm][0].toUpperCase() + NOUN[cm].slice(1)} ${USED[cm]} as a share of the estimate from every cost center, jobs with rough logged. The light line is 100%. Tap a job to see its cost centers.`}</p>
+      {!chartRows.length ? <div className="jc-night"><div className="jc-empty dark">No jobs to chart.</div></div> : <div className="jc-night">
+        <div className="jc-ax"><span/><span className="jc-tr">{cTicks.map(t => <em key={t} className={(isM ? [-0.5, 0, 0.5] : [0, 1, cHi]).includes(t) ? "" : "mn"} style={{ left: cPos(t) }}>{t === cHi && !isM ? "≥" : ""}{Math.round(t * 100)}%</em>)}</span><span/></div>
+        <div className="jc-rows">{chartRows.map(({ j, r, f }) => (
+          <button type="button" key={j.no} className={`jc-crow${cOff.has(j.no) ? " off" : ""}${cSel === j.no ? " on" : ""}`} onClick={() => openFromChart(j.no)}
+            title={`${j.name} · #${j.no}\nRough: ${fp(r)}\nFinish: ${f == null ? "not started" : fp(f)}${cOff.has(j.no) ? "\nSwitched off: left out of the totals" : ""}`}>
+            <span className="nm">{j.name}</span>
+            <span className="jc-tr">
+              {cTicks.map(t => <b key={t} className="g" style={{ left: cPos(t) }}/>)}
+              <b className={`ref${isM ? " goal" : ""}`} style={{ left: cPos(cRef) }}/>
+              {f != null ? <i className="jc-dot f" style={{ left: cPos(f) }}/> : null}
+              <i className="jc-dot r" style={{ left: cPos(r) }}/>
+            </span>
+            <span className={`val${cBad(r) ? " bad" : ""}`}>{fp(r)}</span>
+          </button>))}</div>
+      </div>}
+    </section>);
+  const pending = costsDoc && costsDoc.counts && costsDoc.counts.pending;
+  const howList = (<>
+          <li>Every cost center on the job counts: the base bid and every change order.</li>
+          <li>An item ending "(Rough In)" goes to rough, "(Finish)" to finish. Its hours, materials, labor and sell price go with it. An item with neither follows its cost center's type; a cost center with no phase (Change Order, Generators) is untagged.</li>
+          <li>Simpro's total for each cost center is the budget; items only decide how it splits. A credit comes off its phase.</li>
+          <li>Spending is recorded per cost center, so it splits the same way as that cost center's estimate. Spent dollars include committed (ordered, scheduled), as Simpro's margin does.</li>
+          <li>Margins are weighted (big jobs count more); the plain average of each job's margin is beside it.</li>
+          <li>Josh's rule, the same as the Goals tab: a job is credited to its Simpro technician (the first one listed). A finished job counts when it has a customer invoice dated this year, is invoiced in full and has costs posted; its whole-job margin is Simpro's net profit ÷ contract, summed over those jobs. Rough and finish margins are the item split on those same jobs; on Active, they are open jobs past that phase, so far.</li>
+          <li>Jobs: Simpro's in progress and complete, the invoiced jobs still on the Job Board, and every job Josh's rule counts this year. Pulled nightly; read-only.</li>
+          <li>Open jobs already past rough hours (the fold at the top): open jobs whose rough hours used are past the rough estimate from every cost center, most hours over first; the names are the job's foreman and lead on the Job Board.</li>
+          <li>CO hrs, own CC (Hours, once the Goals pull's Phase 2 has run): hours booked to the job's own change-order cost centers in Simpro. 0 means the job has change-order cost centers with nothing booked; – means it has none.</li>
+  </>);
+  return (<div className={"jc" + (embed ? " jc-emb" : "")}>
+    {embed ? <div className="jc-embh"><span>The Job Costs page, foreman view: percentages and hours.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}{costsAge.note ? <b style={{ color: costsAge.old ? OD_R : "inherit" }}>{" " + costsAge.note}</b> : null}</span>
+      <button type="button" className="jc-btn dark" onClick={() => setCostsTick(t => t + 1)}>Refresh</button></div> :
+    <header className="jc-top">
+      <img src="/hs-logo-white.png" alt="Homestead Electric"/>
+      <div className="jc-title"><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split into rough and finish. Credit and finished-job margins follow Josh's rule.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}{costsAge.note ? <b style={{ color: costsAge.old ? OD_R : "inherit", fontWeight: costsAge.old ? 700 : 400 }}>{" " + costsAge.note}</b> : null}</p></div>
+      <div className="jc-act">
+        <button type="button" className="jc-btn dark" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
+        {canOpenDash(identity) && !noM ? <button type="button" className="jc-btn hv" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
+      </div>
+    </header>}
+    <div className="jc-body">
+    {costsPull && costsPull !== "busy" ? <div className="jc-note">{costsPull}</div> : null}
+    {costsDoc === undefined ? <div className="jc-empty">Reading the last Simpro pull…</div>
+    : !costsDoc ? <div className="jc-lbl"><h4>No Simpro pull yet</h4><p className="jc-cap">The nightly pull runs at 2:15, 3:15 and 4:15 AM. Press Pull from Simpro now to start it.</p></div>
+    : <>
+      {pending ? <div className="jc-note">{pending} jobs still to pull from Simpro. They show after the next run.</div> : null}
+      <div className="jc-ctl">
+        {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", noM ? "Labor" : "Labor $"], ["margin", "Margin"]], "What to compare")}
+        {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["josh", `Invoiced ${joshYear} (Josh)`]], "Which jobs")}
+      </div>
+      {(() => {   // v583 early warning: open jobs already past their rough hours, most hours over first (folded, count on the header)
+        const ov = odCostsRoughOverruns(v.rows), team = (users || []).filter(u => u && u.active !== false);
+        if (!ov.all.length) return null;
+        const who = (r) => odCostsOwners(r, team, owns).map(odFirst).join(" · ") || "No one on the board";
+        const ovRow = (r) => (
+          <tr key={r.no} className="jc-ovr" onClick={() => { setCm("hrs"); openFromChart(r.no); }}>
+            <td className="l job"><b>{r.name}</b><small>#{r.no} · {r.status || "—"}</small></td>
+            <td className="l n">{who(r)}</td>
+            <td className="r">{fh(r.used)}<span className="dim"> / {fh(r.est)} h</span></td>
+            <td className="r"><span className="jc-tag over">{fh(r.over)} h over</span></td>
+            <td className="r"><span className="jc-pct over">{fp(r.pct)}</span></td>
+          </tr>);
+        const ovTable = (rows) => (<div className="jc-scroll"><table className="jc-tbl jc-ov"><thead><tr><th className="l">Job</th><th className="l n">Foreman · lead</th><th className="r">Rough used / est</th><th className="r">Over by</th><th className="r">Of estimate</th></tr></thead><tbody>{rows.map(ovRow)}</tbody></table></div>);
+        return (
+          <details className="jc-fold warn">
+            <summary><b>Open jobs already past rough hours</b><span className="jc-cnt">{ov.all.length}</span><small>top five by hours over · rough hours from every cost center · tap a job for its cost centers</small></summary>
+            <div className="jc-fold-b">
+              {ovTable(ov.top)}
+              {ov.rest.length ? <details className="jc-fold inner"><summary><b>Show all</b><span className="jc-cnt">{ov.all.length}</span><small>{ov.rest.length} more</small></summary><div className="jc-fold-b">{ovTable(ov.rest)}</div></details> : null}
+            </div>
+          </details>);
+      })()}
+      {cWho ? <div className="jc-spot"><div><small>{cWho.role === "crew" ? "Crew, every job its people are credited with" : cWho.role === "person" ? "On the crew, their credited jobs" : "Credited jobs, Simpro technician"}</small><b>{cWho.person}</b></div>
+        <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
+        <button type="button" className="jc-btn hv" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
+      {cOff.size ? <details className="jc-fold wi">   {/* v583: the what-if panel folds; the Count switches in the table still drive it */}
+        <summary><b>What-if</b><span className="jc-cnt">{cOff.size}</span><small>{cOff.size === 1 ? "job" : "jobs"} switched off · the boxes and the people list leave {cOff.size === 1 ? "it" : "them"} out · nothing in Simpro or the app changes</small></summary>
+        <div className="jc-fold-b jc-wi"><span>{v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}</span>
+          <button type="button" className="jc-btn dark" onClick={() => setCOff(new Set())}>Turn all back on</button></div>
+      </details> : null}
+      <div className="jc-hero">{tiles.map(x => (
+        <div key={x.key} className={`jc-lbl w-${x.wire}`}>
+          <h4>{x.title}</h4>
+          <div className="jc-big">{x.big}<small>{x.unit}</small></div>
+          <div className="jc-sub">{x.sub}{x.tag}</div>
+          {x.co}
+        </div>))}</div>
+      <section className="jc-sec">
+        <h3 className="jc-h">{cRole === "crew" ? "By crew" : "By person"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["people", "People"], ["crew", "Crew"]], "Group by")}</h3>
+        <p className="jc-cap">{cRole === "crew" ? "A crew is a foreman and everyone under him on Settings › Team; a job counts once, in its technician's crew, else its lead's. " : "Every name once, in the section of their title on Settings › Team, with the jobs credited to them (the Simpro technician, Josh's rule). "}{isM ? "Whole-job margin on Josh's jobs, rough beside." : `Rough ${NOUN[cm]} ${USED[cm]} as a share of the estimate.`} Tap a {cRole === "crew" ? "crew, then a person," : "name"} to see their numbers.</p>
+        {cRole !== "crew" ? v.crew.map(sec => (<Fragment key={sec.key}>
+          <h4 className="jc-sub">{sec.label}<small>{sec.people.length}</small></h4>
+          <div className="jc-ppl">{sec.people.slice().sort(sortP).map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === "foreman" && cWho.person === r0.person;
+            const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
+            const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
+            return (
+              <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: "foreman", person: r0.person }); setCSel(null); }}>
+                <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{r0.title && r0.title !== sec.key ? ` · ${r0.title}` : ""}{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
+                <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b>
+                  <small>{isM ? `avg ${fp(r.whole.avg)}, rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? `, all jobs ${fp(was)}` : ""}</small></span>
+              </button>); })}</div>
+        </Fragment>)) : null}
+        <div className="jc-ppl">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
+          const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
+          const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
+          return (
+            <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : (cRole === "crew" ? { role: "crew", key: r0.crew ? r0.crew.key : "__nocrew", person: r0.person } : { role: cRole, person: r0.person })); setCSel(null); }}>
+              <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{cRole === "crew" && r0.crew ? ` · ${r0.crew.people.length === 1 ? "alone" : r0.crew.people.map(odFirst).join(", ")}` : ""}{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
+              <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b>
+                <small>{isM ? `avg ${fp(r.whole.avg)}, rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? `, all jobs ${fp(was)}` : ""}</small></span>
+            </button>); })}</div>
+        {cRole === "crew" && cWho && (cWho.role === "crew" || cWho.crewPerson) ? (() => { const g = v.crew.find(x => x.person === (cWho.role === "crew" ? cWho.person : cWho.crewPerson)); if (!g || !g.people.length) return null;
+          return (<><p className="jc-cap" style={{ marginTop: 10 }}>{g.person}: one row per person, the jobs credited to them, plus a job they lead whose technician is on no crew. Each job once.</p>
+            <div className="jc-ppl">{g.people.map(p => { const on = !!cWho && cWho.role === "person" && cWho.person === p.person; const val = isM ? p.whole.w : p[`rough_${cm}_pct`]; const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
+              return (<button type="button" key={p.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? { role: "crew", key: g.crew ? g.crew.key : "__nocrew", person: g.person } : { role: "person", person: p.person, crewPerson: g.person }); setCSel(null); }}>
+                <span className="nm"><b>{p.person}</b><small>{p.title === "foreman" ? "foreman" : p.title === "jrforeman" ? "jr. foreman" : p.title} · {p.jobs} jobs · {p.asTech} credited{p.asLead ? `, ${p.asLead} via lead` : ""}</small></span>
+                <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b><small>{isM ? `avg ${fp(p.whole.avg)}, rough ${fp(p.rough.w)}` : `finish ${fp(p[`finish_${cm}_pct`])}`}</small></span>
+              </button>); })}</div></>); })() : null}
+      </section>
+      {chart}
+      <section className="jc-sec">
+        <h3 className="jc-h">{isM ? "Every job, margin by phase" : `Every job, ${NOUN[cm]}`}</h3>
+        <p className="jc-cap">{isM
+          ? "Margin is sell less what's been spent and committed, over sell, across every cost center. Orange is under the 15% goal. Flip Count off to leave a job out."
+          : "Est is the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on. Orange is over the estimate. Flip Count off to leave a job out."}</p>
+        <input className="jc-q" type="search" value={cQ} onChange={e => setCQ(e.target.value)} placeholder="Search jobs, technicians, leads" aria-label="Search jobs"/>
+        <div className="jc-scroll tall"><table className="jc-tbl">
+          <thead><tr><th className="l">Count</th>{th("name", "Job", "l")}{th("foremanShown", "Technician", "l n", "The job's Simpro technician, who gets credit under Josh's rule (the Goals tab's). Change it on the job in Simpro.")}{th("status", "Status", "l n")}
+            {cols.map(([k, l, cls, , title]) => th(k, l, cls, title))}</tr></thead>
+          <tbody>{list.map(j => { const p = v.pct.get(j.no) || {}, off = cOff.has(j.no), open = cSel === j.no;
+            return (<Fragment key={j.no}>
+              <tr id={`cost-job-${j.no}`} className={`${off ? "off" : ""}${open ? " open" : ""}`} onClick={() => setCSel(open ? null : j.no)}>
+                <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" className="jc-brk" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
+                <td className="l job"><b>{j.name}</b><small>#{j.no}{j.site ? `, ${j.site}` : ""}</small>{embed && embed.rowExtra ? <div className="jc-mx" onClick={e => e.stopPropagation()}>{embed.rowExtra(j)}</div> : null}</td>
+                <td className={`l n fm${j.foreman ? "" : " jc-dim"}`}>{j.foremanShown}{j.lead && !sameName(j.lead, j.foreman) ? <small className="ld">lead {odFirst(j.lead)}</small> : null}</td>
+                <td className="l n"><span className="jc-st">{j.status || "—"}</span></td>
+                {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k]) : typeof fmt === "function" ? fmt(j)
+                  : fmt === "mEst" ? <>{margin(p[k])}<small className="jc-subv">est {fp(p[k.replace("_mAct", "_mEst")])}</small></> : margin(p[k])}</td>)}
+              </tr>
+              {open ? detail(j) : null}
+            </Fragment>); })}
+            {!list.length ? <tr><td colSpan={4 + cols.length}><div className="jc-empty">No jobs match.</div></td></tr> : null}</tbody></table></div>
+      </section>
+      <section className="jc-sec jc-how">
+        {embed ? <details className="jc-fold"><summary><b>How it is counted</b></summary><ul>{howList}</ul></details> : <>
+        <h3 className="jc-h">How it is counted</h3>
+        <ul>{howList}</ul></>}
+      </section>
+    </>}
+    </div>
+  </div>);
+}
 function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, flags, onOpenJob, onGoTab }) {
   const M = MeetingModel;
   const me = (identity && identity.name) || "";
   // v649: which meeting (Weekly Scramble / Weekly Lead Meeting), remembered on this device.
-  const [kind, setKindRaw] = useState(() => { try { return localStorage.getItem("he_mtg_kind") === "lead" ? "lead" : "scramble"; } catch (_) { return "scramble"; } });
+  const [kind, setKindRaw] = useState(() => { try { const k = localStorage.getItem("he_mtg_kind"); return k === "lead" || k === "foreman" ? k : "scramble"; } catch (_) { return "scramble"; } });
+  const wed = kind !== "scramble";   // v652: the Lead and Foreman Meetings (Wednesdays) share the Lead's ways
   const cfg = M.CFG[kind];
   const thisWeek = M.meetingDate(new Date(), kind);
   const [week, setWeek] = useState(thisWeek);
@@ -52234,7 +52577,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   }, [mid]); // eslint-disable-line
   useEffect(() => { setPrefs(null); return onSnapshot(doc(db, "meetings", prefsId), s => setPrefs(s.exists() ? s.data() : {}), () => setPrefs({})); }, [prefsId]);
   useEffect(() => {
-    if (kind !== "lead") return undefined;
+    if (!wed) return undefined;
     let dead = false;
     // v650: settings/simproTotals (dailySimproTotals, weekdays 6:15) is Simpro's own job margin and status,
     // the number the margin watch reads; settings/phaseCosts is the Job Costs page's rough / finish split.
@@ -52243,8 +52586,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         totals: (t && typeof t.byNo === "object" && t.byNo) || {}, totalsAt: String((t && t.at) || ""),
         requests: Array.isArray(r.list) ? r.list : [], pto: Array.isArray(p.list) ? p.list : [] }); });
     return () => { dead = true; };
-  }, [kind]);
+  }, [kind]); // eslint-disable-line
   useEffect(() => {
+    if (kind === "foreman") { setSched([]); return undefined; }   // v652: the Foreman Meeting has no schedule
     let dead = false; setSched(undefined);
     const r = kind === "lead" ? M.leadRange(week) : M.weekRange(week, cfg.weeks);   // v650: Lead runs meeting day to Friday
     httpsCallable(functions, "getSimproSchedule")({ dateFrom: r.from, dateTo: r.to }).then(
@@ -52267,7 +52611,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     miss.forEach(no => fetchSimproJobBasics(no).then(b => { if (!dead && b && b.name) setSimNames(m => ({ ...m, [no]: String(b.name).trim() })); }, () => {}));
     return () => { dead = true; };
   }, [kind, sched, jobs, leadSrc.costs]); // eslint-disable-line
-  const S = useMemo(() => kind === "lead"
+  const S = useMemo(() => kind === "foreman"
+    ? M.buildForemanSections({ jobs, users, costs: leadSrc.costs, totals: leadSrc.totals, effFS })
+    : kind === "lead"
     ? M.buildLeadSections({ jobs, needs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], costs: leadSrc.costs, totals: leadSrc.totals, names: simNames,
         users, requests: leadSrc.requests, pto: leadSrc.pto, today: new Date(), meeting: week, effRS, effFS })
     : M.buildSections({ jobs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], today: new Date(), effRS, effFS }),
@@ -52304,7 +52650,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     (isTyped(sec) ? saveMtg : savePrefs)({ added: { [id()]: item } });
     setAddFor(a => ({ ...a, [sec]: "" }));
   };
-  const isTyped = (sec) => kind === "lead" && M.TYPED.includes(sec);
+  const isTyped = (sec) => wed && M.TYPED.includes(sec);
   const removeAdded = (aid, sec) => (isTyped(sec) ? saveMtg : savePrefs)({ added: { [aid]: deleteField() } });
   // v649: photos on Highlight / Lowlight items, stored like My Day task photos (same path helper,
   // same JPEG shrink); the meeting doc keeps the link under rowPhotos.<row>.<photo>.
@@ -52340,7 +52686,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     if (!a.who) return;
     const mtg = onMeeting || mid;
     const nid = M.needIdFor(mtg, aid), t = nowIso();
-    const need = NeedShape.buildNeed({ kind: "task", text: `${a.text} (${kind === "lead" ? "Lead Meeting" : "Scramble"} ${mtg.replace(/^[a-z]+_/, "")})`, dueDate: a.due || "", assignedTo: a.who, dueBucket: "week" }, me, t, nid);
+    const need = NeedShape.buildNeed({ kind: "task", text: `${a.text} (${kind === "lead" ? "Lead Meeting" : kind === "foreman" ? "Foreman Meeting" : "Scramble"} ${mtg.replace(/^[a-z]+_/, "")})`, dueDate: a.due || "", assignedTo: a.who, dueBucket: "week" }, me, t, nid);
     need.meetingId = mtg; need.meetingActionId = aid;
     try {
       await setDoc(doc(db, "needs", nid), stampWrite({ data: need, updated_at: t, saved_by: me }));
@@ -52366,7 +52712,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
 
   const md = mdoc || {};
   // Who an action item can go to: the Scramble's four; for the Lead Meeting, Koy plus every active foreman, jr. foreman and lead.
-  const people = kind === "lead"
+  const people = wed
     ? Array.from(new Set(["Koy Wilkinson", ...(users || []).filter(u => u && u.active !== false && /^(foreman|jrforeman|lead)$/.test(String(u.title || "")) && u.access !== "contractor").map(u => u.name).filter(Boolean)]))
     : M.ATTENDEES;
   const fmtDue = (s) => { const d = M.parseYmd(s); return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" }) : ""; };
@@ -52452,6 +52798,47 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       </table></div>
     );
   };
+  // v652 (Koy: "section 2 should be straight from the job cost tab in the dashboard, the foreman view of it"):
+  // the Foreman Meeting's Jobs section is the Job Costs page itself (OdJobCosts, foreman view forced on), with
+  // this week's + Note lines and Hide under each job. Notes and hides use the key "w_<Simpro #>".
+  const costKey = (j) => "w_" + String(j.no).replace(/[^A-Za-z0-9_-]/g, "_");
+  const costHidden = new Set(Object.entries(((prefs && prefs.hidden) || {}).jobs || {}).filter(([k, h]) => h && /^w_/.test(k)).map(([k]) => k.slice(2)));
+  const costExtra = (j) => {
+    const key = costKey(j), title = `#${j.no} ${j.name || ""}`.trim();
+    const notes = Object.entries((md.rowNotes || {})[key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
+    return (<>
+      {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(key, nid)}>Remove</button> : null}</li>)}</ul> : null}
+      {!ro ? (noteFor === key ? (
+        <div className="mt-inl">
+          <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={`Note on ${j.name}…`} aria-label={`Note on ${j.name}`}
+            onKeyDown={e => { if (e.key === "Enter") addRowNote(key); if (e.key === "Escape") setNoteFor(null); }}/>
+          <button type="button" className="mt-btn" onClick={() => addRowNote(key)}>Save</button>
+        </div>
+      ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(key); setNoteText(""); }}>+ Note</button>
+        <button type="button" className="mt-lnk dim" onClick={() => hideRow("jobs", { key, title })}>Hide</button></div>) : null}
+    </>);
+  };
+  const jobsView = () => <OdJobCosts jobs={jobs} users={users} identity={identity} onOpenJob={onOpenJob} embed={{ hidden: costHidden, rowExtra: costExtra }}/>;
+  // v652: Guys, each foreman's crew with a line on how each is doing (this week's meeting record, guys.<id>).
+  const typeGuy = (uid, v) => {
+    setDrafts(d => ({ ...d, ["guy_" + uid]: v }));
+    clearTimeout(timers.current["guy_" + uid]);
+    timers.current["guy_" + uid] = setTimeout(() => saveMtg({ guys: { [uid]: { text: v, by: me, at: nowIso() } } }), 900);
+  };
+  const guysView = (rows) => {
+    let last = null;
+    return rows.map(r => {
+      const head = r.group !== last ? (last = r.group, <div className="mt-day" key={"d_" + r.key}>{M.firstOf(r.group)}'s crew</div>) : null;
+      const saved = ((md.guys || {})[r.uid] || {}).text || "";
+      const val = drafts["guy_" + r.uid] != null ? drafts["guy_" + r.uid] : saved;
+      return [head, (
+        <div className="mt-guy" key={r.key}>
+          <div><b>{r.title}</b>{r.detail ? <small>{r.detail}</small> : null}</div>
+          {ro ? <div className="mt-guyv">{saved || <span className="mt-dim">Nothing written</span>}</div>
+            : <input id={"mt-guy-" + r.uid} value={val} onChange={e => typeGuy(r.uid, e.target.value)} placeholder={`How is ${M.firstOf(r.title)} doing?`} aria-label={`How ${r.title} is doing`}/>}
+        </div>)];
+    });
+  };
   // v650: the Lead schedule, a heading a day (meeting day to Friday) with each booked job and its crew.
   const scheduleView = (sec, rows) => {
     let last = null;
@@ -52495,13 +52882,14 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   // v650: the Lead sections Koy cut still show, last, for a week that has something typed in them.
   const secList = kind === "lead" ? cfg.secs.concat(M.LEAD_OLD.filter(([k]) => M.secHasContent(md, k))) : cfg.secs;
   const sections = secList.map(([sec, label], i) => {
-    const typed = kind === "lead" && M.TYPED.includes(sec);
+    const typed = wed && M.TYPED.includes(sec);
     const base = sec === "nextsteps" ? [] : (S[sec] || []);
     const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, typed ? { hidden: (prefs && prefs.hidden) || {}, added: md.added || {} } : prefs);
     const hid = ((prefs && prefs.hidden) || {})[sec] || {};
     const hiddenRows = Object.entries(hid).filter(([, h]) => h).map(([k, h]) => ({ key: k, title: (base.find(r => r.key === k) || {}).title || (h && h.title) || k }));
-    const n = sec === "nextsteps" ? carried.length : kind === "lead" && sec === "schedule" ? new Set(rows.filter(r => !r.empty).map(r => r.no || r.key)).size : rows.length;
-    const nNotes = Object.keys(md.rowNotes || {}).filter(k => rows.some(r => r.key === k)).reduce((s, k) => s + Object.values(md.rowNotes[k] || {}).filter(x => x && x.text).length, 0)
+    const costsSec = kind === "foreman" && sec === "jobs";   // v652: the Job Costs page, not a row list
+    const n = costsSec ? null : sec === "nextsteps" ? carried.length : kind === "lead" && sec === "schedule" ? new Set(rows.filter(r => !r.empty).map(r => r.no || r.key)).size : rows.length;
+    const nNotes = Object.keys(md.rowNotes || {}).filter(k => costsSec ? /^w_/.test(k) : rows.some(r => r.key === k)).reduce((s, k) => s + Object.values(md.rowNotes[k] || {}).filter(x => x && x.text).length, 0)
       + (String((md.notes || {})[sec] || "").trim() ? 1 : 0);
     const nActs = Object.values(md.actions || {}).filter(a => a && a.sec === sec && a.text).length;
     let badge = "";
@@ -52517,12 +52905,16 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       if (sec === "upcoming") { const k = rows.filter(r => /d past$/.test(r.tag || "")).length; badge = k ? `${k} past due` : ""; }
       if (sec === "hours") { const k = rows.filter(r => r.over).length; badge = k ? `${k} over bid` : ""; }
     }
+    if (kind === "foreman") {
+      badge = "";
+      if (sec === "nextsteps") { const k = carried.filter(c => c.status !== "done").length; badge = n ? (k ? `${k} not done` : "all done") : ""; }
+    }
     const isOpen = open.has(sec);
     const noteVal = drafts[sec] != null ? drafts[sec] : ((md.notes || {})[sec] || "");
     return (
       <section className="od-fold od-white mt-sec" key={sec}>
         <button type="button" className="od-foldh" aria-expanded={isOpen} onClick={() => toggle(sec)}>
-          <span className="mt-num">{i + 1}</span>{label}<span className="n">{n}</span>
+          <span className="mt-num">{i + 1}</span>{label}{n != null ? <span className="n">{n}</span> : null}
           {badge ? <span className={"mt-bdg" + (/not booked|need|not done|to order|past due|over bid/.test(badge) ? " warn" : "")}>{badge}</span> : null}
           {nNotes || nActs ? <small>{[nNotes ? `${nNotes} note${nNotes > 1 ? "s" : ""}` : "", nActs ? `${nActs} action item${nActs > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · ")}</small> : null}
           <small className="tog">{isOpen ? "Hide" : "Show"}</small>
@@ -52533,6 +52925,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
             {kind === "lead" && sec === "schedule" ? <div className="mt-src">Booked in Simpro, the meeting day to Friday, with the crew on each job. + Note on a job to add a line under it.</div> : null}
             {kind === "lead" && sec === "upcoming" ? <div className="mt-src">Rough and finish starts in Command Center and the Upcoming list, six weeks out.</div> : null}
             {kind === "lead" && sec === "hours" ? <div className="mt-src">Every active job, by foreman, worst total margin first. Rough and finish net margin from the Job Costs page{leadSrc.costsAt ? " (" + odMtgAt(leadSrc.costsAt) + ")" : ""}; total margin and status straight from Simpro{leadSrc.totalsAt ? " (" + odMtgAt(leadSrc.totalsAt) + ")" : ""}. A phase shows "not started" until it has 10% of its bid hours. Flags: over is past the bid, close is 90% or more. Percentages only.</div> : null}
+            {kind === "foreman" && sec === "team" ? <div className="mt-src">This week's notes on the team: morale, wins and problems. Type "#1291" to tie one to a job.</div> : null}
+            {costsSec ? <div className="mt-src">The Job Costs page in its foreman view, the same numbers the dashboard shows: percentages and hours, no dollars. + Note under a job adds a line to this week's meeting; Hide takes it off this list.</div> : null}
+            {kind === "foreman" && sec === "guys" ? <div className="mt-src">Each foreman's crew from Settings › Team. A line on how each is doing this week.</div> : null}
             {kind === "lead" && sec === "crewout" ? <div className="mt-src">Field crew time off in the next six weeks, approved and asked for.</div> : null}
             {sec === "schedule" && sched === null ? <div className="mt-empty warn">Couldn't read Simpro bookings right now; jobs show without days.</div> : null}
             {sec === "watches" ? <div className="mt-src">{kind === "lead" ? "Open Needs-you flags from the Asks watch and the Crew schedule watch, oldest first, then My Day asks to Koy from someone else." : "Open Needs-you flags from the Job issues watch and the CC and Simpro sync check."} <button type="button" className="mt-lnk" onClick={() => onGoTab && onGoTab("claude")}>Answer them in the Claude tab ›</button></div> : null}
@@ -52550,15 +52945,15 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
                   <div className="mt-rt">{c.status ? <span className={"mt-pill " + (c.status === "done" ? "ok" : "bad")}>{c.status === "done" ? "Done" : "Not done"}</span> : null}</div>
                 </div>
               )) : <div className="mt-empty">Nothing carried from {prevDate.slice(5).replace("-", "/")}.</div>
-            ) : (rows.length ? (kind === "lead" && sec === "hours" ? hoursView(sec, rows) : kind === "lead" && sec === "schedule" ? scheduleView(sec, rows) : rows.map(r => rowView(sec, r)))
-              : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : kind === "lead" && sec === "hours" && !leadSrc.costs.length ? "Reading the Job Costs pull…" : "Nothing here this week."}</div>)}
+            ) : costsSec ? jobsView() : (rows.length ? (kind === "foreman" && sec === "guys" ? guysView(rows) : kind === "lead" && sec === "hours" ? hoursView(sec, rows) : kind === "lead" && sec === "schedule" ? scheduleView(sec, rows) : rows.map(r => rowView(sec, r)))
+              : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : sec === "hours" && wed && !leadSrc.costs.length ? "Reading the Job Costs pull…" : "Nothing here this week."}</div>)}
             {sec !== "nextsteps" && hiddenRows.length ? (
               <div className="mt-hid">
                 <button type="button" className="mt-lnk dim" onClick={() => setShowHidden(h => ({ ...h, [sec]: !h[sec] }))}>{hiddenRows.length} hidden · {showHidden[sec] ? "close" : "show"}</button>
                 {showHidden[sec] ? hiddenRows.map(h => <div key={h.key} className="mt-hidr"><span>{h.title}</span>{!ro ? <button type="button" className="mt-lnk" onClick={() => unhideRow(sec, h.key)}>Unhide</button> : null}</div>) : null}
               </div>
             ) : null}
-            {sec !== "nextsteps" && !ro ? (
+            {sec !== "nextsteps" && !ro && !(kind === "foreman" && (sec === "guys" || sec === "jobs")) ? (
               <div className="mt-add one">
                 <input list="mt-joblist" value={addFor[sec] || ""} onChange={e => setAddFor(a => ({ ...a, [sec]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addItem(sec); }}
                   placeholder="Add a job or item to this section…" aria-label={`Add to ${label}`}/>
@@ -52576,7 +52971,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     );
   });
 
-  const seedWeek = kind === "lead" ? "2026-11-11" : "2026-11-10";
+  const seedWeek = kind === "lead" ? "2026-11-11" : kind === "foreman" ? thisWeek : "2026-11-10";
   const weekOpts = Array.from(new Set([thisWeek, seedWeek, ...weeks])).filter(w => w <= thisWeek).sort().reverse();
   return (
     <div className="od-mtg">
@@ -52594,6 +52989,11 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         .od-mtg .mt-tbl .mt-fl{font-weight:700;font-size:12.5px;min-width:200px}
         .od-mtg .mt-tbl .mt-tot{font-size:15px}
         .od-mtg .mt-dim{color:var(--cdim)}
+        .od-mtg .mt-tbl8{min-width:860px}
+        .od-mtg .mt-guy{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--cline)}
+        .od-mtg .mt-guy small{display:block;color:var(--cdim);font-size:12px}
+        .od-mtg .mt-guy input{width:100%;box-sizing:border-box}
+        @media (max-width:560px){.od-mtg .mt-guy{grid-template-columns:1fr}}
         .od-mtg .mt-file{position:relative;overflow:hidden;cursor:pointer}.od-mtg .mt-file input{position:absolute;inset:0;opacity:0;cursor:pointer}
         .od-mtg .mt-ph{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.od-mtg .mt-ph span{position:relative}
         .od-mtg .mt-ph img{width:88px;height:66px;object-fit:cover;border-radius:8px;border:1px solid var(--cline);display:block}
@@ -52658,7 +53058,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           .od-mtg .mt-add{grid-template-columns:1fr 1fr}.od-mtg .mt-add>input:first-child{grid-column:1 / -1}.od-mtg .mt-act{grid-template-columns:1fr}.od-mtg .mt-wk{margin-left:0}}
       `}</style>
       <div className="mt-pick" role="group" aria-label="Meeting">
-        {[["scramble", "Weekly Scramble · Tue 4:00"], ["lead", "Lead Meeting · Wed 6:30"]].map(([k, l]) => <button type="button" key={k} aria-pressed={kind === k} onClick={() => k !== kind && setKind(k)}>{l}</button>)}
+        {[["scramble", "Weekly Scramble · Tue 4:00"], ["lead", "Lead Meeting · Wed 6:30"], ["foreman", "Foreman Meeting · Wed 7:00"]].map(([k, l]) => <button type="button" key={k} aria-pressed={kind === k} onClick={() => k !== kind && setKind(k)}>{l}</button>)}
       </div>
       <div className="mt-head">
         <div>
@@ -52667,7 +53067,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         </div>
         <label className="mt-wk">Meeting week
           <select value={week} onChange={e => setWeek(e.target.value)} aria-label="Meeting week">
-            {weekOpts.map(w => <option key={w} value={w}>{(kind === "lead" ? "Wed " : "Tue ") + w.slice(5).replace("-", "/") + (w === thisWeek ? " · this week" : " · read only")}</option>)}
+            {weekOpts.map(w => <option key={w} value={w}>{(wed ? "Wed " : "Tue ") + w.slice(5).replace("-", "/") + (w === thisWeek ? " · this week" : " · read only")}</option>)}
           </select>
         </label>
       </div>
@@ -52880,29 +53280,6 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
     getDoc(doc(db, "settings", "scoreboardCompleted")).then(snap => { if (!dead) setGoalsSb(snap.exists() ? { prog: (snap.data() || {}).prog || [] } : null); }, () => {});
     return () => { dead = true; };
   }, [tab, goalsTick]);
-  // ── Job Costs tab (v564): settings/phaseCosts (phaseCostsNightly) is read when the tab opens or
-  // Refresh is pressed; an opened job's cost centers come from its settings/phaseCostsCc<N> shard.
-  // The what-if switches and the picked person live only on this page — nothing here writes.
-  const [costsDoc, setCostsDoc] = useState(undefined);     // undefined = loading, null = no pull yet, else the doc
-  const [costsGoals, setCostsGoals] = useState(null);      // settings/goalsSimpro — Josh's jobs (v566)
-  const [costsTick, setCostsTick] = useState(0);
-  const [costsPull, setCostsPull] = useState("");          // "" | "busy" | the last pull's result line
-  const [costsCc, setCostsCc] = useState({});              // shard index → { simproNo: cost centers } | "err"
-  const [cm, setCm] = useState("hrs");                     // hrs | mat | lab | margin
-  const [cStage, setCStage] = useState("all");             // all | active | done (Invoiced)
-  const [cRole, setCRole] = useState("people");            // v572: people (by title, each name once) | crew
-  const [cWho, setCWho] = useState(null);                  // { role, person } picked in the rail
-  const [cOff, setCOff] = useState(() => new Set());       // Simpro #s switched off for a what-if
-  const [cSel, setCSel] = useState(null);                  // the opened job's Simpro #
-  const [cQ, setCQ] = useState("");
-  const [cSort, setCSort] = useState(null);                // { k, dir } — null = the tab's default order
-  useEffect(() => {
-    if (tab !== "costs") return undefined;
-    let dead = false;
-    getDoc(doc(db, "settings", "phaseCosts")).then(snap => { if (!dead) { setCostsDoc(snap.exists() ? (snap.data() || null) : null); setCostsCc({}); } }, () => { if (!dead) setCostsDoc(null); });
-    getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setCostsGoals(snap.exists() ? (snap.data() || null) : null); }, () => {});
-    return () => { dead = true; };
-  }, [tab, costsTick]);
   // ── Claude tab (2026-11-04): what Claude Duet did — every change in Simpro and Command Center,
   // and (Koy only) the messages it checked. Read through the admin-PIN callable claudeActivity
   // (duet_writes + claude_activity are server-only). Until that function is deployed the tab
@@ -53007,29 +53384,6 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       .catch(() => { if (!dead) setClaudeRuns(null); });
     return () => { dead = true; };
   }, [tab, claudeTick]);
-  const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
-  useEffect(() => {
-    if (tab !== "costs" || costShard == null || costsCc[costShard]) return undefined;
-    let dead = false;
-    getDoc(doc(db, "settings", "phaseCostsCc" + costShard)).then(snap => { if (!dead) setCostsCc(m => ({ ...m, [costShard]: snap.exists() ? ((snap.data() || {}).jobs || {}) : "err" })); },
-      () => { if (!dead) setCostsCc(m => ({ ...m, [costShard]: "err" })); });
-    return () => { dead = true; };
-  }, [tab, costShard]); // eslint-disable-line
-  const costsView = useMemo(() => {
-    const rows = costsDoc && Array.isArray(costsDoc.rows) ? odCostsJoin(costsDoc.rows, jobs, costsGoals && costsGoals.jobs) : [];
-    const joshJob = (j) => !!(j.josh && j.josh.counts);
-    const inStage = (j) => cStage === "all" || (cStage === "josh" ? joshJob(j) : !joshJob(j) && j.status !== "Invoiced");
-    const ownerOf = (j, role) => j[role] || (role === "foreman" ? "No technician" : "No lead");
-    // v571: a crew pick keeps the crew's jobs (technician's crew, else lead's); a person pick keeps every job they run as technician or lead.
-    const crewsInfo = odCrews(users);
-    const mine = (j) => !cWho ? true : cWho.role === "crew" ? ((c) => c ? c.key === cWho.key : cWho.key === "__nocrew")(crewsInfo.crewOfJob(j)) : cWho.role === "person" ? (sameName(j.foreman, cWho.person) || (sameName(j.lead, cWho.person) && !crewsInfo.crewOf(j.foreman))) : ownerOf(j, cWho.role) === cWho.person;
-    const staged = rows.filter(inStage), counted = staged.filter(j => !cOff.has(j.no));
-    return { rows, staged, mine, ownerOf,
-      company: odCostsSummary(staged),                       // every job in this stage — the cited number
-      boxes: odCostsSummary(counted.filter(mine)),           // the picked person's, less switched-off jobs
-      crew: cRole === "crew" ? odCostsByCrew(staged, crewsInfo) : odCostsPeople(staged, users), crewWi: cOff.size ? (cRole === "crew" ? odCostsByCrew(counted, crewsInfo) : odCostsPeople(counted, users)) : null,
-      pct: new Map(rows.map(j => [j.no, odCostsJobPct(j)])) };
-  }, [costsDoc, costsGoals, jobs, users, cStage, cWho, cOff, cRole]);
   const [appl, setAppl] = useState(undefined);   // undefined = loading, { rows } or { err }
   const [applTick, setApplTick] = useState(0);
   useEffect(() => {
@@ -54131,293 +54485,8 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       </div>
     </>);
   } else if (tab === "costs") {
-    // v564: every cost center (base bid and change orders) split item by item into rough / finish;
-    // credit and finished-job margins by Josh's rule (v566); margins weighted, plain average beside.
-    const v = costsView, s = v.boxes, co = v.company, isM = cm === "margin";
-    // v569 Foreman view: percentages and hours only. The sell columns, the $ used / estimate columns and the
-    // "$12k of $15k" lines come off; Materials and Labor show as a share of the estimate; margin % stays (Koy's pick).
-    const noM = fview;
-    const moneyCol = (k) => noM && (isM ? /_sell$/.test(k) : cm !== "hrs" && !/_pct$/.test(k));
-    const scoped = !!cWho || cOff.size > 0;
-    const NOUN = { hrs: "hours", mat: "materials", lab: "labor" }, USED = { hrs: "used", mat: "spent", lab: "spent" };
-    const uKey = (m) => m === "hrs" ? "hrsUsed" : m + "Act";
-    const f$ = (x) => x == null ? "—" : "$" + Math.round(x).toLocaleString();
-    const fk = (x) => x == null ? "—" : Math.abs(x) >= 10000 ? "$" + Math.round(x / 1000).toLocaleString() + "k" : f$(x);
-    const fh = (x) => x == null ? "—" : Math.round(x).toLocaleString();
-    const fv = (m, x) => m === "hrs" ? fh(x) : f$(x);
-    const fvk = (m, x) => m === "hrs" ? fh(x) : fk(x);
-    const fp = (x) => x == null ? "—" : `${Math.round(x * 100)}%`;
-    const mC = (x) => x == null ? OD_GREY : x < 0 ? OD_R : x < OD_COST_GOAL ? OD_O : OD_G;
-    const fmtAt = (iso) => { const t = odDate(iso); return t ? `${odDow(t)} ${odTime(t)}` : "—"; };
-    // v626: how old the rows really are. The header time is only the last run; each row carries its own
-    // pulledAt (an invoiced job is re-read once a week), and nothing warned when the nightly pull stopped.
-    const costsAge = (() => {
-      const rows = (costsDoc && Array.isArray(costsDoc.rows)) ? costsDoc.rows : [], gen = odDate(costsDoc && costsDoc.generated_at);
-      if (!gen) return { note: "", old: false };
-      const at = (r) => odDate(r && r.pulledAt);
-      if (d.now - gen > 36 * 3600 * 1000) return { old: true, note: `The nightly pull has not run since ${odShort(gen)}.` };
-      const stuck = rows.filter(r => { const t = at(r); return t && d.now - t > 8 * OD_DAY; }).length;
-      if (stuck) return { old: true, note: `${odPlural(stuck, "job")} not re-read in over 8 days.` };
-      const earlier = rows.filter(r => { const t = at(r); return t && gen - t > 12 * 3600 * 1000; }).length;
-      return { old: false, note: earlier ? `${earlier} of ${rows.length} jobs were last read before that (invoiced jobs are re-read once a week).` : "" };
-    })();
-    const pullNow = async () => {
-      if (costsPull === "busy") return;
-      if (!window.confirm("Pull every job's cost centers from Simpro now? Read-only. The first pull takes several runs of up to 9 minutes; after that about a minute.")) return;
-      setCostsPull("busy");
-      try {
-        const r = await httpsCallable(functions, "sendTestPhaseCosts", { timeout: 540000 })({});
-        const x = r && r.data;
-        if (x && x.ok) { setCostsPull(`Pulled ${x.refreshed} jobs · ${x.jobs} on the tab${x.pending ? ` · ${x.pending} still to pull — press again or wait for tonight` : ""} · ${x.seconds}s`); setCostsTick(t => t + 1); }
-        else setCostsPull(`Pull failed: ${(x && x.error) || "unknown"}`);
-      } catch (e) { setCostsPull(`Pull failed: ${(e && e.message) || e}`); }
-    };
-    const seg = (val, set, opts, label) => (
-      <div className="jc-seg" role="group" aria-label={label}>{opts.map(([k, l]) => <button type="button" key={k} aria-pressed={val === k} onClick={() => set(k)}>{l}</button>)}</div>);
-    const hintCo = (txt) => scoped ? `Company, every job: ${txt}` : null;
-    const joshYear = (costsGoals && costsGoals.year) || new Date().getFullYear();
-    const PH_LIVE = cStage === "active";                                     // open jobs have no Josh numbers yet
-    const PH = (sum, p) => PH_LIVE ? sum[p + "Live"] : sum[p];
-    // v567 look (Koy picked it from three mockups): the Panel Schedule — steel, white label strips, red / blue
-    // wire for rough / finish, green ground for Josh's whole job, hi-vis orange tags for anything over — with the
-    // Night Shift chart (glowing dots on a dark panel) set into it. Every class here is jc-*, scoped to this tab.
-    const fu = (m) => m === "hrs" ? " h" : "";
-    const tag = (bad, text) => <span className={`jc-tag${bad ? " over" : " ok"}`}>{text}</span>;
-    const coLine = (txt) => scoped ? <small className="jc-co">Company, every job: {txt}</small> : null;
-    const phaseBox = (p) => {
-      const pct = s[`${p}_${cm}_pct`], over = s[`${p}_${cm}_over`], st = s[`${p}_started`];
-      return { key: p, wire: p === "rough" ? "r" : "f", title: `${p === "rough" ? "Rough" : "Finish"} ${NOUN[cm]}`, big: fp(pct), unit: "of estimate",
-        sub: noM && cm !== "hrs" ? "" : `${fvk(cm, s[`${p}_${cm}_used`])}${fu(cm)} of ${fvk(cm, s[`${p}_${cm}_est`])}${fu(cm)}`, tag: tag(over > 0, over ? `${over} of ${st} over` : `none of ${st} over`),
-        co: coLine(`${fp(co[`${p}_${cm}_pct`])}, ${co[`${p}_${cm}_over`]} of ${co[`${p}_started`]} over`) };
-    };
-    const fp1 = (x) => x == null ? "—" : `${(Math.round(x * 1000) / 10).toFixed(1)}%`;   // margins to a tenth, as the Goals tab shows them
-    const marginBox = (key, wire, title, m, cm0, note) => ({ key, wire, title, big: fp1(m.w), unit: key === "whole" ? "goal 15%" : "weighted",
-      sub: m.n ? `${m.n} ${note}, avg ${fp1(m.avg)}` : (PH_LIVE && key === "whole" ? "Finished jobs only: switch to All jobs or Invoiced" : "No jobs yet"),
-      tag: m.n ? tag(m.under > 0, `${m.under} under 15%`) : null, co: coLine(`${fp1(cm0.w)}, ${cm0.under} of ${cm0.n} under 15%`) });
-    const wholeBox = marginBox("whole", "g", "Whole job margin, Josh's numbers", s.whole, co.whole, `jobs invoiced in full ${joshYear}`);
-    const tiles = isM ? [wholeBox,
-      marginBox("rough", "r", `Rough margin${PH_LIVE ? ", open jobs" : ""}`, PH(s, "rough"), PH(co, "rough"), PH_LIVE ? "open jobs past rough" : "of Josh's jobs"),
-      marginBox("finish", "f", `Finish margin${PH_LIVE ? ", open jobs" : ""}`, PH(s, "finish"), PH(co, "finish"), PH_LIVE ? "open jobs at punch list or later" : "of Josh's jobs")]
-      : [phaseBox("rough"), phaseBox("finish"), wholeBox];
-    // The job table: the picked person's jobs in this stage; every job stays listed so it can be switched back on.
-    const q = cQ.trim().toLowerCase();
-    const coHrs = cm === "hrs" ? odCostsCoHours(costsGoals) : null;
-    const fh1 = (x) => x == null ? "—" : (Math.round(x * 10) / 10).toLocaleString();
-    const list = v.staged.filter(v.mine).filter(j => !q || `${j.name} ${j.site} ${j.no} ${j.status} ${j.foremanShown} ${j.lead}`.toLowerCase().includes(q))
-      .map(j => coHrs ? { ...j, co_hrs: coHrs.has(String(j.no)) ? coHrs.get(String(j.no)) : null } : j);
-    const cols = (isM ? [
-      ["rough_sell", "Rough sell", "r", (j) => fk(j.rough_sell)],
-      ["rough_mAct", "Rough margin so far", "r", "mEst", "Rough sell less what has been spent and committed on rough, every cost center. Under it: the margin the estimate expected."],
-      ["finish_sell", "Finish sell", "f", (j) => fk(j.finish_sell)],
-      ["finish_mAct", "Finish margin so far", "f", "mEst", "Finish sell less what has been spent and committed on finish, every cost center. Under it: the margin the estimate expected."],
-      ["all_mAct", "Whole job", "", null],
-    ] : [
-      [`rough_${uKey(cm)}`, `Rough ${USED[cm]} / est`, "r", (j) => <>{fv(cm, j[`rough_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`rough_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on rough / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
-      [`rough_${cm}_pct`, "Rough %", "r", "bar"],
-      [`finish_${uKey(cm)}`, `Finish ${USED[cm]} / est`, "f", (j) => <>{fv(cm, j[`finish_${uKey(cm)}`])}<span className="dim"> / {fv(cm, j[`finish_${cm}Est`])}</span></>, `${USED[cm] === "used" ? "Used" : "Spent"} on finish / the estimate from every cost center (base bid and every change order). Sorts by ${USED[cm]}.`],
-      [`finish_${cm}_pct`, "Finish %", "f", "bar"],
-    ]).filter(c => !moneyCol(c[0]))
-      // v583: hours booked to the job's own change-order cost centers, from the Goals pull's Phase 2; the column
-      // is not there until that pull has run. (The "Untagged est" column came off in the same audit.)
-      .concat(coHrs ? [["co_hrs", "CO hrs, own CC", "n", (j) => j.co_hrs == null ? "–" : <>{fh1(j.co_hrs)}<span className="dim"> h</span></>, "Hours booked to this job's own change-order cost centers (Simpro company cost center \"… - Change Order\"), from the nightly Goals pull. 0 means the job has change-order cost centers with no hours booked yet; – means it has none."]] : []);
-    const valOf = (j, k) => (k in j ? j[k] : (v.pct.get(j.no) || {})[k]);
-    const sort = cSort || (isM ? { k: "rough_profit", dir: 1 } : { k: `rough_${cm}_overBy`, dir: -1 });   // worst first
-    list.sort((a, b) => { const x = valOf(a, sort.k), y = valOf(b, sort.k); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir; });
-    const th = (k, l, cls, title) => (
-      <th key={k} className={cls} title={title} aria-sort={sort.k === k ? (sort.dir > 0 ? "ascending" : "descending") : "none"}>
-        <button type="button" onClick={() => setCSort(sort.k === k ? { k, dir: -sort.dir } : { k, dir: k === "name" || k === "foremanShown" || k === "status" ? 1 : -1 })}>{l}</button></th>);
-    const bar = (x) => x == null ? <span className="jc-dim">–</span> : <span className={`jc-pct${x > 1 ? " over" : ""}`}>{fp(x)}</span>;
-    const margin = (x) => x == null ? <span className="jc-dim">not started</span> : <span className={`jc-pct${x < OD_COST_GOAL ? " over" : " good"}`}>{fp(x)}</span>;
-    const toggle = (no) => setCOff(prev => { const n = new Set(prev); if (n.has(no)) n.delete(no); else n.add(no); return n; });
-    const ccs = cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
-    // Foreman view: a cost center's share of the sell going to each phase (Margin), or what's used as a share of its estimate.
-    const ccPct = (a, b) => b > 0 ? fp((a || 0) / b) : "–";
-    const ccCols = noM && isM ? [["rough_sh", "To rough", "r", (c) => ccPct(c.rough_sell, c.sell)], ["finish_sh", "To finish", "f", (c) => ccPct(c.finish_sell, c.sell)], ["other_sh", "Untagged", "n", (c) => ccPct(c.other_sell, c.sell)]]
-      : noM && cm !== "hrs" ? [["rough_p", `Rough % ${USED[cm]}`, "r", (c) => ccPct(c[`rough_${uKey(cm)}`], c[`rough_${cm}`])], ["finish_p", `Finish % ${USED[cm]}`, "f", (c) => ccPct(c[`finish_${uKey(cm)}`], c[`finish_${cm}`])]]
-      : isM ? [["sell", "Sell"], ["rough_sell", "To rough", "r"], ["finish_sell", "To finish", "f"], ["other_sell", "Untagged", "n"]]
-      : [[`rough_${cm}`, "Rough est", "r"], [`rough_${uKey(cm)}`, `Rough ${USED[cm]}`, "r"], [`finish_${cm}`, "Finish est", "f"], [`finish_${uKey(cm)}`, `Finish ${USED[cm]}`, "f"], [`other_${cm}`, "Untagged est", "n"]];
-    const detail = (j) => (
-      <tr className="jc-det"><td colSpan={4 + cols.length}>
-        <div className="jc-det-h"><b>{j.name}</b><span>Each cost center's estimate split item by item; what was {isM ? "sold" : USED[cm]} on a cost center splits the same way as its estimate.</span>
-          {j.jobId ? <button type="button" className="jc-btn" onClick={() => goApp((jobs || []).find(x => x.id === j.jobId))}>Open job</button> : null}</div>
-        {costShard == null ? <div className="jc-empty">No cost centers saved for this job yet.</div>
-          : costsCc[costShard] === "err" ? <div className="jc-empty">The cost centers could not be read. Press Refresh.</div>
-          : !ccs ? <div className="jc-empty">Reading cost centers…</div>
-          : <div className="jc-scroll"><table className="jc-cct">
-              <thead><tr><th className="l">Section</th><th className="l">Cost center</th><th className="l n">Type</th>{ccCols.map(([k, l, c]) => <th key={k} className={c}>{l}</th>)}</tr></thead>
-              <tbody>{ccs.map((c, i) => <tr key={i}><td className="l">{c.s}</td><td className="l job"><b>{c.cc}</b><small>{c.items ? `${c.tagged} of ${c.items} items named rough / finish` : "no items"}</small></td><td className="l n jc-dim">{c.type || "–"}</td>
-                {ccCols.map(([k, , cl, fn]) => <td key={k} className={cl}>{fn ? fn(c) : c[k] ? (cm === "hrs" && !isM ? fh(c[k]) : f$(c[k])) : "–"}</td>)}</tr>)}</tbody></table></div>}
-      </td></tr>);
-    const wiOf = (r) => { const w = v.crewWi || []; return (cRole === "crew" ? w : w.flatMap(x => x.people)).find(x => x.person === r.person) || null; };
-    const personVal = (r) => isM ? r.whole.w : r[`rough_${cm}_pct`];
-    const sortP = (a, b) => { const x = personVal(a), y = personVal(b); if (x == null && y == null) return b.jobs - a.jobs; if (x == null) return 1; if (y == null) return -1; return isM ? x - y : y - x; };
-    const crewRows = cRole === "crew" ? v.crew.slice().sort(sortP) : [];
-    // "Where every job stands" (Koy liked it on the artifact): each job's rough (red wire) and finish (blue wire) on
-    // one scale — share of estimate, or margin so far — biggest overrun (or $ lost) first, as the table sorts; the value
-    // turns orange when over / under 15%.
-    const cLo = isM ? -0.6 : 0, cHi = isM ? 0.8 : 2.5, cRef = isM ? OD_COST_GOAL : 1;
-    const cTicks = isM ? [-0.5, -0.25, 0, 0.25, 0.5, 0.75] : [0, 0.5, 1, 1.5, 2, 2.5];
-    const cPos = (x) => `${Math.min(Math.max((x - cLo) / (cHi - cLo), 0), 1) * 100}%`;
-    const cBad = (x) => x != null && (isM ? x < OD_COST_GOAL : x > 1);
-    const chartRows = list.map(j => { const p = v.pct.get(j.no) || {};
-      const r = isM ? p.rough_mAct : p[`rough_${cm}_pct`];
-      const f = isM ? p.finish_mAct : ((j[`finish_${uKey(cm)}`] || 0) > 0 ? p[`finish_${cm}_pct`] : null);
-      return { j, r, f, k: isM ? p.rough_profit : p[`rough_${cm}_overBy`] }; }).filter(x => x.r != null && (isM ? (x.j.josh && x.j.josh.counts) || OD_COST_DONE.rough.includes(x.j.status) : (x.j[`rough_${uKey(cm)}`] || 0) > 0))
-      .sort((a, b) => isM ? (a.k == null) - (b.k == null) || a.k - b.k : (b.k || 0) - (a.k || 0));   // like the table: most hours / $ over, or most $ lost, first
-    const openFromChart = (no) => { setCSel(no); setTimeout(() => { const el = document.getElementById(`cost-job-${no}`); if (el) el.scrollIntoView({ block: "center", behavior: "smooth" }); }, 60); };
-    const chart = (
-      <section className="jc-sec" id="cost-chart">
-        <h3 className="jc-h">Where every job stands<span className="jc-key"><i className="r"/>Rough<i className="f"/>Finish</span></h3>
-        <p className="jc-cap">{isM
-          ? "Margin so far, rough and finish, every cost center. The dashed line is the 15% goal. Tap a job to see its cost centers."
-          : `${NOUN[cm][0].toUpperCase() + NOUN[cm].slice(1)} ${USED[cm]} as a share of the estimate from every cost center, jobs with rough logged. The light line is 100%. Tap a job to see its cost centers.`}</p>
-        {!chartRows.length ? <div className="jc-night"><div className="jc-empty dark">No jobs to chart.</div></div> : <div className="jc-night">
-          <div className="jc-ax"><span/><span className="jc-tr">{cTicks.map(t => <em key={t} className={(isM ? [-0.5, 0, 0.5] : [0, 1, cHi]).includes(t) ? "" : "mn"} style={{ left: cPos(t) }}>{t === cHi && !isM ? "≥" : ""}{Math.round(t * 100)}%</em>)}</span><span/></div>
-          <div className="jc-rows">{chartRows.map(({ j, r, f }) => (
-            <button type="button" key={j.no} className={`jc-crow${cOff.has(j.no) ? " off" : ""}${cSel === j.no ? " on" : ""}`} onClick={() => openFromChart(j.no)}
-              title={`${j.name} · #${j.no}\nRough: ${fp(r)}\nFinish: ${f == null ? "not started" : fp(f)}${cOff.has(j.no) ? "\nSwitched off: left out of the totals" : ""}`}>
-              <span className="nm">{j.name}</span>
-              <span className="jc-tr">
-                {cTicks.map(t => <b key={t} className="g" style={{ left: cPos(t) }}/>)}
-                <b className={`ref${isM ? " goal" : ""}`} style={{ left: cPos(cRef) }}/>
-                {f != null ? <i className="jc-dot f" style={{ left: cPos(f) }}/> : null}
-                <i className="jc-dot r" style={{ left: cPos(r) }}/>
-              </span>
-              <span className={`val${cBad(r) ? " bad" : ""}`}>{fp(r)}</span>
-            </button>))}</div>
-        </div>}
-      </section>);
-    const pending = costsDoc && costsDoc.counts && costsDoc.counts.pending;
     right = null;   // full width: the foreman list sits above the chart and the table (Koy: see the whole table at once)
-    main = (<div className="jc">
-      <header className="jc-top">
-        <img src="/hs-logo-white.png" alt="Homestead Electric"/>
-        <div className="jc-title"><h1>Job Costs</h1><p>Every cost center, base bid and change orders, split into rough and finish. Credit and finished-job margins follow Josh's rule.{costsDoc && costsDoc.generated_at ? ` Pulled ${fmtAt(costsDoc.generated_at)}.` : ""}{costsAge.note ? <b style={{ color: costsAge.old ? OD_R : "inherit", fontWeight: costsAge.old ? 700 : 400 }}>{" " + costsAge.note}</b> : null}</p></div>
-        <div className="jc-act">
-          <button type="button" className="jc-btn dark" onClick={() => setCostsTick(t => t + 1)}>Refresh</button>
-          {canOpenDash(identity) && !noM ? <button type="button" className="jc-btn hv" disabled={costsPull === "busy"} onClick={pullNow}>{costsPull === "busy" ? "Pulling…" : "Pull from Simpro now"}</button> : null}
-        </div>
-      </header>
-      <div className="jc-body">
-      {costsPull && costsPull !== "busy" ? <div className="jc-note">{costsPull}</div> : null}
-      {costsDoc === undefined ? <div className="jc-empty">Reading the last Simpro pull…</div>
-      : !costsDoc ? <div className="jc-lbl"><h4>No Simpro pull yet</h4><p className="jc-cap">The nightly pull runs at 2:15, 3:15 and 4:15 AM. Press Pull from Simpro now to start it.</p></div>
-      : <>
-        {pending ? <div className="jc-note">{pending} jobs still to pull from Simpro. They show after the next run.</div> : null}
-        <div className="jc-ctl">
-          {seg(cm, (k) => { setCm(k); setCSort(null); }, [["hrs", "Hours"], ["mat", "Materials"], ["lab", noM ? "Labor" : "Labor $"], ["margin", "Margin"]], "What to compare")}
-          {seg(cStage, setCStage, [["all", "All jobs"], ["active", "Active"], ["josh", `Invoiced ${joshYear} (Josh)`]], "Which jobs")}
-        </div>
-        {(() => {   // v583 early warning: open jobs already past their rough hours, most hours over first (folded, count on the header)
-          const ov = odCostsRoughOverruns(v.rows), team = (users || []).filter(u => u && u.active !== false);
-          if (!ov.all.length) return null;
-          const who = (r) => odCostsOwners(r, team, d.owns).map(odFirst).join(" · ") || "No one on the board";
-          const ovRow = (r) => (
-            <tr key={r.no} className="jc-ovr" onClick={() => { setCm("hrs"); openFromChart(r.no); }}>
-              <td className="l job"><b>{r.name}</b><small>#{r.no} · {r.status || "—"}</small></td>
-              <td className="l n">{who(r)}</td>
-              <td className="r">{fh(r.used)}<span className="dim"> / {fh(r.est)} h</span></td>
-              <td className="r"><span className="jc-tag over">{fh(r.over)} h over</span></td>
-              <td className="r"><span className="jc-pct over">{fp(r.pct)}</span></td>
-            </tr>);
-          const ovTable = (rows) => (<div className="jc-scroll"><table className="jc-tbl jc-ov"><thead><tr><th className="l">Job</th><th className="l n">Foreman · lead</th><th className="r">Rough used / est</th><th className="r">Over by</th><th className="r">Of estimate</th></tr></thead><tbody>{rows.map(ovRow)}</tbody></table></div>);
-          return (
-            <details className="jc-fold warn">
-              <summary><b>Open jobs already past rough hours</b><span className="jc-cnt">{ov.all.length}</span><small>top five by hours over · rough hours from every cost center · tap a job for its cost centers</small></summary>
-              <div className="jc-fold-b">
-                {ovTable(ov.top)}
-                {ov.rest.length ? <details className="jc-fold inner"><summary><b>Show all</b><span className="jc-cnt">{ov.all.length}</span><small>{ov.rest.length} more</small></summary><div className="jc-fold-b">{ovTable(ov.rest)}</div></details> : null}
-              </div>
-            </details>);
-        })()}
-        {cWho ? <div className="jc-spot"><div><small>{cWho.role === "crew" ? "Crew, every job its people are credited with" : cWho.role === "person" ? "On the crew, their credited jobs" : "Credited jobs, Simpro technician"}</small><b>{cWho.person}</b></div>
-          <span>{s.jobs} jobs{cOff.size ? " counted" : ""}. The boxes are their numbers, with the company's under each.</span>
-          <button type="button" className="jc-btn hv" onClick={() => setCWho(null)}>Show everyone</button></div> : null}
-        {cOff.size ? <details className="jc-fold wi">   {/* v583: the what-if panel folds; the Count switches in the table still drive it */}
-          <summary><b>What-if</b><span className="jc-cnt">{cOff.size}</span><small>{cOff.size === 1 ? "job" : "jobs"} switched off · the boxes and the people list leave {cOff.size === 1 ? "it" : "them"} out · nothing in Simpro or the app changes</small></summary>
-          <div className="jc-fold-b jc-wi"><span>{v.rows.filter(j => cOff.has(j.no)).map(j => j.name).join(", ")}</span>
-            <button type="button" className="jc-btn dark" onClick={() => setCOff(new Set())}>Turn all back on</button></div>
-        </details> : null}
-        <div className="jc-hero">{tiles.map(x => (
-          <div key={x.key} className={`jc-lbl w-${x.wire}`}>
-            <h4>{x.title}</h4>
-            <div className="jc-big">{x.big}<small>{x.unit}</small></div>
-            <div className="jc-sub">{x.sub}{x.tag}</div>
-            {x.co}
-          </div>))}</div>
-        <section className="jc-sec">
-          <h3 className="jc-h">{cRole === "crew" ? "By crew" : "By person"}{seg(cRole, (k) => { setCRole(k); setCWho(null); }, [["people", "People"], ["crew", "Crew"]], "Group by")}</h3>
-          <p className="jc-cap">{cRole === "crew" ? "A crew is a foreman and everyone under him on Settings › Team; a job counts once, in its technician's crew, else its lead's. " : "Every name once, in the section of their title on Settings › Team, with the jobs credited to them (the Simpro technician, Josh's rule). "}{isM ? "Whole-job margin on Josh's jobs, rough beside." : `Rough ${NOUN[cm]} ${USED[cm]} as a share of the estimate.`} Tap a {cRole === "crew" ? "crew, then a person," : "name"} to see their numbers.</p>
-          {cRole !== "crew" ? v.crew.map(sec => (<Fragment key={sec.key}>
-            <h4 className="jc-sub">{sec.label}<small>{sec.people.length}</small></h4>
-            <div className="jc-ppl">{sec.people.slice().sort(sortP).map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === "foreman" && cWho.person === r0.person;
-              const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
-              const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
-              return (
-                <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : { role: "foreman", person: r0.person }); setCSel(null); }}>
-                  <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{r0.title && r0.title !== sec.key ? ` · ${r0.title}` : ""}{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
-                  <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b>
-                    <small>{isM ? `avg ${fp(r.whole.avg)}, rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? `, all jobs ${fp(was)}` : ""}</small></span>
-                </button>); })}</div>
-          </Fragment>)) : null}
-          <div className="jc-ppl">{crewRows.map(r0 => { const r = wiOf(r0) || r0, on = !!cWho && cWho.role === cRole && cWho.person === r0.person;
-            const val = isM ? r.whole.w : r[`rough_${cm}_pct`], was = v.crewWi ? (isM ? r0.whole.w : r0[`rough_${cm}_pct`]) : null;
-            const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
-            return (
-              <button type="button" key={r0.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? null : (cRole === "crew" ? { role: "crew", key: r0.crew ? r0.crew.key : "__nocrew", person: r0.person } : { role: cRole, person: r0.person })); setCSel(null); }}>
-                <span className="nm"><b>{r0.person}</b><small>{r.jobs} jobs{cRole === "crew" && r0.crew ? ` · ${r0.crew.people.length === 1 ? "alone" : r0.crew.people.map(odFirst).join(", ")}` : ""}{isM ? `, ${r.whole.n} Josh counts` : `, ${r.rough_started} started`}</small></span>
-                <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b>
-                  <small>{isM ? `avg ${fp(r.whole.avg)}, rough ${fp(r.rough.w)}` : `finish ${fp(r[`finish_${cm}_pct`])}`}{was != null && was !== val ? `, all jobs ${fp(was)}` : ""}</small></span>
-              </button>); })}</div>
-          {cRole === "crew" && cWho && (cWho.role === "crew" || cWho.crewPerson) ? (() => { const g = v.crew.find(x => x.person === (cWho.role === "crew" ? cWho.person : cWho.crewPerson)); if (!g || !g.people.length) return null;
-            return (<><p className="jc-cap" style={{ marginTop: 10 }}>{g.person}: one row per person, the jobs credited to them, plus a job they lead whose technician is on no crew. Each job once.</p>
-              <div className="jc-ppl">{g.people.map(p => { const on = !!cWho && cWho.role === "person" && cWho.person === p.person; const val = isM ? p.whole.w : p[`rough_${cm}_pct`]; const bad = val != null && (isM ? val < OD_COST_GOAL : val > 1);
-                return (<button type="button" key={p.person} className={`jc-p${on ? " on" : ""}`} aria-pressed={on} onClick={() => { setCWho(on ? { role: "crew", key: g.crew ? g.crew.key : "__nocrew", person: g.person } : { role: "person", person: p.person, crewPerson: g.person }); setCSel(null); }}>
-                  <span className="nm"><b>{p.person}</b><small>{p.title === "foreman" ? "foreman" : p.title === "jrforeman" ? "jr. foreman" : p.title} · {p.jobs} jobs · {p.asTech} credited{p.asLead ? `, ${p.asLead} via lead` : ""}</small></span>
-                  <span className="v"><b className={val == null ? "none" : bad ? "bad" : "good"}>{fp(val)}</b><small>{isM ? `avg ${fp(p.whole.avg)}, rough ${fp(p.rough.w)}` : `finish ${fp(p[`finish_${cm}_pct`])}`}</small></span>
-                </button>); })}</div></>); })() : null}
-        </section>
-        {chart}
-        <section className="jc-sec">
-          <h3 className="jc-h">{isM ? "Every job, margin by phase" : `Every job, ${NOUN[cm]}`}</h3>
-          <p className="jc-cap">{isM
-            ? "Margin is sell less what's been spent and committed, over sell, across every cost center. Orange is under the 15% goal. Flip Count off to leave a job out."
-            : "Est is the estimate from every cost center, the base bid and every change order, not just the base cost center the work is scheduled on. Orange is over the estimate. Flip Count off to leave a job out."}</p>
-          <input className="jc-q" type="search" value={cQ} onChange={e => setCQ(e.target.value)} placeholder="Search jobs, technicians, leads" aria-label="Search jobs"/>
-          <div className="jc-scroll tall"><table className="jc-tbl">
-            <thead><tr><th className="l">Count</th>{th("name", "Job", "l")}{th("foremanShown", "Technician", "l n", "The job's Simpro technician, who gets credit under Josh's rule (the Goals tab's). Change it on the job in Simpro.")}{th("status", "Status", "l n")}
-              {cols.map(([k, l, cls, , title]) => th(k, l, cls, title))}</tr></thead>
-            <tbody>{list.map(j => { const p = v.pct.get(j.no) || {}, off = cOff.has(j.no), open = cSel === j.no;
-              return (<Fragment key={j.no}>
-                <tr id={`cost-job-${j.no}`} className={`${off ? "off" : ""}${open ? " open" : ""}`} onClick={() => setCSel(open ? null : j.no)}>
-                  <td className="l" onClick={e => e.stopPropagation()}><input type="checkbox" className="jc-brk" checked={!off} onChange={() => toggle(j.no)} aria-label={`Count ${j.name} in the totals`}/></td>
-                  <td className="l job"><b>{j.name}</b><small>#{j.no}{j.site ? `, ${j.site}` : ""}</small></td>
-                  <td className={`l n fm${j.foreman ? "" : " jc-dim"}`}>{j.foremanShown}{j.lead && !sameName(j.lead, j.foreman) ? <small className="ld">lead {odFirst(j.lead)}</small> : null}</td>
-                  <td className="l n"><span className="jc-st">{j.status || "—"}</span></td>
-                  {cols.map(([k, , cls, fmt]) => <td key={k} className={cls}>{fmt === "bar" ? bar(p[k]) : typeof fmt === "function" ? fmt(j)
-                    : fmt === "mEst" ? <>{margin(p[k])}<small className="jc-subv">est {fp(p[k.replace("_mAct", "_mEst")])}</small></> : margin(p[k])}</td>)}
-                </tr>
-                {open ? detail(j) : null}
-              </Fragment>); })}
-              {!list.length ? <tr><td colSpan={4 + cols.length}><div className="jc-empty">No jobs match.</div></td></tr> : null}</tbody></table></div>
-        </section>
-        <section className="jc-sec jc-how">
-          <h3 className="jc-h">How it is counted</h3>
-          <ul>
-            <li>Every cost center on the job counts: the base bid and every change order.</li>
-            <li>An item ending "(Rough In)" goes to rough, "(Finish)" to finish. Its hours, materials, labor and sell price go with it. An item with neither follows its cost center's type; a cost center with no phase (Change Order, Generators) is untagged.</li>
-            <li>Simpro's total for each cost center is the budget; items only decide how it splits. A credit comes off its phase.</li>
-            <li>Spending is recorded per cost center, so it splits the same way as that cost center's estimate. Spent dollars include committed (ordered, scheduled), as Simpro's margin does.</li>
-            <li>Margins are weighted (big jobs count more); the plain average of each job's margin is beside it.</li>
-            <li>Josh's rule, the same as the Goals tab: a job is credited to its Simpro technician (the first one listed). A finished job counts when it has a customer invoice dated this year, is invoiced in full and has costs posted; its whole-job margin is Simpro's net profit ÷ contract, summed over those jobs. Rough and finish margins are the item split on those same jobs; on Active, they are open jobs past that phase, so far.</li>
-            <li>Jobs: Simpro's in progress and complete, the invoiced jobs still on the Job Board, and every job Josh's rule counts this year. Pulled nightly; read-only.</li>
-            <li>Open jobs already past rough hours (the fold at the top): open jobs whose rough hours used are past the rough estimate from every cost center, most hours over first; the names are the job's foreman and lead on the Job Board.</li>
-            <li>CO hrs, own CC (Hours, once the Goals pull's Phase 2 has run): hours booked to the job's own change-order cost centers in Simpro. 0 means the job has change-order cost centers with nothing booked; – means it has none.</li>
-          </ul>
-        </section>
-      </>}
-      </div>
-    </div>);
+    main = <OdJobCosts jobs={jobs} users={users} identity={identity} fview={fview} owns={d.owns} onOpenJob={(j) => goApp(j)}/>;
   } else if (tab === "claude") {
     // ── Claude (2026-11-04): Koy's view = every change + the messages checked; owners' view =
     // the changes and counts only (the server sends no message words to anyone but Koy).
@@ -55472,6 +55541,12 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-crewp b{font-size:13.5px}.odash .od-crewp .n{font-size:22px;font-weight:800;line-height:1.1;margin-top:4px}.odash .od-crewp .n small{font-size:11.5px;font-weight:500;color:var(--cdim);margin-left:4px}
         .odash .od-crewtag{display:inline-block;font-size:10.5px;color:var(--o-ink);font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-left:6px}
         .odash .jc-tbl td.fm small.ld{display:block;font-size:11px;opacity:.75}
+        .odash .jc-emb{border-radius:10px;overflow:hidden;border:1px solid var(--jc-steel2)}
+        .odash .jc-embh{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--jc-char);color:#F2F4F6;padding:10px 16px;font-size:13px}
+        .odash .jc-emb .jc-body{padding:14px 14px 16px}
+        .odash .jc-tbl td.job .jc-mx{font-family:inherit;font-weight:400;letter-spacing:0}
+        .odash .jc-tbl td.job .jc-mx small{display:inline;font-size:11.5px}
+        .odash .jc-tbl td.job .jc-mx .mt-rn{margin:4px 0 0;padding-left:16px;font-size:13px}
         @media (max-width:900px){.odash .od-crewstrip{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media (max-width:520px){.odash .od-mini .b{flex-direction:column;align-items:flex-start}}
         @media (max-width:600px){
@@ -64142,9 +64217,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-18 · App SW version: v651
+**Last manifest update:** 2026-11-18 · App SW version: v652
 ---
 
+- **Foreman Meeting on the Meetings tab: Team check, Jobs (the Job Costs page, foreman view), Guys, Action items** · 'in-flight 2026-11-18' · 'SW v652' · 'OdMeetings' · 'buildForemanSections' · 'OdJobCosts' · 'src/meetingModel.js' · Koy, 2026-11-18: *"This meeting is going to be with all three foremen, though, not individually"*, *"more about their specific jobs, their guys, maybe morale and margin numbers, rough numbers, like all the job numbers... not schedule or training"*, then *"Okay let's build that and see what it looks like"*. Preview first (claude.ai artifact, read only). **Where:** /dashboard › Meetings, third button **Foreman Meeting · Wed 7:00** (remembered on the device). **Team check:** typed items (week-scoped, TYPED), a "#1291 …" entry ties to the job. **Jobs:** the dashboard's Job Costs page itself, foreman view (Koy: *"I think section 2 should be straight from the job cost tab in the dashboard, the foreman view of it"*). The tab's render, state and reads moved out of OfficeDash into 'OdJobCosts', used by both the Costs tab and the meeting; 'embed' forces the foreman view (percentages and hours, no dollars), starts on Active, uses a slim header and folds How it is counted, and adds + Note / Hide under each job in the table (meetings/foreman_<date>.rowNotes.w_<Simpro #>, foreman__prefs.hidden.jobs.w_<Simpro #>). Hidden jobs leave the table and chart only; the boxes still count them. **Guys:** active users whose foremanId is Keegan, Daegan or Colby (jr. foremen, leads, crew), one typed line each saved to meetings/foreman_<Wednesday>.guys.<userId> (this week only). **Action items:** as the other meetings; last week's carry for Done / Not done. No schedule, training, return trips, upcoming or crew out. Percentages and hours only. **Rules:** /meetings allows type foreman / foreman_prefs (rules deploy). **Why it won't lose data:** same collection and merge-one-field writes; the Scramble and Lead records are untouched; all job data is only read.
 - **Weekly Scramble calendar: all crews on one calendar, Simpro bookings solid, the hours left as forecasts, a list of what isn't on it yet, and Book in Simpro with a preview** · 'in-flight 2026-11-18' · 'SW v651' · 'OdScrambleCal' · 'src/scrambleCal.js' · 'functions/scrambleBook.js' · 'scrambleCalContext' · 'scrambleBook' · 'scripts/scramble-cal-test.js' · Koy, 2026-11-17 (Scramble meeting): *"we want like a calendar view with um, like upcoming jobs and any jobs that are in progress we want them to be like scheduled out through their hours that they have left"*, *"SimPro will be the source of truth with schedule"*, *"on the right or something ... that we can see what needs to be on the calendar and we can put it on there and see what it looks like. And then we can schedule from there"*, *"make the estimated or confirmed start dates visible, and flag anything needing scheduling on a date but not yet"*, *"needs to be clear if its a return trip, rough, or finish"*, then *"lets send it, well adjust when needed"*. Preview first on the real rows (claude.ai/artifact/DF9rkRQuTGGdFkXXk77AL6). **Where:** /dashboard › Meetings, a fold at the top of the Weekly Scramble (open by default). **The calendar:** five weeks from this Monday, all crews in one view, 4-10s (Mon–Thu columns, Friday a thin striped strip, never planned). One block per item, each labelled and coloured **Rough-in** (blue), **Finish** (green) or **Return trip #n** (purple); a Simpro booking with no phase shows as Booked. **Solid** = booked in Simpro (getSimproSchedule, the view's five weeks; days under 2 crew hours are left off), with the first names booked. **Light** = forecast: the phase's hours left from the nightly Job Costs split ('settings/phaseHours': bid − used − hours booked after today) laid out at 10 h a day for the crew Simpro has, else 2 people. A dot marks the CC start date (projected start; filled when its Confirmed box is ticked or the phase is Start Date Set). **Drag** a forecast to move it; **drag the grip on the right end** of any block to add or take off days (a solid booking grows lighter forecast days after it), with a live day count. **The list on the right** (Not on the calendar yet): every phase, open return trip and Upcoming row with nothing booked from today on and no kept plan, grouped *Needs scheduling or a PO* first, then Return trips, In progress Rough-in / Finish, Over bid, Upcoming starts. Drag a card onto a day, tap it then tap a day (phones), or **Place on <start date>**. **Flags (red !):** a start that has passed or falls in the view with nothing booked in Simpro on or after it; a dated rough-in / finish start whose phase has no Materials card ordered ("no material PO" / "material card not ordered yet"); return trips with no date, a schedule-by date, no crew, a date that passed while still open, or set in CC but not booked in Simpro. On-hold and started phases aren't flagged. **Keep as plan** saves the block for everyone in the meeting ('meetings/scramble__prefs.cal.<key>' = { s, hours, crew, staff, by, at }); until then a moved block shows "not kept yet" and only on that screen. **Book in Simpro…** (admin / manager PIN): pick who from Simpro's active staff (the booked crew is ticked), **Show what it would book** lists every entry (day, person, 7:00 start, normal hours, hours at Overtime 1.5x once that person's week passes 40 counting what's already on their Simpro schedule) and the cost center (the Base section's Rough In / Finish; a trip books on Finish), and only **Book these N entries in Simpro** writes. At confirm the server rebuilds the entries from Simpro as it is then; if anything differs from the preview it writes nothing and asks for a new look. One entry at a time, stopping at the first refusal (the card says how many went in). A booked plan comes off the list; the solid days show from Simpro. Upcoming quotes can be planned but not booked until they're a job. Bid hours for Upcoming rows come from the quote or job estimate (whole job, hours only) through 'scrambleCalContext'. **Never** sets or changes a job's stage or status, in CC or Simpro. Each booking is logged to 'scrambleBookings' (server-only). Guide 'dashboard.html' step 6. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scrambleCalContext,functions:scrambleBook' before the app. **Why it won't lose data:** the app writes only its own plans into the existing 'meetings/scramble__prefs' doc, one map key per plan, by merge (no rules change); nothing on a job is written; Simpro gets new schedule entries only, from the server, only on a confirm that matches the preview; no loader, rules or existing function changes.
 - **Lead Meeting laid out like Koy's Nov 11 Doc: Doc order, day-by-day schedule, Hours and margin table with total margin from Simpro** · 'in-flight 2026-11-18' · 'SW v650' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-18 ("all recs go" on 15 fixes): *"make it more accurate to what the last one, the doc, was"* and show *"the total overall margin"* in hours vs bid. Preview first on real numbers (claude.ai artifact, read only). **Order:** Notes, Highlight, Lowlight, Training, Schedule, Upcoming, Hours and margin, Crew out, Action items (last week's carried items, renamed). **Cut:** Open items from the watches, Needs, Hiring, When it comes up; a week whose record already has something typed in one of them still shows it, last ('secHasContent'). **Schedule:** the meeting day to that week's Friday ('leadRange', also the Simpro read's range), a heading per day, each booked job by number + name (CC, else the Job Costs row, else Simpro via the read-only 'getSimproJobBasics', name only) with its crew; one row (and so one + Note) per job per day; an empty day says so. **Upcoming:** CC rough / finish starts and the Upcoming list (its '#2547 - Name' number parsed out), six weeks, "projected" / "confirmed", past due tagged 'Nd past'; a CC start beats its Upcoming-list copy. **Hours and margin:** every active residential job (in CC, not archived / commercial / quick / temp ped, finish not complete, Simpro stage not Invoiced / Complete, hours or material in) as a table: Job, Simpro status, rough net and finish net margin from settings/phaseCosts ((sell − material − labor with overhead) ÷ sell, the Job Costs page's math), total margin from settings/simproTotals (Simpro's NettMargin, the number the margin watch reads), flags per phase for hours / labor / materials over the bid (red) or at 90%+ (orange, never yellow). A phase reads "not started" until it has 10% of its bid hours. Grouped by crew foreman (a jr. foreman's / lead's job sits with their foreman via foremanId): Keegan, Daegan, Colby, then the rest A–Z, then No foreman; worst total margin first. Percentages only, no dollar figure on the page (a test pins that the model carries none). **Crew out:** six weeks, approved ('settings/crewPTO') and pending requests, dates read in both '11/20/2026' and ISO shapes (the v649 bug that dropped all approved time off), names + dates only, people out the same days share a line, office (title admin or untitled roster record) and former crew left out. Tests: 'scripts/meeting-model-test.js'. Guide 'dashboard.html' step M. **Why it won't lose data:** read only everywhere new (settings/simproTotals and getSimproJobBasics are reads); the meeting record shape, ids and writes are unchanged; old sections' typed content still shows.
 - **Meetings tab: the Weekly Lead Meeting beside the Scramble, with the Doc's sections moved in** · 'in-flight 2026-11-17' · 'SW v649' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-17: *"it needs to be added to the meetings page, where weekly scramble currently is"*, *"i want everything from the doc moved here so i dont have to jump between them during the meeting"*, *"i need to be able to easily add and remove items from anywhere, add notes where i want to"*. Reference: the Lead Meeting Claude page (claude.ai/artifact/2J6w44A5VWqQdoRnrM8rKi v9). **Where:** /dashboard › Meetings now opens with a picker, **Weekly Scramble · Tue 4:00** / **Lead Meeting · Wed 6:30** (remembered on the device). **Lead sections, folded with counts:** 1 Open items from the watches (open Needs-you flags from the Asks watch and Crew schedule watch, oldest first, without the myday-* mirrors or a calendar-overlap flag; then My Day asks to Koy from someone else, past due marked) · 2 Schedule, this week and next (every job booked in Simpro Mon–Fri, two weeks, foreman and lead from CC; a booked job not in CC shows by its Simpro #) · 3 Upcoming and past due starts (six weeks) · 4 Hours vs bid (a rough or finish at 90%+ of bid hours and not done, from settings/phaseCosts, as bars with the 100% line; hours only) · 5 Crew out (six weeks; pending requests first, "Needs Koy's approval"; approved time off from settings/crewPTO) · 6–11 the Doc's sections as typed lists: Notes, Highlight, Lowlight, Training, Needs, Hiring · 12 Last week's action items · 13 When it comes up (return trips missing a crew or date, failed inspections, jobs marked Scheduled with nobody booked this week or next). **Everywhere (both meetings):** Add a job or item, Hide / Unhide, + Note on any row, section notes, action items with who and due date and Send to My Day. Lead owners: Koy plus active foremen, jr. foremen and leads. **Carried until done (both meetings):** marking last week's item Not done copies it into this week, so it shows again next week until marked Done; Done removes the copy. **Photos (Koy: "need to be able to put pics with highlight and low lights"):** + Photo on any Highlight or Lowlight item, uploaded like My Day task photos ('taskPhotoPath', 'jobs/_tasks/task-photos/mtg_<meeting>/…', same JPEG shrink), linked from the meeting doc under rowPhotos; tap a thumbnail to open it, × removes the link. Items added to the typed Lead sections belong to that week (meeting doc 'added'), not the sticky prefs. **Seeded:** Nov 11's five Doc notes stand in for that week (lead_2026-11-11) until a record exists. Calendar walks / inspections from the Lead page are not in the app (no calendar source). **Data:** meetings/lead_<Wednesday> and meetings/lead__prefs, same shape as the Scramble's; rules allow type lead / lead_prefs. Guide 'dashboard.html' step M. **Why it won't lose data:** same collection and merge-one-field writes as v648; the Scramble's ids and records are unchanged; settings/phaseCosts, timeOffRequests and crewPTO are only read.

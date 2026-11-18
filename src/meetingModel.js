@@ -244,11 +244,13 @@ const LEAD_SECS = [
 ];
 // v649 sections Koy cut on 2026-11-18. Shown only for a week whose record has something in them.
 const LEAD_OLD = [["needs", "Needs"], ["hiring", "Hiring"], ["watches", "Open items from the watches"], ["whenup", "When it comes up"]];
-const TYPED = ["notes", "highlight", "lowlight", "training", "needs", "hiring"];
+const TYPED = ["notes", "highlight", "lowlight", "training", "needs", "hiring", "team"];
+const FOREMAN_SECS = [["team", "Team check"], ["jobs", "Jobs"], ["guys", "Guys"], ["nextsteps", "Action items"]];
 const LEAD_WATCHES = ["Asks watch", "Crew schedule watch"];
 const CFG = {
   scramble: { dow: 2, label: "Weekly Scramble", when: "Tuesdays 4:00 PM", who: "Josh, Koy, Justin, Brady", secs: SECS, weeks: 1 },
   lead: { dow: 3, label: "Weekly Lead Meeting", when: "Wednesdays 6:30 AM", who: "Koy and the foremen and leads", secs: LEAD_SECS, weeks: 1 },
+  foreman: { dow: 3, label: "Weekly Resi Foreman Meeting", when: "Wednesdays 7:00 AM", who: "Koy, Keegan, Daegan and Colby", secs: FOREMAN_SECS, weeks: 1 },
 };
 const sameName = (a, b) => { const x = String(a || "").trim().toLowerCase(), y = String(b || "").trim().toLowerCase(); return !!x && !!y && (x === y || x.startsWith(y + " ") || y.startsWith(x + " ")); };
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -275,15 +277,17 @@ function phaseOf(r, p) {
   const est = num(r[p + "_hrsEst"]), used = num(r[p + "_hrsUsed"]), sell = num(r[p + "_sell"]);
   const matA = num(r[p + "_matAct"]), labA = num(r[p + "_labAct"]), matE = num(r[p + "_matEst"]), labE = num(r[p + "_labEst"]);
   if (!est && !used && !sell && !matA && !labA) return { state: "none", used, est };
+  const pcts = { hrsPct: est > 0 ? Math.round(used / est * 100) : null, matPct: matE > 0 ? Math.round(matA / matE * 100) : null };
   const started = est > 0 ? used / est >= 0.1 : used > 0;
-  if (!started) return { state: "not started", used, est };
+  if (!started) return { state: "not started", used, est, ...pcts };
   const m = sell > 0 ? Math.round((sell - matA - labA) / sell * 100) : null;
+  const hrsPct = est > 0 ? Math.round(used / est * 100) : null, matPct = matE > 0 ? Math.round(matA / matE * 100) : null;
   const flags = [];
   [["hours", used, est], ["labor", labA, labE], ["materials", matA, matE]].forEach(([k, a, e]) => {
     if (!(e > 0)) return; const pct = Math.round(a / e * 100);
     if (pct > 100) flags.push({ k, pct, over: true }); else if (pct >= 90) flags.push({ k, pct, over: false });
   });
-  return { state: "", m, used, est, flags };
+  return { state: "", m, used, est, hrsPct, matPct, flags };
 }
 const flagText = (ph, f) => {
   const o = f.filter(x => x.over), c = f.filter(x => !x.over), out = [];
@@ -291,6 +295,65 @@ const flagText = (ph, f) => {
   if (c.length) out.push({ over: false, text: ph + " close: " + c.map(x => x.k + " " + x.pct + "%").join(", ") });
   return out;
 };
+
+// The job table the Lead Meeting (Hours and margin) and the Foreman Meeting (Jobs) share (v650, v652):
+// every active residential job with hours or material in, grouped by crew foreman (a jr. foreman's or
+// lead's job sits with their foreman), Keegan, Daegan, Colby, then the rest A–Z, then No foreman;
+// worst total margin first. Rough / finish from the Job Costs pull; total margin and status from Simpro.
+function marginRows(input) {
+  const { jobs = [], costs = [], totals = {}, users = [], effFS } = input || {};
+  const byNo = {}; jobs.forEach(j => { const n = jobNo(j); if (n && (!byNo[n] || (byNo[n].archived && !j.archived))) byNo[n] = j; });
+  const userBy = (n) => (users || []).filter(u => u && sameName(u.name, n));
+  const boss = (name) => {
+    const u = userBy(name).find(x => x.active !== false) || userBy(name)[0];
+    if (!u) return String(name || "").trim();
+    if (u.title !== "foreman" && u.foremanId) { const b = (users || []).find(x => x && x.id === u.foremanId); if (b && b.name) return b.name; }
+    return u.name;
+  };
+  const out = [];
+  (costs || []).forEach(r => {
+    if (!r || r.no == null) return;
+    const no = String(r.no).trim(), j = byNo[no];
+    if (!j || j.archived || j.quickJob || j.tempPed || j.type === "quote" || j.division === "commercial") return;
+    const fs = effFS ? effFS(j) : j.finishStatus;
+    if (["complete", "invoice"].includes(fs)) return;
+    const t = totals[no] || null;
+    if (t && /^(invoiced|complete|archived)$/i.test(String(t.stage || ""))) return;
+    if (!(num(r.rough_hrsUsed) || num(r.finish_hrsUsed) || num(r.rough_matAct) || num(r.finish_matAct))) return;
+    const rough = phaseOf(r, "rough"), finish = phaseOf(r, "finish");
+    const fm = j.foreman && !/^unassigned$/i.test(j.foreman) ? boss(j.foreman) : "";
+    const total = t && typeof t.margin === "number" ? Math.round(t.margin) : null;
+    const fl = flagText("Rough", rough.flags || []).concat(flagText("Finish", finish.flags || []));
+    out.push({ key: "w_" + safeKey(no), jobId: j.id, no, title: j.name || r.name || "", group: fm || "No foreman", status: cleanStatus(t && t.status) || cleanStatus(r.status),
+      rough, finish, total, totalEst: !!(t && t.isEstimate), flags: fl, over: fl.some(f => f.over), days: [] });
+  });
+  out.sort((a, b) => groupRank(a.group) - groupRank(b.group) || (groupRank(a.group) === 10 ? String(a.group).localeCompare(String(b.group)) : 0)
+    || (a.total == null ? 1 : 0) - (b.total == null ? 1 : 0) || (a.total || 0) - (b.total || 0) || (+a.no || 0) - (+b.no || 0));
+  return out;
+}
+const groupRank = (g) => { const i = MARGIN_FOREMEN.indexOf(firstOf(g).toLowerCase()); return g === "No foreman" ? 99 : i >= 0 ? i : 10; };
+// Koy's three foremen come first; every other group folds under "Others" on the Foreman Meeting.
+const isMainGroup = (g) => groupRank(g) < 10;
+
+// ── Weekly Resi Foreman Meeting (SW v652, Koy 2026-11-18: "This meeting is going to be with all three
+// foremen, though, not individually"; "more about their specific jobs, their guys, maybe morale and
+// margin numbers, rough numbers, like all the job numbers... not schedule or training"). Wednesdays 7:00.
+// Team check (typed, this week only) · Jobs (marginRows) · Guys (each foreman's crew, a typed line each,
+// this week only) · Action items (last week's come back for Done / Not done). Percentages and hours only.
+function buildForemanSections(input) {
+  const { users = [] } = input || {};
+  const S = { team: [], jobs: marginRows(input), guys: [] };
+  const tl = { jrforeman: "Jr. foreman", lead: "Lead", crew: "Crew" };
+  MARGIN_FOREMEN.forEach(first => {
+    const f = (users || []).find(u => u && u.active !== false && u.title === "foreman" && firstOf(u.name).toLowerCase() === first);
+    if (!f) return;
+    const rank = { jrforeman: 0, lead: 1, crew: 2 };
+    (users || []).filter(u => u && u.active !== false && u.foremanId === f.id && u.access !== "contractor")
+      .sort((a, b) => (rank[a.title] ?? 3) - (rank[b.title] ?? 3) || String(a.name).localeCompare(String(b.name)))
+      .forEach(u => S.guys.push({ key: "g_" + safeKey(u.id), uid: safeKey(u.id), group: f.name, title: u.name, detail: tl[u.title] || "", days: [] }));
+  });
+  return S;
+}
 
 function buildLeadSections(input) {
   const { jobs = [], needs = [], flags = [], schedules = [], upcoming = [], costs = [], totals = {}, names = {}, users = [], requests = [], pto = [],
@@ -344,33 +407,9 @@ function buildLeadSections(input) {
   });
   S.upcoming.sort((a, b) => a.when - b.when);
 
-  // Hours and margin: every active residential job with hours in, grouped by foreman, worst total
-  // margin first. Rough / finish from the Job Costs pull; total margin and status straight from Simpro.
+  // Hours and margin: the shared job table (marginRows, also the Foreman Meeting's Jobs).
+  S.hours = marginRows({ jobs, costs, totals, users, effFS });
   const userBy = (n) => (users || []).filter(u => u && sameName(u.name, n));
-  const boss = (name) => {
-    const u = userBy(name).find(x => x.active !== false) || userBy(name)[0];
-    if (!u) return String(name || "").trim();
-    if (u.title !== "foreman" && u.foremanId) { const b = (users || []).find(x => x && x.id === u.foremanId); if (b && b.name) return b.name; }
-    return u.name;
-  };
-  Object.keys(costByNo).forEach(no => {
-    const r = costByNo[no], j = byNo[no];
-    if (!j || j.archived || j.quickJob || j.tempPed || j.type === "quote" || j.division === "commercial") return;
-    const fs = effFS ? effFS(j) : j.finishStatus;
-    if (["complete", "invoice"].includes(fs)) return;
-    const t = totals[no] || null;
-    if (t && /^(invoiced|complete|archived)$/i.test(String(t.stage || ""))) return;
-    if (!(num(r.rough_hrsUsed) || num(r.finish_hrsUsed) || num(r.rough_matAct) || num(r.finish_matAct))) return;
-    const rough = phaseOf(r, "rough"), finish = phaseOf(r, "finish");
-    const fm = j.foreman && !/^unassigned$/i.test(j.foreman) ? boss(j.foreman) : "";
-    const total = t && typeof t.margin === "number" ? Math.round(t.margin) : null;
-    const fl = flagText("Rough", rough.flags || []).concat(flagText("Finish", finish.flags || []));
-    S.hours.push({ key: "w_" + safeKey(no), jobId: j.id, no, title: j.name || r.name || "", group: fm || "No foreman", status: cleanStatus(t && t.status) || cleanStatus(r.status),
-      rough, finish, total, totalEst: !!(t && t.isEstimate), flags: fl, over: fl.some(f => f.over), days: [] });
-  });
-  const gRank = (g) => { const i = MARGIN_FOREMEN.indexOf(firstOf(g).toLowerCase()); return g === "No foreman" ? 99 : i >= 0 ? i : 10; };
-  S.hours.sort((a, b) => gRank(a.group) - gRank(b.group) || (gRank(a.group) === 10 ? String(a.group).localeCompare(String(b.group)) : 0)
-    || (a.total == null ? 1 : 0) - (b.total == null ? 1 : 0) || (a.total || 0) - (b.total || 0) || (+a.no || 0) - (+b.no || 0));
 
   // Crew out, six weeks: field crew names and dates only (no notes, no office, no approval tags).
   // Dates are saved "11/20/2026" (anyDate reads both shapes). People out the same days share a line.
@@ -418,4 +457,5 @@ function seedFor(kind, dateYmd) {
 }
 module.exports = { SECS, ATTENDEES, WATCHES, ymd, parseYmd, anyDate, meetingDate, meetingId, prevMeetingDate, weekRange, safeKey, firstOf,
   bookingsByJob, buildSections, applyPrefs, carriedSteps, SEED_2026_11_10, needIdFor,
-  CFG, LEAD_SECS, LEAD_OLD, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11, leadRange, secHasContent, phaseOf };
+  CFG, LEAD_SECS, LEAD_OLD, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11, leadRange, secHasContent, phaseOf,
+  FOREMAN_SECS, marginRows, buildForemanSections, isMainGroup };

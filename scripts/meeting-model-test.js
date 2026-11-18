@@ -145,5 +145,19 @@ ok(M.secHasContent({ notes: { hiring: "References" } }, "hiring") && !M.secHasCo
 ok(M.seedFor("lead", "2026-11-11").notes.notes.split("\n").length === 5 && !M.seedFor("lead", "2026-11-18"), "Nov 11's five notes stand in for that week");
 const cs = M.carriedSteps({ actions: { a1: { text: "Call GC", who: "Koy Wilkinson", sec: "notes", at: "1", carriedFrom: "2026-11-04" } } }, "2026-11-11", {});
 ok(cs[0].sec === "notes" && cs[0].from === "2026-11-04", "a carried item keeps its section and how long it's been open");
+// ── Foreman Meeting (v652) ──
+ok(M.meetingDate(today, "foreman") === "2026-11-18" && M.meetingId("2026-11-18", "foreman") === "foreman_2026-11-18", "Foreman Meeting is the week's Wednesday, foreman_<date>");
+ok(M.FOREMAN_SECS.map(x => x[0]).join() === "team,jobs,guys,nextsteps", "Team check, Jobs, Guys, Action items");
+ok(M.TYPED.includes("team"), "Team check items belong to their week (start empty each week)");
+const F = M.buildForemanSections({ jobs: ljobs, users: users.concat([{ id: "callen", name: "Callen Jakeman", title: "crew", foremanId: "daegan", active: true }, { id: "jose", name: "Jose Sanchez", title: "crew", foremanId: "abe", active: true }]),
+  costs, totals, effFS: eff("finishStatus") });
+ok(F.jobs.map(r => r.no).join() === H.map(r => r.no).join(), "Jobs is the same table as the Lead Meeting's Hours and margin");
+ok(F.jobs.find(r => r.no === "1430").rough.hrsPct === 170 && F.jobs.find(r => r.no === "1430").rough.matPct === 150, "rough hours % and material % of bid");
+ok(F.jobs.find(r => r.no === "1430").finish.state === "not started" && F.jobs.find(r => r.no === "1430").finish.hrsPct === 3, "not started still shows its hours %");
+ok(M.isMainGroup("Keegan Wilkinson") && !M.isMainGroup("Abraham Tristan") && !M.isMainGroup("No foreman"), "Keegan, Daegan, Colby up front; the rest fold under Others");
+const gd = F.guys.map(r => r.group.split(" ")[0] + ":" + r.title).join("|");
+ok(gd === "Keegan:Gage Lund|Daegan:Louis Hoffman|Daegan:Callen Jakeman|Daegan:James Livingston", "Guys: each of the three foremen's active crew, jr. foremen first; other crews and former crew left out");
+ok(F.guys.every(r => /^g_/.test(r.key) && r.uid), "each guy has a stable key for this week's line");
+ok(F.team.length === 0, "Team check starts empty");
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("meeting-model-test: all passed");
