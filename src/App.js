@@ -19,6 +19,7 @@ import SchedMode from "./schedMode";   // v627: the scheduling pill reads Simpro
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import inspAtt from "./inspAttempts";
 import MeetingModel from "./meetingModel";   // v648: the Weekly Scramble on /dashboard › Meetings (Koy, 2026-11-17)
+import ScrambleCal from "./scrambleCal";   // v651: the Scramble calendar (all crews, Simpro bookings, forecasts, not-yet-booked list)
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
 import { syncPostHogIdentity, trackDash, heTrack, heCaptureError } from "./posthog";
 import { readableInk } from "./a11y";
@@ -51840,6 +51841,346 @@ function odCostsCoHours(goalsDoc) {
   const m = new Map(); Object.keys(by).forEach(k => m.set(String(k), Number(by[k]) || 0)); return m;
 }
 
+// ── Scramble calendar (SW v651, Koy 2026-11-17): all crews, Simpro bookings, forecasts, the not-yet-booked list ──
+// Koy: "a calendar view with upcoming jobs and any jobs that are in progress ... scheduled out through their
+// hours that they have left", "Simpro will be the source of truth", "on the right ... what needs to be on the
+// calendar and we can put it on there and see what it looks like. And then we can schedule from there".
+// Preview approved (claude.ai/artifact/DF9rkRQuTGGdFkXXk77AL6), then "lets send it, well adjust when needed".
+// Rows come from src/scrambleCal.js (pure). Solid = booked in Simpro; light = forecast (the hours left at 4-10s,
+// 2 people unless Simpro has a crew). Drag a block to move it, drag the grip on its right end to add or take
+// off days. Keep as plan saves it for everyone (meetings/scramble__prefs.cal). Book in Simpro shows every entry
+// first (scrambleBook preview) and writes only on the confirm tap. Nothing here sets a stage or a status.
+const SCAL_DW = 44, SCAL_FW = 14, SCAL_WEEKS = 5, SCAL_WEEKW = 4 * SCAL_DW + SCAL_FW;
+const SCAL_KIND = { rough: OD_B, finish: OD_G, trip: OD_P, service: C.slate };
+const SCAL_SOFT = { rough: "rgba(37,99,201,.13)", finish: "rgba(24,128,74,.13)", trip: "rgba(106,79,200,.14)", service: "rgba(92,107,122,.14)" };
+function OdScrambleCal({ jobs, upcoming = [], identity, prefs, savePrefs, onOpenJob, say }) {
+  const SC = ScrambleCal;
+  const me = (identity && identity.name) || "";
+  const [sched, setSched] = useState(undefined);       // Simpro schedule for the view (undefined loading, null failed)
+  const [ph, setPh] = useState({});                    // settings/phaseHours.jobs (hours only)
+  const [ctx, setCtx] = useState(null);                // { staff, upHours } from scrambleCalContext
+  const [drafts, setDrafts] = useState({});            // key → plan not kept yet (null = cleared here)
+  const [sel, setSel] = useState("");
+  const [picked, setPicked] = useState("");            // list item picked to tap onto a day (phones)
+  const [q, setQ] = useState("");
+  const [ghost, setGhost] = useState(null);            // { x, y, label, iso }
+  const [drag, setDrag] = useState(null);              // { key, label, x } while a block is dragged
+  const [bk, setBk] = useState(null);                  // booking: { key, staff:Set, preview, busy, err, done }
+  const [reload, setReload] = useState(0);
+  const lanes = useRef(null);
+  const today = new Date();
+  const start = SC.mondayOf(today), end = SC.addDays(start, SCAL_WEEKS * 7 - 3);
+
+  useEffect(() => {
+    let dead = false; setSched(undefined);
+    httpsCallable(functions, "getSimproSchedule")({ dateFrom: start, dateTo: SC.addDays(start, SCAL_WEEKS * 7 - 1) }).then(
+      x => { if (!dead) setSched(Array.isArray(x && x.data) ? x.data : []); }, () => { if (!dead) setSched(null); });
+    return () => { dead = true; };
+  }, [start, reload]); // eslint-disable-line
+  useEffect(() => { loadPhaseHours().then(h => setPh(h || {})); }, []);
+  // Crew picker names + Upcoming hours. A number above every app job number is a quote.
+  useEffect(() => {
+    let dead = false;
+    const maxNo = (jobs || []).reduce((m, j) => Math.max(m, parseInt(j && j.simproNo, 10) || 0), 0);
+    const have = new Set((jobs || []).map(j => String((j && j.simproNo) || "")));
+    const ups = (upcoming || []).map(u => SC.upNo(u)).filter(n => n && !have.has(n)).slice(0, 40).map(no => ({ no, kind: +no > maxNo ? "quote" : "job" }));
+    memberCallable("scrambleCalContext", identity)({ upcoming: ups }).then(r => { if (!dead) setCtx((r && r.data) || { staff: [], upHours: {} }); },
+      () => { if (!dead) setCtx({ staff: [], upHours: {}, failed: true }); });
+    return () => { dead = true; };
+  }, [identity && identity.name, (upcoming || []).length]); // eslint-disable-line
+
+  const kept = (prefs && prefs.cal) || {};
+  const plans = useMemo(() => { const o = { ...kept }; Object.entries(drafts).forEach(([k, v]) => { if (v) o[k] = v; else delete o[k]; }); return o; }, [kept, drafts]); // eslint-disable-line
+  const V = useMemo(() => SC.buildCalendar({ jobs, upcoming, schedules: sched || [], phaseHours: ph, upHours: (ctx && ctx.upHours) || {}, plans, today, weeks: SCAL_WEEKS, effRS, effFS }),
+    [jobs, upcoming, sched, ph, ctx, plans]); // eslint-disable-line
+  const byKey = useMemo(() => Object.fromEntries(V.items.map(it => [it.key, it])), [V]);
+
+  // Positions: Mon–Thu are full columns, Friday is a thin strip.
+  const slotOf = (iso) => { const n = Math.round((SC.parseYmd(iso) - SC.parseYmd(start)) / 86400000); const w = Math.floor(n / 7), d = n - w * 7; return w < 0 || w >= SCAL_WEEKS ? -1 : w * 5 + Math.min(d, 4); };
+  const xOf = (iso) => { const s = slotOf(iso); if (s < 0) return s === -1 && iso > start ? SCAL_WEEKS * SCAL_WEEKW : 0; return Math.floor(s / 5) * SCAL_WEEKW + (s % 5 < 4 ? (s % 5) * SCAL_DW : 4 * SCAL_DW); };
+  const isoAtX = (x) => { const w = Math.max(0, Math.min(SCAL_WEEKS - 1, Math.floor(x / SCAL_WEEKW))); const r = x - w * SCAL_WEEKW; const d = r >= 4 * SCAL_DW ? 7 : Math.max(0, Math.floor(r / SCAL_DW)); return SC.nextWork(SC.addDays(start, w * 7 + d)); };
+  const laneX = (e) => { const el = lanes.current && lanes.current.querySelector(".sc-lane"); return el ? e.clientX - el.getBoundingClientRect().left : 0; };
+  const fc = (it) => it.plan || it.auto;              // the forecast block on an item, if any
+  const fcSpan = (it) => { const f = fc(it); return f ? SC.span(f.s, f.hours, f.crew, SC.addDays(start, SCAL_WEEKS * 7 - 1)) : null; };
+  const setPlan = (key, p) => setDrafts(d => ({ ...d, [key]: p }));
+  const nowIso = () => new Date().toISOString();
+  const keep = (it) => { const p = fc(it); if (!p) return; savePrefs({ cal: { [it.key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: p.staff || [], by: me, at: nowIso() } } });
+    setDrafts(d => { const n = { ...d }; delete n[it.key]; return n; }); say("Kept as plan. Everyone in the meeting sees it."); };
+  const dropPlan = (it) => { if (kept[it.key]) savePrefs({ cal: { [it.key]: deleteField() } }); setDrafts(d => { const n = { ...d }; delete n[it.key]; return n; }); setBk(null); };
+  const undoDraft = (it) => setDrafts(d => { const n = { ...d }; delete n[it.key]; return n; });
+  const place = (it, iso) => { setPlan(it.key, { s: SC.nextWork(iso), hours: it.defHours || SC.HPD, crew: it.defCrew || 2, staff: [] }); setSel(it.key); setPicked(""); };
+
+  // Drag a block (move), its grip (stretch), or a booked block's grip (add forecast days after it).
+  const startDrag = (e, it, mode) => {
+    if (e.button) return; e.preventDefault(); e.stopPropagation(); setSel(it.key);
+    const x0 = laneX(e), f0 = fc(it), last = it.booked.length ? it.booked[it.booked.length - 1].iso : "";
+    let moved = false;
+    const mv = (ev) => {
+      const x = laneX(ev); if (!moved && Math.abs(x - x0) < 4) return; moved = true;
+      let p;
+      if (mode === "move") p = { ...f0, s: isoAtX(xOf(f0.s) + SCAL_DW / 2 + (x - x0)) };
+      else {
+        const s = f0 ? f0.s : SC.workAfter(last), crew = f0 ? f0.crew : Math.max(1, it.crewBooked || it.defCrew || 2);
+        let d = 0; for (let iso = SC.nextWork(s), g = 0; g < 60 && xOf(iso) < x; iso = SC.workAfter(iso), g++) d += Math.min(1, Math.max(0, (x - xOf(iso)) / SCAL_DW));
+        d = Math.round(d * 2) / 2; if (mode === "end" && !it.booked.length) d = Math.max(0.5, d);
+        p = d > 0 ? { ...(f0 || { staff: [] }), s, crew, hours: d * crew * SC.HPD } : null;
+      }
+      setPlan(it.key, p);
+      const dd = p ? Math.round(p.hours / (p.crew * SC.HPD) * 10) / 10 : 0, nb = it.booked.length;
+      setDrag({ key: it.key, x, label: mode === "move" ? `Starts ${SC.short(p.s)} · ${dd} days` : nb ? `${nb} booked + ${dd} forecast = ${Math.round((nb + dd) * 10) / 10} days` : `${dd} days · ${Math.round(p ? p.hours : 0)} h` });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+      setDrag(null);
+    };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+  };
+  // Drag a list card onto a day (a tap picks it, then tap a day).
+  const startChip = (e, it) => {
+    if (e.button) return;
+    const sx = e.clientX, sy = e.clientY; let on = false;
+    const where = (ev) => { const el = lanes.current; if (!el) return ""; const r = el.getBoundingClientRect(), ln = el.querySelector(".sc-lane"); if (!ln) return "";
+      const lr = ln.getBoundingClientRect(); return ev.clientX > Math.max(r.left, lr.left) && ev.clientX < r.right && ev.clientY > r.top && ev.clientY < r.bottom ? isoAtX(ev.clientX - lr.left) : ""; };
+    const mv = (ev) => { if (!on && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return; on = true; setGhost({ x: ev.clientX, y: ev.clientY, label: `${it.no ? "#" + it.no + " · " : ""}${it.tag}`, iso: where(ev) }); };
+    const up = (ev) => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+      setGhost(null); if (!on) { setPicked(p => p === it.key ? "" : it.key); setSel(""); return; } const iso = ev.type === "pointerup" ? where(ev) : ""; if (iso) place(it, iso); };
+    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+  };
+  const tapLane = (e) => { if (!picked || e.target.closest(".sc-bar")) return; const it = byKey[picked]; if (it) place(it, isoAtX(laneX(e))); };
+
+  // Booking in Simpro: preview, then confirm.
+  const staffList = (ctx && ctx.staff) || [];
+  const openBook = (it) => {
+    const p = fc(it); const pre = new Set();
+    ((p && p.staff) || []).forEach(s => s && s.id && pre.add(Number(s.id)));
+    if (!pre.size) { const names = new Set(it.booked.flatMap(b => b.names || [])); staffList.forEach(s => names.has(s.name) && pre.add(s.id)); }
+    if (!pre.size && it.kind === "trip" && it.who) { const s = staffList.find(x => x.name.toLowerCase() === it.who.toLowerCase()); if (s) pre.add(s.id); }
+    setBk({ key: it.key, staff: pre, preview: null, busy: false, err: "", done: null, find: "" });
+  };
+  const bookArgs = (it, staff) => { const p = fc(it); return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, staffIds: [...staff], days: SC.planDays({ ...p, crew: staff.size }) }; };
+  const runPreview = async (it) => {
+    setBk(b => ({ ...b, busy: true, err: "", preview: null }));
+    try { const r = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, bk.staff) }); setBk(b => ({ ...b, busy: false, preview: r.data })); }
+    catch (e) { setBk(b => ({ ...b, busy: false, err: (e && e.message) || "Couldn't build the preview." })); }
+  };
+  const runBook = async (it) => {
+    setBk(b => ({ ...b, busy: true, err: "" }));
+    try {
+      const r = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, bk.staff), hash: bk.preview.hash });
+      const d = r.data || {};
+      setBk(b => ({ ...b, busy: false, done: d, preview: d.ok ? null : b.preview }));
+      if (d.ok) { if (kept[it.key]) savePrefs({ cal: { [it.key]: deleteField() } }); setDrafts(x => { const n = { ...x }; delete n[it.key]; return n; }); say(`Booked ${d.created.length} entries in Simpro.`); }
+      setReload(n => n + 1);
+    } catch (e) { setBk(b => ({ ...b, busy: false, err: (e && e.message) || "Nothing was written." })); }
+  };
+
+  const days = V.days;
+  const startTxt = (it) => {
+    if (it.hold) return "On hold";
+    const s = it.start; if (!s) return it.kind === "trip" ? "" : "No start date";
+    if (s.started) return "In progress";
+    if (!s.iso) return "";
+    return it.kind === "trip" ? `${s.by ? "Schedule by" : "Set for"} ${SC.md(s.iso)}` : `Start ${SC.md(s.iso)} ${s.conf ? "confirmed" : "est."}`;
+  };
+  const hoursTxt = (it) => it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
+  const Pill = ({ it }) => <span className="sc-pill" style={{ background: SCAL_SOFT[it.kind], color: SCAL_KIND[it.kind] }}>{it.tag}</span>;
+
+  const rowView = (it) => {
+    const runs = [];
+    it.booked.forEach(b => { if (slotOf(b.iso) < 0) return; const r = runs[runs.length - 1]; if (r && SC.workAfter(r.e) >= b.iso && b.iso > r.e) { r.e = b.iso; r.n = Math.max(r.n, b.who.length); r.d++; } else runs.push({ s: b.iso, e: b.iso, n: b.who.length, d: 1 }); });
+    const f = fc(it), sp = f ? fcSpan(it) : null, color = SCAL_KIND[it.kind];
+    const crew = [...new Set(it.booked.flatMap(b => b.who))];
+    const isDraft = it.key in drafts, s = it.start && it.start.iso && slotOf(it.start.iso) >= 0 && it.kind !== "trip" ? it.start : null;
+    return (
+      <div className={"sc-row" + (sel === it.key ? " on" : "")} key={it.key}>
+        <button type="button" className="sc-lab" onClick={() => { setSel(it.key); setBk(null); }}>
+          <span className="sc-nm">{it.no ? "#" + it.no + " · " : ""}{it.name}</span>
+          <span className="sc-mt">{it.flags.length ? <span className="sc-fl" title={it.flags.join(". ")}>!</span> : null}<Pill it={it}/>{[startTxt(it), crew.slice(0, 3).join(", ") + (crew.length > 3 ? ` +${crew.length - 3}` : "")].filter(Boolean).join(" · ")}</span>
+        </button>
+        <div className="sc-lane" style={{ width: SCAL_WEEKS * SCAL_WEEKW }} onClick={tapLane}>
+          {days.map(d => <span key={d.iso} className={"sc-c" + (d.fri ? " fri" : "") + (d.iso === V.today ? " now" : "")} style={{ left: xOf(d.iso), width: d.fri ? SCAL_FW : SCAL_DW }}/>)}
+          {s ? <span className={"sc-mk" + (s.conf ? " conf" : "")} style={{ left: xOf(s.iso) + 3 }} title={`${it.tag} start ${SC.md(s.iso)}, ${s.conf ? "confirmed" : "estimated"} in Command Center`}/> : null}
+          {runs.map((r, i) => (
+            <div key={r.s} className={"sc-bar b" + (it.over ? " over" : "")} style={{ left: xOf(r.s) + 2, width: Math.max(34, xOf(r.e) + SCAL_DW - xOf(r.s) - 4), background: color }}
+              title={`#${it.no} ${it.name}: booked in Simpro`} onClick={() => { setSel(it.key); setBk(null); }}>
+              <span className="sc-tg">{it.tag}</span><span className="sc-t">{r.n} ppl · {r.d} d</span>
+              {i === runs.length - 1 && !f && it.kind !== "service" ? <span className="sc-h" title="Drag to add forecast days" onPointerDown={e => startDrag(e, it, "extend")}/> : null}
+            </div>))}
+          {f && sp && sp.used.length ? (
+            <div className={"sc-bar f" + (isDraft ? "" : it.plan ? " kept" : "")} style={{ left: xOf(sp.used[0].iso) + 2, width: Math.max(34, xOf(sp.used[sp.used.length - 1].iso) + sp.used[sp.used.length - 1].part * SCAL_DW - xOf(sp.used[0].iso) - 4), background: SCAL_SOFT[it.kind], borderColor: color, color }}
+              onPointerDown={e => startDrag(e, it, "move")} title="Drag to move. Drag the grip on the right end to change the days.">
+              <span className="sc-tg">{it.booked.length ? "+ " : ""}{it.tag}</span><span className="sc-t">{Math.round(f.hours)} h · {f.crew} ppl · {Math.round(sp.days * 10) / 10} d{sp.cut ? " →" : ""}</span>
+              <span className="sc-h" title="Drag to add or take off days" onPointerDown={e => startDrag(e, it, "end")}/>
+            </div>) : null}
+          {drag && drag.key === it.key ? <span className="sc-dc" style={{ left: Math.min(drag.x + 10, SCAL_WEEKS * SCAL_WEEKW - 200) }}>{drag.label}</span> : null}
+        </div>
+      </div>
+    );
+  };
+
+  const it = sel ? byKey[sel] : null;
+  const inspector = () => {
+    if (picked && byKey[picked]) return <div className="sc-ins"><b>{byKey[picked].no ? "#" + byKey[picked].no + " · " : ""}{byKey[picked].name}</b><small>Tap a day on the calendar to place it.</small><button type="button" className="mt-lnk" onClick={() => setPicked("")}>Cancel</button></div>;
+    if (!it) return <div className="sc-ins"><small>Tap a job to see its hours and book it. Drag a job from the list onto a day to plan it.</small></div>;
+    const f = fc(it), sp = f ? fcSpan(it) : null, isDraft = it.key in drafts;
+    const b = bk && bk.key === it.key ? bk : null;
+    const canBook = f && it.no && !it.upcoming && it.kind !== "service";
+    return (
+      <div className="sc-ins">
+        <div className="sc-ih"><Pill it={it}/>{it.jobId ? <button type="button" className="mt-name" onClick={() => { const j = (jobs || []).find(x => x && x.id === it.jobId); if (j && onOpenJob) onOpenJob(j); }}>{it.no ? "#" + it.no + " · " : ""}{it.name}</button> : <b>{it.no ? "#" + it.no + " · " : ""}{it.name}</b>}</div>
+        <small>{[startTxt(it), hoursTxt(it), it.est != null ? `${it.used} of ${it.est} h used` : ""].filter(Boolean).join(" · ")}</small>
+        {it.scope ? <small>{it.scope}{it.who ? ` · ${it.who}` : ""}</small> : null}
+        {it.flags.map(x => <span key={x} className="sc-flag">{x}</span>)}
+        {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change those days in Simpro.</small> : null}
+        {f ? (<>
+          <div className="sc-ctl">
+            <label>Start<input type="date" value={f.s} onChange={e => e.target.value && setPlan(it.key, { ...f, s: SC.nextWork(e.target.value) })}/></label>
+            <label>Hours<input type="number" min="5" step="5" value={Math.round(f.hours)} onChange={e => setPlan(it.key, { ...f, hours: Math.max(1, +e.target.value || 0) })}/></label>
+            <label>People<input type="number" min="1" max="10" value={f.crew} onChange={e => setPlan(it.key, { ...f, crew: Math.max(1, Math.min(10, +e.target.value || 1)) })}/></label>
+          </div>
+          <small>{sp ? `${SC.short(sp.used[0] ? sp.used[0].iso : f.s)} to ${sp.cut ? "past the view" : SC.short(sp.used[sp.used.length - 1].iso)} · ${Math.round(sp.days * 10) / 10} workdays` : ""}{it.plan && !isDraft ? ` · kept by ${SC.firstOf(it.plan.by)}` : isDraft ? " · not kept yet" : " · forecast from Simpro's crew"}</small>
+          <div className="sc-btns">
+            {canBook ? <button type="button" className="mt-btn" onClick={() => b ? setBk(null) : openBook(it)}>{b ? "Close booking" : "Book in Simpro…"}</button> : null}
+            {isDraft || !it.plan ? <button type="button" className="mt-btn ghost" onClick={() => keep(it)}>Keep as plan</button> : null}
+            {isDraft && it.key in kept ? <button type="button" className="mt-lnk" onClick={() => undoDraft(it)}>Undo changes</button> : null}
+            {it.plan ? <button type="button" className="mt-lnk dim" onClick={() => dropPlan(it)}>{it.booked.length ? "Remove added days" : "Back to the list"}</button> : null}
+          </div>
+          {!canBook && it.upcoming ? <small>{it.no ? `#${it.no} isn't a Simpro job yet` : "Not a Simpro job yet"}, so it can be planned but not booked.</small> : null}
+        </>) : it.kind !== "service" ? <small>Drag the grip on the right end of its block, or drag it from the list, to plan days.</small> : null}
+        {b && !f && b.done ? <small className={b.done.ok ? "ok" : "warn"}>{b.done.ok ? `Booked ${b.done.created.length} entries in Simpro. They show as solid days once Simpro answers.` : "Booking stopped; check Simpro."}</small> : null}
+        {b && f ? (
+          <div className="sc-book">
+            <span className="mt-lab">Who to book ({b.staff.size} picked)</span>
+            {ctx && ctx.failed ? <small className="warn">Couldn't read Simpro's staff list. Try again in a minute.</small> : null}
+            <input value={b.find} onChange={e => setBk(x => ({ ...x, find: e.target.value }))} placeholder="Find a person" aria-label="Find a person"/>
+            <div className="sc-staff">{staffList.filter(s => !b.find || s.name.toLowerCase().includes(b.find.toLowerCase()) || b.staff.has(s.id)).map(s => (
+              <label key={s.id}><input type="checkbox" checked={b.staff.has(s.id)} onChange={() => setBk(x => { const n = new Set(x.staff); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return { ...x, staff: n, preview: null }; })}/>{s.name}</label>))}</div>
+            {b.staff.size && b.staff.size !== f.crew ? <small>Planned for {f.crew} people; booking {b.staff.size} spreads the same {Math.round(f.hours)} h over them.</small> : null}
+            <button type="button" className="mt-btn ghost" disabled={!b.staff.size || b.busy} onClick={() => runPreview(it)}>{b.busy && !b.preview ? "Building the preview…" : "Show what it would book"}</button>
+            {b.err ? <small className="warn">{b.err}</small> : null}
+            {b.preview ? (<>
+              <small>Job #{b.preview.job.no} {b.preview.job.name} · {b.preview.costCenter.sectionName} › {b.preview.costCenter.name} · {b.preview.totals.entries} entries · {b.preview.totals.hours} h{b.preview.totals.ot ? ` · ${b.preview.totals.ot} h at 1.5x` : ""}</small>
+              <div className="sc-tbl"><table><thead><tr><th>Day</th><th>Person</th><th>Time</th><th>Normal</th><th>OT 1.5x</th></tr></thead>
+                <tbody>{b.preview.entries.map(e => <tr key={e.date + e.staffId}><td>{SC.short(e.date)}</td><td>{e.name}</td><td>{e.blocks.map(x => x.StartTime + "–" + x.EndTime).join(", ")}</td><td>{e.normal}</td><td className={e.ot ? "ot" : ""}>{e.ot || "–"}</td></tr>)}</tbody></table></div>
+              <small>Hours over 40 in a person's week go in at 1.5x, counting what's already on their Simpro schedule. This only adds schedule entries; it never changes the job's stage or status.</small>
+              <button type="button" className="mt-btn" disabled={b.busy} onClick={() => runBook(it)}>{b.busy ? "Booking…" : `Book these ${b.preview.totals.entries} entries in Simpro`}</button>
+            </>) : null}
+            {b.done ? <small className={b.done.ok ? "ok" : "warn"}>{b.done.ok ? `Booked ${b.done.created.length} entries in Simpro.` : `Booked ${b.done.created.length} of ${b.done.planned}, then Simpro refused ${b.done.failed.name} on ${b.done.failed.date} (${b.done.failed.status}). The rest weren't written; check Simpro.`}</small> : null}
+          </div>) : null}
+      </div>
+    );
+  };
+
+  const list = V.list.filter(x => !q || String(x.no).includes(q.replace(/^#/, "")) || String(x.name).toLowerCase().includes(q.toLowerCase()));
+  const grp = (x) => x.flags.length ? "Needs scheduling or a PO" : x.kind === "trip" ? "Return trips" : x.upcoming ? "Upcoming starts" : x.over ? "Over bid, nothing booked ahead" : x.kind === "rough" ? "In progress · Rough-in" : "In progress · Finish";
+  const chips = [];
+  let lastG = "";
+  list.forEach(x => {
+    const g = grp(x);
+    if (g !== lastG) { lastG = g; chips.push(<span className="sc-gh" key={"g" + g}>{g}</span>); }
+    const s = x.start && x.start.iso && x.start.iso >= V.today && x.start.iso <= end ? x.start.iso : "";
+    chips.push(
+      <div key={x.key} className={"sc-chip" + (picked === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")} onPointerDown={e => startChip(e, x)} role="button" tabIndex={0}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(p => p === x.key ? "" : x.key); } }}>
+        <b>{x.no ? "#" + x.no + " · " : ""}{x.name}</b>
+        <small><Pill it={x}/>{hoursTxt(x)}{x.left > 0 ? ` · ~${Math.round(x.left / (x.defCrew * SC.HPD) * 10) / 10} days at ${x.defCrew}` : ""}</small>
+        {startTxt(x) ? <small>{startTxt(x)}{x.who && x.kind === "trip" ? ` · ${x.who}` : ""}</small> : null}
+        {x.scope ? <small>{x.scope}</small> : null}
+        {x.flags.map(f => <span key={f} className="sc-flag">{f}</span>)}
+        {s ? <button type="button" className="mt-btn ghost" style={{ alignSelf: "flex-start" }} onPointerDown={e => e.stopPropagation()} onClick={() => place(x, s)}>Place on {SC.short(s)}</button> : null}
+      </div>);
+  });
+  return (
+    <div className="sc">
+      <style>{`
+        .sc{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px;align-items:start}
+        @media (max-width:980px){.sc{grid-template-columns:minmax(0,1fr)}}
+        .sc .sc-key{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;color:var(--cdim)}
+        .sc .sc-sw{display:inline-block;width:20px;height:11px;border-radius:4px;vertical-align:-1px;margin-right:5px}
+        .sc .sc-grid{overflow-x:auto;border:1px solid var(--cline);border-radius:14px;background:var(--card);min-width:0}
+        .sc .sc-hd,.sc .sc-row{display:flex}
+        .sc .sc-hd{position:sticky;top:0;z-index:3;background:var(--card);border-bottom:1px solid var(--cline)}
+        .sc .sc-hl,.sc .sc-lab{position:sticky;left:0;z-index:2;flex:none;width:232px;background:var(--card);border-right:1px solid var(--cline)}
+        .sc .sc-hl{padding:8px 10px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);display:flex;align-items:flex-end}
+        .sc .sc-wk{flex:none;border-right:1px solid var(--cline)}
+        .sc .sc-wl{font-size:11px;font-weight:800;color:var(--cdim);padding:5px 6px 1px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+        .sc .sc-ds{display:flex}.sc .sc-d{width:${SCAL_DW}px;text-align:center;font-size:11px;color:var(--cdim);padding:1px 0 5px;font-variant-numeric:tabular-nums}
+        .sc .sc-d.fri{width:${SCAL_FW}px;font-size:0}.sc .sc-d.now{color:var(--o-ink);font-weight:800}
+        .sc .sc-row{height:46px;border-bottom:1px solid var(--cline)}
+        .sc .sc-row.on .sc-lab{background:var(--inset)}
+        .sc .sc-lab{all:unset;box-sizing:border-box;position:sticky;left:0;z-index:2;width:232px;flex:none;background:var(--card);border-right:1px solid var(--cline);padding:4px 10px;display:flex;flex-direction:column;justify-content:center;cursor:pointer;min-width:0}
+        .sc .sc-nm{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--cink)}
+        .sc .sc-mt{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sc .sc-pill{display:inline-block;font-size:11px;font-weight:800;border-radius:999px;padding:0 7px;margin-right:5px}
+        .sc .sc-fl{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:${OD_R};color:#fff;font-size:11px;font-weight:800;margin-right:4px}
+        .sc .sc-lane{position:relative;flex:none;touch-action:pan-y}
+        .sc .sc-c{position:absolute;top:0;bottom:0;border-right:1px solid rgba(0,0,0,.05)}
+        .sc .sc-c.fri{background:repeating-linear-gradient(135deg,var(--inset) 0 3px,transparent 3px 6px);border-right:1px solid var(--cline)}
+        .sc .sc-c.now{background:rgba(180,83,26,.07)}
+        .sc .sc-mk{position:absolute;top:2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--cink);background:var(--card);z-index:3;pointer-events:none}
+        .sc .sc-mk.conf{background:var(--cink)}
+        .sc .sc-bar{position:absolute;top:8px;height:30px;border-radius:7px;display:flex;align-items:center;padding:0 30px 0 7px;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;user-select:none;touch-action:none;box-sizing:border-box}
+        .sc .sc-bar.b{color:#fff}.sc .sc-bar.b.over{box-shadow:inset 0 0 0 2px ${OD_R}}
+        .sc .sc-bar.f{border:1.5px dashed;cursor:grab}.sc .sc-bar.f.kept{border-style:solid}
+        .sc .sc-tg{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-right:6px;flex:none}
+        .sc .sc-t{overflow:hidden;text-overflow:ellipsis;color:inherit;opacity:.92}.sc .sc-bar.f .sc-t{color:var(--cink)}
+        .sc .sc-h{position:absolute;right:0;top:0;bottom:0;width:26px;cursor:ew-resize;touch-action:none;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.16)}
+        .sc .sc-h::before,.sc .sc-h::after{content:"";width:2px;height:14px;border-radius:1px;margin:0 2px;background:currentColor;opacity:.8}
+        .sc .sc-dc{position:absolute;top:10px;z-index:6;background:${B.ink};color:#fff;font-size:12px;font-weight:700;padding:3px 8px;border-radius:7px;white-space:nowrap;pointer-events:none}
+        .sc .sc-side{display:flex;flex-direction:column;gap:10px;min-width:0}
+        .sc .sc-ins,.sc .sc-listbox{border:1px solid var(--cline);border-radius:14px;background:var(--card);padding:10px 12px;display:flex;flex-direction:column;gap:7px;min-width:0}
+        .sc .sc-ins small{font-size:12.5px;color:var(--cdim)}.sc .sc-ins small.warn{color:${OD_R};font-weight:700}.sc .sc-ins small.ok{color:${OD_G};font-weight:700}
+        .sc .sc-ih{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+        .sc .sc-flag{color:${OD_R};font-size:12.5px;font-weight:700}
+        .sc .sc-ctl{display:flex;gap:8px;flex-wrap:wrap}.sc .sc-ctl label{display:flex;flex-direction:column;font-size:11px;font-weight:800;color:var(--cdim);text-transform:uppercase;gap:2px}
+        .sc .sc-ctl input{width:92px}.sc .sc-ctl input[type=date]{width:142px}
+        .sc .sc-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+        .sc .sc-book{border-top:1px solid var(--cline);padding-top:8px;display:flex;flex-direction:column;gap:7px}
+        .sc .sc-staff{max-height:170px;overflow:auto;display:flex;flex-direction:column;gap:2px;font-size:13px}
+        .sc .sc-staff label{display:flex;gap:6px;align-items:center}
+        .sc .sc-tbl{overflow:auto;max-height:240px;border:1px solid var(--cline);border-radius:10px}
+        .sc .sc-tbl table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+        .sc .sc-tbl th,.sc .sc-tbl td{padding:4px 7px;border-top:1px solid var(--cline);text-align:left;white-space:nowrap}
+        .sc .sc-tbl th{color:var(--cdim);font-weight:700;border-top:0}.sc .sc-tbl td.ot{color:${OD_R};font-weight:800}
+        .sc .sc-list{display:flex;flex-direction:column;gap:6px;max-height:64vh;overflow:auto}
+        .sc .sc-gh{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim);margin-top:6px}
+        .sc .sc-chip{border:1px solid var(--cline);border-radius:11px;padding:7px 9px;background:var(--card);cursor:grab;touch-action:none;user-select:none;display:flex;flex-direction:column;gap:2px}
+        .sc .sc-chip.pick{box-shadow:0 0 0 2px var(--o)}.sc .sc-chip.flag{border-left:3px solid ${OD_R}}
+        .sc .sc-chip b{font-size:13px}.sc .sc-chip small{font-size:12px;color:var(--cdim)}
+        .sc .sc-ghost{position:fixed;z-index:60;pointer-events:none;background:var(--card);border:1.5px dashed var(--o);border-radius:7px;padding:4px 8px;font-size:12px;font-weight:700}
+        .sc .sc-empty{padding:12px;font-size:12.5px;color:var(--cdim)}
+      `}</style>
+      <div className="sc-key">
+        <span><span className="sc-pill" style={{ background: SCAL_SOFT.rough, color: SCAL_KIND.rough }}>Rough-in</span><span className="sc-pill" style={{ background: SCAL_SOFT.finish, color: SCAL_KIND.finish }}>Finish</span><span className="sc-pill" style={{ background: SCAL_SOFT.trip, color: SCAL_KIND.trip }}>Return trip</span></span>
+        <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Solid: booked in Simpro</span>
+        <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Light: forecast at 4-10s</span>
+        <span>Dot: start date, filled = confirmed</span>
+        <span>Drag the grip on a block's right end to add or take off days</span>
+        {sched === undefined ? <span>Reading Simpro's schedule…</span> : sched === null ? <span style={{ color: OD_R, fontWeight: 700 }}>Couldn't read Simpro's schedule; only plans show.</span> : null}
+      </div>
+      <div className="sc-grid" ref={lanes}>
+        <div style={{ width: 232 + SCAL_WEEKS * SCAL_WEEKW }}>
+          <div className="sc-hd"><div className="sc-hl">Job · Rough-in / Finish / Trip</div>
+            {Array.from({ length: SCAL_WEEKS }, (_, w) => { const m = SC.addDays(start, w * 7); return (
+              <div className="sc-wk" key={m} style={{ width: SCAL_WEEKW }}><div className="sc-wl">Week of {SC.md(m)}</div>
+                <div className="sc-ds">{[0, 1, 2, 3, 4].map(i => { const iso = SC.addDays(m, i); return <span key={i} className={"sc-d" + (i === 4 ? " fri" : "") + (iso === V.today ? " now" : "")}>{i < 4 ? ["Mon", "Tue", "Wed", "Thu"][i] + " " + SC.parseYmd(iso).getDate() : ""}</span>; })}</div></div>); })}
+          </div>
+          {V.cal.length ? V.cal.map(rowView) : <div className="sc-empty">{sched === undefined ? "Reading…" : "Nothing booked in this view yet. Drag a job from the list onto a day."}</div>}
+        </div>
+      </div>
+      <div className="sc-side">
+        {inspector()}
+        <div className="sc-listbox">
+          <span className="mt-lab">Not on the calendar yet · {V.list.length}</span>
+          <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find by job number or name" aria-label="Find a job"/>
+          <div className="sc-list">{chips}{!list.length ? <div className="sc-empty">Everything is on the calendar.</div> : null}</div>
+        </div>
+      </div>
+      {ghost ? <div className="sc-ghost" style={{ left: ghost.x + 12, top: ghost.y + 12 }}>{ghost.label}{ghost.iso ? " · " + SC.short(ghost.iso) : ""}</div> : null}
+    </div>
+  );
+}
+
 // ── Meetings tab (SW v648, Koy 2026-11-17): the Weekly Scramble, in the dashboard ──────────
 // Koy: "can we make this in the dashboard though?" then "can I have the ability to add jobs or
 // things to each section and also hide jobs or things from sections". Mockup approved first
@@ -51876,6 +52217,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   const [actFor, setActFor] = useState({});            // sec → {text, who, due}
   const [showHidden, setShowHidden] = useState({});
   const [msg, setMsg] = useState("");
+  const [calOpen, setCalOpen] = useState(true);       // v651: the calendar fold, open by default
   const timers = useRef({});
   const ro = week !== thisWeek;
   const mid = M.meetingId(week, kind), prevDate = M.prevMeetingDate(week), pid = M.meetingId(prevDate, kind), prefsId = kind + "__prefs";
@@ -52332,6 +52674,13 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       {ro ? <div className="mt-ro"><b>{week.slice(5).replace("-", "/")} meeting, read only.</b> Notes and action items as saved that week. The rows are always today's.</div> : null}
       {msg ? <div className="mt-msg" role="status">{msg}</div> : null}
       {mdoc === undefined ? <div className="mt-empty">Opening this week's meeting…</div> : null}
+      {kind === "scramble" ? <section className="od-fold od-white mt-sec">
+        <button type="button" className="od-foldh" aria-expanded={calOpen} onClick={() => setCalOpen(o => !o)}>
+          <span className="mt-num">0</span>Calendar · all crews<small>Simpro bookings, forecasts and what isn't on the calendar yet</small>
+          <small className="tog">{calOpen ? "Hide" : "Show"}</small>
+        </button>
+        {calOpen ? <div className="od-foldb"><OdScrambleCal jobs={jobs} upcoming={upcoming} identity={identity} prefs={prefs} savePrefs={savePrefs} onOpenJob={onOpenJob} say={say}/></div> : null}
+      </section> : null}
       <datalist id="mt-joblist">{(jobs || []).filter(j => j && !j.archived && j.name).slice(0, 400).map(j => <option key={j.id} value={j.simproNo ? `#${j.simproNo} ${j.name}` : j.name}/>)}</datalist>
       {sections}
     </div>
@@ -63793,9 +64142,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-18 · App SW version: v650
+**Last manifest update:** 2026-11-18 · App SW version: v651
 ---
 
+- **Weekly Scramble calendar: all crews on one calendar, Simpro bookings solid, the hours left as forecasts, a list of what isn't on it yet, and Book in Simpro with a preview** · 'in-flight 2026-11-18' · 'SW v651' · 'OdScrambleCal' · 'src/scrambleCal.js' · 'functions/scrambleBook.js' · 'scrambleCalContext' · 'scrambleBook' · 'scripts/scramble-cal-test.js' · Koy, 2026-11-17 (Scramble meeting): *"we want like a calendar view with um, like upcoming jobs and any jobs that are in progress we want them to be like scheduled out through their hours that they have left"*, *"SimPro will be the source of truth with schedule"*, *"on the right or something ... that we can see what needs to be on the calendar and we can put it on there and see what it looks like. And then we can schedule from there"*, *"make the estimated or confirmed start dates visible, and flag anything needing scheduling on a date but not yet"*, *"needs to be clear if its a return trip, rough, or finish"*, then *"lets send it, well adjust when needed"*. Preview first on the real rows (claude.ai/artifact/DF9rkRQuTGGdFkXXk77AL6). **Where:** /dashboard › Meetings, a fold at the top of the Weekly Scramble (open by default). **The calendar:** five weeks from this Monday, all crews in one view, 4-10s (Mon–Thu columns, Friday a thin striped strip, never planned). One block per item, each labelled and coloured **Rough-in** (blue), **Finish** (green) or **Return trip #n** (purple); a Simpro booking with no phase shows as Booked. **Solid** = booked in Simpro (getSimproSchedule, the view's five weeks; days under 2 crew hours are left off), with the first names booked. **Light** = forecast: the phase's hours left from the nightly Job Costs split ('settings/phaseHours': bid − used − hours booked after today) laid out at 10 h a day for the crew Simpro has, else 2 people. A dot marks the CC start date (projected start; filled when its Confirmed box is ticked or the phase is Start Date Set). **Drag** a forecast to move it; **drag the grip on the right end** of any block to add or take off days (a solid booking grows lighter forecast days after it), with a live day count. **The list on the right** (Not on the calendar yet): every phase, open return trip and Upcoming row with nothing booked from today on and no kept plan, grouped *Needs scheduling or a PO* first, then Return trips, In progress Rough-in / Finish, Over bid, Upcoming starts. Drag a card onto a day, tap it then tap a day (phones), or **Place on <start date>**. **Flags (red !):** a start that has passed or falls in the view with nothing booked in Simpro on or after it; a dated rough-in / finish start whose phase has no Materials card ordered ("no material PO" / "material card not ordered yet"); return trips with no date, a schedule-by date, no crew, a date that passed while still open, or set in CC but not booked in Simpro. On-hold and started phases aren't flagged. **Keep as plan** saves the block for everyone in the meeting ('meetings/scramble__prefs.cal.<key>' = { s, hours, crew, staff, by, at }); until then a moved block shows "not kept yet" and only on that screen. **Book in Simpro…** (admin / manager PIN): pick who from Simpro's active staff (the booked crew is ticked), **Show what it would book** lists every entry (day, person, 7:00 start, normal hours, hours at Overtime 1.5x once that person's week passes 40 counting what's already on their Simpro schedule) and the cost center (the Base section's Rough In / Finish; a trip books on Finish), and only **Book these N entries in Simpro** writes. At confirm the server rebuilds the entries from Simpro as it is then; if anything differs from the preview it writes nothing and asks for a new look. One entry at a time, stopping at the first refusal (the card says how many went in). A booked plan comes off the list; the solid days show from Simpro. Upcoming quotes can be planned but not booked until they're a job. Bid hours for Upcoming rows come from the quote or job estimate (whole job, hours only) through 'scrambleCalContext'. **Never** sets or changes a job's stage or status, in CC or Simpro. Each booking is logged to 'scrambleBookings' (server-only). Guide 'dashboard.html' step 6. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scrambleCalContext,functions:scrambleBook' before the app. **Why it won't lose data:** the app writes only its own plans into the existing 'meetings/scramble__prefs' doc, one map key per plan, by merge (no rules change); nothing on a job is written; Simpro gets new schedule entries only, from the server, only on a confirm that matches the preview; no loader, rules or existing function changes.
 - **Lead Meeting laid out like Koy's Nov 11 Doc: Doc order, day-by-day schedule, Hours and margin table with total margin from Simpro** · 'in-flight 2026-11-18' · 'SW v650' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-18 ("all recs go" on 15 fixes): *"make it more accurate to what the last one, the doc, was"* and show *"the total overall margin"* in hours vs bid. Preview first on real numbers (claude.ai artifact, read only). **Order:** Notes, Highlight, Lowlight, Training, Schedule, Upcoming, Hours and margin, Crew out, Action items (last week's carried items, renamed). **Cut:** Open items from the watches, Needs, Hiring, When it comes up; a week whose record already has something typed in one of them still shows it, last ('secHasContent'). **Schedule:** the meeting day to that week's Friday ('leadRange', also the Simpro read's range), a heading per day, each booked job by number + name (CC, else the Job Costs row, else Simpro via the read-only 'getSimproJobBasics', name only) with its crew; one row (and so one + Note) per job per day; an empty day says so. **Upcoming:** CC rough / finish starts and the Upcoming list (its '#2547 - Name' number parsed out), six weeks, "projected" / "confirmed", past due tagged 'Nd past'; a CC start beats its Upcoming-list copy. **Hours and margin:** every active residential job (in CC, not archived / commercial / quick / temp ped, finish not complete, Simpro stage not Invoiced / Complete, hours or material in) as a table: Job, Simpro status, rough net and finish net margin from settings/phaseCosts ((sell − material − labor with overhead) ÷ sell, the Job Costs page's math), total margin from settings/simproTotals (Simpro's NettMargin, the number the margin watch reads), flags per phase for hours / labor / materials over the bid (red) or at 90%+ (orange, never yellow). A phase reads "not started" until it has 10% of its bid hours. Grouped by crew foreman (a jr. foreman's / lead's job sits with their foreman via foremanId): Keegan, Daegan, Colby, then the rest A–Z, then No foreman; worst total margin first. Percentages only, no dollar figure on the page (a test pins that the model carries none). **Crew out:** six weeks, approved ('settings/crewPTO') and pending requests, dates read in both '11/20/2026' and ISO shapes (the v649 bug that dropped all approved time off), names + dates only, people out the same days share a line, office (title admin or untitled roster record) and former crew left out. Tests: 'scripts/meeting-model-test.js'. Guide 'dashboard.html' step M. **Why it won't lose data:** read only everywhere new (settings/simproTotals and getSimproJobBasics are reads); the meeting record shape, ids and writes are unchanged; old sections' typed content still shows.
 - **Meetings tab: the Weekly Lead Meeting beside the Scramble, with the Doc's sections moved in** · 'in-flight 2026-11-17' · 'SW v649' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-17: *"it needs to be added to the meetings page, where weekly scramble currently is"*, *"i want everything from the doc moved here so i dont have to jump between them during the meeting"*, *"i need to be able to easily add and remove items from anywhere, add notes where i want to"*. Reference: the Lead Meeting Claude page (claude.ai/artifact/2J6w44A5VWqQdoRnrM8rKi v9). **Where:** /dashboard › Meetings now opens with a picker, **Weekly Scramble · Tue 4:00** / **Lead Meeting · Wed 6:30** (remembered on the device). **Lead sections, folded with counts:** 1 Open items from the watches (open Needs-you flags from the Asks watch and Crew schedule watch, oldest first, without the myday-* mirrors or a calendar-overlap flag; then My Day asks to Koy from someone else, past due marked) · 2 Schedule, this week and next (every job booked in Simpro Mon–Fri, two weeks, foreman and lead from CC; a booked job not in CC shows by its Simpro #) · 3 Upcoming and past due starts (six weeks) · 4 Hours vs bid (a rough or finish at 90%+ of bid hours and not done, from settings/phaseCosts, as bars with the 100% line; hours only) · 5 Crew out (six weeks; pending requests first, "Needs Koy's approval"; approved time off from settings/crewPTO) · 6–11 the Doc's sections as typed lists: Notes, Highlight, Lowlight, Training, Needs, Hiring · 12 Last week's action items · 13 When it comes up (return trips missing a crew or date, failed inspections, jobs marked Scheduled with nobody booked this week or next). **Everywhere (both meetings):** Add a job or item, Hide / Unhide, + Note on any row, section notes, action items with who and due date and Send to My Day. Lead owners: Koy plus active foremen, jr. foremen and leads. **Carried until done (both meetings):** marking last week's item Not done copies it into this week, so it shows again next week until marked Done; Done removes the copy. **Photos (Koy: "need to be able to put pics with highlight and low lights"):** + Photo on any Highlight or Lowlight item, uploaded like My Day task photos ('taskPhotoPath', 'jobs/_tasks/task-photos/mtg_<meeting>/…', same JPEG shrink), linked from the meeting doc under rowPhotos; tap a thumbnail to open it, × removes the link. Items added to the typed Lead sections belong to that week (meeting doc 'added'), not the sticky prefs. **Seeded:** Nov 11's five Doc notes stand in for that week (lead_2026-11-11) until a record exists. Calendar walks / inspections from the Lead page are not in the app (no calendar source). **Data:** meetings/lead_<Wednesday> and meetings/lead__prefs, same shape as the Scramble's; rules allow type lead / lead_prefs. Guide 'dashboard.html' step M. **Why it won't lose data:** same collection and merge-one-field writes as v648; the Scramble's ids and records are unchanged; settings/phaseCosts, timeOffRequests and crewPTO are only read.
 - **Dashboard Meetings tab: the Weekly Scramble, with notes, action items to My Day, and add / hide per section** · 'in-flight 2026-11-17' · 'SW v648' · 'OdMeetings' · 'src/meetingModel.js' · 'scripts/meeting-model-test.js' · 'meetings/{id}' · Koy, 2026-11-17: *"yes start the mockup, can we make this in the dashboard though?"*, then *"can I have the ability to add jobs or things to each section and also hide jobs or things from sections? And then go ahead and build it."* Mockup first on the real rows (claude.ai/artifact/LNkP6NgeXYmDzRKu17w6iA). **Where:** /dashboard › **Meetings** (between People and Automations), full width. **Sections, in the notes doc's order, all folded with a count and badge:** 1 Schedule this week (Rough / Finish jobs in progress or booked, with this week's Simpro booked days and first names via 'getSimproSchedule', and the job's %; "Nothing booked in Simpro this week" when none) · 2 Small jobs and return trips (open trips missing a crew or a date, quick jobs not scheduled; booked quick jobs last) · 3 Waiting on (phases On Hold, COs pending 7+ days with the day count) · 4 Upcoming starts (Upcoming rows and projected starts in the next six weeks) · 5 Open items from the watches (open Needs-you flags from the Job issues watch and the CC and Simpro sync check, read with 'claudeWork', answered in the Claude tab) · 6 Upcoming material (material cards still needing an order, plus a link to Josh's CED forecast sheet) · 7 Last Scramble's next steps (last week's action items with Done / Not done; the Nov 10 Granola next steps are built in until that week has a record). **Typed and saved:** Section notes (save a second after typing stops), **+ Note** on any row (a bullet under that job), **action items** with who (Josh, Koy, Justin, Brady) and a due date, **Send to <name>'s My Day** in one tap (a My Day task built by 'NeedShape.buildNeed', id 'need_mtg_<meeting>_<item>' so a double tap makes one task; Undo takes it back while still untouched), **Add a job or item** to any section (job picker or free text) and **Hide** on any row with "N hidden · show" to unhide. Adds and hides stick across weeks ('meetings/scramble__prefs'); notes and action items are per week ('meetings/scramble_<Tuesday>'). **Week picker:** this week is editable, earlier weeks open read only; the rows are always today's. **Rules:** new '/meetings/{id}' block (read open, create / update need type scramble or scramble_prefs and updated_at; no deletes). Guide 'dashboard.html' step 7. **Why it won't lose data:** a new collection only; every write is a merge of the one field changed (a note, an item, a hide), so two people typing in different sections never overwrite each other; nothing on a job is written; My Day tasks are ordinary needs docs through the same shape the app uses; no loader or function change.

@@ -8348,3 +8348,112 @@ exports.scheduledSimproStageSync = functions
       throw e;
     }
   });
+
+// ─── Weekly Scramble calendar (SW v651, Koy 2026-11-17) ──────────────────────
+// Koy: "we can put it on there and see what it looks like. And then we can schedule from there", then
+// "lets send it". Two callables for the dashboard's Meetings tab, both behind a live office PIN (admin or
+// manager, the same tiers as the dashboard):
+//   scrambleCalContext  read only: active Simpro staff (ID + name) for the crew picker, and the bid /
+//                       used labor HOURS of the Upcoming rows (quote or job estimate). Never dollars.
+//   scrambleBook        "Book in Simpro". mode "preview" builds every schedule entry it would write (Base
+//                       section's Rough In / Finish cost center, 7:00 AM starts, hours over 40 in the
+//                       person's week at Overtime 1.5x). mode "book" rebuilds the same entries from Simpro
+//                       as it is now and writes them only when they hash the same as the preview the person
+//                       confirmed; otherwise it writes nothing and asks for a new look. Writes one entry at a
+//                       time and stops at the first error. Creates schedule entries only: never a job's
+//                       stage or status. Each run is logged to scrambleBookings (server-only).
+const SB = require("./scrambleBook");
+async function requireOffice(data) {
+  const user = await requireMember(data);
+  if (!["admin", "manager"].includes(gcAdminAccessOf(user))) {
+    throw new functions.https.HttpsError("permission-denied", "Only office admins can book crews in Simpro from here.");
+  }
+  return user;
+}
+async function sbActiveStaff() {
+  const out = [];
+  for (let page = 1; page <= 4; page++) {
+    const r = await simproReqWithRetry("GET", `/employees/?pageSize=250&page=${page}&columns=ID,Name,Archived`);
+    if (!r.ok || !Array.isArray(r.data)) break;
+    r.data.forEach(e => { if (e && !e.Archived && e.ID && e.Name) out.push({ id: Number(e.ID), name: String(e.Name) }); });
+    if (r.data.length < 250) break;
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+exports.scrambleCalContext = functions
+  .runWith({ timeoutSeconds: 120 })
+  .https.onCall(async (data) => {
+    await requireOffice(data);
+    const staff = await sbActiveStaff();
+    const upHours = {};
+    const want = (Array.isArray(data && data.upcoming) ? data.upcoming : []).slice(0, 40)
+      .filter(u => u && /^\d{1,6}$/.test(String(u.no || "")) && ["quote", "job"].includes(u.kind));
+    for (const u of want) {
+      const r = await simproReqWithRetry("GET", `/${u.kind === "quote" ? "quotes" : "jobs"}/${u.no}?columns=ID,Totals`);
+      const lh = r.ok && r.data && r.data.Totals && r.data.Totals.ResourcesCost && r.data.Totals.ResourcesCost.LaborHours;
+      if (lh && Number(lh.Estimate) > 0) upHours[u.no] = { est: Math.round(Number(lh.Estimate) * 10) / 10, used: Math.round((Number(lh.Actual) || 0) * 10) / 10 };
+    }
+    return { ok: true, staff, upHours };
+  });
+exports.scrambleBook = functions
+  .runWith({ timeoutSeconds: 300 })
+  .https.onCall(async (data) => {
+    const user = await requireOffice(data);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const bad = SB.validate(data, today);
+    if (bad) throw new functions.https.HttpsError("invalid-argument", bad);
+    const no = String(data.jobNo), phase = data.phase;
+    const days = data.days.map(d => ({ date: d.date, hours: Number(d.hours) }));
+    const ids = data.staffIds.map(Number);
+    // The job and the cost center it books on.
+    const jr = await simproReqWithRetry("GET", `/jobs/${no}?columns=ID,Name,Stage`);
+    if (!jr.ok || !jr.data || !jr.data.ID) throw new functions.https.HttpsError("not-found", `Simpro has no job #${no}.`);
+    const sr = await simproReqWithRetry("GET", `/jobs/${no}/sections/?pageSize=250&columns=ID,Name,DisplayOrder`);
+    const sections = Array.isArray(sr.data) ? sr.data : [];
+    for (const s of sections.filter(x => /^\s*base\s*$/i.test(x.Name || "")).concat(sections).slice(0, 4)) {
+      if (s.ccs) continue;
+      const cr = await simproReqWithRetry("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250&columns=ID,Name`);
+      s.ccs = Array.isArray(cr.data) ? cr.data : [];
+    }
+    const cc = SB.pickCostCenter(sections, phase);
+    if (!cc) throw new functions.https.HttpsError("failed-precondition", `Job #${no} has no ${phase === "rough" ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Book it in Simpro.`);
+    // Who, by Simpro's own names.
+    const staffAll = await sbActiveStaff();
+    const staff = ids.map(id => staffAll.find(s => s.id === id)).filter(Boolean);
+    if (staff.length !== ids.length) throw new functions.https.HttpsError("invalid-argument", "Someone picked isn't an active Simpro employee.");
+    // Each person's hours already on Simpro for the weeks touched (for the 40-hour line).
+    const sorted = days.map(d => d.date).sort();
+    const from = SB.mondayOf(sorted[0]), to = SB.addDays(SB.mondayOf(sorted[sorted.length - 1]), 6);
+    let rows = [];
+    for (let page = 1; page <= 12; page++) {
+      const r = await simproReqWithRetry("GET", `/schedules/?pageSize=250&page=${page}&Date=between(${from},${to})`);
+      if (!r.ok || !Array.isArray(r.data)) throw new functions.https.HttpsError("unavailable", "Couldn't read Simpro's schedule to check overtime. Nothing was written; try again.");
+      rows = rows.concat(r.data);
+      if (r.data.length < 250) break;
+    }
+    const entries = SB.buildEntries(days, staff, SB.weekHours(rows, ids));
+    const hash = SB.hashOf(no, cc, entries);
+    const job = { no, name: String(jr.data.Name || ""), stage: String(jr.data.Stage || "") };
+    const totals = { entries: entries.length, hours: entries.reduce((a, e) => a + e.hours, 0), ot: entries.reduce((a, e) => a + e.ot, 0) };
+    if (data.mode === "preview") return { ok: true, job, costCenter: cc, entries, hash, totals };
+    if (data.hash !== hash) {
+      throw new functions.https.HttpsError("aborted", "Simpro changed since that preview (someone booked or moved a day). Nothing was written. Look at the new preview and confirm again.");
+    }
+    const path = `/jobs/${no}/sections/${cc.sectionId}/costCenters/${cc.id}/schedules/`;
+    const created = []; let failed = null;
+    for (const e of entries) {
+      const r = await simproReqWithRetry("POST", path, SB.bodyOf(e));
+      if (!r.ok) {
+        const why = typeof r.data === "string" ? r.data : JSON.stringify(r.data || {});
+        failed = { date: e.date, name: e.name, status: r.status, error: why.slice(0, 300) };
+        break;
+      }
+      created.push({ date: e.date, name: e.name, hours: e.hours, ot: e.ot, scheduleId: (r.data && r.data.ID) || null });
+    }
+    try {
+      await db.collection("scrambleBookings").add({ at: new Date().toISOString(), by: user.name || "", job, phase, costCenter: cc,
+        planned: entries.map(e => ({ date: e.date, staffId: e.staffId, name: e.name, hours: e.hours, ot: e.ot })), created, failed, ok: !failed });
+    } catch (e) { functions.logger.warn("[scrambleBook] log failed", e.message); }
+    functions.logger.info("scrambleBook", { no, phase, by: user.name, created: created.length, failed: !!failed });
+    return { ok: !failed, job, costCenter: cc, created, failed, planned: entries.length };
+  });
