@@ -51846,6 +51846,9 @@ function odCostsCoHours(goalsDoc) {
 // (claude.ai/artifact/LNkP6NgeXYmDzRKu17w6iA). Rows are live (jobs, Upcoming, Needs-you flags,
 // this week's Simpro bookings); what the meeting types is saved in /meetings (see meetingModel.js).
 // Past weeks open read only. Send to My Day writes one needs doc with a fixed id per action.
+// A meeting photo link is shown only when it is a Firebase Storage https download URL (the
+// meetings collection is open-write, so a stored javascript: or other link is never rendered).
+const odMtgPhotoUrl = (u) => { try { const x = new URL(String(u || "")); return x.protocol === "https:" && x.hostname === "firebasestorage.googleapis.com" ? x.href : null; } catch (_) { return null; } };
 const OD_CED_SHEET = "https://docs.google.com/spreadsheets/d/160vZ86F38-DpaDwW5JSDJt6DFsh1Qo-Zie8wGY9dYCA/edit";
 function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, flags, onOpenJob, onGoTab }) {
   const M = MeetingModel;
@@ -52016,8 +52019,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           {r.detail ? <small className={r.detail === "Nothing booked in Simpro this week" ? "warn" : ""}>{r.detail}</small> : null}
           {sec === "hours" && r.pct != null ? <div className="mt-bar"><i style={{ width: Math.min(100, r.pct / 1.5) + "%", background: r.pct >= 100 ? OD_R : "var(--o)" }}/><b style={{ left: (100 / 1.5) + "%" }}/></div> : null}
           {r.days && r.days.length ? <div className="mt-days">{r.days.map(d => <span key={d.d}><b>{d.d}</b>: {d.who.join(", ")}</span>)}</div> : null}
-          {Object.keys((md.rowPhotos || {})[r.key] || {}).length ? <div className="mt-ph">{Object.entries(md.rowPhotos[r.key]).filter(([, ph]) => ph && ph.url).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1).map(([pid, ph]) => (
-            <span key={pid}><a href={ph.url} target="_blank" rel="noopener noreferrer" title={ph.name}><img src={ph.url} alt={ph.name || "Photo"} loading="lazy"/></a>{!ro ? <button type="button" aria-label="Remove photo" onClick={() => delRowPhoto(r.key, pid)}>×</button> : null}</span>))}</div> : null}
+          {Object.values((md.rowPhotos || {})[r.key] || {}).some(ph => ph && odMtgPhotoUrl(ph.url)) ? <div className="mt-ph">{Object.entries(md.rowPhotos[r.key]).filter(([, ph]) => ph && odMtgPhotoUrl(ph.url)).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1).map(([pid, ph]) => (
+            <span key={pid}><a href={odMtgPhotoUrl(ph.url)} target="_blank" rel="noopener noreferrer" title={ph.name}><img src={odMtgPhotoUrl(ph.url)} alt={ph.name || "Photo"} loading="lazy"/></a>{!ro ? <button type="button" aria-label="Remove photo" onClick={() => delRowPhoto(r.key, pid)}>×</button> : null}</span>))}</div> : null}
           {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(r.key, nid)}>Remove</button> : null}</li>)}</ul> : null}
           {!ro ? (noteFor === r.key ? (
             <div className="mt-inl">
