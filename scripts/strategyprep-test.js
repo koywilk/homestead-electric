@@ -781,7 +781,7 @@ function fixture(over = {}) {
   const calSrc = src.slice(src.indexOf("function calendarRows"), src.indexOf("// ── people"));
   t("F12b: calendarRows guard 'if (!d) return;' is live code on its own line, not inside a comment", /\n\s*if \(!d\) return;/.test(calSrc), "");
   const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
-  const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
+  const run = idxSrc.slice(idxSrc.indexOf("async function gatherStrategyInputs"), idxSrc.indexOf("exports.strategyPrep ="));   // v657: the reads moved into gatherStrategyInputs (shared with the meeting prefill)
   t("F12a: calendar window timeMin …T00:00:00-06:00, timeMax …T23:59:59-07:00", /timeMin: `\$\{windowStart\}T00:00:00-06:00`/.test(run) && /timeMax: `\$\{windowEnd\}T23:59:59-07:00`/.test(run));
   t("F12c: NO success push — no deliverIfWanted / resolveRecipients / \"Friday prep\" notif in the run; both failure alerts stay; docs go to the Meeting Prep Friday folder", !/deliverIfWanted|resolveRecipients|title: "Friday prep"/.test(run) && /Friday prep: plain-text fallback/.test(run) && /Friday prep failed/.test(run) && !/PACKET_DRIVE_FOLDER_ID/.test(run) && (run.match(/parents: \[MEETING_PREP_FOLDERS\.friday\]/g) || []).length === 2 && !/recipients|pushError/.test(run) && (run.match(/sendToName\(/g) || []).length === 3);
   t("F12d: fallback HTML declares utf-8", /<meta charset="utf-8">/.test(run));
@@ -826,7 +826,7 @@ function fixture(over = {}) {
 
   // M4 / M8 — orchestrator: whole-field state write; Simpro page cap is reported.
   const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
-  const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
+  const run = idxSrc.slice(idxSrc.indexOf("async function gatherStrategyInputs"), idxSrc.indexOf("exports.strategyPrep ="));   // v657: the reads moved into gatherStrategyInputs (shared with the meeting prefill)
   t("M4: state write uses mergeFields of the payload's keys (stale map keys replaced), not merge:true", /\{ mergeFields: Object\.keys\(statePayload\) \}/.test(run) && !/settings\/strategyPrep"\)\.set\([^;]*\{ merge: true \}/.test(run));
   t("M8: 10 full Simpro schedule pages → logged and pushed to inputErrors", /simpro schedule: 10 full pages/.test(run) && /strategyPrep simpro schedule page cap hit/.test(run));
 }
@@ -895,7 +895,7 @@ function fixture(over = {}) {
   t("v547: the inserted text carries the tabs the Docs API nests on", reqs[0].insertText.text.includes("\n\tfinish 95%\n\tPlan\n\t\tTreycen Rollene, Bailey Smith · Mon\n"));
   // Orchestrator: the data-did-not-load line is inserted at the TOP (there is no pre-line any more).
   const idxSrc = require("fs").readFileSync(require.resolve("../functions/index.js"), "utf8");
-  const run = idxSrc.slice(idxSrc.indexOf("async function runStrategyPrep"), idxSrc.indexOf("exports.strategyPrep ="));
+  const run = idxSrc.slice(idxSrc.indexOf("async function gatherStrategyInputs"), idxSrc.indexOf("exports.strategyPrep ="));   // v657: the reads moved into gatherStrategyInputs (shared with the meeting prefill)
   t("v547: orchestrator splices the 'Some data did not load' line at index 0", /lines\.splice\(0, 0, \{ text: `Some data did not load this run/.test(run) && !/lines\.splice\(1, 0/.test(run));
   t("v547: fallback HTML indents tab-nested rows and strips the tabs from the text", /margin-left:\$\{depth \* 18\}px/.test(run) && /esc\(plain\)/.test(run));
 }

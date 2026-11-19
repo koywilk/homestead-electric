@@ -181,7 +181,7 @@ service cloud.firestore {
     // the app (a past week is history).
     match /meetings/{meetingId} {
       allow read: if true;
-      allow create, update: if request.resource.data.type in ['scramble', 'scramble_prefs', 'lead', 'lead_prefs', 'foreman', 'foreman_prefs']
+      allow create, update: if request.resource.data.type in ['scramble', 'scramble_prefs', 'lead', 'lead_prefs', 'foreman', 'foreman_prefs', 'strategy', 'strategy_prefs']
                     && request.resource.data.updated_at is string;
       allow delete: if false;
     }

@@ -247,10 +247,28 @@ const LEAD_OLD = [["needs", "Needs"], ["hiring", "Hiring"], ["watches", "Open it
 const TYPED = ["notes", "highlight", "lowlight", "training", "needs", "hiring", "team"];
 const FOREMAN_SECS = [["team", "Team check"], ["jobs", "Jobs"], ["guys", "Guys"], ["nextsteps", "Action items"]];
 const LEAD_WATCHES = ["Asks watch", "Crew schedule watch"];
+// ── Friday Strategy (SW v657, Koy 2026-11-19, owners meeting, Fridays 8:00) ──────────────────────
+// The rows come from the Thursday-night prefill (functions/strategyMeeting.js, saved under
+// meetings/strategy_<Friday>.prefill); Job numbers are read live (Job Costs + Simpro totals) and
+// carry dollars. Everything on this page belongs to its week: hides, edits, adds, notes, items.
+const STRATEGY_SECS = [
+  ["top", "Top of the meeting"],
+  ["schedule", "Schedule next week"],
+  ["starts", "Starts next week"],
+  ["trips", "Return trips needed"],
+  ["needsdate", "Needs a date"],
+  ["moved", "Dates that moved since last Friday"],
+  ["oncal", "On the calendar next week"],
+  ["numbers", "Job numbers"],
+  ["out", "People out next week"],
+  ["notes", "Notes"],
+  ["nextsteps", "Action items"],
+];
 const CFG = {
   scramble: { dow: 2, label: "Weekly Scramble", when: "Tuesdays 4:00 PM", who: "Josh, Koy, Justin, Brady", secs: SECS, weeks: 1 },
   lead: { dow: 3, label: "Weekly Lead Meeting", when: "Wednesdays 6:30 AM", who: "Koy and the foremen and leads", secs: LEAD_SECS, weeks: 1 },
   foreman: { dow: 3, label: "Weekly Resi Foreman Meeting", when: "Wednesdays 7:00 AM", who: "Koy, Keegan, Daegan and Colby", secs: FOREMAN_SECS, weeks: 1 },
+  strategy: { dow: 5, label: "Friday Strategy", when: "Fridays 8:00 AM", who: "Koy, Josh and Brady", secs: STRATEGY_SECS, weeks: 1 },
 };
 const sameName = (a, b) => { const x = String(a || "").trim().toLowerCase(), y = String(b || "").trim().toLowerCase(); return !!x && !!y && (x === y || x.startsWith(y + " ") || y.startsWith(x + " ")); };
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -352,6 +370,51 @@ function buildForemanSections(input) {
       .sort((a, b) => (rank[a.title] ?? 3) - (rank[b.title] ?? 3) || String(a.name).localeCompare(String(b.name)))
       .forEach(u => S.guys.push({ key: "g_" + safeKey(u.id), uid: safeKey(u.id), group: f.name, title: u.name, detail: tl[u.title] || "", days: [] }));
   });
+  return S;
+}
+
+// Friday Strategy · Job numbers: the shared job table (marginRows: rough / finish net from Job Costs,
+// total margin from Simpro, flags at 90%+ and over bid), every active job, worst total margin first,
+// with the dollars the owners asked for: Simpro job total, and each phase's sell and profit
+// (sell − material − labor with overhead, actual, the Job Costs page's math). A phase that hasn't
+// started shows "not started" and no profit.
+function strategyNumbers(input) {
+  const { costs = [], totals = {} } = input || {};
+  const costByNo = {}; (costs || []).forEach(r => { if (r && r.no != null) costByNo[String(r.no).trim()] = r; });
+  const rows = marginRows(input).map(r => {
+    const c = costByNo[r.no] || {}, t = totals[r.no] || {};
+    const ph = (p, st) => {
+      const sell = num(c[p + "_sell"]), mat = num(c[p + "_matAct"]), lab = num(c[p + "_labAct"]);
+      return { sell: sell || null, profit: st && !st.state && sell ? Math.round(sell - mat - lab) : null, matUsed: Math.round(mat), matBid: Math.round(num(c[p + "_matEst"])) };
+    };
+    return { ...r, group: "", money: { total: typeof t.total === "number" ? Math.round(t.total) : null, rough: ph("rough", r.rough), finish: ph("finish", r.finish) } };
+  });
+  rows.sort((a, b) => (a.total == null ? 1 : 0) - (b.total == null ? 1 : 0) || (a.total || 0) - (b.total || 0) || (+a.no || 0) - (+b.no || 0));
+  return rows;
+}
+// Crew-calendar items taken off the calendar and left open (scramble__prefs.cal.<key>.off) → Needs a date.
+function parkedRows(jobs, cal) {
+  const out = [];
+  Object.entries(cal || {}).forEach(([k, p]) => {
+    if (!p || !p.off || /~/.test(k)) return;
+    let j = null, what = "";
+    const m = /^j_(.+)_([rf])$/.exec(k);
+    if (m) { j = (jobs || []).find(x => x && safeKey(x.id) === m[1]); what = m[2] === "f" ? "Finish" : "Rough-in"; }
+    else if (/^t_/.test(k)) { j = (jobs || []).find(x => x && k.slice(2).startsWith(safeKey(x.id) + "_")); what = "Return trip"; }
+    if (!j || j.archived) return;
+    out.push({ key: "pk_" + safeKey(k), jobId: j.id, no: jobNo(j), title: j.name || "", tag: "Parked", bad: true,
+      detail: `${what} taken off the crew calendar${p.by ? " by " + firstOf(p.by) : ""}${p.at ? " " + String(p.at).slice(5, 10).replace("-", "/") : ""}, still open`, days: [] });
+  });
+  return out;
+}
+function buildStrategySections(input) {
+  const { prefill = null, jobs = [], calPrefs = null } = input || {};
+  const P = (prefill && prefill.rows) || {};
+  const S = {};
+  STRATEGY_SECS.forEach(([k]) => { S[k] = (Array.isArray(P[k]) ? P[k] : []).filter(r => r && r.key).map(r => ({ ...r, days: [] })); });
+  S.numbers = strategyNumbers(input);
+  S.needsdate = S.needsdate.concat(parkedRows(jobs, calPrefs && calPrefs.cal));
+  S.notes = [];
   return S;
 }
 
@@ -458,4 +521,4 @@ function seedFor(kind, dateYmd) {
 module.exports = { SECS, ATTENDEES, WATCHES, ymd, parseYmd, anyDate, meetingDate, meetingId, prevMeetingDate, weekRange, safeKey, firstOf,
   bookingsByJob, buildSections, applyPrefs, carriedSteps, SEED_2026_11_10, needIdFor,
   CFG, LEAD_SECS, LEAD_OLD, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11, leadRange, secHasContent, phaseOf,
-  FOREMAN_SECS, marginRows, buildForemanSections, isMainGroup };
+  FOREMAN_SECS, marginRows, buildForemanSections, isMainGroup, STRATEGY_SECS, strategyNumbers, parkedRows, buildStrategySections };

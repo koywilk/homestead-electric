@@ -51952,7 +51952,7 @@ const SCAL_WEEKS = 5;
 const SCAL_KIND = { rough: OD_B, finish: OD_G, trip: OD_P, service: C.slate };
 const SCAL_SOFT = { rough: "rgba(37,99,201,.12)", finish: "rgba(24,128,74,.12)", trip: "rgba(106,79,200,.13)", service: "rgba(92,107,122,.13)" };
 const SCAL_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs, onOpenJob, say }) {
+function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs, onOpenJob, say, startWk = 0 }) {
   const SC = ScrambleCal;
   const me = (identity && identity.name) || "";
   const [sched, setSched] = useState(undefined);       // Simpro schedule for the view (undefined loading, null failed)
@@ -51966,7 +51966,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const [reload, setReload] = useState(0);
   const [simOnly, setSimOnly] = useState(false);
   const [view, setView] = useState(() => { try { const v = localStorage.getItem("he_scal_view"); return v === "month" ? "month" : "week"; } catch (_) { return "week"; } });
-  const [wk, setWk] = useState(0);                     // which of the five weeks the week view shows
+  const [wk, setWk] = useState(startWk);               // which of the five weeks the week view shows (v657: Friday Strategy opens on next week)
   const [crewF, setCrewF] = useState("All");
   const [copyOpen, setCopyOpen] = useState(false);
   const [drag, setDrag] = useState("");                // key being dragged
@@ -52793,11 +52793,29 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
     </div>
   </div>);
 }
-function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, flags, onOpenJob, onGoTab }) {
+// v657: what each Friday Strategy section is, under its heading.
+const STRAT_SRC = {
+  top: "The five or six things that matter most this week, worst first. Built from the sections below when the meeting was prefilled.",
+  schedule: "The crew calendar, opened on next week: Simpro bookings, kept plans and the auto-schedule. Under it, every job booked next week, then every job in progress with nobody booked (phase %, last update, punch, questions, what it waits on, crew or NO CREW).",
+  starts: "Next week's rough and finish starts. AT RISK when nobody is booked, no lead, Job Prep not 5 of 5, or no material PO on the phase.",
+  trips: "Every open return trip in Command Center: what it's for, material and PO numbers, booked or not. Approved change orders not on a trip are listed too.",
+  needsdate: "Return trips past their date and not finished, jobs Simpro calls Job - Scheduled with nothing booked next week, and anything taken off the crew calendar and left open.",
+  moved: "Start, inspection, QC, scan and return-trip dates that changed since last Friday, then dates that passed with nothing logged.",
+  oncal: "Inspections, QC walks, scans, booked return trips, and walks and meetings on Koy's calendar, by day.",
+  numbers: "Every active job, worst total margin first. Total margin and job total straight from Simpro; rough and finish net margin, profit and hours from the Job Costs page (actual, not projected). Flags at 90% of the bid and over it.",
+  out: "Approved time off next week, requests still waiting, and booking conflicts.",
+  notes: "This week's notes. Starts empty every Friday.",
+};
+const stratMoney = (n) => n == null ? "—" : (n < 0 ? "−" : "") + (odMoney(Math.abs(n)) || "$0");
+function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, flags, onOpenJob, onGoTab, money = true }) {
   const M = MeetingModel;
   const me = (identity && identity.name) || "";
+  // v657: the Friday Strategy is the owners meeting and shows dollars: admins only (Koy, Josh, Brady), never in Foreman view.
+  const canStrategy = !!money && getAccess(identity) === "admin";
   // v649: which meeting (Weekly Scramble / Weekly Lead Meeting), remembered on this device.
-  const [kind, setKindRaw] = useState(() => { try { const k = localStorage.getItem("he_mtg_kind"); return k === "lead" || k === "foreman" ? k : "scramble"; } catch (_) { return "scramble"; } });
+  const [kindSel, setKindRaw] = useState(() => { try { const k = localStorage.getItem("he_mtg_kind"); return k === "lead" || k === "foreman" || k === "strategy" ? k : "scramble"; } catch (_) { return "scramble"; } });
+  const kind = kindSel === "strategy" && !canStrategy ? "scramble" : kindSel;
+  const strat = kind === "strategy";
   const wed = kind !== "scramble";   // v652: the Lead and Foreman Meetings (Wednesdays) share the Lead's ways
   const cfg = M.CFG[kind];
   const thisWeek = M.meetingDate(new Date(), kind);
@@ -52834,6 +52852,17 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     return () => { u1(); u2(); };
   }, [mid]); // eslint-disable-line
   useEffect(() => { setPrefs(null); return onSnapshot(doc(db, "meetings", prefsId), s => setPrefs(s.exists() ? s.data() : {}), () => setPrefs({})); }, [prefsId]);
+  // v657: the Friday Strategy's Schedule is the crew calendar itself, the same shared plans as the Scramble's (scramble__prefs).
+  const [calPrefs, setCalPrefs] = useState(null);
+  useEffect(() => { if (!strat) return undefined; return onSnapshot(doc(db, "meetings", "scramble__prefs"), s => setCalPrefs(s.exists() ? s.data() : {}), () => setCalPrefs({})); }, [strat]);
+  const saveCalPrefs = (patch) => setDoc(doc(db, "meetings", "scramble__prefs"), { type: "scramble_prefs", ...patch, updated_at: new Date().toISOString(), saved_by: me }, { merge: true })
+    .catch(e => say("Didn't save: " + ((e && e.message) || "check the connection")));
+  const [prefillBusy, setPrefillBusy] = useState(false);
+  const prefillNow = () => {
+    if (prefillBusy) return; setPrefillBusy(true); say("Prefilling this Friday's meeting. This takes a minute or two.");
+    memberCallable("refreshStrategyMeeting", identity, { timeout: 540000 })({ _appKey: APP_CALL_KEY }).then(r => { setPrefillBusy(false); say(r && r.data && r.data.ok ? "Prefilled." : "Didn't prefill: " + ((r && r.data && r.data.error) || "try again")); },
+      e => { setPrefillBusy(false); say("Didn't prefill: " + ((e && e.message) || "try again")); });
+  };
   useEffect(() => {
     if (!wed) return undefined;
     let dead = false;
@@ -52846,7 +52875,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     return () => { dead = true; };
   }, [kind]); // eslint-disable-line
   useEffect(() => {
-    if (kind === "foreman") { setSched([]); return undefined; }   // v652: the Foreman Meeting has no schedule
+    if (kind === "foreman" || kind === "strategy") { setSched([]); return undefined; }   // v652: the Foreman Meeting has no schedule; v657: the Friday Strategy's calendar reads its own
     let dead = false; setSched(undefined);
     const r = kind === "lead" ? M.leadRange(week) : M.weekRange(week, cfg.weeks);   // v650: Lead runs meeting day to Friday
     httpsCallable(functions, "getSimproSchedule")({ dateFrom: r.from, dateTo: r.to }).then(
@@ -52869,13 +52898,15 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     miss.forEach(no => fetchSimproJobBasics(no).then(b => { if (!dead && b && b.name) setSimNames(m => ({ ...m, [no]: String(b.name).trim() })); }, () => {}));
     return () => { dead = true; };
   }, [kind, sched, jobs, leadSrc.costs]); // eslint-disable-line
-  const S = useMemo(() => kind === "foreman"
+  const S = useMemo(() => kind === "strategy"
+    ? M.buildStrategySections({ prefill: mdoc && mdoc.prefill, jobs, users, costs: leadSrc.costs, totals: leadSrc.totals, effFS, calPrefs })
+    : kind === "foreman"
     ? M.buildForemanSections({ jobs, users, costs: leadSrc.costs, totals: leadSrc.totals, effFS })
     : kind === "lead"
     ? M.buildLeadSections({ jobs, needs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], costs: leadSrc.costs, totals: leadSrc.totals, names: simNames,
         users, requests: leadSrc.requests, pto: leadSrc.pto, today: new Date(), meeting: week, effRS, effFS })
     : M.buildSections({ jobs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], today: new Date(), effRS, effFS }),
-    [kind, jobs, needs, upcoming, flags, sched, leadSrc, simNames, users, week]); // eslint-disable-line
+    [kind, jobs, needs, upcoming, flags, sched, leadSrc, simNames, users, week, mdoc, calPrefs]); // eslint-disable-line
   const nowIso = () => new Date().toISOString();
   const say = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
   const saveMtg = (patch) => setDoc(doc(db, "meetings", mid), { type: kind, date: week, ...patch, updated_at: nowIso(), saved_by: me }, { merge: true })
@@ -52898,8 +52929,15 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     setNoteText("");
   };
   const delRowNote = (key, nid) => saveMtg({ rowNotes: { [key]: { [nid]: deleteField() } } });
-  const hideRow = (sec, r) => savePrefs({ hidden: { [sec]: { [r.key]: { by: me, at: nowIso(), title: r.title || "" } } } });
-  const unhideRow = (sec, key) => savePrefs({ hidden: { [sec]: { [key]: deleteField() } } });
+  // v657: on the Friday Strategy a hide belongs to that week (each week is prefilled fresh); elsewhere it sticks.
+  const hideRow = (sec, r) => (strat ? saveMtg : savePrefs)({ hidden: { [sec]: { [r.key]: { by: me, at: nowIso(), title: r.title || "" } } } });
+  const unhideRow = (sec, key) => (strat ? saveMtg : savePrefs)({ hidden: { [sec]: { [key]: deleteField() } } });
+  // v657 (Koy: "make sure I can hide, edit, delete, or add in any of them"): Edit any row's words for this week.
+  const [editFor, setEditFor] = useState(null);       // row key being edited
+  const [editVals, setEditVals] = useState({ title: "", detail: "" });
+  const startEdit = (r, ed) => { setEditFor(r.key); setNoteFor(null); setEditVals({ title: (ed && ed.title) || r.title || "", detail: ed && ed.detail != null ? ed.detail : (r.detail || "") }); };
+  const saveEdit = (r) => { const t = editVals.title.trim(); saveMtg({ edits: { [r.key]: { title: t || r.title || "", detail: editVals.detail.trim(), by: me, at: nowIso() } } }); setEditFor(null); };
+  const resetEdit = (key) => { saveMtg({ edits: { [key]: deleteField() } }); setEditFor(null); };
   const addItem = (sec) => {
     const t = String(addFor[sec] || "").trim(); if (!t) return;
     const j = (jobs || []).find(x => x && (String(x.simproNo || "") === t.replace(/^#/, "").split(" ")[0] || String(x.name || "").toLowerCase() === t.toLowerCase()));
@@ -52908,7 +52946,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     (isTyped(sec) ? saveMtg : savePrefs)({ added: { [id()]: item } });
     setAddFor(a => ({ ...a, [sec]: "" }));
   };
-  const isTyped = (sec) => wed && M.TYPED.includes(sec);
+  const isTyped = (sec) => strat || (wed && M.TYPED.includes(sec));   // v657: every Friday Strategy add belongs to its week
   const removeAdded = (aid, sec) => (isTyped(sec) ? saveMtg : savePrefs)({ added: { [aid]: deleteField() } });
   // v649: photos on Highlight / Lowlight items, stored like My Day task photos (same path helper,
   // same JPEG shrink); the meeting doc keeps the link under rowPhotos.<row>.<photo>.
@@ -52944,7 +52982,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     if (!a.who) return;
     const mtg = onMeeting || mid;
     const nid = M.needIdFor(mtg, aid), t = nowIso();
-    const need = NeedShape.buildNeed({ kind: "task", text: `${a.text} (${kind === "lead" ? "Lead Meeting" : kind === "foreman" ? "Foreman Meeting" : "Scramble"} ${mtg.replace(/^[a-z]+_/, "")})`, dueDate: a.due || "", assignedTo: a.who, dueBucket: "week" }, me, t, nid);
+    const need = NeedShape.buildNeed({ kind: "task", text: `${a.text} (${kind === "lead" ? "Lead Meeting" : kind === "foreman" ? "Foreman Meeting" : kind === "strategy" ? "Friday Strategy" : "Scramble"} ${mtg.replace(/^[a-z]+_/, "")})`, dueDate: a.due || "", assignedTo: a.who, dueBucket: "week" }, me, t, nid);
     need.meetingId = mtg; need.meetingActionId = aid;
     try {
       await setDoc(doc(db, "needs", nid), stampWrite({ data: need, updated_at: t, saved_by: me }));
@@ -52970,13 +53008,15 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
 
   const md = mdoc || {};
   // Who an action item can go to: the Scramble's four; for the Lead Meeting, Koy plus every active foreman, jr. foreman and lead.
-  const people = wed
+  const people = strat ? Array.from(new Set(["Koy Wilkinson", "Josh Cloward", "Brady Nelson", ...M.ATTENDEES])) : wed
     ? Array.from(new Set(["Koy Wilkinson", ...(users || []).filter(u => u && u.active !== false && /^(foreman|jrforeman|lead)$/.test(String(u.title || "")) && u.access !== "contractor").map(u => u.name).filter(Boolean)]))
     : M.ATTENDEES;
   const fmtDue = (s) => { const d = M.parseYmd(s); return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" }) : ""; };
   const pillCls = (tag) => /^Finish/.test(tag) ? "fin" : /^Rough/.test(tag) ? "rgh" : tag === "Booked" ? "ok" : /^Needs|^On hold|ordering|d past$/.test(tag) ? "bad" : "";
 
-  const rowView = (sec, r) => {
+  const rowView = (sec, r0) => {
+    const ed = (md.edits || {})[r0.key];
+    const r = ed ? { ...r0, title: ed.title || r0.title, detail: ed.detail != null ? ed.detail : r0.detail } : r0;
     const notes = Object.entries((md.rowNotes || {})[r.key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
     const job = r.jobId ? (jobs || []).find(j => j && j.id === r.jobId) : null;
     return (
@@ -52985,12 +53025,23 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         <div className="mt-tt">
           {job ? <button type="button" className="mt-name" onClick={() => onOpenJob && onOpenJob(job)}>{r.title}</button> : <b>{r.title}</b>}
           {r.detail ? <small className={r.detail === "Nothing booked in Simpro this week" ? "warn" : ""}>{r.detail}</small> : null}
+          {ed ? <small className="mt-dim">Edited by {M.firstOf(ed.by)}</small> : null}
           {sec === "hours" && r.pct != null ? <div className="mt-bar"><i style={{ width: Math.min(100, r.pct / 1.5) + "%", background: r.pct >= 100 ? OD_R : "var(--o)" }}/><b style={{ left: (100 / 1.5) + "%" }}/></div> : null}
           {r.days && r.days.length ? <div className="mt-days">{r.days.map(d => <span key={d.d}><b>{d.d}</b>: {d.who.join(", ")}</span>)}</div> : null}
           {Object.values((md.rowPhotos || {})[r.key] || {}).some(ph => ph && odMtgPhotoUrl(ph.url)) ? <div className="mt-ph">{Object.entries(md.rowPhotos[r.key]).filter(([, ph]) => ph && odMtgPhotoUrl(ph.url)).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1).map(([pid, ph]) => (
             <span key={pid}><a href={odMtgPhotoUrl(ph.url)} target="_blank" rel="noopener noreferrer" title={ph.name}><img src={odMtgPhotoUrl(ph.url)} alt={ph.name || "Photo"} loading="lazy"/></a>{!ro ? <button type="button" aria-label="Remove photo" onClick={() => delRowPhoto(r.key, pid)}>×</button> : null}</span>))}</div> : null}
           {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(r.key, nid)}>Remove</button> : null}</li>)}</ul> : null}
-          {!ro ? (noteFor === r.key ? (
+          {!ro && editFor === r.key ? (
+            <div className="mt-edit">
+              <input autoFocus value={editVals.title} onChange={e => setEditVals(v => ({ ...v, title: e.target.value }))} aria-label="Title" placeholder="Title"/>
+              <input value={editVals.detail} onChange={e => setEditVals(v => ({ ...v, detail: e.target.value }))} aria-label="Details" placeholder="Details"
+                onKeyDown={e => { if (e.key === "Enter") saveEdit(r0); if (e.key === "Escape") setEditFor(null); }}/>
+              <span><button type="button" className="mt-btn" onClick={() => saveEdit(r0)}>Save</button>
+                <button type="button" className="mt-lnk" onClick={() => setEditFor(null)}>Cancel</button>
+                {ed ? <button type="button" className="mt-lnk dim" onClick={() => resetEdit(r.key)}>Back to original</button> : null}</span>
+            </div>
+          ) : null}
+          {!ro && editFor !== r.key ? (noteFor === r.key ? (
             <div className="mt-inl">
               <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={`Note on ${r.title}…`} aria-label={`Note on ${r.title}`}
                 onKeyDown={e => { if (e.key === "Enter") addRowNote(r.key); if (e.key === "Escape") setNoteFor(null); }}/>
@@ -53000,6 +53051,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           ) : (
             <div className="mt-rowacts">
               <button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
+              <button type="button" className="mt-lnk" onClick={() => startEdit(r0, ed)}>Edit</button>
               {kind === "lead" && (sec === "highlight" || sec === "lowlight") ? <label className="mt-lnk mt-file">{photoBusy === r.key ? "Uploading…" : "+ Photo"}<input type="file" accept="image/*" multiple disabled={photoBusy === r.key} onChange={e => { addRowPhotos(r.key, e.target.files); e.target.value = ""; }}/></label> : null}
               {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId, sec)}>Remove from section</button>
                 : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}
@@ -53007,7 +53059,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           )) : null}
         </div>
         <div className="mt-rt">
-          {r.tag ? <span className={"mt-pill " + pillCls(r.tag)}>{r.tag}</span> : null}
+          {r.tag ? <span className={"mt-pill " + (r.bad ? "bad" : pillCls(r.tag))}>{r.tag}</span> : null}
           {sec === "schedule" && r.pct != null ? <span className="mt-big">{r.pct}%</span> : null}
           {sec === "hours" && r.pct != null ? <span className="mt-big" style={{ color: r.pct >= 100 ? OD_R : undefined }}>{r.pct}%<small>of bid</small></span> : null}
           {sec === "waiting" && r.pct != null ? <span className="mt-big">{r.pct}<small>days</small></span> : null}
@@ -53052,6 +53104,52 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
               <td><b className="mt-tot" style={{ color: r.total != null && r.total < 15 ? OD_R : undefined }}>{r.rough ? pctTxt(r.total) : ""}</b>{r.totalEst ? <small>Simpro estimate</small> : null}</td>
               <td className="mt-fl">{r.flags ? (r.flags.length ? r.flags.map((f, i) => <div key={i} style={{ color: f.over ? OD_R : OD_O }}>{f.text}</div>) : <span className="mt-dim">OK</span>) : null}</td>
             </tr>)];
+        })}</tbody>
+      </table></div>
+    );
+  };
+  // v657: Friday Strategy · Job numbers, with dollars (owners meeting). Worst total margin first.
+  const numbersView = (sec, rows) => {
+    const cell = (ph, m) => !ph ? null : ph.state === "none" ? <span className="mt-dim">—</span>
+      : ph.state === "not started" ? <span className="mt-dim">not started{ph.used >= 1 ? <small>{Math.round(ph.used)} of {Math.round(ph.est)} h</small> : null}</span>
+      : <span><b className={ph.m != null && ph.m < 0 ? "mt-neg" : ""}>{pctTxt(ph.m)}</b>{m && m.profit != null ? <small className={m.profit < 0 ? "mt-neg" : ""}>{stratMoney(m.profit)} profit on {stratMoney(m.sell)}</small> : null}<small>{Math.round(ph.used)} of {Math.round(ph.est)} h</small></span>;
+    return (
+      <div className="mt-tblw"><table className="mt-tbl mt-tbl8">
+        <thead><tr><th>Job</th><th>Simpro status</th><th>Job total</th><th>Rough net</th><th>Finish net</th><th>Total margin</th><th>Material used / bid</th><th>Flags</th></tr></thead>
+        <tbody>{rows.map(r0 => {
+          const ed = (md.edits || {})[r0.key];
+          const r = ed ? { ...r0, title: ed.title || r0.title } : r0;
+          const notes = Object.entries((md.rowNotes || {})[r.key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
+          const job = r.jobId ? (jobs || []).find(j => j && j.id === r.jobId) : null;
+          const mo = r.money || null;
+          const mat = mo ? [mo.rough, mo.finish].reduce((t, x) => ({ u: t.u + (x.matUsed || 0), b: t.b + (x.matBid || 0) }), { u: 0, b: 0 }) : null;
+          return (
+            <tr key={r.key}>
+              <td className="mt-tj">
+                <span className="mt-no">{r.no || ""}</span> {job ? <button type="button" className="mt-name" onClick={() => onOpenJob && onOpenJob(job)}>{r.title}</button> : <b>{r.title}</b>}
+                {!r.rough && r.detail ? <small>{r.detail}</small> : null}
+                {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(r.key, nid)}>Remove</button> : null}</li>)}</ul> : null}
+                {!ro && editFor === r.key ? (
+                  <div className="mt-inl"><input autoFocus value={editVals.title} onChange={e => setEditVals(v => ({ ...v, title: e.target.value }))} aria-label="Job name" onKeyDown={e => { if (e.key === "Enter") saveEdit(r0); if (e.key === "Escape") setEditFor(null); }}/>
+                    <button type="button" className="mt-btn" onClick={() => saveEdit(r0)}>Save</button>{ed ? <button type="button" className="mt-lnk dim" onClick={() => resetEdit(r.key)}>Original</button> : null}</div>
+                ) : !ro ? (noteFor === r.key ? (
+                  <div className="mt-inl">
+                    <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={`Note on ${r.title}…`} aria-label={`Note on ${r.title}`}
+                      onKeyDown={e => { if (e.key === "Enter") addRowNote(r.key); if (e.key === "Escape") setNoteFor(null); }}/>
+                    <button type="button" className="mt-btn" onClick={() => addRowNote(r.key)}>Save</button>
+                  </div>
+                ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
+                  <button type="button" className="mt-lnk" onClick={() => startEdit(r0, ed)}>Edit</button>
+                  {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId, sec)}>Remove</button> : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}</div>) : null}
+              </td>
+              <td>{r.status || (r.rough ? "" : r.tag || "")}</td>
+              <td>{mo ? stratMoney(mo.total) : null}{r.totalEst ? <small>Simpro estimate</small> : null}</td>
+              <td>{cell(r.rough, mo && mo.rough)}</td>
+              <td>{cell(r.finish, mo && mo.finish)}</td>
+              <td><b className={"mt-tot" + (r.total != null && r.total < 15 ? " mt-neg" : "")}>{r.rough ? pctTxt(r.total) : ""}</b></td>
+              <td>{mat && mat.b ? <span className={mat.u > mat.b ? "mt-neg" : ""}>{stratMoney(mat.u)} of {stratMoney(mat.b)}</span> : mat ? <span className="mt-dim">{mat.u ? stratMoney(mat.u) : "—"}</span> : null}</td>
+              <td className="mt-fl">{r.flags ? (r.flags.length ? r.flags.map((f, i) => <div key={i} style={{ color: f.over ? OD_R : OD_O }}>{f.text}</div>) : <span className="mt-dim">OK</span>) : null}</td>
+            </tr>);
         })}</tbody>
       </table></div>
     );
@@ -53142,8 +53240,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   const sections = secList.map(([sec, label], i) => {
     const typed = wed && M.TYPED.includes(sec);
     const base = sec === "nextsteps" ? [] : (S[sec] || []);
-    const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, typed ? { hidden: (prefs && prefs.hidden) || {}, added: md.added || {} } : prefs);
-    const hid = ((prefs && prefs.hidden) || {})[sec] || {};
+    // v657: the Friday Strategy keeps its hides and adds on the week's own record.
+    const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, strat ? { hidden: md.hidden || {}, added: md.added || {} } : typed ? { hidden: (prefs && prefs.hidden) || {}, added: md.added || {} } : prefs);
+    const hid = ((strat ? md.hidden : prefs && prefs.hidden) || {})[sec] || {};
     const hiddenRows = Object.entries(hid).filter(([, h]) => h).map(([k, h]) => ({ key: k, title: (base.find(r => r.key === k) || {}).title || (h && h.title) || k }));
     const costsSec = kind === "foreman" && sec === "jobs";   // v652: the Job Costs page, not a row list
     const n = costsSec ? null : sec === "nextsteps" ? carried.length : kind === "lead" && sec === "schedule" ? new Set(rows.filter(r => !r.empty).map(r => r.no || r.key)).size : rows.length;
@@ -53167,13 +53266,23 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       badge = "";
       if (sec === "nextsteps") { const k = carried.filter(c => c.status !== "done").length; badge = n ? (k ? `${k} not done` : "all done") : ""; }
     }
+    if (strat) {
+      badge = "";
+      const bad = rows.filter(r => r.bad).length;
+      if (sec === "nextsteps") { const k = carried.filter(c => c.status !== "done").length; badge = n ? (k ? `${k} not done` : "all done") : ""; }
+      if (sec === "schedule") { const k = rows.filter(r => r.group === "Needs booking").length; badge = k ? `${k} need booking` : ""; }
+      if (sec === "starts") badge = bad ? `${bad} at risk` : "";
+      if (sec === "trips") badge = bad ? `${bad} need booking` : "";
+      if (sec === "needsdate" || sec === "moved") badge = bad ? `${bad} need a date` : "";
+      if (sec === "numbers") { const k = rows.filter(r => r.total != null && r.total < 0).length, o = rows.filter(r => r.over).length; badge = [k ? `${k} losing money` : "", o ? `${o} over bid` : ""].filter(Boolean).join(" · "); }
+    }
     const isOpen = open.has(sec);
     const noteVal = drafts[sec] != null ? drafts[sec] : ((md.notes || {})[sec] || "");
     return (
       <section className="od-fold od-white mt-sec" key={sec}>
         <button type="button" className="od-foldh" aria-expanded={isOpen} onClick={() => toggle(sec)}>
           <span className="mt-num">{i + 1}</span>{label}{n != null ? <span className="n">{n}</span> : null}
-          {badge ? <span className={"mt-bdg" + (/not booked|need|not done|to order|past due|over bid/.test(badge) ? " warn" : "")}>{badge}</span> : null}
+          {badge ? <span className={"mt-bdg" + (/not booked|need|not done|to order|past due|over bid|at risk|losing/.test(badge) ? " warn" : "")}>{badge}</span> : null}
           {nNotes || nActs ? <small>{[nNotes ? `${nNotes} note${nNotes > 1 ? "s" : ""}` : "", nActs ? `${nActs} action item${nActs > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · ")}</small> : null}
           <small className="tog">{isOpen ? "Hide" : "Show"}</small>
         </button>
@@ -53187,6 +53296,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
             {costsSec ? <div className="mt-src">The Job Costs page in its foreman view, the same numbers the dashboard shows: percentages and hours, no dollars. + Note under a job adds a line to this week's meeting; Hide takes it off this list.</div> : null}
             {kind === "foreman" && sec === "guys" ? <div className="mt-src">Each foreman's crew from Settings › Team. A line on how each is doing this week.</div> : null}
             {kind === "lead" && sec === "crewout" ? <div className="mt-src">Field crew time off in the next six weeks, approved and asked for.</div> : null}
+            {strat && STRAT_SRC[sec] ? <div className="mt-src">{STRAT_SRC[sec]}</div> : null}
+            {strat && sec === "schedule" ? <div className="mt-cal"><OdScrambleCal jobs={jobs} upcoming={upcoming} users={users} identity={identity} prefs={calPrefs} savePrefs={saveCalPrefs} onOpenJob={onOpenJob} say={say} startWk={1}/></div> : null}
             {sec === "schedule" && sched === null ? <div className="mt-empty warn">Couldn't read Simpro bookings right now; jobs show without days.</div> : null}
             {sec === "watches" ? <div className="mt-src">{kind === "lead" ? "Open Needs-you flags from the Asks watch and the Crew schedule watch, oldest first, then My Day asks to Koy from someone else." : "Open Needs-you flags from the Job issues watch and the CC and Simpro sync check."} <button type="button" className="mt-lnk" onClick={() => onGoTab && onGoTab("claude")}>Answer them in the Claude tab ›</button></div> : null}
             {sec === "watches" && flags === undefined ? <div className="mt-empty">Reading the flags…</div> : null}
@@ -53203,8 +53314,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
                   <div className="mt-rt">{c.status ? <span className={"mt-pill " + (c.status === "done" ? "ok" : "bad")}>{c.status === "done" ? "Done" : "Not done"}</span> : null}</div>
                 </div>
               )) : <div className="mt-empty">Nothing carried from {prevDate.slice(5).replace("-", "/")}.</div>
-            ) : costsSec ? jobsView() : (rows.length ? (kind === "foreman" && sec === "guys" ? guysView(rows) : kind === "lead" && sec === "hours" ? hoursView(sec, rows) : kind === "lead" && sec === "schedule" ? scheduleView(sec, rows) : rows.map(r => rowView(sec, r)))
-              : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : sec === "hours" && wed && !leadSrc.costs.length ? "Reading the Job Costs pull…" : "Nothing here this week."}</div>)}
+            ) : costsSec ? jobsView() : (rows.length ? (kind === "foreman" && sec === "guys" ? guysView(rows) : kind === "lead" && sec === "hours" ? hoursView(sec, rows) : strat && sec === "numbers" ? numbersView(sec, rows) : (kind === "lead" || strat) && (sec === "schedule" || sec === "oncal") ? scheduleView(sec, rows) : rows.map(r => rowView(sec, r)))
+              : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : (sec === "hours" || sec === "numbers") && wed && !leadSrc.costs.length ? "Reading the Job Costs pull…" : strat && !(md.prefill && md.prefill.rows) ? "Not prefilled yet for this Friday." : "Nothing here this week."}</div>)}
             {sec !== "nextsteps" && hiddenRows.length ? (
               <div className="mt-hid">
                 <button type="button" className="mt-lnk dim" onClick={() => setShowHidden(h => ({ ...h, [sec]: !h[sec] }))}>{hiddenRows.length} hidden · {showHidden[sec] ? "close" : "show"}</button>
@@ -53229,7 +53340,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     );
   });
 
-  const seedWeek = kind === "lead" ? "2026-11-11" : kind === "foreman" ? thisWeek : "2026-11-10";
+  const seedWeek = kind === "lead" ? "2026-11-11" : kind === "foreman" || kind === "strategy" ? thisWeek : "2026-11-10";
   const weekOpts = Array.from(new Set([thisWeek, seedWeek, ...weeks])).filter(w => w <= thisWeek).sort().reverse();
   return (
     <div className="od-mtg">
@@ -53247,6 +53358,11 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         .od-mtg .mt-tbl .mt-fl{font-weight:700;font-size:12.5px;min-width:200px}
         .od-mtg .mt-tbl .mt-tot{font-size:15px}
         .od-mtg .mt-dim{color:var(--cdim)}
+        .od-mtg .mt-pre{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:9px 14px;border-radius:14px;background:${C.slateBg};color:${C.slateInk};font-size:13px}
+        .od-mtg .mt-pre small{flex-basis:100%;color:var(--cdim)}
+        .od-mtg .mt-cal{margin:4px 0 10px}
+        .od-mtg .mt-edit{display:flex;flex-direction:column;gap:6px;margin-top:6px}.od-mtg .mt-edit span{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+        .od-mtg .mt-tbl .mt-neg{color:${OD_R}}
         .od-mtg .mt-tbl8{min-width:860px}
         .od-mtg .mt-guy{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);gap:10px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--cline)}
         .od-mtg .mt-guy small{display:block;color:var(--cdim);font-size:12px}
@@ -53316,7 +53432,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           .od-mtg .mt-add{grid-template-columns:1fr 1fr}.od-mtg .mt-add>input:first-child{grid-column:1 / -1}.od-mtg .mt-act{grid-template-columns:1fr}.od-mtg .mt-wk{margin-left:0}}
       `}</style>
       <div className="mt-pick" role="group" aria-label="Meeting">
-        {[["scramble", "Weekly Scramble · Tue 4:00"], ["lead", "Lead Meeting · Wed 6:30"], ["foreman", "Foreman Meeting · Wed 7:00"]].map(([k, l]) => <button type="button" key={k} aria-pressed={kind === k} onClick={() => k !== kind && setKind(k)}>{l}</button>)}
+        {[["scramble", "Weekly Scramble · Tue 4:00"], ["lead", "Lead Meeting · Wed 6:30"], ["foreman", "Foreman Meeting · Wed 7:00"], ...(canStrategy ? [["strategy", "Friday Strategy · Fri 8:00"]] : [])].map(([k, l]) => <button type="button" key={k} aria-pressed={kind === k} onClick={() => k !== kind && setKind(k)}>{l}</button>)}
       </div>
       <div className="mt-head">
         <div>
@@ -53325,13 +53441,19 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         </div>
         <label className="mt-wk">Meeting week
           <select value={week} onChange={e => setWeek(e.target.value)} aria-label="Meeting week">
-            {weekOpts.map(w => <option key={w} value={w}>{(wed ? "Wed " : "Tue ") + w.slice(5).replace("-", "/") + (w === thisWeek ? " · this week" : " · read only")}</option>)}
+            {weekOpts.map(w => <option key={w} value={w}>{(strat ? "Fri " : wed ? "Wed " : "Tue ") + w.slice(5).replace("-", "/") + (w === thisWeek ? " · this week" : " · read only")}</option>)}
           </select>
         </label>
       </div>
       {ro ? <div className="mt-ro"><b>{week.slice(5).replace("-", "/")} meeting, read only.</b> Notes and action items as saved that week. The rows are always today's.</div> : null}
       {msg ? <div className="mt-msg" role="status">{msg}</div> : null}
       {mdoc === undefined ? <div className="mt-empty">Opening this week's meeting…</div> : null}
+      {strat && mdoc !== undefined ? <div className="mt-pre">
+        {md.prefill && md.prefill.at ? <span><b>Prefilled {odMtgAt(md.prefill.at)}</b> for next week, {md.prefill.weekLabel || ""}{md.prefill.by && md.prefill.by !== "Thursday prefill" ? " · by " + M.firstOf(md.prefill.by) : ""}. Job numbers are live.</span>
+          : <span><b>Not prefilled yet.</b> It fills itself Thursday at 9:00 PM.</span>}
+        {!ro ? <button type="button" className="mt-btn ghost" disabled={prefillBusy} onClick={prefillNow}>{prefillBusy ? "Prefilling…" : md.prefill ? "Prefill again" : "Prefill now"}</button> : null}
+        {md.prefill && Array.isArray(md.prefill.errors) && md.prefill.errors.length ? <small>Did not load: {md.prefill.errors.join("; ")}</small> : null}
+      </div> : null}
       {kind === "scramble" ? <section className="od-fold od-white mt-sec">
         <button type="button" className="od-foldh" aria-expanded={calOpen} onClick={() => setCalOpen(o => !o)}>
           <span className="mt-num">0</span>Calendar · all crews<small>Simpro bookings, forecasts and what isn't on the calendar yet</small>
@@ -54480,7 +54602,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
     </>);
   } else if (tab === "meetings") {
     // v648: the Weekly Scramble (OdMeetings above). Full width, like Job Costs.
-    main = <OdMeetings jobs={jobs} needs={needs} upcoming={upcoming} users={users} identity={identity} flags={claudeWork} onOpenJob={openJob} onGoTab={pickTab}/>;
+    main = <OdMeetings jobs={jobs} needs={needs} upcoming={upcoming} users={users} identity={identity} flags={claudeWork} onOpenJob={openJob} onGoTab={pickTab} money={!fview}/>;
   } else if (tab === "people") {
     // v582 (dashboard audit): the team by crew with what each person is on today, from the Crew Planner.
     // Gone: the activity heat map, the "On the app, no job touched" list and the My Day load card; the
@@ -64479,6 +64601,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 **Last manifest update:** 2026-11-19 · App SW version: v656
 ---
 
+- **Friday Strategy on the Meetings tab: the owners meeting, prefilled Thursday night, with next week on the crew calendar** · 'in-flight 2026-11-19' · 'SW v657' · 'OdMeetings' · 'buildStrategySections' · 'strategyNumbers' · 'functions/strategyMeeting.js' · 'strategyMeetingPrefill' · 'refreshStrategyMeeting' · 'gatherStrategyInputs' · 'scripts/strategy-meeting-test.js' · Koy, 2026-11-19 (spec approved in weekly-meetings, from his 11/13 template Doc): *"Yeah this will use the new auto-scheduler calendar as well but these other sections look good. Just make sure I can hide, edit, delete, or add in any of them, just like the other ones"*. Preview first on real data. **Where:** /dashboard › Meetings, fourth button **Friday Strategy · Fri 8:00**, shown only to admins (access admin: Koy, Josh, Brady and any other admin) and never in Foreman view, because it carries dollars. **Sections:** 1 Top of the meeting (five or six items, worst first: jobs losing money in Simpro, starts at risk, jobs in progress with nothing booked, finals next week, trips past their date, customer deadlines, approved COs not on a trip) · 2 Schedule next week (the v656 crew calendar itself, opened on next week, same shared plans as the Scramble; under it every job booked next week by day and who, then every job in progress with nobody booked: phase %, last update, punch, questions, waiting on by type, crew or NO CREW, then on hold) · 3 Starts (next week's rough / finish starts and overdue ones; AT RISK when nobody booked, no lead, Job Prep not 5/5 or no material PO on the phase card) · 4 Return trips needed (every open CC trip: what for, material, PO numbers written on it, booked day and person or not; approved COs not converted) · 5 Needs a date (trips past their date not finished, Simpro Job - Scheduled with nothing booked next week, crew-calendar items Removed and left open) · 6 Dates that moved since last Friday (and dates passed with nothing logged) · 7 On the calendar (inspections, QC walks, scans, booked trips, walks / meetings on Koy's calendar that name a live job) · 8 Job numbers (every active job, worst total margin first: Simpro status, job total, rough and finish net % with profit $ on sell and hours, total margin straight from Simpro, material $ used of bid, flags at 90%+ and over; actual, never projected; live from settings/phaseCosts + settings/simproTotals) · 9 People out next week (approved, still asked, booking conflicts) · 10 Notes (empty each week) · 11 Action items (who, due, Send to My Day; last week's come back for Done / Not done). **Hide, edit, delete, add:** every row has + Note, **Edit** (title and details for that week, "Back to original"), Hide (that week) or Remove (an added one), and every section has Add a job or item and Section notes. On this meeting all of it belongs to its week (meetings/strategy_<Friday>: notes, rowNotes, edits, hidden, added, actions). Edit is on every meeting's rows now (meetings/<kind>_<week>.edits). **Prefill:** new scheduled function **strategyMeetingPrefill** (Thu 9:00 PM MT) runs the Friday prep's reads (now one shared 'gatherStrategyInputs', also used by strategyPrep) and its pure model, then 'functions/strategyMeeting.js' turns it into the rows and writes ONLY prefill / prefill_at / type / date / updated_at on meetings/strategy_<Friday> (mergeFields). It never advances settings/strategyPrep (the Friday 6 AM doc still owns it, so "moved since last Friday" compares to last Friday's doc run). **Prefill now / again** on the page calls the new **refreshStrategyMeeting** callable (live PIN, admin only). **Rules:** /meetings allows type strategy / strategy_prefs. Never changes a job's stage, never writes Simpro. Guide 'dashboard.html' (Meetings). Test 'scripts/strategy-meeting-test.js' (prebuild); 'scripts/strategyprep-test.js' source checks now read the shared reader. **Why it won't lose data:** the page writes only its own meeting doc by merge, one field at a time, like the other meetings; the calendar writes the same scramble__prefs plans as v656; the function writes only the prefill fields of one meeting doc and reads everything else; the Friday doc run is unchanged apart from its reads moving into a shared function (same calls, same order, same errors).
 - **Crew calendar with the auto-schedule, on Meetings and the Forecast tab** · 'in-flight 2026-11-19' · 'SW v656' · 'autoPlan' · 'crewBoard' · 'isHoliday' · 'src/scrambleCal.js' · 'OdScrambleCal' · 'ForecastScrambleCal' · 'scripts/scramble-cal-test.js' · Josh's auto-scheduler (Nov 18 email; plan approved claude.ai/artifact/HzdcE9HYEdD7E9spDBWpcA), Koy 2026-11-19: *"the Forecast tab calendar will be replaced with this, as well as meetings"*, crews from the Crew Board (*"why dont you just use the teams already made in the ap"*), *"unassigned members should not be scheudled."*, on the first build *"really condensed ... I want a full calendar view not everything one by one on top of each other"* (calendar preview claude.ai/artifact/NhYSpENbPR9V9CgKrRa8hW), *"I'll just drag and copy and stuff and I like to keep the crews at least four on a job if we can. But if there are two jobs going at the same time for a foreman, then the junior foreman is first up to take the job that the foreman's not on."* (no chat box). Release 1 of 3 (v657 Review & book, v658 Crew Planner out). **The calendar:** replaces the v651 lanes. **Week** view (wide Mon–Thu columns, a light striped Friday for volunteer overtime; days stack on a phone; This week / Next week / ‹ › through the five weeks) and a **Month** grid of the five weeks (4 chips a day, +N more opens that week). Each day holds its jobs as chips (number and name, phase tag, crew and headcount): **solid** = booked in Simpro, **dashed** = auto-scheduled, **solid border** = a plan someone placed or moved, **red stripes** = held for a call. Crew filter (each foreman with a crew), Everything / Simpro only. Same calendar on Dashboard › Meetings (Weekly Scramble) and Forecast › Calendar (replaces the month view in Residential; Commercial keeps the month view, v454). **Moving and changing:** drag a chip to another day (press and hold, then tap a day, on a phone; or Move… then tap a day); tap a chip for its details: start date, days (±½), hours, **Who** (tick people on that foreman's crew, or add someone from another crew), **Copy to other days** (one day each, its own plan keyed '<item>~<day>', tap again to remove), Back to auto. Every move, copy or change saves at once as a plan everyone sees ('meetings/scramble__prefs.cal', one key per plan, by merge) and the auto-schedule never moves it again. Booked days are changed in Simpro. **Remove** (Koy: *"if I don't want a job scheduled, I just delete it off there"*): takes the block off the calendar as '{ off: true }' on its key; the auto-schedule leaves it alone and it stays on Not on the calendar yet as needing scheduling (left open) until **Restore** or it's placed again; a job booked in Simpro keeps its booked days (only its forecast days go); a copied day is just deleted; a Needs you item can be removed the same way. Nothing in Simpro changes. **The auto-schedule:** lays out what Simpro hasn't booked: dated return trips, then **confirmed start dates** (on their date), then jobs under way, then the rest **rough-in before finish**. 10 h days Mon–Thu only, never on a company holiday (New Year's, Memorial Day, July 4, Labor Day, Thanksgiving, Christmas; a Sunday one moves to Monday) or a Friday. **Crews** come from the Crew Board (settings/users): a foreman plus every active person whose foremanId is that foreman; inactive and Unassigned people are never scheduled. A job gets **4** from its foreman's crew when the crew has them (a crew under 4 goes out whole); its own foreman / lead heads it, else the crew's foreman, else a jr foreman, and the other heads are kept back. When another of the crew's jobs wants the same days, the job leaves the second job's head plus one, so **the foreman keeps the bigger group and the jr foreman leads the other**; a job left under 4 is held (*Only N of Daegan's crew free (want 4)*), the foreman's own job in a split is not. Nobody goes on a day they're on a Simpro booking (2 h or more), a plan or another block. **Needs you** (right): held blocks (start with no material PO or card not ordered, trip with no material, short crew) and what it couldn't place, with why (no date / crew / passed date on a trip, unassigned person, over bid, no Job Costs hours, no crew for the foreman, crew booked through the view). Book in Simpro (unchanged v651 flow, its preview first) on a block pre-ticks its people; a held auto block can't be booked until it's moved or changed. Not on the calendar yet (folded): Upcoming rows and phases with no start date, Place on a day… / Place on <start>. **Both lists are split by type** (Koy: *"if that could be separated into what they are (rough ends, finishes, return trips, failed finals, etc.)"*): Rough-ins, Finishes, Failed finals, Failed rough inspections, Change orders, QC walk fixes, Warranty, Return trips, Other, each with a count, empty ones hidden (a trip's type from the marker the app stamps when it makes one: fromFailedFinal, fromFailedRough, fromCOId, fromQCFail; warranty from its scope). **Every open return trip goes on the calendar** (Koy: the 1393 Tuhaye Hollow trip *"isn't on there"*): a trip with no date, or a schedule-by date, goes on the first open workday (before that date) for its person, or with none for someone on the job's foreman's crew (the job's own foreman / lead first, then a lead, jr foreman, crew), held so you look at it; only a passed date, a Friday or holiday date, an unassigned or unknown person, or nobody free stays unplaced in Needs you. **Never** sets or changes a job's stage or status. Guide 'dashboard.html' (Meetings). **Why it won't lose data:** display plus the same plan write as v651 (one map key in meetings/scramble__prefs by merge, the doc's existing rules); Simpro gets entries only through the existing Book confirm; no loader, rules or function change.
 - **Team phone list on My Day for everyone, emails and phones on Team Members, and Pick from team on the PO CC box** · 'in-flight 2026-11-19' · 'SW v655' · 'TeamPhoneCard' · 'useTeamContacts' · 'PoCopyToBox' · 'functions/teamContacts.js' · 'teamContacts' · Koy, 2026-11-16: *"can we add all of our crews emails and phone numbers to the app? and in the option to CC somebody on a purchase order etc a drop down with all emails there to choose from?"*; 2026-11-19, to phones for foremen and up only: *"No, everyone needs to be able to have everybody's number"*. **Source:** each Simpro employee's Primary Contact (email, cell or else work phone), already filled for all 26; the app keeps no copy, so Simpro stays the one place to fix one. Matched to the app's team by name; deactivated people and contractors left out; office people in Simpro but not the app (Lisa) included; app people missing from Simpro show 'Not in Simpro'. **Where:** My Day → Team phone list (closed by default, search, Call / Text / email) for every title except contractors; Settings → Team Members shows each person's email and phone under their chips; Send to CED and New order from the bid → CC → **Pick from team** (search, tick up to 5, untick to remove; typing a one-off still works; the same copyTo string, so the send is unchanged). **Access:** the database is open to read, so contacts never go in Firestore; 'teamContacts' callable checks a live PIN ('requireMember') and refuses contractors, reads Simpro '/employees/' once per 10 minutes. Guides 'myday.html', 'materials.html'. Test 'scripts/team-contacts-test.js'. **Why it won't lose data:** read-only; no Firestore, rules or Simpro write; the PO send path is untouched.
 - **Team rating and goals on My Day: each guy's own crew ratings as words once Koy releases the round, his goal from his last one-on-one, and goals of his own** · 'in-flight 2026-11-19' · 'SW v654' · 'TeamRatingCard' · 'OdRatingsRelease' · 'functions/myScores.js' · 'myTeamCard' · 'myGoalEdit' · 'crewScoresRelease' · Koy, 2026-11-19: guys asked "for acess to their one on one scores from the guys that rated them so can see it any remember what they need to work on", at the top of My Day "along with they goal they set with me"; to the mockup: scores "after i release", start it collapsed, title it "team rating and goals", and "give them the ability to add more goals". **Who:** crew, lead, jrforeman and foreman titles (not contractors), above My role. **Card:** closed by default; Goals (Koy's goal from 'crewGoals/fromKoy', copied nightly from his One-on-Ones tracker by a cloud routine through the Duet door, plus up to 10 of his own in 'myGoals/{userId}', add / tick / remove); Team rating (the five areas as Needs work / Getting there / Solid / Strong from 'myScores/{userId}', up / down against the round before, 'Not enough ratings yet' under 2 raters). Never a number, a name or a rater count. **Release:** Koy's Claude tab, under One-on-Ones: the newest finished round, Release then Yes, release; writes one 'myScores' doc per person rated and 'myScoresMeta/release'. **Access:** the app signs in by name + PIN, so phones get nothing from these four collections (rules: read, write false); 'myTeamCard' / 'myGoalEdit' check the guy's own live PIN ('requireMember'), 'crewScoresRelease' the admin PIN. Guides 'myday.html', 'dashboard.html'. Test 'scripts/my-scores-test.js'. **Why it won't lose data:** four new server-only collections; no job, user, rating or existing rule changed; ratings are read, never written.

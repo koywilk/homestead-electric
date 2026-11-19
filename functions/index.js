@@ -5111,8 +5111,10 @@ exports.dailySimproTotals = functions
 const STRATEGY_NOTES_DOC_ID = "1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM";   // Josh's notes doc — READ ONLY here
 const strategyLib = require("./strategyPrep.js");
 
-async function runStrategyPrep({ testRun = false } = {}) {
-  const now = new Date();
+// Steps 1–4 of the Friday prep's reads, shared by the Friday doc (runStrategyPrep) and, since v657, the
+// Thursday-night Friday Strategy meeting prefill (runStrategyMeetingPrefill). Read only. A failed jobs/users
+// read comes back as { fatal: Error }; every other failed read is named in inputErrors.
+async function gatherStrategyInputs(now) {
   const w = strategyLib.weekOf(now);
   const windowStart = w.weekYmds[0], windowEnd = w.weekYmds[4];
   const inputErrors = [];
@@ -5131,8 +5133,7 @@ async function runStrategyPrep({ testRun = false } = {}) {
     ]);
   } catch (e) {
     functions.logger.error("strategyPrep fatal read failed (jobs/users)", { error: e.message });
-    try { await sendToName("Koy", { title: "Friday prep failed", body: e.message.slice(0, 120) }); } catch (e2) { /* nothing more to do */ }
-    return { ok: false, error: e.message };
+    return { fatal: e };
   }
   const unwrap = (d) => { const raw = d.data() || {}; return { id: d.id, ...(raw.data || {}) }; };
   const jobs = snap.docs.map(unwrap), needs = needSnap ? needSnap.docs.map(unwrap) : [];
@@ -5187,6 +5188,18 @@ async function runStrategyPrep({ testRun = false } = {}) {
     const r = await cal.events.list({ calendarId: "koy@homesteadelectric.net", timeMin: `${windowStart}T00:00:00-06:00`, timeMax: `${windowEnd}T23:59:59-07:00`, singleEvents: true, maxResults: 250 }, { timeout: 20000 });   // window one hour WIDER on both ends in every DST state (-06 starts earlier, -07 ends later)
     calendarEvents = (r.data && r.data.items) || [];
   } catch (e) { inputErrors.push(`calendar: ${e.message}`); functions.logger.warn("strategyPrep calendar read failed", { error: e.message }); }
+
+  return { w, inputErrors, jobs, users, needs, upcoming, plannerDoc, pto, timeOffRequests, prevState, agentFindings, scheduleEntries, simproOk, simproTotalsById, calendarEvents };
+}
+
+async function runStrategyPrep({ testRun = false } = {}) {
+  const now = new Date();
+  const G = await gatherStrategyInputs(now);
+  if (G.fatal) {
+    try { await sendToName("Koy", { title: "Friday prep failed", body: G.fatal.message.slice(0, 120) }); } catch (e2) { /* nothing more to do */ }
+    return { ok: false, error: G.fatal.message };
+  }
+  const { inputErrors, jobs, users, needs, upcoming, plannerDoc, pto, timeOffRequests, prevState, agentFindings, scheduleEntries, simproOk, simproTotalsById, calendarEvents } = G;
 
   // 5 · Josh's notes doc, READ ONLY, for carry-forward. 403 until shared with the service account as Viewer ⇒ section degrades.
   let notesDoc = null, notesError = null;
@@ -5262,6 +5275,53 @@ exports.sendTestStrategyPrep = functions
   .https.onCall(async (data) => {
     requireAppKey(data);
     return await stampAutoRun("friday", () => runStrategyPrep({ testRun: true }), { test: true });
+  });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Thursday 9:00 PM Mountain Time (SW v657, Koy 2026-11-19)
+// Friday Strategy meeting prefill for /dashboard › Meetings › Friday Strategy. Same reads and the
+// same pure model as the Friday doc (gatherStrategyInputs + strategyPrep.buildModel), turned into the
+// meeting's rows by ./strategyMeeting.js and saved to meetings/strategy_<Friday>.prefill.
+// Writes ONLY the prefill fields of that one meeting doc (mergeFields), so notes, edits, hides and
+// action items typed in the meeting are never touched. Never advances settings/strategyPrep (the
+// Friday 6 AM doc run owns that state), never writes a job, never touches Simpro.
+// ─────────────────────────────────────────────────────────────
+const strategyMeetingLib = require("./strategyMeeting.js");
+async function runStrategyMeetingPrefill({ by = "Thursday prefill" } = {}) {
+  const now = new Date();
+  const G = await gatherStrategyInputs(now);
+  if (G.fatal) {
+    try { await sendToName("Koy", { title: "Friday Strategy prefill failed", body: G.fatal.message.slice(0, 120) }); } catch (e2) { /* nothing more to do */ }
+    return { ok: false, error: G.fatal.message };
+  }
+  let totals = {};
+  try { const t = await db.doc("settings/simproTotals").get(); totals = (t.exists && (t.data() || {}).byNo) || {}; }
+  catch (e) { G.inputErrors.push(`simproTotals: ${String(e.message).slice(0, 80)}`); }
+  const model = strategyLib.buildModel({ jobs: G.jobs, users: G.users, scheduleEntries: G.scheduleEntries, plannerDoc: G.plannerDoc, pto: G.pto, timeOffRequests: G.timeOffRequests,
+    needs: G.needs, upcoming: G.upcoming, agentFindings: G.agentFindings, calendarEvents: G.calendarEvents, prevState: G.prevState, simproTotalsById: G.simproTotalsById, notesDoc: null, notesError: "not read", simproOk: G.simproOk, now });
+  const P = strategyMeetingLib.buildPrefill({ model, jobs: G.jobs, totals, now });
+  const at = now.toISOString();
+  const prefill = { at, by, builtAt: P.builtAt, weekLabel: P.weekLabel, weekYmds: P.weekYmds, rows: P.rows, errors: [...P.errors, ...G.inputErrors].slice(0, 12), simproOk: G.simproOk !== false };
+  await db.doc(`meetings/strategy_${P.meetingYmd}`).set({ type: "strategy", date: P.meetingYmd, prefill, prefill_at: at, updated_at: at }, { mergeFields: ["type", "date", "prefill", "prefill_at", "updated_at"] });
+  const counts = Object.fromEntries(Object.entries(P.rows).map(([k, v]) => [k, v.length]));
+  functions.logger.info("strategyMeetingPrefill done", { meeting: P.meetingYmd, by, counts, inputErrors: G.inputErrors });
+  return { ok: true, meeting: P.meetingYmd, counts, errors: prefill.errors };
+}
+
+exports.strategyMeetingPrefill = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
+  .pubsub.schedule("0 21 * * 4")
+  .timeZone(TZ)
+  .onRun(async () => { await runStrategyMeetingPrefill(); return null; });
+
+// "Prefill now" on the meeting page: an admin (name + live PIN) re-runs the same prefill for this Friday.
+exports.refreshStrategyMeeting = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB", secrets: ["PLAN_INTAKE_GOOGLE_OAUTH"] })
+  .https.onCall(async (data) => {
+    const user = await requireMember(data);
+    const legacy = { admin: "admin", justin: "admin", jeromy: "manager", foreman: "standard", lead: "limited", crew: "limited" };
+    if ((user.access || legacy[user.role] || "limited") !== "admin") throw new functions.https.HttpsError("permission-denied", "Only owners and admins can prefill the Friday Strategy meeting.");
+    return await runStrategyMeetingPrefill({ by: String(user.name || "").trim() || "admin" });
   });
 
 // Lead Meeting Prep (Tuesday 6 AM, runLeadMeetingPrep + leadMeetingPrep/sendTestLeadMeetingPrep)
