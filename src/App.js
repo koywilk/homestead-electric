@@ -6238,6 +6238,9 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
   const [editing, setEditing] = useState(null);
   const [showPin, setShowPin] = useState({});
   const [refused, setRefused] = useState(false);   // v546: a refused save keeps the editor open
+  // v655: each person's email and phone from Simpro (read only here; fix them in Simpro).
+  const contacts = useTeamContacts(getIdentity());
+  const contactOf = (u) => Array.isArray(contacts) ? contacts.find(c => (c.teamId && c.teamId === u.id) || String(c.name).toLowerCase() === String(u.name || "").trim().toLowerCase()) : null;
 
   // v546: when the roster refreshes underneath an open editor (a refused save
   // loads the latest list), keep the row being typed instead of dropping it.
@@ -6639,6 +6642,10 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                         })()}
                         <span style={{color:C.faint}}>PIN: {u.pin?"••••":"not set"}</span>
                       </div>
+                      {u.active!==false && Array.isArray(contacts) && (() => { const c = contactOf(u);
+                        const bits = c ? [c.email, c.phone].filter(Boolean) : [];
+                        return <div style={{fontSize:12.5,color:bits.length?C.dim:C.faint,marginTop:3,overflowWrap:"anywhere"}}>
+                          {bits.length ? bits.join(" · ") + (c.phone ? "" : " · no phone in Simpro") : (c && c.inSimpro ? "No email or phone in Simpro" : "Not in Simpro")}</div>; })()}
                     </div>
                   </div>
                   <button onClick={()=>setEditing(u.id)}
@@ -16122,15 +16129,61 @@ function PoCustomBox({ value, onChange }) {
 }
 
 // v595: CC someone on the PO email. Optional and typed fresh per send; the server checks the addresses before any PO exists.
+// v655 (Koy: "a drop down with all emails there to choose from"): Pick from team lists everyone's
+// email from Simpro (teamContacts); ticking one adds it to the box, unticking takes it out. Typing a
+// one-off address still works. Up to 5, the same limit the server checks.
+const PO_CC_MAX = 5;
+const poCcList = (v) => String(v || "").split(/[,;\s]+/).map(x => x.trim()).filter(Boolean);
 function PoCopyToBox({ value, onChange }) {
+  const [pick, setPick] = useState(false);
+  const [q, setQ] = useState("");
+  const rows = useTeamContacts(getIdentity(), pick);
+  const list = poCcList(value);
+  const has = (email) => list.some(x => x.toLowerCase() === email.toLowerCase());
+  const toggle = (email) => {
+    if (has(email)) onChange(list.filter(x => x.toLowerCase() !== email.toLowerCase()).join(", "));
+    else if (list.length < PO_CC_MAX) onChange([...list, email].join(", "));
+  };
+  const qq = q.trim().toLowerCase();
+  const withEmail = Array.isArray(rows) ? rows.filter(c => c.email) : [];
+  const shown = withEmail.filter(c => tcMatch(c, qq));
+  const full = list.length >= PO_CC_MAX;
   return (
-    <label style={{display:"grid",gap:6}}>
-      <span style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>CC (optional)</span>
-      <input type="text" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={value} onChange={e=>onChange(e.target.value)}
+    <div style={{display:"grid",gap:6}}>
+      <label htmlFor="po-cc-box" style={{fontSize:12.5,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>CC (optional)</label>
+      <input id="po-cc-box" type="text" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={value} onChange={e=>onChange(e.target.value)}
         placeholder="name@example.com"
         style={{fontFamily:"inherit",fontSize:15,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 11px",background:C.card,color:C.text}}/>
-      <span style={{fontSize:12.5,color:C.faint}}>Anyone else who should get this email. Up to 5, with a comma between them.</span>
-    </label>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+        <span style={{fontSize:12.5,color:C.faint}}>Anyone else who should get this email. Up to 5, with a comma between them.</span>
+        <button type="button" aria-expanded={pick} onClick={()=>setPick(p=>!p)}
+          style={{fontFamily:"inherit",fontSize:13.5,fontWeight:700,color:C.accent,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,minHeight:36,padding:"0 12px",cursor:"pointer"}}>
+          {pick ? "Done picking" : "Pick from team"}
+        </button>
+      </div>
+      {pick && (
+        <div style={{border:`1px solid ${C.border}`,borderRadius:10,background:C.surface,padding:8,display:"grid",gap:6}}>
+          {rows === undefined ? <div style={{fontSize:13,color:C.dim,padding:4}}>Loading the team…</div>
+            : rows === null ? <div style={{fontSize:13,color:C.dim,padding:4}}>Couldn't load the team list. You can still type an address.</div>
+            : <>
+              <input type="search" value={q} onChange={e=>setQ(e.target.value)} placeholder="Search a name" aria-label="Search the team"
+                style={{fontFamily:"inherit",fontSize:15,border:`1px solid ${C.border}`,borderRadius:9,padding:"8px 10px",background:C.card,color:C.text}}/>
+              <div style={{maxHeight:240,overflowY:"auto",display:"grid"}}>
+                {shown.map(c => { const on = has(c.email); const off = !on && full; return (
+                  <label key={c.teamId || c.email} style={{display:"flex",alignItems:"center",gap:10,minHeight:44,padding:"0 4px",cursor:off?"default":"pointer",opacity:off?0.5:1}}>
+                    <input type="checkbox" checked={on} disabled={off} onChange={()=>toggle(c.email)} style={{width:20,height:20,flexShrink:0}}/>
+                    <span style={{display:"flex",flexDirection:"column",minWidth:0}}>
+                      <span style={{fontSize:14,fontWeight:600,color:C.text}}>{c.name}</span>
+                      <span style={{fontSize:12.5,color:C.dim,overflowWrap:"anywhere"}}>{c.email}</span>
+                    </span>
+                  </label>); })}
+                {!shown.length ? <div style={{fontSize:13,color:C.dim,padding:4}}>{withEmail.length ? `No one matches "${q.trim()}".` : "No team emails in Simpro yet."}</div> : null}
+              </div>
+              {full ? <div style={{fontSize:12.5,color:C.dim}}>5 picked, the most one email can copy.</div> : null}
+            </>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -64254,9 +64307,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-19 · App SW version: v654
+**Last manifest update:** 2026-11-19 · App SW version: v655
 ---
 
+- **Team phone list on My Day for everyone, emails and phones on Team Members, and Pick from team on the PO CC box** · 'in-flight 2026-11-19' · 'SW v655' · 'TeamPhoneCard' · 'useTeamContacts' · 'PoCopyToBox' · 'functions/teamContacts.js' · 'teamContacts' · Koy, 2026-11-16: *"can we add all of our crews emails and phone numbers to the app? and in the option to CC somebody on a purchase order etc a drop down with all emails there to choose from?"*; 2026-11-19, to phones for foremen and up only: *"No, everyone needs to be able to have everybody's number"*. **Source:** each Simpro employee's Primary Contact (email, cell or else work phone), already filled for all 26; the app keeps no copy, so Simpro stays the one place to fix one. Matched to the app's team by name; deactivated people and contractors left out; office people in Simpro but not the app (Lisa) included; app people missing from Simpro show 'Not in Simpro'. **Where:** My Day → Team phone list (closed by default, search, Call / Text / email) for every title except contractors; Settings → Team Members shows each person's email and phone under their chips; Send to CED and New order from the bid → CC → **Pick from team** (search, tick up to 5, untick to remove; typing a one-off still works; the same copyTo string, so the send is unchanged). **Access:** the database is open to read, so contacts never go in Firestore; 'teamContacts' callable checks a live PIN ('requireMember') and refuses contractors, reads Simpro '/employees/' once per 10 minutes. Guides 'myday.html', 'materials.html'. Test 'scripts/team-contacts-test.js'. **Why it won't lose data:** read-only; no Firestore, rules or Simpro write; the PO send path is untouched.
 - **Team rating and goals on My Day: each guy's own crew ratings as words once Koy releases the round, his goal from his last one-on-one, and goals of his own** · 'in-flight 2026-11-19' · 'SW v654' · 'TeamRatingCard' · 'OdRatingsRelease' · 'functions/myScores.js' · 'myTeamCard' · 'myGoalEdit' · 'crewScoresRelease' · Koy, 2026-11-19: guys asked "for acess to their one on one scores from the guys that rated them so can see it any remember what they need to work on", at the top of My Day "along with they goal they set with me"; to the mockup: scores "after i release", start it collapsed, title it "team rating and goals", and "give them the ability to add more goals". **Who:** crew, lead, jrforeman and foreman titles (not contractors), above My role. **Card:** closed by default; Goals (Koy's goal from 'crewGoals/fromKoy', copied nightly from his One-on-Ones tracker by a cloud routine through the Duet door, plus up to 10 of his own in 'myGoals/{userId}', add / tick / remove); Team rating (the five areas as Needs work / Getting there / Solid / Strong from 'myScores/{userId}', up / down against the round before, 'Not enough ratings yet' under 2 raters). Never a number, a name or a rater count. **Release:** Koy's Claude tab, under One-on-Ones: the newest finished round, Release then Yes, release; writes one 'myScores' doc per person rated and 'myScoresMeta/release'. **Access:** the app signs in by name + PIN, so phones get nothing from these four collections (rules: read, write false); 'myTeamCard' / 'myGoalEdit' check the guy's own live PIN ('requireMember'), 'crewScoresRelease' the admin PIN. Guides 'myday.html', 'dashboard.html'. Test 'scripts/my-scores-test.js'. **Why it won't lose data:** four new server-only collections; no job, user, rating or existing rule changed; ratings are read, never written.
 - **My jobsite on My Day: everyone booked on your job today or tomorrow, with each person's open punch items, unassigned and waiting items** · 'in-flight 2026-11-19' · 'SW v653' · 'JobsiteDayCard' · 'buildJobsiteDay' · 'src/jobsiteDay.js' · Louis Hoffman via Koy: *"a spot to be able to see everyone on his jobsite that day, and every punch item he assigned sorted out to the people."* Koy's picks: every open item on the job (not only the lead's own), today plus tomorrow. A card at the top of My Day for leads, jr. foremen and foremen, on jobs where they are the lead or foreman and someone is booked in Simpro today or tomorrow (one chip per job when there are several). Who's on site = the Simpro schedule via the existing 'getSimproSchedule' callable (one read per 10 minutes, shared); hours show beside each name. Under each person: open, not-waiting items assigned to them (rough, finish, QC, extras floors), then **Show done this week**. Then **Unassigned** (with an Assign picker), **Waiting on others** folded, with the reason, and **Not here** for people with open items who aren't booked. Check off = 'togglePunchItemDone'; Assign = new 'assignPunchItem' (same walk and whole-phase save as the toggle, only 'assignedTo' changes). Harness 'scripts/jobsite-day-test.js' in prebuild. **Why it won't lose data:** the card reads only; its two writes are the existing check-off and the same assign the punch list does; nothing goes to Simpro; no rules or functions change.
 - **Foreman Meeting on the Meetings tab: Team check, Jobs (the Job Costs page, foreman view), Guys, Action items** · 'in-flight 2026-11-18' · 'SW v652' · 'OdMeetings' · 'buildForemanSections' · 'OdJobCosts' · 'src/meetingModel.js' · Koy, 2026-11-18: *"This meeting is going to be with all three foremen, though, not individually"*, *"more about their specific jobs, their guys, maybe morale and margin numbers, rough numbers, like all the job numbers... not schedule or training"*, then *"Okay let's build that and see what it looks like"*. Preview first (claude.ai artifact, read only). **Where:** /dashboard › Meetings, third button **Foreman Meeting · Wed 7:00** (remembered on the device). **Team check:** typed items (week-scoped, TYPED), a "#1291 …" entry ties to the job. **Jobs:** the dashboard's Job Costs page itself, foreman view (Koy: *"I think section 2 should be straight from the job cost tab in the dashboard, the foreman view of it"*). The tab's render, state and reads moved out of OfficeDash into 'OdJobCosts', used by both the Costs tab and the meeting; 'embed' forces the foreman view (percentages and hours, no dollars), starts on Active, uses a slim header and folds How it is counted, and adds + Note / Hide under each job in the table (meetings/foreman_<date>.rowNotes.w_<Simpro #>, foreman__prefs.hidden.jobs.w_<Simpro #>). Hidden jobs leave the table and chart only; the boxes still count them. **Guys:** active users whose foremanId is Keegan, Daegan or Colby (jr. foremen, leads, crew), one typed line each saved to meetings/foreman_<Wednesday>.guys.<userId> (this week only). **Action items:** as the other meetings; last week's carry for Done / Not done. No schedule, training, return trips, upcoming or crew out. Percentages and hours only. **Rules:** /meetings allows type foreman / foreman_prefs (rules deploy). **Why it won't lose data:** same collection and merge-one-field writes; the Scramble and Lead records are untouched; all job data is only read.
@@ -71590,7 +71644,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ roleSlot = null, pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onAssignPunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
+function MyDay({ roleSlot = null, phonesSlot = null, pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onAssignPunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -72983,6 +73037,7 @@ function MyDay({ roleSlot = null, pinsSlot = null, messagesSlot = null, qcTracke
         style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, marginBottom: 8 }} />}
       <JobsiteDayCard me={me} title={myTitle} jobs={jobs} users={users} onTogglePunch={onTogglePunch} onAssignPunch={onAssignPunch} onOpenJob={onOpenJob} />
       {roleSlot}
+      {phonesSlot}
       {pinsSlot}
       <div role="tablist" style={{ background: C.bg, display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto", scrollbarWidth: "none" }}>
         {TABS.map(([k, l, n, hot]) => (
@@ -74828,6 +74883,83 @@ function MyRoleCard({ level, onOpen }) {
       </span>
       <span style={{ color: RL_ACC, fontWeight: 700, fontSize: 14 }}>Open</span>
     </button>
+  );
+}
+// ── TEAM PHONE LIST (v655) ─────────────────────────────────────────────────────
+// Koy, 2026-11-16: "can we add all of our crews emails and phone numbers to the app? and in the
+// option to CC somebody on a purchase order etc a drop down with all emails there to choose from?";
+// 2026-11-19: "everyone needs to be able to have everybody's number". Numbers and emails come from
+// each employee's Primary Contact in Simpro through the teamContacts callable (live PIN, no
+// contractors). Nothing is saved in Firestore: the database is open to read. Fix a number in Simpro.
+const TC_CACHE = { at: 0, p: null, rows: null };
+function loadTeamContacts(identity, fresh = false) {
+  const now = Date.now();
+  if (!fresh && TC_CACHE.p && now - TC_CACHE.at < 10 * 60e3) return TC_CACHE.p;
+  TC_CACHE.at = now;
+  TC_CACHE.p = memberCallable("teamContacts", identity)(fresh ? { fresh: true } : {})
+    .then(r => { const d = r && r.data; if (!d || !d.ok || !Array.isArray(d.contacts)) throw new Error("no list"); TC_CACHE.rows = d.contacts; return d.contacts; })
+    .catch(e => { TC_CACHE.p = null; throw e; });
+  return TC_CACHE.p;
+}
+// undefined while loading · null when it couldn't load · the list
+function useTeamContacts(identity, on = true) {
+  const [rows, setRows] = useState(() => TC_CACHE.rows || undefined);
+  const uid = identity && identity.id;
+  useEffect(() => {
+    if (!uid || !on) return;
+    let live = true;
+    loadTeamContacts(identity).then(r => { if (live) setRows(r); }, () => { if (live) setRows(r0 => r0 || null); });
+    return () => { live = false; };
+  }, [uid, on]);
+  return rows;
+}
+const tcDial = (phone) => { let d = String(phone || "").replace(/\D/g, ""); if (d.length === 11 && d[0] === "1") d = d.slice(1); return d.length === 10 ? d : ""; };
+const tcMatch = (c, q) => !q || [c.name, c.email, c.phone, TITLE_LABELS[c.title] || ""].join(" ").toLowerCase().includes(q);
+function TeamPhoneCard({ identity }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const rows = useTeamContacts(identity, open);
+  if (!identity || !identity.id) return null;
+  const qq = q.trim().toLowerCase();
+  const shown = Array.isArray(rows) ? rows.filter(c => tcMatch(c, qq)) : [];
+  const link = { display: "inline-flex", alignItems: "center", gap: 5, minHeight: 36, padding: "0 10px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.card, color: C.accent, fontSize: 13.5, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" };
+  return (
+    <section style={{ border: `1px solid ${C.border}`, background: C.card, borderRadius: 14, marginBottom: 10, color: C.text, overflow: "hidden" }}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left", cursor: "pointer", fontFamily: "inherit", border: "none", background: "transparent", padding: "12px 14px", minHeight: 56, color: C.text }}>
+        <span style={{ width: 26, height: 26, flexShrink: 0, display: "grid", placeItems: "center" }}><Icon name="phone" size={20} color={C.accent}/></span>
+        <span style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+          <b style={{ fontSize: 15 }}>Team phone list</b>
+          <small style={{ color: C.dim, fontSize: 13 }}>{Array.isArray(rows) ? `${rows.length} people · phone, text, email` : "Everyone's phone and email"}</small>
+        </span>
+        <span style={{ color: C.accent, fontWeight: 700, fontSize: 14 }}>{open ? "Hide" : "Open"}</span>
+      </button>
+      {open ? <div style={{ padding: "12px 14px 14px", display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.border}` }}>
+        {rows === undefined ? <div style={{ fontSize: 13, color: C.dim }}>Loading…</div>
+          : rows === null ? <div style={{ fontSize: 13, color: C.dim }}>Couldn't load the list. Check your signal and try again.</div>
+          : <>
+            <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Search a name" aria-label="Search the team phone list"
+              style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text }}/>
+            {shown.map(c => { const dial = tcDial(c.phone); return (
+              <div key={c.teamId || c.name} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 14.5 }}>{c.name}</b>
+                  {c.title ? <small style={{ color: C.dim, fontSize: 12.5 }}>{TITLE_LABELS[c.title] || c.title}</small> : null}
+                  {c.phone ? <small style={{ color: C.dim, fontSize: 12.5 }}>{c.phone}</small> : null}
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {dial ? <a href={`tel:${dial}`} style={link} aria-label={`Call ${c.name}`}><Icon name="phone" size={14} color={C.accent}/>Call</a> : null}
+                  {dial ? <a href={`sms:${dial}`} style={link} aria-label={`Text ${c.name}`}><Icon name="chat" size={14} color={C.accent}/>Text</a> : null}
+                  {c.email ? <a href={`mailto:${c.email}`} style={{ ...link, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }} aria-label={`Email ${c.name}`}><Icon name="mail" size={14} color={C.accent}/>{c.email}</a> : null}
+                  {!c.phone && !c.email ? <small style={{ color: C.faint, fontSize: 12.5 }}>{c.inSimpro ? "No phone or email in Simpro yet" : "Not in Simpro yet"}</small>
+                    : !c.phone ? <small style={{ color: C.faint, fontSize: 12.5, alignSelf: "center" }}>No phone in Simpro yet</small> : null}
+                </div>
+              </div>); })}
+            {!shown.length ? <div style={{ fontSize: 13, color: C.dim }}>No one matches "{q.trim()}".</div> : null}
+            <div style={{ fontSize: 12, color: C.faint }}>From Simpro. A wrong or missing number gets fixed in Simpro by the office.</div>
+          </>}
+      </div> : null}
+    </section>
   );
 }
 // ── TEAM RATING AND GOALS (v654, Koy 2026-11-19) ─────────────────────────────
@@ -80554,6 +80686,7 @@ function App() {
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
           jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)} msgsJump={officeJump} msgCounts={officeMsgCounts(officeMsgs)}
           roleSlot={myLadderKey || myLadderLevel ? <>{myLadderKey ? <TeamRatingCard identity={identity}/> : null}{myLadderLevel ? <MyRoleCard level={myLadderLevel} onOpen={() => setRoleOpen(true)}/> : null}</> : null}
+          phonesSlot={getAccess(identity) !== "contractor" ? <TeamPhoneCard identity={identity}/> : null}
           pinsSlot={announcePins.length > 0 ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}
           messagesSlot={(officeMsgs.length || canBroadcast(identity)) ? <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/> : null}/>
       )}

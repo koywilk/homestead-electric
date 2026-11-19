@@ -7724,6 +7724,32 @@ exports.claudeActivity = functions.https.onCall(async (data) => {
   });
 });
 
+// ─── Team phone list (SW v655) ───────────────────────────────────────────────
+// Koy, 2026-11-16: "can we add all of our crews emails and phone numbers to the app? and in the
+// option to CC somebody on a purchase order etc a drop down with all emails there to choose
+// from?"; 2026-11-19: "everyone needs to be able to have everybody's number". Simpro's employee
+// Primary Contact stays the one place to type them; nothing is saved in Firestore (open reads).
+// Gate: any live team PIN except contractors. Read-only. Merge in functions/teamContacts.js,
+// tested by scripts/team-contacts-test.js. Deploy ONLY this one:
+//   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:teamContacts --project homestead-electric
+const _teamContacts = require("./teamContacts.js");
+let _teamContactsCache = { at: 0, rows: null };
+exports.teamContacts = functions.https.onCall(async (data) => {
+  const user = await requireMember(data);
+  if (!_teamContacts.mayRead(user)) throw new functions.https.HttpsError("permission-denied", "The team phone list is for Homestead staff.");
+  const now = Date.now();
+  if (!_teamContactsCache.rows || now - _teamContactsCache.at > 10 * 60e3 || (data && data.fresh === true && now - _teamContactsCache.at > 30e3)) {
+    const r = await simproReqWithRetry("GET", "/employees/?pageSize=250&columns=ID,Name,Archived,PrimaryContact");
+    if (!r || !r.ok || !Array.isArray(r.data)) {
+      if (_teamContactsCache.rows) return { ok: true, stale: true, contacts: _teamContactsCache.rows };
+      throw new functions.https.HttpsError("unavailable", "Couldn't reach Simpro. Try again in a minute.");
+    }
+    _teamContactsCache = { at: now, rows: r.data };
+  }
+  const contacts = _teamContacts.buildContacts(_teamContactsCache.rows, await getUsers());
+  return { ok: true, contacts };
+});
+
 // ─── Reports in the Claude tab (SW v616) ─────────────────────────────────────
 // Koy, 2026-11-05: reports "easily accessable from the claude section in
 // dashboard", "from here on any reports will go there as well organized
