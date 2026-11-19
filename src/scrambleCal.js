@@ -40,8 +40,19 @@ function anyDate(s) {
 const anyIso = (s) => { const d = anyDate(s); return d ? ymd(d) : ""; };
 const addDays = (iso, n) => { const d = parseYmd(iso); d.setDate(d.getDate() + n); return ymd(d); };
 const dowOf = (iso) => (parseYmd(iso).getDay() + 6) % 7;        // Mon 0 … Sun 6
-const isWork = (iso) => dowOf(iso) <= 3;                          // Mon–Thu
-function nextWork(iso) { let d = iso; for (let i = 0; i < 7 && !isWork(d); i++) d = addDays(d, 1); return d; }
+// Company holidays, no crew work (v656): New Year's Day, Memorial Day, July 4, Labor Day, Thanksgiving,
+// Christmas Day; one on a Sunday is taken the Monday after.
+function holidaysOf(y) {
+  const iso = (m, d) => ymd(new Date(y, m, d, 12));
+  const nth = (m, dow, n) => { const d = new Date(y, m, 1, 12); while (d.getDay() !== dow) d.setDate(d.getDate() + 1); d.setDate(d.getDate() + 7 * (n - 1)); return ymd(d); };
+  const last = (m, dow) => { const d = new Date(y, m + 1, 0, 12); while (d.getDay() !== dow) d.setDate(d.getDate() - 1); return ymd(d); };
+  const fixed = [iso(0, 1), iso(6, 4), iso(11, 25)].map(x => new Date(x + "T12:00").getDay() === 0 ? addDays(x, 1) : x);
+  return new Set([...fixed, last(4, 1), nth(8, 1, 1), nth(10, 4, 4)]);
+}
+const HOL = {};
+const isHoliday = (iso) => { const y = +String(iso).slice(0, 4); if (!HOL[y]) HOL[y] = holidaysOf(y); return HOL[y].has(iso); };
+const isWork = (iso) => dowOf(iso) <= 3 && !isHoliday(iso);   // Mon–Thu, not a holiday
+function nextWork(iso) { let d = iso; for (let i = 0; i < 10 && !isWork(d); i++) d = addDays(d, 1); return d; }
 const workAfter = (iso) => nextWork(addDays(iso, 1));
 const mondayOf = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return ymd(x); };
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -130,8 +141,8 @@ const boardTitle = (u) => u.title || (["admin", "justin", "jeromy"].includes(u.r
 function crewBoard(users) {
   const act = (users || []).filter(u => u && String(u.name || "").trim() && u.active !== false);
   const crews = {};
-  act.forEach(u => { if (boardTitle(u) === "foreman") crews[u.id] = { id: u.id, foreman: u.name, people: [u.name] }; });
-  act.forEach(u => { const t = boardTitle(u); if (t !== "foreman" && t !== "admin" && u.foremanId && crews[u.foremanId]) crews[u.foremanId].people.push(u.name); });
+  act.forEach(u => { if (boardTitle(u) === "foreman") crews[u.id] = { id: u.id, foreman: u.name, people: [u.name], title: { [u.name]: "foreman" } }; });
+  act.forEach(u => { const t = boardTitle(u); if (t !== "foreman" && t !== "admin" && u.foremanId && crews[u.foremanId]) { crews[u.foremanId].people.push(u.name); crews[u.foremanId].title[u.name] = t; } });
   // "Daegan Smith", "Daegan", "Louis H." → the one active person it can only mean
   const find = (name) => {
     const n = lc(name).replace(/\./g, ""); if (!n) return null;
@@ -162,7 +173,8 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
   items.forEach(it => {
     const f = it.plan || it.auto; if (!f) return;
     const names = (f.staff || []).map(x => x && x.name).filter(Boolean);
-    const who = names.length ? names : it.plan ? crewNames(it) : [...new Set(it.booked.flatMap(b => b.names || []))];
+    const lastDay = it.booked.length ? it.booked[it.booked.length - 1] : null;   // a Simpro tail runs on with the last booked day's people
+    const who = names.length ? names : it.plan ? crewNames(it) : ((lastDay && lastDay.names) || []);
     planDays(f).forEach(d => { if (d.date <= end) who.forEach(n => mark(n, d.date)); });
   });
   const first = workAfter(todayIso);
@@ -201,7 +213,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
     if (!u) return need(it, `${it.who} isn't on the Crew Board`);
     if (!board.crewOfUser(u)) return need(it, `${firstOf(u.name)} is unassigned on the Crew Board`);
     if (!s.by && s.iso < todayIso) return need(it, `Was set for ${md(s.iso)}, not done. Pick a new date`);
-    if (!s.by && !isWork(s.iso)) return need(it, `Set for ${short(s.iso)}. Fridays are volunteer only`);
+    if (!s.by && !isWork(s.iso)) return need(it, `Set for ${short(s.iso)}, ${isHoliday(s.iso) ? "a holiday" : "Fridays are volunteer only"}`);
     const held = it.material ? "" : "No material listed on the trip";
     const hours = it.defHours || HPD;
     if (s.by) {
@@ -212,22 +224,68 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
     if (!free([u.name], s.iso)) return need(it, `${firstOf(u.name)} is already booked ${short(s.iso)}`);
     place(it, [u.name], s.iso, hours, held, firstOf(u.name));
   };
+  // Crews (Koy 2026-11-19): "keep the crews at least four on a job if we can. But if there are two jobs going at
+  // the same time for a foreman, then the junior foreman is first up to take the job that the foreman's not on."
+  // A job gets one head (its own foreman / lead on the board if free, else the crew's foreman, else a jr foreman)
+  // and up to 4 people, the other heads kept back for the crew's other jobs. When another of the crew's jobs
+  // wants the same days, this one leaves room for it (the second job's head plus one); a job that can't get 4
+  // goes on with fewer, held under Needs you. A crew under 4 people goes out whole.
+  const crewKey = (it) => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead); return c ? c.id : ""; };
+  const doneKeys = new Set();
+  const fromOf = (it) => it.start.started || !sIso(it) || sIso(it) < first ? first : nextWork(sIso(it));
   const doPhase = (it) => {
+    doneKeys.add(it.key);
     if (it.over) return need(it, "Over bid. Set the hours by hand");
     if (it.left == null) return need(it, "No hours in Job Costs. Set the hours by hand");
     if (!(it.left > 0)) return;
     const c = board.crewOf(it.foreman) || board.crewOf(it.jlead);
     if (!c) return need(it, it.foreman ? `${it.foreman} has no crew on the Crew Board` : "No foreman set on the job");
-    const names = c.people, n = names.length;
-    const from = it.start.started || !sIso(it) || sIso(it) < first ? first : nextWork(sIso(it));
-    const at = fit(names, from, Math.max(1, Math.ceil(it.left / (n * HPD) - 1e-9)), end);
+    const pool = c.people, tt = c.title || {};
+    const isHead = (p) => tt[p] === "foreman" || tt[p] === "jrforeman";
+    const runner = [board.find(it.foreman), board.find(it.jlead)].filter(Boolean).map(u => u.name).find(x => pool.includes(x)) || "";
+    const headRank = (p) => p === runner ? 0 : tt[p] === "foreman" ? 1 : tt[p] === "jrforeman" ? 2 : 3;
+    const rest = (p) => tt[p] === "lead" ? 0 : 1;
+    const want = Math.min(4, pool.length);
+    const from = fromOf(it);
+    let at = "", names = [], split = false;
+    for (let s = nextWork(from), g = 0; s <= end && g < 60 && !at; s = workAfter(s), g++) {
+      for (let cnt = want; cnt >= Math.min(2, want) && !at; cnt--) {
+        const nDays = Math.max(1, Math.ceil(it.left / (cnt * HPD) - 1e-9));
+        const days = []; for (let d = s, i = 0; i < nDays && d <= end; i++, d = workAfter(d)) days.push(d);
+        const avail = pool.filter(p => days.every(d => free([p], d)));
+        const heads = avail.filter(p => isHead(p) || p === runner).sort((x, y) => headRank(x) - headRank(y));
+        if (!heads.length && pool.some(isHead)) continue;
+        const head = heads[0] || avail[0]; if (!head) continue;
+        // another of this crew's jobs (not placed yet) that wants these days keeps its head plus one
+        const other = phases.some(o => o !== it && !doneKeys.has(o.key) && crewKey(o) === c.id && fromOf(o) <= days[days.length - 1]);
+        const spareHead = other && avail.length >= 4 ? heads.find(p => p !== head) : "";   // a split needs 2 on each side
+        const cap = other && spareHead ? Math.max(2, Math.min(cnt, avail.length - 2)) : cnt;
+        const team = [head, ...avail.filter(p => p !== head && !isHead(p) && p !== runner).sort((x, y) => rest(x) - rest(y)),
+          ...avail.filter(p => p !== head && p !== spareHead && (isHead(p) || p === runner))].slice(0, Math.min(cnt, cap));
+        if (team.length >= cnt || (team.length >= Math.min(2, want) && team.length === Math.min(cnt, cap))) {
+          // the head count may have dropped: lay the hours out again for the team it got
+          const nd2 = Math.max(1, Math.ceil(it.left / (team.length * HPD) - 1e-9));
+          let ok = true; for (let d = s, i = 0; i < nd2 && d <= end; i++, d = workAfter(d)) if (!free(team, d)) { ok = false; break; }
+          if (ok) { at = s; names = team; split = !!(other && spareHead); }
+        }
+      }
+    }
     if (!at) return need(it, `${label(c)} is booked through ${md(end)}`);
-    const held = it.start.started ? "" : it.po === "none" ? `${it.tag} starts with no material PO` : it.po === "notOrdered" ? `${it.tag} material card not ordered yet` : "";
-    place(it, names, at, it.left, held, label(c));
+    // the foreman's own job keeps the bigger group when the crew splits; the short one is flagged
+    const short = names.length < want && !(split && tt[names[0]] === "foreman") ? `Only ${names.length} of ${label(c)} free (want ${want})` : "";
+    const po = it.start.started ? "" : it.po === "none" ? `${it.tag} starts with no material PO` : it.po === "notOrdered" ? `${it.tag} material card not ordered yet` : "";
+    place(it, names, at, it.left, [po, short].filter(Boolean).join(". "), label(c));
   };
+  // A confirmed start date is a promise to the builder, so those go first, on their date; then work already under
+  // way; then the rest, rough-in first (rough-in ahead of finish on the same day throughout).
+  const conf = (x) => !x.start.started && x.start.conf;
+  const firm = (x) => x.start.started || conf(x);
+  const kindRank = (x) => x.kind === "rough" ? 0 : 1;
   fixed.forEach(doTrip);
-  phases.filter(x => x.kind === "rough").sort(ord).forEach(doPhase);   // rough-in first
-  phases.filter(x => x.kind === "finish").sort(ord).forEach(doPhase);
+  phases.filter(conf).sort((a, b) => ord(a, b) || kindRank(a) - kindRank(b)).forEach(doPhase);
+  phases.filter(x => x.start.started).sort((a, b) => ord(a, b) || kindRank(a) - kindRank(b)).forEach(doPhase);
+  phases.filter(x => !firm(x) && x.kind === "rough").sort(ord).forEach(doPhase);   // rough-in first
+  phases.filter(x => !firm(x) && x.kind === "finish").sort(ord).forEach(doPhase);
   byTrips.forEach(doTrip);
   return needs;
 }
@@ -301,6 +359,15 @@ function buildCalendar(input) {
     if (h && h.est) { it.est = r1(h.est); it.used = r1(h.used || 0); it.wholeJob = true; }
   });
 
+  // v656: a copied block (Copy to other days) is its own plan, keyed "<item key>~<day>"; it shows as a copy of
+  // its job, with no flags or hours of its own.
+  Object.keys(plans || {}).forEach(k => {
+    const i = k.indexOf("~"); if (i < 1 || !plans[k]) return;
+    const base = items.find(x => x.key === k.slice(0, i)); if (!base) return;
+    mk({ key: k, kind: base.kind, tag: base.tag, tripNo: base.tripNo, no: base.no, name: base.name, jobId: base.jobId, upcoming: base.upcoming,
+      foreman: base.foreman, jlead: base.jlead, who: base.who, copyOf: base.key, defCrew: base.defCrew, defHours: HPD });
+  });
+
   // Hours left, the auto tail after a booking, kept plans, flags.
   items.forEach(it => {
     it.booked.sort((a, b) => a.iso < b.iso ? -1 : 1);
@@ -356,5 +423,5 @@ function buildCalendar(input) {
     counts: { flagged: list.filter(x => x.flags.length).length + cal.filter(x => x.flags.length).length, list: list.length, cal: cal.length, needs: needs.length } };
 }
 
-module.exports = { HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
+module.exports = { HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
   md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar };

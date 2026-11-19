@@ -17,7 +17,8 @@ ok(SC.workAfter("2026-11-19") === "2026-11-23", "the day after Thursday is Monda
 const sp = SC.span("2026-11-23", 50, 2, "2026-12-18");
 ok(sp.used.length === 3 && sp.used[2].part === 0.5 && sp.days === 2.5, "50 h at 2 people is 2.5 workdays");
 const big = SC.span("2026-11-23", 2485, 2, "2026-12-18");
-ok(big.cut && big.used.length === 16, "a job longer than the view runs to its edge and says it continues");
+ok(big.cut && big.used.length === 15, "a job longer than the view runs to its edge and says it continues (Thanksgiving off)");
+ok(!SC.isWork("2026-11-26") && SC.isHoliday("2026-11-26") && SC.isHoliday("2026-12-25") && SC.isHoliday("2027-07-05") && SC.nextWork("2026-11-26") === "2026-11-30" && SC.isWork("2026-11-25"), "holidays: Thanksgiving, Christmas, July 4 on a Sunday taken Monday");
 ok(JSON.stringify(SC.planDays({ s: "2026-11-23", hours: 50, crew: 2 })) === JSON.stringify([{ date: "2026-11-23", hours: 10 }, { date: "2026-11-24", hours: 10 }, { date: "2026-11-25", hours: 5 }]), "a plan books 10 h days, the last one short");
 ok(SC.upNo({ name: "#2386 - Skyridge Lot 211" }) === "2386" && SC.upName({ name: "#2386 - Skyridge Lot 211" }) === "Skyridge Lot 211", "Upcoming numbers and names split");
 
@@ -103,9 +104,9 @@ const jobs3 = jobs.map(j => fm[j.id] ? { ...j, foreman: fm[j.id] } : j).concat([
 const A = (plans) => SC.buildCalendar({ jobs: jobs3, upcoming, schedules, phaseHours, plans: plans || {}, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 const V3 = A(), K3 = (k) => V3.items.find(x => x.key === k), N3 = (k) => V3.needs.find(x => x.key === k);
 const cm3 = K3("j_a1402_f");
-ok(cm3.auto && cm3.auto.src === "auto" && cm3.auto.s === "2026-11-23" && cm3.auto.crew === 3 && !cm3.auto.held && cm3.onCal && !cm3.inList, "Cougar Moon finish: Daegan's 3 on its confirmed Monday, off the list");
+ok(cm3.auto && cm3.auto.src === "auto" && cm3.auto.s === "2026-11-23" && cm3.auto.crew === 3 && cm3.auto.staff[0].name === "Daegan Smith" && !cm3.auto.held && cm3.onCal && !cm3.inList, "Cougar Moon finish: Daegan's whole 3-person crew (under 4, so no split) on its confirmed Monday, foreman first, off the list");
 const tb3 = K3("j_a1407_f");
-ok(tb3.auto && tb3.auto.s === "2026-12-01" && tb3.auto.held === "Finish starts with no material PO" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) goes on Daegan's crew after Cougar Moon, held for no material PO");
+ok(tb3.auto && tb3.auto.s === "2026-12-02" && tb3.auto.staff[0].name === "Louis Hoffman" && tb3.auto.held === "Finish starts with no material PO" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) runs with Daegan's crew after Cougar Moon, Louis leading, held for no material PO");
 ok(K3("j_a1412_r").auto.src === undefined && K3("j_a1412_r").auto.s === "2026-11-23", "a Simpro tail stays as it was");
 ok(!K3("j_a1382_r").auto && N3("j_a1382_r").why === "Zane's crew is booked through 12/18", "Riverton: Zane's crew is on Battle Creek through the view, so it's held for you, not double-booked");
 ok(N3("t_a1407_t4").why === "No date or crew set in Command Center" && /Was set for 10\/28, not done/.test(N3("t_a959_t2").why), "trips with no date or a passed date go to Needs you");
@@ -117,7 +118,25 @@ ok(K3("j_a1382_r").inList === false && V3.list.every(x => !x.need), "Needs you i
 ok(SC.buildCalendar({ jobs: jobs3, schedules, phaseHours, today, weeks: 5 }).needs.length === 0, "with no Crew Board the auto-schedule stays off");
 const V4 = A({ "j_a1402_f": { s: "2026-11-23", hours: 140, crew: 2, by: "Koy Wilkinson" } });
 const cm4 = V4.items.find(x => x.key === "j_a1402_f"), tb4 = V4.items.find(x => x.key === "j_a1407_f");
-ok(cm4.plan && !cm4.auto && tb4.auto.s === "2026-12-03", "a kept plan never moves, and its crew's days stay taken (Tolbert moves to after it)");
+ok(cm4.plan && !cm4.auto && tb4.auto.s === "2026-12-07", "a kept plan never moves, and its crew's days stay taken (Tolbert moves to after it)");
+// Koy: "keep the crews at least four on a job if we can. But if there are two jobs going at the same time for a
+// foreman, then the junior foreman is first up to take the job that the foreman's not on."
+const users5 = users.concat([{ id: "t", name: "Trever Worley", title: "lead", foremanId: "d", active: true }, { id: "jl", name: "James Livingston", title: "crew", foremanId: "d", active: true }]);
+const jobs5 = [
+  { id: "x", simproNo: "500", name: "Foreman job", foreman: "Daegan Smith", roughStatus: "date_confirmed", roughProjectedStart: "11/23/2026", roughStartConfirmed: true, roughMaterials: [{ ordered: true }] },
+  { id: "y", simproNo: "501", name: "Jr job", foreman: "Louis Hoffman", roughStatus: "inprogress", roughMaterials: [{ ordered: true }] },
+  { id: "z", simproNo: "502", name: "Big crew", foreman: "Keegan Wilkinson", roughStatus: "inprogress" }];
+const users6 = users5.concat([{ id: "k", name: "Keegan Wilkinson", title: "foreman", active: true }, { id: "au", name: "Austin Schut", title: "lead", foremanId: "k", active: true },
+  { id: "g", name: "Gage Lund", title: "jrforeman", foremanId: "k", active: true }, { id: "p", name: "Payton Bolda", title: "crew", foremanId: "k", active: true }, { id: "q", name: "Quinn Test", title: "crew", foremanId: "k", active: true }]);
+const V5 = SC.buildCalendar({ jobs: jobs5, schedules: [], phaseHours: { "500": { r: [0, 120] }, "501": { r: [0, 300] }, "502": { r: [0, 200] } }, today, weeks: 5, users: users6, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const X = V5.items.find(i => i.key === "j_x_r").auto, Y = V5.items.find(i => i.key === "j_y_r").auto, Z = V5.items.find(i => i.key === "j_z_r").auto;
+ok(X.staff.map(p => p.name).join() === "Daegan Smith,Trever Worley,Callen Jakeman" && !X.held, "two jobs at once on a 5-person crew: the foreman's job keeps the bigger group (3), not flagged");
+ok(Y.staff[0].name === "Louis Hoffman" && Y.crew === 2 && SC.planDays(Y).some(d => d.date === X.s) && /Only 2 of Daegan's crew free \(want 4\)/.test(Y.held), "the jr foreman takes the other job the same days with the rest, flagged short");
+ok(Z.crew === 4 && Z.staff[0].name === "Keegan Wilkinson" && !Z.held && !Z.staff.some(p => p.name === "Gage Lund"), "one job on a 5-person crew: 4 on it, the foreman leading, the jr foreman kept free");
+const V6 = A({ "j_a1402_f~2026-12-03": { s: "2026-12-03", hours: 20, crew: 2, staff: [{ name: "Callen Jakeman" }, { name: "Louis Hoffman" }] } });
+const cp = V6.items.find(x => x.key === "j_a1402_f~2026-12-03");
+ok(cp && cp.copyOf === "j_a1402_f" && cp.plan && cp.plan.s === "2026-12-03" && cp.onCal && !cp.inList && !cp.flags.length && cp.no === "1402", "a copied day is its own kept block on its job, with no flags");
+ok(!V6.items.some(it => it.auto && it.auto.src === "auto" && it.key !== cp.key && SC.planDays(it.auto).some(d => d.date === "2026-12-03") && it.auto.staff.some(p => p.name === "Callen Jakeman")), "the auto-schedule doesn't put a copied day's people anywhere else that day");
 // every auto day stays Mon–Thu
 ok(V3.items.filter(it => it.auto && it.auto.src).every(it => SC.planDays(it.auto).every(d => SC.isWork(d.date))), "auto blocks only use Mon–Thu");
 

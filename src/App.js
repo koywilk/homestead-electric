@@ -51937,30 +51937,45 @@ function odCostsCoHours(goalsDoc) {
 // calendar and we can put it on there and see what it looks like. And then we can schedule from there".
 // Preview approved (claude.ai/artifact/DF9rkRQuTGGdFkXXk77AL6), then "lets send it, well adjust when needed".
 // Rows come from src/scrambleCal.js (pure). Solid = booked in Simpro; light = forecast (the hours left at 4-10s,
-// 2 people unless Simpro has a crew). Drag a block to move it, drag the grip on its right end to add or take
-// off days. Keep as plan saves it for everyone (meetings/scramble__prefs.cal). Book in Simpro shows every entry
+// 2 people unless Simpro has a crew). (v651 lanes; v656 replaced them with the calendar below.) Keep as plan
+// saves it for everyone (meetings/scramble__prefs.cal). Book in Simpro shows every entry
 // first (scrambleBook preview) and writes only on the confirm tap. Nothing here sets a stage or a status.
-const SCAL_DW = 44, SCAL_FW = 14, SCAL_WEEKS = 5, SCAL_WEEKW = 4 * SCAL_DW + SCAL_FW;
+// v656 (Koy 2026-11-19): a real calendar. Koy on the first try: "really condensed ... I want a full calendar view
+// not everything one by one on top of each other". Preview first (claude.ai/artifact/NhYSpENbPR9V9CgKrRa8hW).
+// Week view (wide Mon–Thu, a light Friday; days stack on a phone) and a Month grid of the five weeks. Each day holds
+// its jobs as chips: solid = booked in Simpro, dashed = auto-scheduled, striped red = held for a call, solid border =
+// a plan someone placed. Drag a chip to another day (press and hold, then tap a day, on a phone), Copy to other days,
+// change who's on it, its days or hours. Every move, copy or change saves at once as a plan everyone sees
+// (meetings/scramble__prefs.cal, one key per plan) and the auto-schedule never moves it again. Book in Simpro is
+// still the only write to Simpro, with its preview first. Nothing here sets a stage or a status.
+const SCAL_WEEKS = 5;
 const SCAL_KIND = { rough: OD_B, finish: OD_G, trip: OD_P, service: C.slate };
-const SCAL_SOFT = { rough: "rgba(37,99,201,.13)", finish: "rgba(24,128,74,.13)", trip: "rgba(106,79,200,.14)", service: "rgba(92,107,122,.14)" };
+const SCAL_SOFT = { rough: "rgba(37,99,201,.12)", finish: "rgba(24,128,74,.12)", trip: "rgba(106,79,200,.13)", service: "rgba(92,107,122,.13)" };
+const SCAL_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs, onOpenJob, say }) {
   const SC = ScrambleCal;
   const me = (identity && identity.name) || "";
   const [sched, setSched] = useState(undefined);       // Simpro schedule for the view (undefined loading, null failed)
   const [ph, setPh] = useState({});                    // settings/phaseHours.jobs (hours only)
   const [ctx, setCtx] = useState(null);                // { staff, upHours } from scrambleCalContext
-  const [drafts, setDrafts] = useState({});            // key → plan not kept yet (null = cleared here)
-  const [sel, setSel] = useState("");
-  const [picked, setPicked] = useState("");            // list item picked to tap onto a day (phones)
+  const [drafts, setDrafts] = useState({});            // key → plan just saved here (shown until the snapshot has it)
+  const [sel, setSel] = useState("");                  // item key tapped
+  const [picked, setPicked] = useState("");            // item key being moved (press and hold, Move…, or a list card)
   const [q, setQ] = useState("");
-  const [ghost, setGhost] = useState(null);            // { x, y, label, iso }
-  const [drag, setDrag] = useState(null);              // { key, label, x } while a block is dragged
   const [bk, setBk] = useState(null);                  // booking: { key, staff:Set, preview, busy, err, done }
   const [reload, setReload] = useState(0);
-  const [simOnly, setSimOnly] = useState(false);      // v656: show only what Simpro has booked
-  const lanes = useRef(null);
+  const [simOnly, setSimOnly] = useState(false);
+  const [view, setView] = useState(() => { try { const v = localStorage.getItem("he_scal_view"); return v === "month" ? "month" : "week"; } catch (_) { return "week"; } });
+  const [wk, setWk] = useState(0);                     // which of the five weeks the week view shows
+  const [crewF, setCrewF] = useState("All");
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [drag, setDrag] = useState("");                // key being dragged
+  const [over, setOver] = useState("");                // day under the drag
+  const [listOpen, setListOpen] = useState(false);
+  const hold = useRef(null);
   const today = new Date();
-  const start = SC.mondayOf(today), end = SC.addDays(start, SCAL_WEEKS * 7 - 3);
+  const start = SC.mondayOf(today);
+  const setV = (v) => { setView(v); try { localStorage.setItem("he_scal_view", v); } catch (_) {} };
 
   useEffect(() => {
     let dead = false; setSched(undefined);
@@ -51969,7 +51984,6 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     return () => { dead = true; };
   }, [start, reload]); // eslint-disable-line
   useEffect(() => { loadPhaseHours().then(h => setPh(h || {})); }, []);
-  // Crew picker names + Upcoming hours. A number above every app job number is a quote.
   useEffect(() => {
     let dead = false;
     const maxNo = (jobs || []).reduce((m, j) => Math.max(m, parseInt(j && j.simproNo, 10) || 0), 0);
@@ -51981,73 +51995,81 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   }, [identity && identity.name, (upcoming || []).length]); // eslint-disable-line
 
   const kept = (prefs && prefs.cal) || {};
+  useEffect(() => { setDrafts({}); }, [prefs]);   // the shared plans just came in (our own saves land here at once)
   const plans = useMemo(() => { const o = { ...kept }; Object.entries(drafts).forEach(([k, v]) => { if (v) o[k] = v; else delete o[k]; }); return o; }, [kept, drafts]); // eslint-disable-line
-  // v656: with the Crew Board (users) the auto-schedule lays out what isn't booked; it waits for Simpro's
-  // schedule so it never plans over a booking it hasn't seen.
-  const board = Array.isArray(sched) && (users || []).length ? users : null;
-  const V = useMemo(() => SC.buildCalendar({ jobs, upcoming, schedules: sched || [], phaseHours: ph, upHours: (ctx && ctx.upHours) || {}, plans, today, weeks: SCAL_WEEKS, effRS, effFS, users: board }),
-    [jobs, upcoming, sched, ph, ctx, plans, board]); // eslint-disable-line
+  // The auto-schedule waits for Simpro's schedule so it never plans over a booking it hasn't seen.
+  const boardUsers = Array.isArray(sched) && (users || []).length ? users : null;
+  const V = useMemo(() => SC.buildCalendar({ jobs, upcoming, schedules: sched || [], phaseHours: ph, upHours: (ctx && ctx.upHours) || {}, plans, today, weeks: SCAL_WEEKS, effRS, effFS, users: boardUsers }),
+    [jobs, upcoming, sched, ph, ctx, plans, boardUsers]); // eslint-disable-line
   const byKey = useMemo(() => Object.fromEntries(V.items.map(it => [it.key, it])), [V]);
-
-  // Positions: Mon–Thu are full columns, Friday is a thin strip.
-  const slotOf = (iso) => { const n = Math.round((SC.parseYmd(iso) - SC.parseYmd(start)) / 86400000); const w = Math.floor(n / 7), d = n - w * 7; return w < 0 || w >= SCAL_WEEKS ? -1 : w * 5 + Math.min(d, 4); };
-  const xOf = (iso) => { const s = slotOf(iso); if (s < 0) return s === -1 && iso > start ? SCAL_WEEKS * SCAL_WEEKW : 0; return Math.floor(s / 5) * SCAL_WEEKW + (s % 5 < 4 ? (s % 5) * SCAL_DW : 4 * SCAL_DW); };
-  const isoAtX = (x) => { const w = Math.max(0, Math.min(SCAL_WEEKS - 1, Math.floor(x / SCAL_WEEKW))); const r = x - w * SCAL_WEEKW; const d = r >= 4 * SCAL_DW ? 7 : Math.max(0, Math.floor(r / SCAL_DW)); return SC.nextWork(SC.addDays(start, w * 7 + d)); };
-  const laneX = (e) => { const el = lanes.current && lanes.current.querySelector(".sc-lane"); return el ? e.clientX - el.getBoundingClientRect().left : 0; };
-  const fc = (it) => it.plan || it.auto;              // the forecast block on an item, if any
-  const fcSpan = (it) => { const f = fc(it); return f ? SC.span(f.s, f.hours, f.crew, SC.addDays(start, SCAL_WEEKS * 7 - 1)) : null; };
-  const setPlan = (key, p) => setDrafts(d => ({ ...d, [key]: p }));
+  const board = useMemo(() => SC.crewBoard(users || []), [users]);
+  const foremen = useMemo(() => Object.values(board.crews).filter(c => c.people.length > 1).map(c => SC.firstOf(c.foreman)), [board]);
+  const fc = (it) => it.plan || it.auto;
   const nowIso = () => new Date().toISOString();
-  const keep = (it) => { const p = fc(it); if (!p) return; savePrefs({ cal: { [it.key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: p.staff || [], by: me, at: nowIso() } } });
-    setDrafts(d => { const n = { ...d }; delete n[it.key]; return n; }); say("Kept as plan. Everyone in the meeting sees it."); };
-  const dropPlan = (it) => { if (kept[it.key]) savePrefs({ cal: { [it.key]: deleteField() } }); setDrafts(d => { const n = { ...d }; delete n[it.key]; return n; }); setBk(null); };
-  const undoDraft = (it) => setDrafts(d => { const n = { ...d }; delete n[it.key]; return n; });
-  const place = (it, iso) => { setPlan(it.key, { s: SC.nextWork(iso), hours: it.defHours || SC.HPD, crew: it.defCrew || 2, staff: [] }); setSel(it.key); setPicked(""); };
 
-  // Drag a block (move), its grip (stretch), or a booked block's grip (add forecast days after it).
-  const startDrag = (e, it, mode) => {
-    if (e.button) return; e.preventDefault(); e.stopPropagation(); setSel(it.key);
-    const x0 = laneX(e), f0 = fc(it), last = it.booked.length ? it.booked[it.booked.length - 1].iso : "";
-    let moved = false;
-    const mv = (ev) => {
-      const x = laneX(ev); if (!moved && Math.abs(x - x0) < 4) return; moved = true;
-      let p;
-      if (mode === "move") p = { ...f0, s: isoAtX(xOf(f0.s) + SCAL_DW / 2 + (x - x0)) };
-      else {
-        const s = f0 ? f0.s : SC.workAfter(last), crew = f0 ? f0.crew : Math.max(1, it.crewBooked || it.defCrew || 2);
-        let d = 0; for (let iso = SC.nextWork(s), g = 0; g < 60 && xOf(iso) < x; iso = SC.workAfter(iso), g++) d += Math.min(1, Math.max(0, (x - xOf(iso)) / SCAL_DW));
-        d = Math.round(d * 2) / 2; if (mode === "end" && !it.booked.length) d = Math.max(0.5, d);
-        p = d > 0 ? { ...(f0 || { staff: [] }), s, crew, hours: d * crew * SC.HPD } : null;
-      }
-      setPlan(it.key, p);
-      const dd = p ? Math.round(p.hours / (p.crew * SC.HPD) * 10) / 10 : 0, nb = it.booked.length;
-      setDrag({ key: it.key, x, label: mode === "move" ? `Starts ${SC.short(p.s)} · ${dd} days` : nb ? `${nb} booked + ${dd} forecast = ${Math.round((nb + dd) * 10) / 10} days` : `${dd} days · ${Math.round(p ? p.hours : 0)} h` });
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
-      setDrag(null);
-    };
-    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
-  };
-  // Drag a list card onto a day (a tap picks it, then tap a day).
-  const startChip = (e, it) => {
-    if (e.button) return;
-    const sx = e.clientX, sy = e.clientY; let on = false;
-    const where = (ev) => { const el = lanes.current; if (!el) return ""; const r = el.getBoundingClientRect(), ln = el.querySelector(".sc-lane"); if (!ln) return "";
-      const lr = ln.getBoundingClientRect(); return ev.clientX > Math.max(r.left, lr.left) && ev.clientX < r.right && ev.clientY > r.top && ev.clientY < r.bottom ? isoAtX(ev.clientX - lr.left) : ""; };
-    const mv = (ev) => { if (!on && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return; on = true; setGhost({ x: ev.clientX, y: ev.clientY, label: `${it.no ? "#" + it.no + " · " : ""}${it.tag}`, iso: where(ev) }); };
-    const up = (ev) => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
-      setGhost(null); if (!on) { setPicked(p => p === it.key ? "" : it.key); setSel(""); return; } const iso = ev.type === "pointerup" ? where(ev) : ""; if (iso) place(it, iso); };
-    window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
-  };
-  const tapLane = (e) => { if (!picked || e.target.closest(".sc-bar")) return; const it = byKey[picked]; if (it) place(it, isoAtX(laneX(e))); };
+  // Chips per day.
+  const chips = useMemo(() => {
+    const out = {};
+    const fmOf = (names) => [...new Set(names.map(n => { const c = board.crewOf(n); return c ? SC.firstOf(c.foreman) : ""; }).filter(Boolean))];
+    const push = (iso, c) => { (out[iso] = out[iso] || []).push(c); };
+    V.items.forEach(it => {
+      it.booked.forEach(b => push(b.iso, { it, style: "booked", n: b.who.length, who: b.who, fm: fmOf(b.names || []), hrs: b.hrs }));
+      const f = fc(it); if (!f) return;
+      const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
+      const nm = names.length ? names : ((it.booked[it.booked.length - 1] || {}).names || []);
+      const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
+      SC.planDays(f).forEach(d => { if (d.date <= V.end) push(d.date, { it, style, n: f.crew, who: nm.map(SC.firstOf), fm: fmOf(nm), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "" }); });
+    });
+    const ord = { booked: 0, kept: 1, auto: 2, held: 3 }, kord = { rough: 0, finish: 1, trip: 2, service: 3 };
+    Object.values(out).forEach(l => l.sort((a, b) => ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
+    return out;
+  }, [V, board]); // eslint-disable-line
+  const shown = (c) => (!simOnly || c.style === "booked") && (crewF === "All" || c.fm.includes(crewF) || (!c.fm.length && crewF === "All"));
+  const dayChips = (iso) => (chips[iso] || []).filter(shown);
+  const crewText = (c) => c.team ? `${c.team} · ${c.n}` : c.who.length ? (c.who.length > 3 ? `${c.who.slice(0, 2).join(", ")} +${c.who.length - 2}` : c.who.join(", ")) : `${c.n} ppl`;
 
-  // Booking in Simpro: preview, then confirm.
+  // Saving: every move, copy or change is a plan everyone sees right away.
+  const commit = (key, p) => {
+    setDrafts(d => ({ ...d, [key]: p }));
+    if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), by: me, at: nowIso() } } });
+    else savePrefs({ cal: { [key]: deleteField() } });
+  };
+  const moveTo = (key, iso) => {
+    const it = byKey[key]; if (!it || it.kind === "service") return;
+    const f = fc(it), s = SC.nextWork(iso);
+    if (f) commit(key, { ...f, s, staff: f.staff || [] });
+    else commit(key, { s, hours: it.defHours || SC.HPD, crew: it.defCrew || 2, staff: [] });
+    setSel(key); setPicked(""); setDrag(""); setOver(""); setBk(null);
+    say(`${it.no ? "#" + it.no + " " : ""}${it.tag} moved to ${SC.short(s)}. Saved as a plan.`);
+  };
+  const backToAuto = (it) => { commit(it.key, null); setBk(null); setCopyOpen(false); if (it.copyOf) setSel(""); };
+  const copyTo = (it, iso) => {
+    const f = fc(it); if (!f) return;
+    const key = (it.copyOf || it.key) + "~" + iso;
+    commit(key, { s: iso, hours: Math.max(1, f.crew) * SC.HPD, crew: Math.max(1, f.crew), staff: f.staff || [] });
+    say(`Copied to ${SC.short(iso)}.`);
+  };
+  const setStaff = (it, names) => {
+    const f = fc(it); if (!f || !names.length) return;
+    commit(it.key, { ...f, staff: names.map(name => ({ name })), crew: names.length });
+  };
+  const setDays = (it, days) => { const f = fc(it); if (!f || days < 0.5) return; commit(it.key, { ...f, hours: days * f.crew * SC.HPD }); };
+
+  // Press and hold a chip (phones) to pick it up; then tap a day.
+  const holdStart = (e, c) => {
+    if (c.style === "booked") return;
+    clearTimeout(hold.current);
+    hold.current = setTimeout(() => { setPicked(c.it.key); setSel(c.it.key); try { navigator.vibrate && navigator.vibrate(15); } catch (_) {} }, 450);
+  };
+  const holdEnd = () => clearTimeout(hold.current);
+  const tapDay = (iso) => { if (picked) moveTo(picked, iso); };
+
+  // Booking in Simpro: preview, then confirm (unchanged from v651).
   const staffList = (ctx && ctx.staff) || [];
   const openBook = (it) => {
     const p = fc(it); const pre = new Set();
     ((p && p.staff) || []).forEach(s => s && s.id && pre.add(Number(s.id)));
-    if (!pre.size) { const names = new Set(((p && p.staff) || []).map(s => s && s.name).filter(Boolean)); staffList.forEach(s => names.has(s.name) && pre.add(s.id)); }   // v656: an auto block's crew
+    if (!pre.size) { const names = new Set(((p && p.staff) || []).map(s => s && s.name).filter(Boolean)); staffList.forEach(s => names.has(s.name) && pre.add(s.id)); }
     if (!pre.size) { const names = new Set(it.booked.flatMap(b => b.names || [])); staffList.forEach(s => names.has(s.name) && pre.add(s.id)); }
     if (!pre.size && it.kind === "trip" && it.who) { const s = staffList.find(x => x.name.toLowerCase() === it.who.toLowerCase()); if (s) pre.add(s.id); }
     setBk({ key: it.key, staff: pre, preview: null, busy: false, err: "", done: null, find: "" });
@@ -52064,88 +52086,122 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       const r = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, bk.staff), hash: bk.preview.hash });
       const d = r.data || {};
       setBk(b => ({ ...b, busy: false, done: d, preview: d.ok ? null : b.preview }));
-      if (d.ok) { if (kept[it.key]) savePrefs({ cal: { [it.key]: deleteField() } }); setDrafts(x => { const n = { ...x }; delete n[it.key]; return n; }); say(`Booked ${d.created.length} entries in Simpro.`); }
+      if (d.ok) { if (kept[it.key] || drafts[it.key]) commit(it.key, null); say(`Booked ${d.created.length} entries in Simpro.`); }
       setReload(n => n + 1);
     } catch (e) { setBk(b => ({ ...b, busy: false, err: (e && e.message) || "Nothing was written." })); }
   };
 
-  const days = V.days;
   const startTxt = (it) => {
+    if (it.copyOf) return "Copied day";
     if (it.hold) return "On hold";
     const s = it.start; if (!s) return it.kind === "trip" ? "" : "No start date";
     if (s.started) return "In progress";
     if (!s.iso) return "";
     return it.kind === "trip" ? `${s.by ? "Schedule by" : "Set for"} ${SC.md(s.iso)}` : `Start ${SC.md(s.iso)} ${s.conf ? "confirmed" : "est."}`;
   };
-  const hoursTxt = (it) => it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
+  const hoursTxt = (it) => it.copyOf ? "" : it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
   const Pill = ({ it }) => <span className="sc-pill" style={{ background: SCAL_SOFT[it.kind], color: SCAL_KIND[it.kind] }}>{it.tag}</span>;
+  const label = (it) => `${it.no ? "#" + it.no + " " : ""}${it.name}`;
 
-  const rowView = (it) => {
-    const runs = [];
-    it.booked.forEach(b => { if (slotOf(b.iso) < 0) return; const r = runs[runs.length - 1]; if (r && SC.workAfter(r.e) >= b.iso && b.iso > r.e) { r.e = b.iso; r.n = Math.max(r.n, b.who.length); r.d++; } else runs.push({ s: b.iso, e: b.iso, n: b.who.length, d: 1 }); });
-    const f = fc(it), sp = f ? fcSpan(it) : null, color = SCAL_KIND[it.kind];
-    const crew = [...new Set(it.booked.flatMap(b => b.who))];
-    const isDraft = it.key in drafts, s = it.start && it.start.iso && slotOf(it.start.iso) >= 0 && it.kind !== "trip" ? it.start : null;
+  const chipEl = (c, iso, compact) => {
+    const it = c.it, movable = c.style !== "booked" && it.kind !== "service";
     return (
-      <div className={"sc-row" + (sel === it.key ? " on" : "")} key={it.key}>
-        <button type="button" className="sc-lab" onClick={() => { setSel(it.key); setBk(null); }}>
-          <span className="sc-nm">{it.no ? "#" + it.no + " · " : ""}{it.name}</span>
-          <span className="sc-mt">{it.flags.length ? <span className="sc-fl" title={it.flags.join(". ")}>!</span> : null}<Pill it={it}/>{[startTxt(it), crew.slice(0, 3).join(", ") + (crew.length > 3 ? ` +${crew.length - 3}` : "")].filter(Boolean).join(" · ")}</span>
-        </button>
-        <div className="sc-lane" style={{ width: SCAL_WEEKS * SCAL_WEEKW }} onClick={tapLane}>
-          {days.map(d => <span key={d.iso} className={"sc-c" + (d.fri ? " fri" : "") + (d.iso === V.today ? " now" : "")} style={{ left: xOf(d.iso), width: d.fri ? SCAL_FW : SCAL_DW }}/>)}
-          {s ? <span className={"sc-mk" + (s.conf ? " conf" : "")} style={{ left: xOf(s.iso) + 3 }} title={`${it.tag} start ${SC.md(s.iso)}, ${s.conf ? "confirmed" : "estimated"} in Command Center`}/> : null}
-          {runs.map((r, i) => (
-            <div key={r.s} className={"sc-bar b" + (it.over ? " over" : "")} style={{ left: xOf(r.s) + 2, width: Math.max(34, xOf(r.e) + SCAL_DW - xOf(r.s) - 4), background: color }}
-              title={`#${it.no} ${it.name}: booked in Simpro`} onClick={() => { setSel(it.key); setBk(null); }}>
-              <span className="sc-tg">{it.tag}</span><span className="sc-t">{r.n} ppl · {r.d} d</span>
-              {i === runs.length - 1 && !f && it.kind !== "service" ? <span className="sc-h" title="Drag to add forecast days" onPointerDown={e => startDrag(e, it, "extend")}/> : null}
-            </div>))}
-          {f && sp && sp.used.length && !simOnly ? (
-            <div className={"sc-bar f" + (isDraft ? "" : it.plan ? " kept" : "") + (!it.plan && f.held ? " held" : "")} style={{ left: xOf(sp.used[0].iso) + 2, width: Math.max(34, xOf(sp.used[sp.used.length - 1].iso) + sp.used[sp.used.length - 1].part * SCAL_DW - xOf(sp.used[0].iso) - 4), background: SCAL_SOFT[it.kind], borderColor: color, color }}
-              onPointerDown={e => startDrag(e, it, "move")} title="Drag to move. Drag the grip on the right end to change the days.">
-              <span className="sc-tg">{it.booked.length ? "+ " : ""}{!it.plan && f.held ? "Held · " : ""}{it.tag}</span><span className="sc-t">{!it.plan && f.team ? f.team + " · " : ""}{Math.round(f.hours)} h · {f.crew} ppl · {Math.round(sp.days * 10) / 10} d{sp.cut ? " →" : ""}</span>
-              <span className="sc-h" title="Drag to add or take off days" onPointerDown={e => startDrag(e, it, "end")}/>
-            </div>) : null}
-          {drag && drag.key === it.key ? <span className="sc-dc" style={{ left: Math.min(drag.x + 10, SCAL_WEEKS * SCAL_WEEKW - 200) }}>{drag.label}</span> : null}
-        </div>
-      </div>
-    );
+      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}`}
+        style={{ "--c": SCAL_KIND[it.kind], "--s": SCAL_SOFT[it.kind] }}
+        draggable={movable} onDragStart={e => { if (!movable) return; setDrag(it.key); try { e.dataTransfer.setData("text/plain", it.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }}
+        onDragEnd={() => { setDrag(""); setOver(""); }}
+        onPointerDown={e => movable && e.pointerType !== "mouse" && holdStart(e, c)} onPointerUp={holdEnd} onPointerLeave={holdEnd} onPointerCancel={holdEnd}
+        onClick={e => { e.stopPropagation(); if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setBk(null); setCopyOpen(false); }}
+        title={`${label(it)} · ${it.tag}`}>
+        <span className="t">{label(it)}</span>
+        {compact ? null : <span className="m"><i>{c.style === "held" ? "Held · " : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{crewText(c)}</span>}
+      </button>);
   };
+  const dayProps = (iso) => ({
+    onDragOver: e => { if (!drag) return; e.preventDefault(); if (over !== iso) setOver(iso); },
+    onDragLeave: () => { if (over === iso) setOver(""); },
+    onDrop: e => { e.preventDefault(); const k = drag || (() => { try { return e.dataTransfer.getData("text/plain"); } catch (_) { return ""; } })(); if (k) moveTo(k, iso); },
+    onClick: () => tapDay(iso),
+  });
+  const weekStart = SC.addDays(start, wk * 7);
+  const weekView = () => (
+    <div className="sc-week">
+      {[0, 1, 2, 3, 4].map(i => {
+        const iso = SC.addDays(weekStart, i), list = dayChips(iso), fri = i === 4, hol = !fri && !SC.isWork(iso);
+        const ppl = new Set(); list.forEach(c => c.who.forEach(n => ppl.add(n)));
+        return (
+          <div key={iso} className={"sc-day" + (fri ? " fri" : "") + (iso === V.today ? " now" : "") + (over === iso || (picked && !fri && !hol) ? " drop" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
+            <div className="sc-dh"><span>{SCAL_DOW[i]}</span><b>{SC.parseYmd(iso).getDate()}</b>{list.length ? <em>{list.length} job{list.length > 1 ? "s" : ""} · {ppl.size} ppl</em> : null}</div>
+            <div className="sc-dl">
+              {hol ? <span className="sc-mt">Holiday</span> : null}
+              {list.map(c => chipEl(c, iso, false))}
+              {!list.length && !hol ? <span className="sc-mt">{fri ? "Volunteer overtime only" : picked ? "Tap to move here" : "Nothing yet"}</span> : null}
+            </div>
+          </div>);
+      })}
+    </div>);
+  const monthView = () => (
+    <div className="sc-month">
+      {SCAL_DOW.map(d => <div key={d} className="sc-mh">{d}</div>)}
+      {Array.from({ length: SCAL_WEEKS * 5 }, (_, n) => {
+        const w = Math.floor(n / 5), i = n % 5, iso = SC.addDays(start, w * 7 + i), list = dayChips(iso), max = 4;
+        return (
+          <div key={iso} className={"sc-mc" + (i === 4 ? " fri" : "") + (iso === V.today ? " now" : "") + (iso < V.today ? " past" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
+            <span className="sc-dn">{SC.md(iso)}{i < 4 && !SC.isWork(iso) ? " · holiday" : ""}</span>
+            {list.slice(0, max).map(c => chipEl(c, iso, true))}
+            {list.length > max ? <button type="button" className="sc-more" onClick={e => { e.stopPropagation(); setWk(w); setV("week"); }}>+{list.length - max} more</button> : null}
+          </div>);
+      })}
+    </div>);
 
   const it = sel ? byKey[sel] : null;
   const inspector = () => {
-    if (picked && byKey[picked]) return <div className="sc-ins"><b>{byKey[picked].no ? "#" + byKey[picked].no + " · " : ""}{byKey[picked].name}</b><small>Tap a day on the calendar to place it.</small><button type="button" className="mt-lnk" onClick={() => setPicked("")}>Cancel</button></div>;
-    if (!it) return <div className="sc-ins"><small>Tap a job to see its hours and book it. Drag a job from the list onto a day to plan it.</small></div>;
-    const f = fc(it), sp = f ? fcSpan(it) : null, isDraft = it.key in drafts;
-    const b = bk && bk.key === it.key ? bk : null;
-    const held = f && !it.plan && f.held;              // v656: held for a call; booked only once someone keeps it
+    if (picked && byKey[picked]) return <div className="sc-ins"><b>Moving {label(byKey[picked])}</b><small>Tap the day to move it to.</small><button type="button" className="mt-lnk" onClick={() => setPicked("")}>Cancel</button></div>;
+    if (!it) return <div className="sc-ins"><small>Tap a job to see its crew, days and hours. Drag it to another day to move it (press and hold on a phone, then tap a day).</small></div>;
+    const f = fc(it), b = bk && bk.key === it.key ? bk : null;
+    const held = f && !it.plan && f.held;
     const canBook = f && it.no && !it.upcoming && it.kind !== "service" && !held;
+    const pool = (() => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead) || board.crewOf(it.who); return c ? c.people : []; })();
+    const cur = ((f && f.staff) || []).map(x => x && x.name).filter(Boolean);
+    const others = Object.values(board.crews).flatMap(c => c.people).filter(n => !pool.includes(n) && !cur.includes(n));
+    const days = f ? Math.round(f.hours / (Math.max(1, f.crew) * SC.HPD) * 2) / 2 : 0;
+    const copyDays = []; for (let d = SC.workAfter(V.today), g = 0; d <= V.end && g < 25; d = SC.workAfter(d), g++) copyDays.push(d);
+    const copied = new Set(Object.keys(plans).filter(k => k.startsWith((it.copyOf || it.key) + "~")).map(k => k.split("~")[1]));
     return (
       <div className="sc-ins">
-        <div className="sc-ih"><Pill it={it}/>{it.jobId ? <button type="button" className="mt-name" onClick={() => { const j = (jobs || []).find(x => x && x.id === it.jobId); if (j && onOpenJob) onOpenJob(j); }}>{it.no ? "#" + it.no + " · " : ""}{it.name}</button> : <b>{it.no ? "#" + it.no + " · " : ""}{it.name}</b>}</div>
+        <div className="sc-ih"><Pill it={it}/>{it.jobId ? <button type="button" className="mt-name" onClick={() => { const j = (jobs || []).find(x => x && x.id === it.jobId); if (j && onOpenJob) onOpenJob(j); }}>{label(it)}</button> : <b>{label(it)}</b>}</div>
         <small>{[startTxt(it), hoursTxt(it), it.est != null ? `${it.used} of ${it.est} h used` : ""].filter(Boolean).join(" · ")}</small>
         {it.scope ? <small>{it.scope}{it.who ? ` · ${it.who}` : ""}</small> : null}
         {it.flags.map(x => <span key={x} className="sc-flag">{x}</span>)}
         {it.need ? <span className="sc-flag">Needs you: {it.need}</span> : null}
-        {held ? <span className="sc-flag">Held: {f.held}. Keep it as a plan once that's sorted, then book it.</span> : null}
-        {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change those days in Simpro.</small> : null}
+        {held ? <span className="sc-flag">Held: {f.held}. Move or change it once that's sorted; it then books like any plan.</span> : null}
+        {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change booked days in Simpro.</small> : null}
         {f ? (<>
+          <small className="sc-state">{it.plan ? `Plan${it.plan.by ? " by " + SC.firstOf(it.plan.by) : ""}: the auto-schedule won't move it.` : f.src === "auto" ? `Auto-scheduled for ${f.team}. Move or change it to keep it.` : "Forecast from Simpro's crew."}</small>
           <div className="sc-ctl">
-            <label>Start<input type="date" value={f.s} onChange={e => e.target.value && setPlan(it.key, { ...f, s: SC.nextWork(e.target.value) })}/></label>
-            <label>Hours<input type="number" min="5" step="5" value={Math.round(f.hours)} onChange={e => setPlan(it.key, { ...f, hours: Math.max(1, +e.target.value || 0) })}/></label>
-            <label>People<input type="number" min="1" max="10" value={f.crew} onChange={e => setPlan(it.key, { ...f, crew: Math.max(1, Math.min(10, +e.target.value || 1)) })}/></label>
+            <label>Start<input type="date" value={f.s} onChange={e => e.target.value && commit(it.key, { ...f, s: SC.nextWork(e.target.value) })}/></label>
+            <label>Days<span className="sc-step"><button type="button" onClick={() => setDays(it, days - 0.5)} aria-label="One half day less">−</button><b>{days}</b><button type="button" onClick={() => setDays(it, days + 0.5)} aria-label="One half day more">+</button></span></label>
+            <label>Hours<input type="number" min="5" step="5" value={Math.round(f.hours)} onChange={e => commit(it.key, { ...f, hours: Math.max(1, +e.target.value || 0) })}/></label>
           </div>
-          <small>{sp ? `${SC.short(sp.used[0] ? sp.used[0].iso : f.s)} to ${sp.cut ? "past the view" : SC.short(sp.used[sp.used.length - 1].iso)} · ${Math.round(sp.days * 10) / 10} workdays` : ""}{it.plan && !isDraft ? ` · kept by ${SC.firstOf(it.plan.by)}` : isDraft ? " · not kept yet" : f.src === "auto" ? ` · auto-scheduled for ${f.team}: ${(f.staff || []).map(x => SC.firstOf(x.name)).join(", ")}` : " · forecast from Simpro's crew"}</small>
+          {pool.length || cur.length ? (
+            <div className="sc-who">
+              <span className="mt-lab">Who · {cur.length || f.crew}</span>
+              <div className="sc-ppl">{[...new Set([...cur, ...pool])].map(n => (
+                <label key={n}><input type="checkbox" checked={cur.includes(n)} onChange={() => setStaff(it, cur.includes(n) ? cur.filter(x => x !== n) : [...cur, n])}/>{n}</label>))}</div>
+              {others.length ? <select value="" onChange={e => e.target.value && setStaff(it, [...cur, e.target.value])} aria-label="Add someone from another crew">
+                <option value="">+ Someone from another crew</option>{others.map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
+            </div>) : null}
           <div className="sc-btns">
+            {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => { setPicked(it.key); setBk(null); }}>Move…</button> : null}
+            {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => setCopyOpen(o => !o)}>{copyOpen ? "Done copying" : "Copy to other days"}</button> : null}
             {canBook ? <button type="button" className="mt-btn" onClick={() => b ? setBk(null) : openBook(it)}>{b ? "Close booking" : "Book in Simpro…"}</button> : null}
-            {isDraft || !it.plan ? <button type="button" className="mt-btn ghost" onClick={() => keep(it)}>Keep as plan</button> : null}
-            {isDraft && it.key in kept ? <button type="button" className="mt-lnk" onClick={() => undoDraft(it)}>Undo changes</button> : null}
-            {it.plan ? <button type="button" className="mt-lnk dim" onClick={() => dropPlan(it)}>{it.booked.length ? "Remove added days" : "Back to the list"}</button> : null}
+            {it.plan ? <button type="button" className="mt-lnk dim" onClick={() => backToAuto(it)}>{it.copyOf ? "Remove this copy" : it.booked.length ? "Remove added days" : "Back to auto"}</button> : null}
           </div>
+          {copyOpen ? (
+            <div className="sc-copy"><small>Tap the days to copy it to ({f.crew} {f.crew === 1 ? "person" : "people"}, one day each). Tap again to remove.</small>
+              <div>{copyDays.map(d => <button type="button" key={d} aria-pressed={copied.has(d)} onClick={() => copied.has(d) ? commit((it.copyOf || it.key) + "~" + d, null) : copyTo(it, d)}>{SC.short(d)}</button>)}</div></div>) : null}
           {!canBook && it.upcoming ? <small>{it.no ? `#${it.no} isn't a Simpro job yet` : "Not a Simpro job yet"}, so it can be planned but not booked.</small> : null}
-        </>) : it.kind !== "service" ? <small>Drag the grip on the right end of its block, or drag it from the list, to plan days.</small> : null}
-        {b && !f && b.done ? <small className={b.done.ok ? "ok" : "warn"}>{b.done.ok ? `Booked ${b.done.created.length} entries in Simpro. They show as solid days once Simpro answers.` : "Booking stopped; check Simpro."}</small> : null}
+        </>) : it.kind !== "service" ? (<div className="sc-btns"><button type="button" className="mt-btn ghost" onClick={() => setPicked(it.key)}>Place on a day…</button></div>) : null}
         {b && f ? (
           <div className="sc-book">
             <span className="mt-lab">Who to book ({b.staff.size} picked)</span>
@@ -52165,142 +52221,167 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
             </>) : null}
             {b.done ? <small className={b.done.ok ? "ok" : "warn"}>{b.done.ok ? `Booked ${b.done.created.length} entries in Simpro.` : `Booked ${b.done.created.length} of ${b.done.planned}, then Simpro refused ${b.done.failed.name} on ${b.done.failed.date} (${b.done.failed.status}). The rest weren't written; check Simpro.`}</small> : null}
           </div>) : null}
+        {b && !f && b.done ? <small className={b.done.ok ? "ok" : "warn"}>{b.done.ok ? `Booked ${b.done.created.length} entries in Simpro.` : "Booking stopped; check Simpro."}</small> : null}
       </div>
     );
   };
 
-  // v656: Needs you, the calls the auto-schedule won't make on its own (held blocks first).
   const needsBox = V.needs.length ? (
-    <div className="sc-listbox sc-needs">
+    <div className="sc-box">
       <span className="mt-lab">Needs you · {V.needs.length}</span>
-      <small className="sc-sub">The auto-schedule won't book these on its own. Tap one to see it.</small>
-      <div className="sc-list">{[...V.needs].sort((a, b) => (b.held ? 1 : 0) - (a.held ? 1 : 0)).map(n => { const x = byKey[n.key]; if (!x) return null; return (
-        <button type="button" key={n.key} className={"sc-need" + (sel === n.key ? " on" : "")} onClick={() => { setSel(n.key); setPicked(""); setBk(null); }}>
-          <b>{x.no ? "#" + x.no + " · " : ""}{x.name}</b><small><Pill it={x}/>{n.held ? "Placed, held" : "Not placed"}</small><span className="sc-flag">{n.why}</span>
+      <small className="sc-sub">Calls the auto-schedule won't make on its own. Tap one to see it.</small>
+      <div className="sc-scroll">{[...V.needs].sort((a, b) => (b.held ? 1 : 0) - (a.held ? 1 : 0)).map(n => { const x = byKey[n.key]; if (!x) return null; return (
+        <button type="button" key={n.key} className={"sc-need" + (sel === n.key ? " on" : "")} onClick={() => {
+          setSel(n.key); setPicked(""); setBk(null);
+          const f = fc(x); if (f) { const w = Math.floor((SC.parseYmd(f.s) - SC.parseYmd(start)) / (7 * 86400000)); if (w >= 0 && w < SCAL_WEEKS) setWk(w); }
+        }}>
+          <b>{label(x)}</b><small><Pill it={x}/>{n.held ? "Placed, held" : "Not placed"}</small><span className="sc-flag">{n.why}</span>
         </button>); })}</div>
     </div>) : null;
-  const sect = (x) => x.booked.length ? "Booked in Simpro" : x.plan ? "Kept plans" : x.auto && x.auto.held ? "Held for you" : "Auto-scheduled";
-  const calRows = [];
-  const SECT_ORDER = ["Booked in Simpro", "Kept plans", "Auto-scheduled", "Held for you"];
-  SECT_ORDER.forEach(g => { const rows = V.cal.filter(x => sect(x) === g && (!simOnly || x.booked.length)); if (!rows.length) return;
-    calRows.push(<div className="sc-sect" key={"s" + g}><div className="sc-hl">{g} · {rows.length}</div></div>); rows.forEach(x => calRows.push(rowView(x))); });
-
   const list = V.list.filter(x => !q || String(x.no).includes(q.replace(/^#/, "")) || String(x.name).toLowerCase().includes(q.toLowerCase()));
-  const grp = (x) => x.flags.length ? "Needs scheduling or a PO" : x.kind === "trip" ? "Return trips" : x.upcoming ? "Upcoming starts" : x.over ? "Over bid, nothing booked ahead" : x.kind === "rough" ? "In progress · Rough-in" : "In progress · Finish";
-  const chips = [];
-  let lastG = "";
-  list.forEach(x => {
-    const g = grp(x);
-    if (g !== lastG) { lastG = g; chips.push(<span className="sc-gh" key={"g" + g}>{g}</span>); }
-    const s = x.start && x.start.iso && x.start.iso >= V.today && x.start.iso <= end ? x.start.iso : "";
-    chips.push(
-      <div key={x.key} className={"sc-chip" + (picked === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")} onPointerDown={e => startChip(e, x)} role="button" tabIndex={0}
-        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPicked(p => p === x.key ? "" : x.key); } }}>
-        <b>{x.no ? "#" + x.no + " · " : ""}{x.name}</b>
-        <small><Pill it={x}/>{hoursTxt(x)}{x.left > 0 ? ` · ~${Math.round(x.left / (x.defCrew * SC.HPD) * 10) / 10} days at ${x.defCrew}` : ""}</small>
-        {startTxt(x) ? <small>{startTxt(x)}{x.who && x.kind === "trip" ? ` · ${x.who}` : ""}</small> : null}
-        {x.scope ? <small>{x.scope}</small> : null}
-        {x.flags.map(f => <span key={f} className="sc-flag">{f}</span>)}
-        {s ? <button type="button" className="mt-btn ghost" style={{ alignSelf: "flex-start" }} onPointerDown={e => e.stopPropagation()} onClick={() => place(x, s)}>Place on {SC.short(s)}</button> : null}
-      </div>);
-  });
+  const listBox = (
+    <div className="sc-box">
+      <button type="button" className="sc-fold" onClick={() => setListOpen(o => !o)} aria-expanded={listOpen}><span className="mt-lab">Not on the calendar yet · {V.list.length}</span><span>{listOpen ? "Hide" : "Show"}</span></button>
+      {listOpen ? (<>
+        <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find by job number or name" aria-label="Find a job"/>
+        <div className="sc-scroll">{list.map(x => {
+          const s = x.start && x.start.iso && x.start.iso >= V.today && x.start.iso <= V.end ? x.start.iso : "";
+          return (
+            <div key={x.key} className={"sc-card" + (picked === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")}>
+              <b>{label(x)}</b>
+              <small><Pill it={x}/>{hoursTxt(x)}</small>
+              {startTxt(x) ? <small>{startTxt(x)}{x.who && x.kind === "trip" ? ` · ${x.who}` : ""}</small> : null}
+              {x.flags.map(f => <span key={f} className="sc-flag">{f}</span>)}
+              <div className="sc-btns">
+                <button type="button" className="mt-btn ghost" onClick={() => { setPicked(x.key); setSel(x.key); }}>Place on a day…</button>
+                {s ? <button type="button" className="mt-btn ghost" onClick={() => moveTo(x.key, s)}>Place on {SC.short(s)}</button> : null}
+              </div>
+            </div>);
+        })}{!list.length ? <div className="sc-mt">Everything is on the calendar.</div> : null}</div>
+      </>) : null}
+    </div>);
+
   return (
-    <div className="sc">
+    <div className="sc2">
       <style>{`
-        .sc{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px;align-items:start}
-        @media (max-width:980px){.sc{grid-template-columns:minmax(0,1fr)}}
-        .sc .sc-key{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;color:var(--cdim)}
-        .sc .sc-sw{display:inline-block;width:20px;height:11px;border-radius:4px;vertical-align:-1px;margin-right:5px}
-        .sc .sc-grid{overflow-x:auto;border:1px solid var(--cline);border-radius:14px;background:var(--card);min-width:0}
-        .sc .sc-hd,.sc .sc-row{display:flex}
-        .sc .sc-hd{position:sticky;top:0;z-index:3;background:var(--card);border-bottom:1px solid var(--cline)}
-        .sc .sc-hl,.sc .sc-lab{position:sticky;left:0;z-index:2;flex:none;width:232px;background:var(--card);border-right:1px solid var(--cline)}
-        .sc .sc-hl{padding:8px 10px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);display:flex;align-items:flex-end}
-        .sc .sc-wk{flex:none;border-right:1px solid var(--cline)}
-        .sc .sc-wl{font-size:11px;font-weight:800;color:var(--cdim);padding:5px 6px 1px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-        .sc .sc-ds{display:flex}.sc .sc-d{width:${SCAL_DW}px;text-align:center;font-size:11px;color:var(--cdim);padding:1px 0 5px;font-variant-numeric:tabular-nums}
-        .sc .sc-d.fri{width:${SCAL_FW}px;font-size:0}.sc .sc-d.now{color:var(--o-ink);font-weight:800}
-        .sc .sc-row{height:46px;border-bottom:1px solid var(--cline)}
-        .sc .sc-row.on .sc-lab{background:var(--inset)}
-        .sc .sc-lab{all:unset;box-sizing:border-box;position:sticky;left:0;z-index:2;width:232px;flex:none;background:var(--card);border-right:1px solid var(--cline);padding:4px 10px;display:flex;flex-direction:column;justify-content:center;cursor:pointer;min-width:0}
-        .sc .sc-nm{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--cink)}
-        .sc .sc-mt{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .sc .sc-pill{display:inline-block;font-size:11px;font-weight:800;border-radius:999px;padding:0 7px;margin-right:5px}
-        .sc .sc-fl{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:${OD_R};color:#fff;font-size:11px;font-weight:800;margin-right:4px}
-        .sc .sc-lane{position:relative;flex:none;touch-action:pan-y}
-        .sc .sc-c{position:absolute;top:0;bottom:0;border-right:1px solid rgba(0,0,0,.05)}
-        .sc .sc-c.fri{background:repeating-linear-gradient(135deg,var(--inset) 0 3px,transparent 3px 6px);border-right:1px solid var(--cline)}
-        .sc .sc-c.now{background:rgba(180,83,26,.07)}
-        .sc .sc-mk{position:absolute;top:2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--cink);background:var(--card);z-index:3;pointer-events:none}
-        .sc .sc-mk.conf{background:var(--cink)}
-        .sc .sc-bar{position:absolute;top:8px;height:30px;border-radius:7px;display:flex;align-items:center;padding:0 30px 0 7px;font-size:11.5px;font-weight:700;white-space:nowrap;overflow:hidden;user-select:none;touch-action:none;box-sizing:border-box}
-        .sc .sc-bar.b{color:#fff}.sc .sc-bar.b.over{box-shadow:inset 0 0 0 2px ${OD_R}}
-        .sc .sc-bar.f{border:1.5px dashed;cursor:grab}.sc .sc-bar.f.kept{border-style:solid}
-        .sc .sc-tg{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-right:6px;flex:none}
-        .sc .sc-t{overflow:hidden;text-overflow:ellipsis;color:inherit;opacity:.92}.sc .sc-bar.f .sc-t{color:var(--cink)}
-        .sc .sc-h{position:absolute;right:0;top:0;bottom:0;width:26px;cursor:ew-resize;touch-action:none;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.16)}
-        .sc .sc-h::before,.sc .sc-h::after{content:"";width:2px;height:14px;border-radius:1px;margin:0 2px;background:currentColor;opacity:.8}
-        .sc .sc-dc{position:absolute;top:10px;z-index:6;background:${B.ink};color:#fff;font-size:12px;font-weight:700;padding:3px 8px;border-radius:7px;white-space:nowrap;pointer-events:none}
-        .sc .sc-side{display:flex;flex-direction:column;gap:10px;min-width:0}
-        .sc .sc-ins,.sc .sc-listbox{border:1px solid var(--cline);border-radius:14px;background:var(--card);padding:10px 12px;display:flex;flex-direction:column;gap:7px;min-width:0}
-        .sc .sc-ins small{font-size:12.5px;color:var(--cdim)}.sc .sc-ins small.warn{color:${OD_R};font-weight:700}.sc .sc-ins small.ok{color:${OD_G};font-weight:700}
-        .sc .sc-ih{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-        .sc .sc-flag{color:${OD_R};font-size:12.5px;font-weight:700}
-        .sc .sc-ctl{display:flex;gap:8px;flex-wrap:wrap}.sc .sc-ctl label{display:flex;flex-direction:column;font-size:11px;font-weight:800;color:var(--cdim);text-transform:uppercase;gap:2px}
-        .sc .sc-ctl input{width:92px}.sc .sc-ctl input[type=date]{width:142px}
-        .sc .sc-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-        .sc .sc-book{border-top:1px solid var(--cline);padding-top:8px;display:flex;flex-direction:column;gap:7px}
-        .sc .sc-staff{max-height:170px;overflow:auto;display:flex;flex-direction:column;gap:2px;font-size:13px}
-        .sc .sc-staff label{display:flex;gap:6px;align-items:center}
-        .sc .sc-tbl{overflow:auto;max-height:240px;border:1px solid var(--cline);border-radius:10px}
-        .sc .sc-tbl table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
-        .sc .sc-tbl th,.sc .sc-tbl td{padding:4px 7px;border-top:1px solid var(--cline);text-align:left;white-space:nowrap}
-        .sc .sc-tbl th{color:var(--cdim);font-weight:700;border-top:0}.sc .sc-tbl td.ot{color:${OD_R};font-weight:800}
-        .sc .sc-list{display:flex;flex-direction:column;gap:6px;max-height:64vh;overflow:auto}
-        .sc .sc-gh{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim);margin-top:6px}
-        .sc .sc-chip{border:1px solid var(--cline);border-radius:11px;padding:7px 9px;background:var(--card);cursor:grab;touch-action:none;user-select:none;display:flex;flex-direction:column;gap:2px}
-        .sc .sc-chip.pick{box-shadow:0 0 0 2px var(--o)}.sc .sc-chip.flag{border-left:3px solid ${OD_R}}
-        .sc .sc-chip b{font-size:13px}.sc .sc-chip small{font-size:12px;color:var(--cdim)}
-        .sc .sc-ghost{position:fixed;z-index:60;pointer-events:none;background:var(--card);border:1.5px dashed var(--o);border-radius:7px;padding:4px 8px;font-size:12px;font-weight:700}
-        .sc .sc-empty{padding:12px;font-size:12.5px;color:var(--cdim)}
-        .sc .sc-bar.f.held{background:repeating-linear-gradient(135deg,rgba(194,59,59,.16) 0 5px,transparent 5px 10px)!important;border-color:${OD_R}!important;color:${OD_R}!important}
-        .sc .sc-sect{display:flex;background:var(--inset);border-bottom:1px solid var(--cline)}.sc .sc-sect .sc-hl{background:var(--inset);padding:4px 10px;width:232px}
-        .sc .sc-need{all:unset;box-sizing:border-box;cursor:pointer;border:1px solid var(--cline);border-left:3px solid ${OD_R};border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;background:var(--card)}
-        .sc .sc-need.on{box-shadow:0 0 0 2px var(--o)}.sc .sc-need b{font-size:13px}.sc .sc-need small{font-size:12px;color:var(--cdim)}
-        .sc .sc-needs .sc-list{max-height:36vh}.sc .sc-sub{font-size:12px;color:var(--cdim)}
-        .sc .sc-seg{display:inline-flex;border:1px solid var(--cline);border-radius:8px;overflow:hidden}
-        .sc .sc-seg button{all:unset;cursor:pointer;padding:3px 10px;font-size:12px;font-weight:700;color:var(--cdim)}.sc .sc-seg button[aria-pressed=true]{background:var(--inset);color:var(--cink)}
+        .sc2{display:flex;flex-direction:column;gap:10px}
+        .sc2 .sc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+        .sc2 .sc-seg{display:inline-flex;border:1px solid var(--cline);border-radius:999px;overflow:hidden;background:var(--card)}
+        .sc2 .sc-seg button{all:unset;cursor:pointer;padding:6px 12px;font-size:12.5px;font-weight:700;color:var(--cdim)}
+        .sc2 .sc-seg button[aria-pressed=true]{background:var(--o);color:#fff}
+        .sc2 .sc-seg button:disabled{opacity:.4;cursor:default}
+        .sc2 .sc-seg button:focus-visible,.sc2 .sc-chip2:focus-visible{outline:2px solid var(--o);outline-offset:2px}
+        .sc2 .sc-key{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--cdim);align-items:center}
+        .sc2 .sc-sw{display:inline-block;width:18px;height:10px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+        .sc2 .sc-pill{display:inline-block;font-size:11px;font-weight:800;border-radius:999px;padding:0 7px;margin-right:5px}
+        .sc2 .sc-main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:12px;align-items:start}
+        @media (max-width:1000px){.sc2 .sc-main{grid-template-columns:minmax(0,1fr)}}
+        .sc2 .sc-cal{border:1px solid var(--cline);border-radius:14px;background:var(--card);min-width:0;overflow:hidden}
+        .sc2 .sc-week{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,.55fr)}
+        .sc2 .sc-day{border-right:1px solid var(--cline);min-width:0;display:flex;flex-direction:column;min-height:280px}
+        .sc2 .sc-day:last-child{border-right:0}
+        .sc2 .sc-day.fri{background:repeating-linear-gradient(135deg,var(--inset) 0 4px,transparent 4px 9px)}
+        .sc2 .sc-day.now .sc-dh{background:rgba(180,83,26,.09)}
+        .sc2 .sc-day.drop{cursor:pointer}.sc2 .sc-day.over,.sc2 .sc-mc.over{box-shadow:inset 0 0 0 2px var(--o);background:rgba(142,99,54,.06)}
+        .sc2 .sc-dh{display:flex;align-items:baseline;gap:6px;padding:9px 10px 7px;border-bottom:1px solid var(--cline)}
+        .sc2 .sc-dh span{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim)}
+        .sc2 .sc-dh b{font-size:19px;color:var(--cink)}
+        .sc2 .sc-dh em{margin-left:auto;font-style:normal;font-size:11px;color:var(--cdim)}
+        .sc2 .sc-dl{display:flex;flex-direction:column;gap:6px;padding:8px;flex:1}
+        .sc2 .sc-mt{font-size:12px;color:var(--cdim);padding:2px}
+        .sc2 .sc-chip2{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:1px;min-width:0;border-radius:9px;padding:6px 8px 6px 9px;border:1.5px solid var(--c);border-left-width:5px;color:var(--cink);touch-action:manipulation;-webkit-user-select:none;user-select:none}
+        .sc2 .sc-chip2 .t{font-weight:700;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sc2 .sc-chip2 .m{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sc2 .sc-chip2 .m i{font-style:normal;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-right:5px;color:var(--c)}
+        .sc2 .sc-chip2.booked{background:var(--c);color:#fff}.sc2 .sc-chip2.booked .m,.sc2 .sc-chip2.booked .m i{color:rgba(255,255,255,.9)}
+        .sc2 .sc-chip2.auto{background:var(--s);border-style:dashed;border-left-style:solid;cursor:grab}
+        .sc2 .sc-chip2.kept{background:var(--s);cursor:grab}
+        .sc2 .sc-chip2.held{background:repeating-linear-gradient(135deg,rgba(196,59,59,.14) 0 5px,var(--card) 5px 10px);border-color:${OD_R};border-left-color:var(--c);cursor:grab}
+        .sc2 .sc-chip2.held .m i{color:${OD_R}}
+        .sc2 .sc-chip2.on{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o)}
+        .sc2 .sc-chip2.pick{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o);opacity:.7}
+        .sc2 .fri .sc-chip2 .t{font-size:11.5px}
+        .sc2 .sc-month{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,.5fr)}
+        .sc2 .sc-mh{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);padding:7px 8px;border-bottom:1px solid var(--cline)}
+        .sc2 .sc-mc{border-right:1px solid var(--cline);border-bottom:1px solid var(--cline);min-height:112px;padding:5px;display:flex;flex-direction:column;gap:3px;min-width:0}
+        .sc2 .sc-mc:nth-child(5n){border-right:0}
+        .sc2 .sc-mc.fri{background:repeating-linear-gradient(135deg,var(--inset) 0 4px,transparent 4px 9px)}
+        .sc2 .sc-mc.now{background:rgba(180,83,26,.07)}.sc2 .sc-mc.past{opacity:.6}
+        .sc2 .sc-dn{font-size:11.5px;font-weight:800;color:var(--cdim)}
+        .sc2 .sc-mc .sc-chip2{padding:2px 6px;border-left-width:4px;border-radius:6px}.sc2 .sc-mc .sc-chip2 .t{font-size:11px}
+        .sc2 .sc-more{all:unset;cursor:pointer;font-size:11.5px;font-weight:700;color:var(--o-ink)}
+        @media (max-width:700px){
+          .sc2 .sc-week{grid-template-columns:minmax(0,1fr)}
+          .sc2 .sc-day{border-right:0;border-bottom:1px solid var(--cline);min-height:0}
+          .sc2 .sc-month{grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,.3fr)}
+          .sc2 .sc-mc{min-height:80px;padding:3px}.sc2 .sc-mc .sc-chip2 .t{font-size:10px}
+        }
+        .sc2 .sc-side{display:flex;flex-direction:column;gap:10px;min-width:0}
+        .sc2 .sc-ins,.sc2 .sc-box{border:1px solid var(--cline);border-radius:14px;background:var(--card);padding:10px 12px;display:flex;flex-direction:column;gap:7px;min-width:0}
+        .sc2 .sc-ins small{font-size:12.5px;color:var(--cdim)}.sc2 small.warn{color:${OD_R};font-weight:700}.sc2 small.ok{color:${OD_G};font-weight:700}
+        .sc2 .sc-state{color:var(--cink)!important;font-weight:600}
+        .sc2 .sc-ih{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+        .sc2 .sc-flag{color:${OD_R};font-size:12.5px;font-weight:700}
+        .sc2 .sc-ctl{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+        .sc2 .sc-ctl label{display:flex;flex-direction:column;font-size:11px;font-weight:800;color:var(--cdim);text-transform:uppercase;gap:2px}
+        .sc2 .sc-ctl input{width:84px}.sc2 .sc-ctl input[type=date]{width:142px}
+        .sc2 .sc-step{display:inline-flex;align-items:center;border:1px solid var(--cline);border-radius:10px;overflow:hidden;height:33px}
+        .sc2 .sc-step button{all:unset;cursor:pointer;width:28px;text-align:center;font-size:16px;font-weight:700;color:var(--cink)}
+        .sc2 .sc-step b{min-width:30px;text-align:center;font-size:13px;color:var(--cink);text-transform:none}
+        .sc2 .sc-who{display:flex;flex-direction:column;gap:5px}
+        .sc2 .sc-ppl{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13px;color:var(--cink)}.sc2 .sc-ppl label{display:flex;gap:5px;align-items:center}
+        .sc2 .sc-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+        .sc2 .sc-copy{display:flex;flex-direction:column;gap:6px}.sc2 .sc-copy div{display:flex;flex-wrap:wrap;gap:5px}
+        .sc2 .sc-copy button{all:unset;cursor:pointer;border:1px solid var(--cline);border-radius:999px;padding:3px 9px;font-size:12px;font-weight:700;color:var(--cdim)}
+        .sc2 .sc-copy button[aria-pressed=true]{background:var(--o);border-color:var(--o);color:#fff}
+        .sc2 .sc-book{border-top:1px solid var(--cline);padding-top:8px;display:flex;flex-direction:column;gap:7px}
+        .sc2 .sc-staff{max-height:170px;overflow:auto;display:flex;flex-direction:column;gap:2px;font-size:13px}
+        .sc2 .sc-staff label{display:flex;gap:6px;align-items:center}
+        .sc2 .sc-tbl{overflow:auto;max-height:240px;border:1px solid var(--cline);border-radius:10px}
+        .sc2 .sc-tbl table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+        .sc2 .sc-tbl th,.sc2 .sc-tbl td{padding:4px 7px;border-top:1px solid var(--cline);text-align:left;white-space:nowrap}
+        .sc2 .sc-tbl th{color:var(--cdim);font-weight:700;border-top:0}.sc2 .sc-tbl td.ot{color:${OD_R};font-weight:800}
+        .sc2 .sc-sub{font-size:12px;color:var(--cdim)}
+        .sc2 .sc-scroll{display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow:auto}
+        .sc2 .sc-need{all:unset;box-sizing:border-box;cursor:pointer;border:1px solid var(--cline);border-left:3px solid ${OD_R};border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;background:var(--card)}
+        .sc2 .sc-need.on{box-shadow:0 0 0 2px var(--o)}.sc2 .sc-need b,.sc2 .sc-card b{font-size:13px;color:var(--cink)}.sc2 .sc-need small,.sc2 .sc-card small{font-size:12px;color:var(--cdim)}
+        .sc2 .sc-fold{all:unset;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--o-ink)}
+        .sc2 .sc-card{border:1px solid var(--cline);border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:3px}
+        .sc2 .sc-card.flag{border-left:3px solid ${OD_R}}.sc2 .sc-card.pick{box-shadow:0 0 0 2px var(--o)}
+        .sc2 .sc-pickbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;border-radius:12px;background:var(--o);color:#fff;font-size:13px;font-weight:700}
+        .sc2 .sc-pickbar button{all:unset;cursor:pointer;text-decoration:underline}
       `}</style>
-      <div className="sc-key">
-        <span><span className="sc-pill" style={{ background: SCAL_SOFT.rough, color: SCAL_KIND.rough }}>Rough-in</span><span className="sc-pill" style={{ background: SCAL_SOFT.finish, color: SCAL_KIND.finish }}>Finish</span><span className="sc-pill" style={{ background: SCAL_SOFT.trip, color: SCAL_KIND.trip }}>Return trip</span></span>
-        <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Solid: booked in Simpro</span>
-        <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Light: forecast at 4-10s</span>
-        <span>Dot: start date, filled = confirmed</span>
-        <span><span className="sc-sw" style={{ background: `repeating-linear-gradient(135deg,rgba(194,59,59,.18) 0 3px,transparent 3px 6px)`, border: `1.5px dashed ${OD_R}` }}/>Held for you</span>
-        <span>Drag the grip on a block's right end to add or take off days</span>
+      <div className="sc-bar">
+        <span className="sc-seg" role="group" aria-label="View">
+          <button type="button" aria-pressed={view === "week"} onClick={() => setV("week")}>Week</button>
+          <button type="button" aria-pressed={view === "month"} onClick={() => setV("month")}>Month</button>
+        </span>
+        {view === "week" ? <span className="sc-seg" role="group" aria-label="Week">
+          <button type="button" disabled={wk === 0} onClick={() => setWk(w => Math.max(0, w - 1))} aria-label="Week before">‹</button>
+          {[0, 1].map(w => <button type="button" key={w} aria-pressed={wk === w} onClick={() => setWk(w)}>{w === 0 ? "This week" : "Next week"}</button>)}
+          {wk > 1 ? <button type="button" aria-pressed={true}>Week of {SC.md(weekStart)}</button> : null}
+          <button type="button" disabled={wk >= SCAL_WEEKS - 1} onClick={() => setWk(w => Math.min(SCAL_WEEKS - 1, w + 1))} aria-label="Week after">›</button>
+        </span> : null}
+        {foremen.length ? <span className="sc-seg" role="group" aria-label="Crew">{["All", ...foremen].map(f => <button type="button" key={f} aria-pressed={crewF === f} onClick={() => setCrewF(f)}>{f}</button>)}</span> : null}
         <span className="sc-seg" role="group" aria-label="Show"><button type="button" aria-pressed={!simOnly} onClick={() => setSimOnly(false)}>Everything</button><button type="button" aria-pressed={simOnly} onClick={() => setSimOnly(true)}>Simpro only</button></span>
+      </div>
+      <div className="sc-key">
+        <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Booked in Simpro</span>
+        <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Auto-scheduled</span>
+        <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px solid ${SCAL_KIND.rough}` }}/>Plan (placed or moved)</span>
+        <span><span className="sc-sw" style={{ background: "repeating-linear-gradient(135deg,rgba(196,59,59,.18) 0 3px,transparent 3px 6px)", border: `1.5px solid ${OD_R}` }}/>Held for you</span>
+        <span><span className="sc-pill" style={{ background: SCAL_SOFT.rough, color: SCAL_KIND.rough }}>Rough-in</span><span className="sc-pill" style={{ background: SCAL_SOFT.finish, color: SCAL_KIND.finish }}>Finish</span><span className="sc-pill" style={{ background: SCAL_SOFT.trip, color: SCAL_KIND.trip }}>Return trip</span></span>
         {sched === undefined ? <span>Reading Simpro's schedule…</span> : sched === null ? <span style={{ color: OD_R, fontWeight: 700 }}>Couldn't read Simpro's schedule; only plans show.</span> : null}
       </div>
-      <div className="sc-grid" ref={lanes}>
-        <div style={{ width: 232 + SCAL_WEEKS * SCAL_WEEKW }}>
-          <div className="sc-hd"><div className="sc-hl">Job · Rough-in / Finish / Trip</div>
-            {Array.from({ length: SCAL_WEEKS }, (_, w) => { const m = SC.addDays(start, w * 7); return (
-              <div className="sc-wk" key={m} style={{ width: SCAL_WEEKW }}><div className="sc-wl">Week of {SC.md(m)}</div>
-                <div className="sc-ds">{[0, 1, 2, 3, 4].map(i => { const iso = SC.addDays(m, i); return <span key={i} className={"sc-d" + (i === 4 ? " fri" : "") + (iso === V.today ? " now" : "")}>{i < 4 ? ["Mon", "Tue", "Wed", "Thu"][i] + " " + SC.parseYmd(iso).getDate() : ""}</span>; })}</div></div>); })}
-          </div>
-          {calRows.length ? calRows : <div className="sc-empty">{sched === undefined ? "Reading…" : "Nothing booked in this view yet. Drag a job from the list onto a day."}</div>}
+      {picked && byKey[picked] ? <div className="sc-pickbar">Moving {label(byKey[picked])}: tap a day.<button type="button" onClick={() => setPicked("")}>Cancel</button></div> : null}
+      <div className="sc-main">
+        <div className="sc-cal">{view === "month" ? monthView() : weekView()}</div>
+        <div className="sc-side">
+          {inspector()}
+          {needsBox}
+          {listBox}
         </div>
       </div>
-      <div className="sc-side">
-        {needsBox}
-        {inspector()}
-        <div className="sc-listbox">
-          <span className="mt-lab">Not on the calendar yet · {V.list.length}</span>
-          <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find by job number or name" aria-label="Find a job"/>
-          <div className="sc-list">{chips}{!list.length ? <div className="sc-empty">Everything is on the calendar.</div> : null}</div>
-        </div>
-      </div>
-      {ghost ? <div className="sc-ghost" style={{ left: ghost.x + 12, top: ghost.y + 12 }}>{ghost.label}{ghost.iso ? " · " + SC.short(ghost.iso) : ""}</div> : null}
     </div>
   );
 }
