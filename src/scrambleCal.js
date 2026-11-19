@@ -197,7 +197,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
   };
   const label = (c) => c ? firstOf(c.foreman) + "'s crew" : "";
 
-  const isCand = (it) => !it.plan && !it.auto && !it.upcoming && it.kind !== "service";
+  const isCand = (it) => !it.plan && !it.auto && !it.off && !it.upcoming && it.kind !== "service";
   const sIso = (it) => (it.start && it.start.iso) || "";
   const trips = items.filter(it => isCand(it) && it.kind === "trip" && !it.booked.length);
   const phases = items.filter(it => isCand(it) && (it.kind === "rough" || it.kind === "finish") && !it.bookedAhead && !it.hold
@@ -382,8 +382,11 @@ function buildCalendar(input) {
     }
     if (it.defHours == null) it.defHours = it.left > 0 ? it.left : HPD;
     const p = plans && plans[it.key];
-    if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "" };
-    if (!it.plan && it.bookedAhead && it.left > 0 && it.kind !== "trip") {
+    // v656: { off: true } = taken off the calendar by hand (Koy: "if I don't want a job scheduled, I just delete it
+    // off there"): no block, the auto-schedule leaves it alone, it stays on the list as needing scheduling.
+    if (p && p.off) it.off = { by: p.by || "", at: p.at || "" };
+    else if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "" };
+    if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip") {
       it.auto = { s: workAfter(it.booked[it.booked.length - 1].iso), hours: it.left, crew: Math.max(1, it.crewBooked) };
     }
     const bookedFrom = (iso) => it.booked.some(b => b.iso >= iso);
@@ -406,8 +409,8 @@ function buildCalendar(input) {
     }
     it.onCal = it.booked.length > 0 || !!it.plan;
     // On the right-hand list: anything with nothing booked from today on and no kept plan.
-    it.inList = !it.plan && !it.bookedAhead && (it.kind === "trip" || it.upcoming || it.left == null || it.left > 0 || it.over || it.flags.length > 0)
-      && !(it.kind === "service");
+    it.inList = !it.plan && !it.copyOf && (it.off ? !it.bookedAhead : !it.bookedAhead && (it.kind === "trip" || it.upcoming || it.left == null || it.left > 0 || it.over || it.flags.length > 0)
+      && !(it.kind === "service"));
     delete it._ph;
   });
 

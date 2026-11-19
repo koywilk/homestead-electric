@@ -137,6 +137,10 @@ const V6 = A({ "j_a1402_f~2026-12-03": { s: "2026-12-03", hours: 20, crew: 2, st
 const cp = V6.items.find(x => x.key === "j_a1402_f~2026-12-03");
 ok(cp && cp.copyOf === "j_a1402_f" && cp.plan && cp.plan.s === "2026-12-03" && cp.onCal && !cp.inList && !cp.flags.length && cp.no === "1402", "a copied day is its own kept block on its job, with no flags");
 ok(!V6.items.some(it => it.auto && it.auto.src === "auto" && it.key !== cp.key && SC.planDays(it.auto).some(d => d.date === "2026-12-03") && it.auto.staff.some(p => p.name === "Callen Jakeman")), "the auto-schedule doesn't put a copied day's people anywhere else that day");
+const V7 = A({ "j_a1402_f": { off: true, by: "Koy Wilkinson" }, "j_a1412_r": { off: true } });
+const cm7 = V7.items.find(x => x.key === "j_a1402_f"), bc7 = V7.items.find(x => x.key === "j_a1412_r");
+ok(cm7.off && !cm7.auto && !cm7.plan && cm7.inList && !cm7.onCal && !V7.needs.some(n => n.key === "j_a1402_f"), "a block taken off stays off: no auto block, not in Needs you, still listed as needing scheduling");
+ok(bc7.off && !bc7.auto && bc7.booked.length === 4 && bc7.onCal, "taking a booked job off only drops its forecast days; its Simpro days stay");
 // every auto day stays Mon–Thu
 ok(V3.items.filter(it => it.auto && it.auto.src).every(it => SC.planDays(it.auto).every(d => SC.isWork(d.date))), "auto blocks only use Mon–Thu");
 
