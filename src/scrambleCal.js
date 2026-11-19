@@ -50,7 +50,21 @@ function holidaysOf(y) {
   return new Set([...fixed, last(4, 1), nth(8, 1, 1), nth(10, 4, 4)]);
 }
 const HOL = {};
-const isHoliday = (iso) => { const y = +String(iso).slice(0, 4); if (!HOL[y]) HOL[y] = holidaysOf(y); return HOL[y].has(iso); };
+// Company holidays (Koy 2026-11-19: "make sure that holidays don't get booked on Thanksgiving, Christmas, New Year's
+// Eve, and Memorial Day. I think there's a couple more that I don't remember"). The calendar passes the list kept in
+// the meeting prefs (admins edit it); without one, the built-in rule above stands. The default list keeps the days the
+// rule already had (New Year's Day, July 4, Labor Day) beside Koy's four.
+const DEFAULT_HOLIDAYS = [
+  { date: "2026-11-26", name: "Thanksgiving" }, { date: "2026-12-25", name: "Christmas" }, { date: "2026-12-31", name: "New Year's Eve" },
+  { date: "2027-01-01", name: "New Year's Day" }, { date: "2027-05-31", name: "Memorial Day" }, { date: "2027-07-05", name: "Independence Day (observed)" },
+  { date: "2027-09-06", name: "Labor Day" }];
+let CUSTOM = null;   // iso → name, when a list is given
+function setHolidays(list) {
+  if (!Array.isArray(list)) { CUSTOM = null; return; }
+  CUSTOM = {}; list.forEach(h => { const d = h && anyIso(h.date); if (d) CUSTOM[d] = String((h && h.name) || "Holiday").slice(0, 40); });
+}
+const isHoliday = (iso) => { if (CUSTOM) return !!CUSTOM[iso]; const y = +String(iso).slice(0, 4); if (!HOL[y]) HOL[y] = holidaysOf(y); return HOL[y].has(iso); };
+const holidayName = (iso) => CUSTOM ? CUSTOM[iso] || "" : isHoliday(iso) ? "Holiday" : "";
 const isWork = (iso) => dowOf(iso) <= 3 && !isHoliday(iso);   // Mon–Thu, not a holiday
 function nextWork(iso) { let d = iso; for (let i = 0; i < 10 && !isWork(d); i++) d = addDays(d, 1); return d; }
 const workAfter = (iso) => nextWork(addDays(iso, 1));
@@ -153,11 +167,12 @@ function crewBoard(users) {
   };
   const crewOfUser = (u) => !u ? null : boardTitle(u) === "foreman" ? crews[u.id] || null : boardTitle(u) === "admin" ? null : (u.foremanId && crews[u.foremanId]) || null;
   // Set pairs (Koy 2026-11-19: "we need to know which junior foreman is with which apprentice, which lead is with
-  // which apprentice ... so that we can schedule by that instead of guessing at who the pairs are"). A pair counts
-  // only when both point at each other and sit on the same crew; anything else is ignored, never guessed.
+  // which apprentice ... so that we can schedule by that instead of guessing at who the pairs are"), then "I need to be
+  // able to pair anybody with anybody". A pair counts when both point at each other, any role, any crew; a one-sided
+  // pointer is ignored, never guessed. Someone Unassigned keeps their pair on the board but is never scheduled.
   const byId = {}; act.forEach(u => { byId[u.id] = u; });
   const pairs = {};
-  act.forEach(u => { const o = u.pairId && byId[u.pairId]; if (o && o.pairId === u.id && o.id !== u.id) { const c1 = crewOfUser(u), c2 = crewOfUser(o); if (c1 && c1 === c2) pairs[u.name] = o.name; } });
+  act.forEach(u => { const o = u.pairId && byId[u.pairId]; if (o && o.pairId === u.id && o.id !== u.id && boardTitle(u) !== "admin" && boardTitle(o) !== "admin") pairs[u.name] = o.name; });
   return { crews, find, crewOf: (name) => crewOfUser(find(name)), crewOfUser, pairs, partnerOf: (name) => pairs[name] || "" };
 }
 
@@ -165,9 +180,10 @@ function crewBoard(users) {
 // Simpro booking, a kept plan or another auto block for the same person. Kept plans (placed or moved by hand) are
 // never touched. Anything it shouldn't decide alone goes to Needs you: a held block (placed, hatched, not booked
 // until someone keeps it) or no block with the reason. Returns the Needs you list.
-function autoPlan(items, { board, schedules, plans, todayIso, end }) {
+function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {} }) {
   const busy = {};                                   // person (lower case) → Set of iso
   const mark = (name, iso) => { const k = lc(name); (busy[k] = busy[k] || new Set()).add(iso); };
+  Object.entries(offByDay).forEach(([iso, names]) => names.forEach(n => mark(n, iso)));   // nobody is booked on a day off
   const free = (names, iso) => names.every(n => !(busy[lc(n)] && busy[lc(n)].has(iso)));
   const perDay = {};
   (schedules || []).forEach(s => { if (!s || !s.Date || !s.Staff || !s.Staff.Name) return;
@@ -234,8 +250,8 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
     const runner = [board.find(it.foreman), board.find(it.jlead)].filter(Boolean).map(x => x.name).filter(x => c.people.includes(x));
     const leadRank = (p) => runner.includes(p) && tt[p] !== "foreman" ? 0 : tt[p] === "lead" ? 1 : tt[p] === "jrforeman" ? 2 : tt[p] === "foreman" ? 3 : 9;
     const leaders = lead0.length ? lead0 : c.people.filter(canLead).sort((x, y) => leadRank(x) - leadRank(y));
-    const mate = (first) => board.partnerOf(first);   // their set pair goes first
-    const mates = (first) => c.people.filter(p => p !== first).sort((x, y) => (x === mate(first) ? -1 : 0) - (y === mate(first) ? -1 : 0) || (tt[x] === "crew" ? 0 : tt[x] === "lead" ? 1 : 2) - (tt[y] === "crew" ? 0 : tt[y] === "lead" ? 1 : 2));
+    const mate = (first) => board.partnerOf(first);   // their set pair goes first, from any crew, never someone Unassigned
+    const mates = (first) => [...(mate(first) && !c.people.includes(mate(first)) && board.crewOf(mate(first)) ? [mate(first)] : []), ...c.people].filter(p => p !== first).sort((x, y) => (x === mate(first) ? -1 : 0) - (y === mate(first) ? -1 : 0) || (tt[x] === "crew" ? 0 : tt[x] === "lead" ? 1 : 2) - (tt[y] === "crew" ? 0 : tt[y] === "lead" ? 1 : 2));
     // who goes on day d: a pair if there is one; else a lone leader (held); else nobody
     const crewFor = (d) => {
       for (const l of leaders) { if (!free([l], d)) continue; const m = mates(l).find(p => free([p], d)); if (m) return { names: [l, m] }; }
@@ -317,7 +333,9 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
         // head's pair stays back with them. A pair is split only when one of the two isn't free.
         const lim = Math.min(cnt, cap), keep = new Set([spareHead, spareHead && board.partnerOf(spareHead)].filter(Boolean));
         const team = [head]; const used = new Set([head]);
-        const pt = board.partnerOf(head); if (pt && avail.includes(pt) && !keep.has(pt) && team.length < lim) { team.push(pt); used.add(pt); }
+        const pt = board.partnerOf(head);
+        const ptOk = pt && !keep.has(pt) && (avail.includes(pt) || (!pool.includes(pt) && board.crewOf(pt) && days.every(d => free([pt], d))));
+        if (ptOk && team.length < lim) { team.push(pt); used.add(pt); }
         const units = []; const seen = new Set(used);
         [...avail.filter(p => !isHead(p) && p !== runner).sort((x, y) => rest(x) - rest(y)), ...avail.filter(p => isHead(p) || p === runner)].forEach(p => {
           if (seen.has(p) || keep.has(p)) return; seen.add(p);
@@ -356,7 +374,8 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
 //   input: { jobs, upcoming, schedules, phaseHours ({ no: { r: [used, est], f: [...] } }),
 //            upHours ({ no: { est, used } }), plans ({ key: plan }), today (Date), weeks, effRS, effFS }
 function buildCalendar(input) {
-  const { jobs = [], upcoming = [], schedules = [], phaseHours = {}, upHours = {}, plans = {}, today = new Date(), weeks = 5, effRS, effFS, users = null } = input || {};
+  const { jobs = [], upcoming = [], schedules = [], phaseHours = {}, upHours = {}, plans = {}, today = new Date(), weeks = 5, effRS, effFS, users = null, timeOff = [] } = input || {};
+  setHolidays(input && "holidays" in input ? input.holidays : null);
   const todayIso = ymd(today), start = mondayOf(today);
   const days = viewDays(start, weeks), end = days[days.length - 1].iso;
   const book = bookingsByNo(schedules);
@@ -479,14 +498,31 @@ function buildCalendar(input) {
   });
 
   // v656: the auto-schedule (Josh's rules) when the Crew Board is given.
-  const needs = users ? autoPlan(items, { board: crewBoard(users), schedules, plans, todayIso, end }) : [];
+  // Time off (settings/crewPTO, approved): who's off each day, by their Crew Board name when it can be told.
+  const board0 = users ? crewBoard(users) : null, offByDay = {};
+  (timeOff || []).forEach(p => {
+    const a = p && anyIso(p.start); if (!a || !p.name) return; const b = anyIso(p.end) || a;
+    const lo = a <= b ? a : b, hi = a <= b ? b : a, who = (board0 && board0.find(p.name) || { name: String(p.name).trim() }).name;
+    for (let d = lo < todayIso ? todayIso : lo, g = 0; d <= hi && d <= end && g < 400; d = addDays(d, 1), g++) { const l = offByDay[d] = offByDay[d] || []; if (!l.includes(who)) l.push(who); }
+  });
+  const needs = users ? autoPlan(items, { board: board0, schedules, plans, todayIso, end, offByDay }) : [];
+  // A plan someone kept, or a Simpro booking, on a day a person on it is off, or on a holiday: flagged, never moved.
+  items.forEach(it => {
+    // a kept plan, or a forecast tail after Simpro's last booked day (its people are the last day's crew)
+    const f = it.plan || (it.auto && it.auto.src !== "auto" ? it.auto : null); const seen = new Set();
+    const ppl = f ? ((f.staff || []).length ? f.staff : ((it.booked[it.booked.length - 1] || {}).names || []).map(name => ({ name }))) : [];
+    if (f) planDays(f).forEach(d => ppl.forEach(x => { const n = x && x.name; if (n && (offByDay[d.date] || []).includes((board0 && board0.find(n) || { name: n }).name) && !seen.has(n + d.date)) { seen.add(n + d.date); it.flags.push(`${firstOf(n)} is off ${md(d.date)}`); } }));
+    it.booked.forEach(b => { if (isHoliday(b.iso)) it.flags.push(`Booked in Simpro on ${holidayName(b.iso) || "a holiday"} (${md(b.iso)})`);
+      (b.names || []).forEach(n => { const nm = (board0 && board0.find(n) || { name: n }).name; if ((offByDay[b.iso] || []).includes(nm)) it.flags.push(`${firstOf(n)} is booked ${md(b.iso)} but off that day`); }); });
+  });
 
   const rank = (it) => it.flags.length ? 0 : it.kind === "trip" ? 1 : it.upcoming ? 5 : it.over ? 4 : it.kind === "rough" ? 2 : 3;
   const sIso = (it) => (it.start && it.start.iso) || "9999";
   const list = items.filter(it => it.inList).sort((a, b) => rank(a) - rank(b) || (sIso(a) < sIso(b) ? -1 : sIso(a) > sIso(b) ? 1 : 0) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true }));
   const firstIso = (it) => it.booked.length ? it.booked[0].iso : it.plan ? it.plan.s : "9999";
   const cal = items.filter(it => it.onCal).sort((a, b) => (a.booked.length ? 0 : 1) - (b.booked.length ? 0 : 1) || (firstIso(a) < firstIso(b) ? -1 : 1));
-  return { start, end, today: todayIso, days, items, cal, list, needs,
+  const holidays = {}; days.forEach(d => { if (isHoliday(d.iso)) holidays[d.iso] = holidayName(d.iso) || "Holiday"; });
+  return { start, end, today: todayIso, days, items, cal, list, needs, offByDay, holidays,
     counts: { flagged: list.filter(x => x.flags.length).length + cal.filter(x => x.flags.length).length, list: list.length, cal: cal.length, needs: needs.length } };
 }
 
@@ -500,4 +536,4 @@ function groupBy(list, itemOf) {
   return GROUPS.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
 }
 module.exports = { HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
-  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, GROUPS, groupOf, groupBy };
+  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };

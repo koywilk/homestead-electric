@@ -203,7 +203,15 @@ const usersP = users6.map(u => u.id === "l" ? { ...u, pairId: "jl" } : u.id === 
 const bP = SC.crewBoard(usersP);
 ok(bP.partnerOf("Louis Hoffman") === "James Livingston" && bP.partnerOf("James Livingston") === "Louis Hoffman" && bP.partnerOf("Daegan Smith") === "", "a pair counts when both point at each other");
 ok(SC.crewBoard(users6.map(u => u.id === "l" ? { ...u, pairId: "jl" } : u)).partnerOf("Louis Hoffman") === "", "a one-sided pair is ignored, never guessed");
-ok(SC.crewBoard(usersP.map(u => u.id === "jl" ? { ...u, foremanId: "k" } : u)).partnerOf("Louis Hoffman") === "", "a pair across two crews is ignored");
+ok(SC.crewBoard(usersP.map(u => u.id === "jl" ? { ...u, foremanId: "k" } : u)).partnerOf("Louis Hoffman") === "James Livingston", "anybody with anybody: a pair across two crews counts (Koy: \"pair anybody with anybody\")");
+const uFL = users6.map(u => u.id === "d" ? { ...u, pairId: "t" } : u.id === "t" ? { ...u, pairId: "d" } : u);
+ok(SC.crewBoard(uFL).partnerOf("Daegan Smith") === "Trever Worley", "a foreman can pair with a lead");
+const jX = [{ id: "tx", simproNo: "71", name: "Cross trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+  returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Louis Hoffman", material: "x" }] }];
+const uX = users6.map(u => u.id === "l" ? { ...u, pairId: "p" } : u.id === "p" ? { ...u, pairId: "l" } : u);
+ok(SC.buildCalendar({ jobs: jX, schedules: [], phaseHours: {}, today, weeks: 5, users: uX, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" }).items.find(x => x.key === "t_tx_a").auto.staff[1].name === "Payton Bolda", "a trip takes a pair from another crew");
+const uU = users6.map(u => u.id === "l" ? { ...u, pairId: "jo" } : u.id === "jo" ? { ...u, pairId: "l" } : u);
+ok(SC.buildCalendar({ jobs: jX, schedules: [], phaseHours: {}, today, weeks: 5, users: uU, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" }).items.find(x => x.key === "t_tx_a").auto.staff.every(p => p.name !== "Joel Fey"), "a pair who is Unassigned is never scheduled");
 const jP = [{ id: "tp", simproNo: "70", name: "Pair trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
   returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Louis Hoffman", material: "x" }] }];
 const VP = SC.buildCalendar({ jobs: jP, schedules: [], phaseHours: {}, today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
@@ -216,6 +224,21 @@ const V5P = SC.buildCalendar({ jobs: jobs5, schedules: [], phaseHours: { "500": 
 const XP = V5P.items.find(i => i.key === "j_x_r").auto, YP = V5P.items.find(i => i.key === "j_y_r").auto, ZP = V5P.items.find(i => i.key === "j_z_r").auto;
 ok(XP.staff.map(p => p.name).join() === "Daegan Smith,Trever Worley,Callen Jakeman" && YP.staff.map(p => p.name).join() === "Louis Hoffman,James Livingston", "two jobs at once: pairs stay whole (Trever + Callen with Daegan, Louis + James on the other)");
 ok(ZP.crew === 4 && ZP.staff.some(p => p.name === "Austin Schut") && ZP.staff.some(p => p.name === "Payton Bolda"), "a 4-person job is built from whole pairs");
+
+// Koy 2026-11-19: time off on the calendar, never booked; company holidays never booked, work moves to the next day.
+const VH = SC.buildCalendar({ jobs: jobs3, upcoming, schedules, phaseHours, today, weeks: 8, users, holidays: SC.DEFAULT_HOLIDAYS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(VH.holidays["2026-11-26"] === "Thanksgiving" && VH.holidays["2026-12-25"] === "Christmas" && VH.holidays["2026-12-31"] === "New Year's Eve", "holidays come from the list, with their names");
+ok(VH.items.every(it => !it.auto || SC.planDays(it.auto).every(d => !VH.holidays[d.date])), "nothing auto-scheduled lands on a holiday");
+ok(SC.planDays({ s: "2026-12-30", hours: 20, crew: 1 }).map(d => d.date).join() === "2026-12-30,2027-01-04", "a block running into New Year's Eve and New Year's Day picks up the next Monday");
+const VH2 = SC.buildCalendar({ jobs: [], schedules: [], today, weeks: 5, holidays: [{ date: "2026-12-02", name: "Shop day" }] });
+ok(VH2.holidays["2026-12-02"] === "Shop day" && !VH2.holidays["2026-11-26"], "the list is what counts: an added day is off, a removed one isn't");
+SC.setHolidays(null);
+const VO = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, timeOff: [{ name: "Daegan Smith", start: "2026-11-24", end: "2026-11-24" }], effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(VO.offByDay["2026-11-24"].includes("Daegan Smith"), "time off shows by day");
+const oa = VO.items.find(x => x.key === "t_s1_a"), ob = VO.items.find(x => x.key === "t_s1_b");
+ok(!(oa.auto && oa.auto.staff.some(p => p.name === "Daegan Smith")) && !(ob.auto && ob.auto.s === "2026-11-24"), "nobody is booked on a day they're off");
+const VO2 = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, plans: { t_s1_b: { s: "2026-11-30", hours: 10, crew: 1, staff: [{ name: "Daegan Smith" }] } }, timeOff: [{ name: "Daegan", start: "11/30/2026" }], effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(VO2.items.find(x => x.key === "t_s1_b").flags.some(f => /Daegan is off 11\/30/.test(f)), "a kept plan on someone's day off is flagged");
 
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");
