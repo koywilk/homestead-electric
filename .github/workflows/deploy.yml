@@ -1,0 +1,159 @@
+# Deploy to Firebase (project homestead-electric) on every push to main.
+#
+# Why (Koy, 2026-11-19): "if I tell you to deploy it here, I just want you to
+# deploy it". A push to main is the deploy: no patch, no Terminal, no Mac.
+#
+# What it runs, in order (the same order the hand deploys used):
+#   1. npm install + CI=true npm run build (the same build Vercel and the
+#      pre-push hook run; prebuild runs every gate script)
+#   2. firestore:rules (Firebase skips the upload when the rules are unchanged)
+#   3. Cloud Functions, only when needed (see "Which functions" below)
+#   4. hosting (the build/ folder), last, so new callables exist before the app
+#
+# Which functions:
+#   - A commit in the push with a trailer line "Deploy-functions: a,b" deploys
+#     functions a and b (union over every commit in the push).
+#   - "Deploy-functions: none" skips functions; "Deploy-functions: all" deploys all.
+#   - No trailer but files under functions/ changed: deploys all functions.
+#   - Never passes --force, so a deploy that would DELETE a live function fails
+#     instead (Koy decides deletions by hand).
+#
+# Safety: a run whose commit is no longer the tip of main stops before
+# deploying (a newer push will deploy), so a re-run of an old job can never
+# roll production back.
+#
+# Auth: keyless Workload Identity Federation into the github-deploy service
+# account (only koywilk/homestead-electric on refs/heads/main can use it).
+# If a JSON key is saved as the repo secret FIREBASE_SERVICE_ACCOUNT, that is
+# used instead. Setup steps: docs/deploy-from-github.md.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      functions:
+        description: 'Functions to deploy: blank = only if changed, "all", "none", or names like claudeReports,duetApi'
+        required: false
+        default: ''
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT: homestead-electric
+  FIREBASE_TOOLS: firebase-tools@15.34.2
+  FUNCTIONS_DISCOVERY_TIMEOUT: '120'
+  WIF_PROVIDER: projects/318598172684/locations/global/workloadIdentityPools/github/providers/homestead-electric
+  DEPLOY_SA: github-deploy@homestead-electric.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HAS_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Still the tip of main?
+        run: |
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "main is now at $tip, not $GITHUB_SHA. A newer push will deploy. Stopping."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - name: Pick functions to deploy
+        id: fns
+        env:
+          BEFORE: ${{ github.event.before }}
+          INPUT: ${{ github.event.inputs.functions }}
+        run: |
+          set -eu
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            want="$(echo "${INPUT:-}" | tr -d ' ')"
+            changed=0
+          else
+            if [ -z "${BEFORE:-}" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              range="$GITHUB_SHA~1..$GITHUB_SHA"
+            else
+              range="$BEFORE..$GITHUB_SHA"
+            fi
+            want="$(git log --format=%B "$range" | sed -n 's/^Deploy-functions:[[:space:]]*//Ip' | tr ',' '\n' | tr -d ' \r' | grep -v '^$' | sort -u | paste -sd, - || true)"
+            changed=$(git diff --name-only "$range" -- functions/ | grep -c . || true)
+          fi
+          only=""
+          case ",$want," in
+            *,none,*) only="" ;;
+            *,all,*)  only="functions" ;;
+            ,,)       [ "$changed" -gt 0 ] && only="functions" ;;
+            *)        only="$(echo "$want" | tr ',' '\n' | grep -E '^[A-Za-z0-9_-]+$' | sed 's/^/functions:/' | paste -sd, -)" ;;
+          esac
+          echo "only=$only" >> "$GITHUB_OUTPUT"
+          echo "Functions: ${only:-none}"
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        env:
+          CI: 'true'
+        run: npm run build
+
+      - name: Install functions dependencies
+        if: steps.fns.outputs.only != ''
+        working-directory: functions
+        run: npm ci --no-audit --no-fund
+
+      - name: Google auth (key)
+        if: env.HAS_KEY == 'true'
+        env:
+          KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          printf '%s' "$KEY" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+
+      - name: Google auth (keyless)
+        if: env.HAS_KEY != 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Deploy Firestore rules
+        run: npx --yes "$FIREBASE_TOOLS" deploy --only firestore:rules --project "$PROJECT" --non-interactive
+
+      - name: Deploy functions
+        if: steps.fns.outputs.only != ''
+        env:
+          ONLY: ${{ steps.fns.outputs.only }}
+        run: npx --yes "$FIREBASE_TOOLS" deploy --only "$ONLY" --project "$PROJECT" --non-interactive
+
+      - name: Deploy hosting
+        run: |
+          ver=$(grep -oE 'CACHE\s*=\s*"[^"]+"' public/service-worker.js | grep -oE '"[^"]+"' | tr -d '"')
+          npx --yes "$FIREBASE_TOOLS" deploy --only hosting --project "$PROJECT" --non-interactive -m "$ver ${GITHUB_SHA::7}"
+          echo "### Deployed $ver (${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove key file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"
