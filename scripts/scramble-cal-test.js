@@ -181,5 +181,22 @@ const VF = SC.buildCalendar({ jobs: jf, schedules: [], phaseHours: {}, today, we
 const ffi = VF.items.find(x => x.key === "t_ff_f1");
 ok(ffi.cause === "final" && ffi.auto && ffi.auto.s >= VF.today && /No date or crew set/.test(ffi.auto.held), "a failed-final trip with no date or crew is a Failed final, placed on the first open day for the job's crew, held");
 
+// Koy 2026-11-19: "They don't get sent by themselves anywhere ... we travel in at least pairs of two"
+ok(x2.auto.crew === 2 && x2.auto.staff.length === 2, "a trip goes out as a pair: its person plus one from the crew");
+ok(t43.auto.crew === 2 && t43.auto.staff[0].name === "Louis Hoffman", "a trip with no crew set: a leader from the job's crew plus one more");
+ok(V3.items.every(it => !(it.auto && it.auto.src === "auto" && it.auto.crew === 1)) , "no block goes out with one person when a pair is free");
+const usersS = [{ id: "d", name: "Daegan Smith", title: "foreman", active: true }, { id: "cj", name: "Callen Jakeman", title: "crew", foremanId: "d", active: true }];
+const jS = [{ id: "s1", simproNo: "61", name: "Solo test", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+  returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Callen Jakeman", material: "x" },
+                { id: "b", number: 2, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Daegan Smith", material: "x" }] }];
+const VS = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const sa = VS.items.find(x => x.key === "t_s1_a"), sb = VS.items.find(x => x.key === "t_s1_b");
+ok(sa.auto && sa.auto.crew === 2 && !sb.auto && /Daegan or a partner|No pair/.test(VS.needs.find(n => n.key === "t_s1_b").why), "two trips the same day on a 2-person crew: the first gets the pair, the second waits in Needs you");
+const VS2 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].returnTrips[0], assignedTo: "Callen Jakeman" }] }], schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "Daegan Smith" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(!VS2.items.find(x => x.key === "t_s1_a").auto && /can't go alone/.test(VS2.needs.find(n => n.key === "t_s1_a").why), "a crew member is never sent alone: no partner free means Needs you");
+const VS3 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].returnTrips[1] }] }], schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "Callen Jakeman" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const s3 = VS3.items.find(x => x.key === "t_s1_b").auto;
+ok(s3 && s3.crew === 1 && /Only Daegan free that day, no second person/.test(s3.held), "a foreman may go alone only when no second person is free, held");
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

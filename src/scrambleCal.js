@@ -179,7 +179,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
   });
   const first = workAfter(todayIso);
   const fit = (names, from, nDays, last) => {
-    for (let s = nextWork(from), g = 0; s <= last && g < 60; s = workAfter(s), g++) {
+    for (let s = nextWork(from), g = 0; s <= last && g < 120; s = workAfter(s), g++) {
       let d = s, ok = true;
       for (let i = 0; i < nDays && d <= end; i++, d = workAfter(d)) if (!free(names, d)) { ok = false; break; }
       if (ok) return s;
@@ -205,51 +205,69 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
   const ord = (a, b) => (a.start.started ? 0 : 1) - (b.start.started ? 0 : 1) || (sIso(a) < sIso(b) ? -1 : sIso(a) > sIso(b) ? 1 : 0) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true });
   const fixed = trips.filter(t => t.start && !t.start.by), byTrips = trips.filter(t => !t.start || t.start.by);
 
-  // Return trips: on their date for their person. One with no person goes to someone on the job's foreman's crew
-  // (the job's own foreman / lead first, then a lead, a jr foreman, crew, the foreman last); one with no date or a
-  // schedule-by date goes on the first open day (before that date). Anything the trip doesn't say is held for a look.
+  // Return trips: on their date, in a pair. Koy 2026-11-19: "They don't get sent by themselves anywhere: sometimes leads,
+  // sometimes junior foreman, sometimes foreman, but for the most part we travel in at least pairs of two." So a trip is
+  // its person (or, with none set, someone who can lead it from the job's foreman's crew: the job's own foreman / lead
+  // first, then a lead, jr foreman, the foreman) plus one more from that crew, crew members first. A lead, jr foreman or
+  // foreman may go alone only when no second person is free, held; a crew member never goes alone. One with no date or a
+  // schedule-by date goes on the first open day (before that date) a pair is free.
   const doTrip = (it) => {
-    const s = it.start, notes = [];
-    let pool;
+    const s = it.start; let c, lead0 = [], noCrew = false;
     if (it.who) {
       const u = board.find(it.who);
       if (!u) return need(it, `${it.who} isn't on the Crew Board`);
-      if (!board.crewOfUser(u)) return need(it, `${firstOf(u.name)} is unassigned on the Crew Board`);
-      pool = [u.name];
+      c = board.crewOfUser(u);
+      if (!c) return need(it, `${firstOf(u.name)} is unassigned on the Crew Board`);
+      lead0 = [u.name];
     } else {
-      const c = board.crewOf(it.foreman) || board.crewOf(it.jlead);
+      c = board.crewOf(it.foreman) || board.crewOf(it.jlead);
       if (!c) return need(it, it.foreman ? `No crew on the trip, and ${it.foreman} has no crew on the Crew Board` : "No date or crew set in Command Center");
-      const tt = c.title || {}, rank = (p) => tt[p] === "lead" ? 0 : tt[p] === "jrforeman" ? 1 : tt[p] === "crew" ? 2 : 3;
-      const runner = [board.find(it.foreman), board.find(it.jlead)].filter(Boolean).map(x => x.name).filter(x => c.people.includes(x) && tt[x] !== "foreman");
-      pool = [...new Set([...runner, ...c.people.slice().sort((x, y) => rank(x) - rank(y))])];
-      notes.push("crew");
+      noCrew = true;
     }
+    const tt = c.title || {}, canLead = (p) => ["foreman", "jrforeman", "lead"].includes(tt[p]);
+    const runner = [board.find(it.foreman), board.find(it.jlead)].filter(Boolean).map(x => x.name).filter(x => c.people.includes(x));
+    const leadRank = (p) => runner.includes(p) && tt[p] !== "foreman" ? 0 : tt[p] === "lead" ? 1 : tt[p] === "jrforeman" ? 2 : tt[p] === "foreman" ? 3 : 9;
+    const leaders = lead0.length ? lead0 : c.people.filter(canLead).sort((x, y) => leadRank(x) - leadRank(y));
+    const mates = (first) => c.people.filter(p => p !== first).sort((x, y) => (tt[x] === "crew" ? 0 : tt[x] === "lead" ? 1 : 2) - (tt[y] === "crew" ? 0 : tt[y] === "lead" ? 1 : 2));
+    // who goes on day d: a pair if there is one; else a lone leader (held); else nobody
+    const crewFor = (d) => {
+      for (const l of leaders) { if (!free([l], d)) continue; const m = mates(l).find(p => free([p], d)); if (m) return { names: [l, m] }; }
+      if (!lead0.length) { const two = c.people.filter(p => free([p], d)); if (two.length >= 2) return { names: two.slice(0, 2) }; }
+      const solo = leaders.find(l => free([l], d) && canLead(l));
+      return solo ? { names: [solo], solo: true } : null;
+    };
     if (s && !s.by && s.iso < todayIso) return need(it, `Was set for ${md(s.iso)}, not done. Pick a new date`);
     if (s && !s.by && !isWork(s.iso)) return need(it, `Set for ${short(s.iso)}, ${isHoliday(s.iso) ? "a holiday" : "Fridays are volunteer only"}`);
-    const noCrew = notes[0] === "crew"; notes.length = 0;
+    const notes = [];
     if (!s && noCrew) notes.push("No date or crew set in Command Center, so it's on the first open day");
     else if (!s) notes.push("No date set in Command Center, so it's on the first open day");
     else if (noCrew) notes.push("No crew set in Command Center");
     if (!it.material) notes.push("No material listed on the trip");
     const hours = it.defHours || HPD;
+    const go = (d, r, pre) => {
+      const why = [...(pre ? [pre] : []), ...(r.solo ? [`Only ${firstOf(r.names[0])} free that day, no second person`] : []), ...notes].join(". ");
+      return place(it, r.names, d, hours * r.names.length, why, firstOf(r.names[0]) + (r.names[1] ? " + " + firstOf(r.names[1]) : ""));
+    };
+    const alone = lead0.length && !canLead(lead0[0]) ? `${firstOf(lead0[0])} is crew and can't go alone, and no one on ${label(c)} is free with them` : "";
     if (!s || s.by) {
       const last = s ? (s.iso < end ? s.iso : end) : end;
-      for (let d = nextWork(first), g = 0; d <= last && g < 40; d = workAfter(d), g++) {
-        const p = pool.find(n => free([n], d));
-        if (p) return place(it, [p], d, hours, notes.join(". "), firstOf(p));
+      let soloAt = null;
+      for (let d = nextWork(first), g = 0; d <= last && g < 120; d = workAfter(d), g++) {
+        const r = crewFor(d); if (!r) continue;
+        if (!r.solo) return go(d, r); if (!soloAt) soloAt = { d, r };
       }
+      if (soloAt) return go(soloAt.d, soloAt.r);
       if (s) {   // nobody free by its date: the first open day after it, held, so it's still on the calendar
-        for (let d = workAfter(last), g = 0; d <= end && g < 40; d = workAfter(d), g++) {
-          const p = pool.find(n => free([n], d));
-          if (p) return place(it, [p], d, hours, [`Wanted by ${md(s.iso)}, but no one on the crew is free until ${md(d)}`, ...notes].join(". "), firstOf(p));
+        for (let d = workAfter(last), g = 0; d <= end && g < 120; d = workAfter(d), g++) {
+          const r = crewFor(d); if (r) return go(d, r, `Wanted by ${md(s.iso)}, but no pair from the crew is free until ${md(d)}`);
         }
       }
-      return need(it, s ? `No one free before ${md(s.iso)}` : "No one on the crew free in the next five weeks");
+      return need(it, alone || (s ? `No pair free before ${md(s.iso)}` : `No one on ${label(c)} free through ${md(end)}`));
     }
     if (s.iso > end) return;
-    const p = pool.find(n => free([n], s.iso));
-    if (!p) return need(it, `${pool.length === 1 ? firstOf(pool[0]) + " is" : "Everyone on the crew is"} already booked ${short(s.iso)}`);
-    place(it, [p], s.iso, hours, notes.join(". "), firstOf(p));
+    const r = crewFor(s.iso);
+    if (!r) return need(it, alone || `${lead0.length ? firstOf(lead0[0]) + " or a partner" : "No pair from " + label(c)} free ${short(s.iso)}`);
+    go(s.iso, r);
   };
   // Crews (Koy 2026-11-19): "keep the crews at least four on a job if we can. But if there are two jobs going at
   // the same time for a foreman, then the junior foreman is first up to take the job that the foreman's not on."
@@ -273,9 +291,10 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
     const headRank = (p) => p === runner ? 0 : tt[p] === "foreman" ? 1 : tt[p] === "jrforeman" ? 2 : 3;
     const rest = (p) => tt[p] === "lead" ? 0 : 1;
     const want = Math.min(4, pool.length);
+    if (want === 1 && !["foreman", "jrforeman", "lead"].includes(tt[pool[0]])) return need(it, `${label(c)} is one crew member, who can't go alone`);
     const from = fromOf(it);
     let at = "", names = [], split = false;
-    for (let s = nextWork(from), g = 0; s <= end && g < 60 && !at; s = workAfter(s), g++) {
+    for (let s = nextWork(from), g = 0; s <= end && g < 120 && !at; s = workAfter(s), g++) {
       for (let cnt = want; cnt >= Math.min(2, want) && !at; cnt--) {
         const nDays = Math.max(1, Math.ceil(it.left / (cnt * HPD) - 1e-9));
         const days = []; for (let d = s, i = 0; i < nDays && d <= end; i++, d = workAfter(d)) days.push(d);
@@ -342,7 +361,7 @@ function buildCalendar(input) {
       if (!tripOpen(t)) return;
       const iso = tripIso(t), n = Number(t.number) || i + 1;
       const it = mk({ key: "t_" + safeKey(j.id + "_" + (t.id || i)), kind: "trip", tag: "Return trip #" + n, tripNo: n, no, name: j.name || "", jobId: j.id,
-        who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 1, defHours: HPD,
+        who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 2, defHours: HPD,
         start: iso ? { iso, conf: t.rtStatus === "scheduled", by: t.rtStatus === "needs" } : null,
         cause: t.fromFailedFinal || t.scope === "Failed final inspection items" ? "final" : t.fromFailedRough ? "roughfail" : t.fromCOId ? "co"
           : (t.fromQCFail || /^QC (Fail|Items)/.test(String(t.scope || ""))) ? "qc" : /warrant/i.test(String(t.scope || "") + " " + String(t.task || "")) ? "warranty" : "" });
