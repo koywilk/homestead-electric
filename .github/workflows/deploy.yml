@@ -146,7 +146,17 @@ jobs:
         if: steps.fns.outputs.only != ''
         env:
           ONLY: ${{ steps.fns.outputs.only }}
-        run: npx --yes "$FIREBASE_TOOLS" deploy --only "$ONLY" --project "$PROJECT" --non-interactive
+        run: |
+          if ! npx --yes "$FIREBASE_TOOLS" deploy --only "$ONLY" --project "$PROJECT" --non-interactive; then
+            # The CLI hides the reason. Print the API error lines from its debug
+            # log (status, message, reason, permission), never headers or tokens.
+            for f in firebase-debug.log functions/firebase-debug.log; do
+              [ -f "$f" ] || continue
+              echo "--- error details from $f ---"
+              grep -iE '"(message|status|reason|permission|code)"|error' "$f" | grep -viE 'bearer|token|authorization|private_key|access_token' | tail -40 | cut -c1-400
+            done
+            exit 1
+          fi
 
       - name: Deploy hosting
         run: |
