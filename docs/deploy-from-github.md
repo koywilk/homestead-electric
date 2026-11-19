@@ -37,12 +37,13 @@ gcloud services enable iamcredentials.googleapis.com sts.googleapis.com
 gcloud iam service-accounts create github-deploy --display-name="GitHub deploy"
 for R in firebasehosting.admin firebaserules.admin cloudfunctions.admin cloudscheduler.admin secretmanager.viewer serviceusage.serviceUsageConsumer serviceusage.apiKeysViewer artifactregistry.reader; do gcloud projects add-iam-policy-binding $P --member="serviceAccount:$SA" --role="roles/$R" --condition=None --quiet >/dev/null && echo "ok $R"; done
 gcloud iam service-accounts add-iam-policy-binding $P@appspot.gserviceaccount.com --member="serviceAccount:$SA" --role=roles/iam.serviceAccountUser --quiet >/dev/null && echo "ok actAs"
+gcloud iam service-accounts add-iam-policy-binding $N-compute@developer.gserviceaccount.com --member="serviceAccount:$SA" --role=roles/iam.serviceAccountUser --quiet >/dev/null && echo "ok actAs build"
 gcloud iam workload-identity-pools create github --location=global --display-name="GitHub"
 gcloud iam workload-identity-pools providers create-oidc homestead-electric --location=global --workload-identity-pool=github --display-name="homestead-electric main" --issuer-uri="https://token.actions.githubusercontent.com" --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref,attribute.repository_owner_id=assertion.repository_owner_id" --attribute-condition="assertion.repository=='koywilk/homestead-electric' && assertion.ref=='refs/heads/main' && assertion.repository_owner_id=='265636922'"
 gcloud iam service-accounts add-iam-policy-binding $SA --role=roles/iam.workloadIdentityUser --member="principalSet://iam.googleapis.com/projects/$N/locations/global/workloadIdentityPools/github/attribute.repository/koywilk/homestead-electric" --quiet >/dev/null && echo "ALL DONE"
 ```
 
-The last line should print `ALL DONE`.
+The last line should print `ALL DONE`. (If the final binding says PERMISSION_DENIED right after the account was created, wait a minute and run that line again.)
 
 ### Why these roles (least privilege for hosting + rules + v1 functions)
 
@@ -51,7 +52,9 @@ The last line should print `ALL DONE`.
 - `cloudfunctions.admin`: create and update functions, and set public invoker on
   new HTTPS / callable functions (Developer can't set that).
 - `iam.serviceAccountUser` on `homestead-electric@appspot.gserviceaccount.com`
-  only: functions run as that account.
+  (functions run as it) and on `318598172684-compute@developer.gserviceaccount.com`
+  (Google builds new 1st gen functions with it; without this, creating a new
+  function fails with "missing permission iam.serviceaccounts.actAs", Nov 19 2026).
 - `cloudscheduler.admin`: the 16 scheduled functions' jobs.
 - `secretmanager.viewer`: check the secrets functions bind (`ANTHROPIC_API_KEY`)
   without reading their values.
