@@ -76,6 +76,21 @@ const safeKey = (s) => String(s || "").replace(/[^A-Za-z0-9_]/g, "_").slice(0, 8
 const firstOf = (n) => String(n || "").trim().split(/\s+/)[0] || "";
 const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
 
+// A block's days with clock times: each day starts at 7:00 plus the hours its people already had that day (auto
+// blocks carry those in `times`), or at the time someone set on the first day (`t`, "HH:MM").
+const DAY0 = 7;
+const clock = (h) => { const m = Math.round(h * 60), hh = Math.floor(m / 60), mm = m % 60, ap = hh >= 12 ? "PM" : "AM"; return `${((hh + 11) % 12) + 1}:${String(mm).padStart(2, "0")} ${ap}`; };
+const hhmmOf = (h) => { const m = Math.round(h * 60); return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+const hoursOf = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || "")); return m ? +m[1] + +m[2] / 60 : null; };
+function slotsOf(plan) {
+  if (!plan) return [];
+  const t0 = hoursOf(plan.t);
+  return planDays(plan).map((d, i) => {
+    const from = i === 0 && t0 != null ? t0 : DAY0 + ((plan.times && plan.times[d.date]) || 0);
+    return { date: d.date, hours: d.hours, from, to: from + d.hours, start: hhmmOf(from), label: `${clock(from)}–${clock(from + d.hours)}` };
+  });
+}
+
 // The view: `weeks` weeks of Mon–Fri starting the Monday of `start`.
 function viewDays(startIso, weeks) {
   const out = [];
@@ -103,7 +118,9 @@ function planDays(plan) {
   const crew = Math.max(1, Number(plan.crew) || 1);
   let left = Math.max(0, Number(plan.hours) || 0) / crew, d = nextWork(plan.s);
   const out = [];
-  for (let g = 0; left > 1e-6 && g < 120; g++) { const h = Math.min(HPD, left); out.push({ date: d, hours: Math.round(h * 4) / 4 }); left -= h; d = workAfter(d); }
+  // a day that starts late (after a trip, or a start time someone set) ends at 5:00 like the rest; the hours carry on
+  const t0 = hoursOf(plan.t), off = (date, i) => (plan.times && plan.times[date]) || (i === 0 && t0 != null ? Math.max(0, t0 - DAY0) : 0);
+  for (let g = 0; left > 1e-6 && g < 120; g++) { const h = Math.min(Math.max(0.25, HPD - off(d, g)), left); out.push({ date: d, hours: Math.round(h * 4) / 4 }); left -= h; d = workAfter(d); }
   return out.filter(x => x.hours > 0);
 }
 
@@ -135,6 +152,18 @@ function poState(cards) {
 }
 const tripIso = (t) => anyIso((t && (t.rtStatusDate || t.scheduledDate || t.date)) || "");
 const tripOpen = (t) => t && !t.signedOff && t.rtStatus !== "complete";
+// A trip's time, from its est. time ("time", carried from a change order or typed on the trip): "3", "3 hrs",
+// "2.5 hours", "30 min", "half day", "1 day", "2 days". Hours per person; "" when it doesn't say.
+function tripHours(v) {
+  const t = String(v == null ? "" : v).toLowerCase().trim(); if (!t) return 0;
+  if (/half/.test(t)) return HPD / 2;
+  const n = parseFloat((t.match(/\d+(\.\d+)?/) || [])[0]);
+  if (/day/.test(t)) return (n > 0 ? n : 1) * HPD;
+  if (!(n > 0)) return /full|all/.test(t) ? HPD : 0;
+  if (/min/.test(t) && !/h(ou)?r/.test(t)) return Math.max(0.25, Math.round(n / 60 * 4) / 4);
+  return Math.round(n * 4) / 4;
+}
+const TRIP_DEFAULT_H = 4;   // a trip with no time on it: half a day, held so someone sets it
 const plain = (s) => String(s || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 // An Upcoming row's number: "#1331 - Becker Residence" → "1331"
 const upNo = (u) => { const m = /#\s*(\d{2,6})/.exec(String((u && u.name) || "")); return m ? m[1] : ""; };
@@ -181,15 +210,19 @@ function crewBoard(users) {
 // never touched. Anything it shouldn't decide alone goes to Needs you: a held block (placed, hatched, not booked
 // until someone keeps it) or no block with the reason. Returns the Needs you list.
 function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {} }) {
-  const busy = {};                                   // person (lower case) → Set of iso
-  const mark = (name, iso) => { const k = lc(name); (busy[k] = busy[k] || new Set()).add(iso); };
+  // Hours each person already has each day (Koy 2026-11-19: "none of them have time assignments. tuhaye hollow RT
+  // monday wont take all day"): a short trip leaves the rest of the day for another job.
+  const used = {};                                   // person (lower case) → { iso: hours }
+  const usedOn = (name, iso) => ((used[lc(name)] || {})[iso]) || 0;
+  const mark = (name, iso, h) => { const k = lc(name); const m = used[k] = used[k] || {}; m[iso] = Math.min(HPD, (m[iso] || 0) + (h == null ? HPD : h)); };
   Object.entries(offByDay).forEach(([iso, names]) => names.forEach(n => mark(n, iso)));   // nobody is booked on a day off
-  const free = (names, iso) => names.every(n => !(busy[lc(n)] && busy[lc(n)].has(iso)));
+  const free = (names, iso, need) => names.every(n => usedOn(n, iso) + (need == null ? HPD : need) <= HPD + 1e-6);
+  const PH_NEED = HPD / 2;   // a job can start a person's day after a trip of up to half a day
   const perDay = {};
   (schedules || []).forEach(s => { if (!s || !s.Date || !s.Staff || !s.Staff.Name) return;
     const k = s.Staff.Name + "|" + String(s.Date).slice(0, 10);
     perDay[k] = (perDay[k] || 0) + ((s.Blocks || []).reduce((a, b) => a + (Number(b && b.Hrs) || 0), 0) || Number(s.TotalHours) || 0); });
-  Object.keys(perDay).forEach(k => { if (perDay[k] >= 2) { const [n, iso] = k.split("|"); mark(n, iso); } });
+  Object.keys(perDay).forEach(k => { const [n, iso] = k.split("|"); mark(n, iso, Math.max(0.25, perDay[k])); });
   const crewNames = (it) => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead); return c ? c.people : []; };
   // what is already planned holds its people
   items.forEach(it => {
@@ -197,23 +230,29 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
     const names = (f.staff || []).map(x => x && x.name).filter(Boolean);
     const lastDay = it.booked.length ? it.booked[it.booked.length - 1] : null;   // a Simpro tail runs on with the last booked day's people
     const who = names.length ? names : it.plan ? crewNames(it) : ((lastDay && lastDay.names) || []);
-    planDays(f).forEach(d => { if (d.date <= end) who.forEach(n => mark(n, d.date)); });
+    planDays(f).forEach(d => { if (d.date <= end) who.forEach(n => mark(n, d.date, d.hours)); });
   });
   const first = workAfter(todayIso);
   const fit = (names, from, nDays, last) => {
     for (let s = nextWork(from), g = 0; s <= last && g < 120; s = workAfter(s), g++) {
       let d = s, ok = true;
-      for (let i = 0; i < nDays && d <= end; i++, d = workAfter(d)) if (!free(names, d)) { ok = false; break; }
+      for (let i = 0; i < nDays && d <= end; i++, d = workAfter(d)) if (!free(names, d, PH_NEED)) { ok = false; break; }
       if (ok) return s;
     }
     return "";
   };
-  const take = (names, s, hours, crew) => planDays({ s, hours, crew }).forEach(d => { if (d.date <= end) names.forEach(n => mark(n, d.date)); });
+  const take = (names, s, hours, crew) => planDays({ s, hours, crew }).forEach(d => { if (d.date <= end) names.forEach(n => mark(n, d.date, d.hours)); });
   const needs = [];
   const need = (it, why) => { it.need = why; it.inList = false; needs.push({ key: it.key, why, held: false }); };
   const place = (it, names, s, hours, held, label) => {
-    it.auto = { s, hours, crew: names.length, staff: names.map(name => ({ name })), team: label, src: "auto", held: held || "" };
-    take(names, s, hours, names.length);
+    // each day starts when the last of its people is free (7:00 plus what they already have that day)
+    const times = {}; let left = hours / Math.max(1, names.length);
+    for (let d = nextWork(s), g = 0; left > 1e-6 && g < 120; d = workAfter(d), g++) {
+      const st = Math.min(HPD - 0.25, Math.max(0, ...names.map(n => usedOn(n, d))));
+      if (st > 0) times[d] = st; left -= Math.min(HPD - st, left);
+    }
+    it.auto = { s, hours, crew: names.length, staff: names.map(name => ({ name })), team: label, src: "auto", held: held || "", times };
+    planDays(it.auto).forEach(d => { if (d.date <= end) names.forEach(n => mark(n, d.date, d.hours)); });
     it.onCal = true; it.inList = false;
     if (held) needs.push({ key: it.key, why: held, held: true });
   };
@@ -223,7 +262,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   const sIso = (it) => (it.start && it.start.iso) || "";
   const trips = items.filter(it => isCand(it) && it.kind === "trip" && !it.booked.length);
   const phases = items.filter(it => isCand(it) && (it.kind === "rough" || it.kind === "finish") && !it.bookedAhead && !it.hold
-    && it.start && (it.start.started || (sIso(it) && sIso(it) <= end)));
+    && it.start && (it.start.started || (it.start.conf && sIso(it) && sIso(it) <= end)));   // an estimated start stays on the list
   const ord = (a, b) => (a.start.started ? 0 : 1) - (b.start.started ? 0 : 1) || (sIso(a) < sIso(b) ? -1 : sIso(a) > sIso(b) ? 1 : 0) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true });
   const fixed = trips.filter(t => t.start && !t.start.by), byTrips = trips.filter(t => !t.start || t.start.by);
 
@@ -234,7 +273,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   // foreman may go alone only when no second person is free, held; a crew member never goes alone. One with no date or a
   // schedule-by date goes on the first open day (before that date) a pair is free.
   const doTrip = (it) => {
-    const s = it.start; let c, lead0 = [], noCrew = false;
+    const s = it.start, th = Math.min(HPD, it.tripH || TRIP_DEFAULT_H); let c, lead0 = [], noCrew = false;
     if (it.who) {
       const u = board.find(it.who);
       if (!u) return need(it, `${it.who} isn't on the Crew Board`);
@@ -254,9 +293,9 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
     const mates = (first) => [...(mate(first) && !c.people.includes(mate(first)) && board.crewOf(mate(first)) ? [mate(first)] : []), ...c.people].filter(p => p !== first).sort((x, y) => (x === mate(first) ? -1 : 0) - (y === mate(first) ? -1 : 0) || (tt[x] === "crew" ? 0 : tt[x] === "lead" ? 1 : 2) - (tt[y] === "crew" ? 0 : tt[y] === "lead" ? 1 : 2));
     // who goes on day d: a pair if there is one; else a lone leader (held); else nobody
     const crewFor = (d) => {
-      for (const l of leaders) { if (!free([l], d)) continue; const m = mates(l).find(p => free([p], d)); if (m) return { names: [l, m] }; }
-      if (!lead0.length) { const two = c.people.filter(p => free([p], d)); if (two.length >= 2) return { names: two.slice(0, 2) }; }
-      const solo = leaders.find(l => free([l], d) && canLead(l));
+      for (const l of leaders) { if (!free([l], d, th)) continue; const m = mates(l).find(p => free([p], d, th)); if (m) return { names: [l, m] }; }
+      if (!lead0.length) { const two = c.people.filter(p => free([p], d, th)); if (two.length >= 2) return { names: two.slice(0, 2) }; }
+      const solo = leaders.find(l => free([l], d, th) && canLead(l));
       return solo ? { names: [solo], solo: true } : null;
     };
     if (s && !s.by && s.iso < todayIso) return need(it, `Was set for ${md(s.iso)}, not done. Pick a new date`);
@@ -266,10 +305,9 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
     else if (!s) notes.push("No date set in Command Center, so it's on the first open day");
     else if (noCrew) notes.push("No crew set in Command Center");
     if (!it.material) notes.push("No material listed on the trip");
-    const hours = it.defHours || HPD;
     const go = (d, r, pre) => {
       const why = [...(pre ? [pre] : []), ...(r.solo ? [`Only ${firstOf(r.names[0])} free that day, no second person`] : []), ...notes].join(". ");
-      return place(it, r.names, d, hours * r.names.length, why, firstOf(r.names[0]) + (r.names[1] ? " + " + firstOf(r.names[1]) : ""));
+      return place(it, r.names, d, th * r.names.length, why, firstOf(r.names[0]) + (r.names[1] ? " + " + firstOf(r.names[1]) : ""));
     };
     const alone = lead0.length && !canLead(lead0[0]) ? `${firstOf(lead0[0])} is crew and can't go alone, and no one on ${label(c)} is free with them` : "";
     if (!s || s.by) {
@@ -321,7 +359,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
       for (let cnt = want; cnt >= Math.min(2, want) && !at; cnt--) {
         const nDays = Math.max(1, Math.ceil(it.left / (cnt * HPD) - 1e-9));
         const days = []; for (let d = s, i = 0; i < nDays && d <= end; i++, d = workAfter(d)) days.push(d);
-        const avail = pool.filter(p => days.every(d => free([p], d)));
+        const avail = pool.filter(p => days.every(d => free([p], d, PH_NEED)));
         const heads = avail.filter(p => isHead(p) || p === runner).sort((x, y) => headRank(x) - headRank(y));
         if (!heads.length && pool.some(isHead)) continue;
         const head = heads[0] || avail[0]; if (!head) continue;
@@ -334,7 +372,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
         const lim = Math.min(cnt, cap), keep = new Set([spareHead, spareHead && board.partnerOf(spareHead)].filter(Boolean));
         const team = [head]; const used = new Set([head]);
         const pt = board.partnerOf(head);
-        const ptOk = pt && !keep.has(pt) && (avail.includes(pt) || (!pool.includes(pt) && board.crewOf(pt) && days.every(d => free([pt], d))));
+        const ptOk = pt && !keep.has(pt) && (avail.includes(pt) || (!pool.includes(pt) && board.crewOf(pt) && days.every(d => free([pt], d, PH_NEED))));
         if (ptOk && team.length < lim) { team.push(pt); used.add(pt); }
         const units = []; const seen = new Set(used);
         [...avail.filter(p => !isHead(p) && p !== runner).sort((x, y) => rest(x) - rest(y)), ...avail.filter(p => isHead(p) || p === runner)].forEach(p => {
@@ -345,7 +383,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
         if (team.length >= cnt || (team.length >= Math.min(2, want) && team.length === Math.min(cnt, cap))) {
           // the head count may have dropped: lay the hours out again for the team it got
           const nd2 = Math.max(1, Math.ceil(it.left / (team.length * HPD) - 1e-9));
-          let ok = true; for (let d = s, i = 0; i < nd2 && d <= end; i++, d = workAfter(d)) if (!free(team, d)) { ok = false; break; }
+          let ok = true; for (let d = s, i = 0; i < nd2 && d <= end; i++, d = workAfter(d)) if (!free(team, d, PH_NEED)) { ok = false; break; }
           if (ok) { at = s; names = team; split = !!(other && spareHead); }
         }
       }
@@ -393,10 +431,17 @@ function buildCalendar(input) {
     const jb = (no && book[no]) || {};
     // Return trips: their own items. A scheduled trip takes the Simpro booking on its date.
     (j.returnTrips || []).forEach((t, i) => {
-      if (!tripOpen(t)) return;
       const iso = tripIso(t), n = Number(t.number) || i + 1;
+      // A trip already done that Simpro booked on its date keeps that day as the trip's, so the booking doesn't land on
+      // the job's rough-in or finish and start a forecast there (Koy 2026-11-19: "why is kweller finish there? it has no
+      // confirmed start date or anything" — its trip #6 was done today, and today's booking went to the finish).
+      if (!tripOpen(t)) {
+        if (iso && jb[iso]) { const d = mk({ key: "t_" + safeKey(j.id + "_" + (t.id || i)), kind: "trip", tag: "Return trip #" + n, tripNo: n, no, name: j.name || "", jobId: j.id, done: true, start: { iso, conf: true } });
+          d.booked.push({ iso, ...jb[iso] }); (usedDays[no] = usedDays[no] || new Set()).add(iso); }
+        return;
+      }
       const it = mk({ key: "t_" + safeKey(j.id + "_" + (t.id || i)), kind: "trip", tag: "Return trip #" + n, tripNo: n, no, name: j.name || "", jobId: j.id,
-        who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 2, defHours: HPD,
+        who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 2, tripH: tripHours(t.time), defHours: 2 * (tripHours(t.time) || TRIP_DEFAULT_H),
         start: iso ? { iso, conf: t.rtStatus === "scheduled", by: t.rtStatus === "needs" } : null,
         cause: t.fromFailedFinal || t.scope === "Failed final inspection items" ? "final" : t.fromFailedRough ? "roughfail" : t.fromCOId ? "co"
           : (t.fromQCFail || /^QC (Fail|Items)/.test(String(t.scope || ""))) ? "qc" : /warrant/i.test(String(t.scope || "") + " " + String(t.task || "")) ? "warranty" : "" });
@@ -468,12 +513,12 @@ function buildCalendar(input) {
     // v656: { off: true } = taken off the calendar by hand (Koy: "if I don't want a job scheduled, I just delete it
     // off there"): no block, the auto-schedule leaves it alone, it stays on the list as needing scheduling.
     if (p && p.off) it.off = { by: p.by || "", at: p.at || "" };
-    else if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "" };
-    if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip") {
+    else if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "", ...(hoursOf(p.t) != null ? { t: p.t } : {}) };
+    if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
       it.auto = { s: workAfter(it.booked[it.booked.length - 1].iso), hours: it.left, crew: Math.max(1, it.crewBooked) };
     }
     const bookedFrom = (iso) => it.booked.some(b => b.iso >= iso);
-    if (it.kind === "trip") {
+    if (it.kind === "trip" && !it.done) {
       const s = it.start;
       if (!s) it.flags.push(it.who ? "Not scheduled, no date" : "Not scheduled, no date or crew");
       else if (s.by) it.flags.push(`Needs scheduling by ${md(s.iso)}`);
@@ -492,7 +537,7 @@ function buildCalendar(input) {
     }
     it.onCal = it.booked.length > 0 || !!it.plan;
     // On the right-hand list: anything with nothing booked from today on and no kept plan.
-    it.inList = !it.plan && !it.copyOf && (it.off ? !it.bookedAhead : !it.bookedAhead && (it.kind === "trip" || it.upcoming || it.left == null || it.left > 0 || it.over || it.flags.length > 0)
+    it.inList = !it.done && !it.plan && !it.copyOf && (it.off ? !it.bookedAhead : !it.bookedAhead && (it.kind === "trip" || it.upcoming || it.left == null || it.left > 0 || it.over || it.flags.length > 0)
       && !(it.kind === "service"));
     delete it._ph;
   });
@@ -536,4 +581,4 @@ function groupBy(list, itemOf) {
   return GROUPS.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
 }
 module.exports = { HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
-  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };
+  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };

@@ -6,7 +6,9 @@
 //     (preview → the same entries are rebuilt at confirm time and must hash the same, or nothing is written)
 //   - any hours over 40 in a person's week go in at the 1.5x overtime rate
 //   - never set or change a job's stage or status: this only creates schedule entries
-// Entries start at 7:00 AM. A person's week is Monday to Sunday and counts every hour already on
+// Entries start at 7:00 AM, or at the day's start time from the calendar ("HH:MM", 5:00 AM to 5:00 PM; v660, Koy:
+// "none of them have time assignments ... RT monday wont take all day"), so a short trip and the job after it fit
+// the same day. A person's week is Monday to Sunday and counts every hour already on
 // their Simpro schedule that week (jobs and activities), then the new days in date order.
 "use strict";
 
@@ -22,11 +24,12 @@ const q4 = (h) => Math.round((Number(h) || 0) * 4) / 4;
 function mondayOf(iso) { const [y, m, d] = iso.split("-").map(Number); const x = new Date(Date.UTC(y, m - 1, d)); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); }
 function addDays(iso, n) { const [y, m, d] = iso.split("-").map(Number); const x = new Date(Date.UTC(y, m - 1, d)); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 
-// One person-day: `hours` from 7:00, normal time until the person's week reaches 40, overtime after.
-function blocksFor(hours, weekBefore) {
+const startMinOf = (v) => { const m = /^(\d{2}):(\d{2})$/.exec(String(v || "")); return m ? +m[1] * 60 + +m[2] : START_MIN; };
+// One person-day: `hours` from the day's start (7:00 unless given), normal time until the person's week reaches 40, overtime after.
+function blocksFor(hours, weekBefore, start) {
   const h = q4(hours), before = Math.max(0, Number(weekBefore) || 0);
   const normal = Math.max(0, Math.min(h, q4(40 - before))), ot = q4(h - normal);
-  const blocks = []; let t = START_MIN;
+  const blocks = []; let t = startMinOf(start);
   if (normal > 0) { const e = t + Math.round(normal * 60); blocks.push({ StartTime: hhmm(t), EndTime: hhmm(e), ScheduleRate: RATE_NORMAL.id, rate: RATE_NORMAL.name, hrs: normal }); t = e; }
   if (ot > 0) { const e = t + Math.round(ot * 60); blocks.push({ StartTime: hhmm(t), EndTime: hhmm(e), ScheduleRate: RATE_OT.id, rate: RATE_OT.name, hrs: ot }); }
   return { blocks, normal, ot };
@@ -55,7 +58,7 @@ function buildEntries(days, staff, existing) {
       const wk = mondayOf(d.date), k = p.id + "|" + wk;
       if (run[k] == null) run[k] = Number(((existing || {})[p.id] || {})[wk]) || 0;
       const before = run[k];
-      const b = blocksFor(d.hours, before);
+      const b = blocksFor(d.hours, before, d.start);
       run[k] = before + q4(d.hours);
       out.push({ date: d.date, staffId: Number(p.id), name: String(p.name || ""), hours: q4(d.hours), normal: b.normal, ot: b.ot, weekBefore: Math.round(before * 100) / 100, blocks: b.blocks });
     });
@@ -106,6 +109,10 @@ function validate(data, today) {
     if (x.date > last) return `${x.date} is more than 120 days out.`;
     if (seen.has(x.date)) return `${x.date} is in the list twice.`; seen.add(x.date);
     const h = q4(x.hours); if (!(h >= 0.25 && h <= 12)) return `Hours on ${x.date} must be between 0.25 and 12.`;
+    if (x.start != null && x.start !== "") {
+      if (!/^\d{2}:\d{2}$/.test(String(x.start))) return `Start time on ${x.date} must be like 07:00.`;
+      const m = startMinOf(x.start); if (m < 5 * 60 || m > 17 * 60 || m % 15) return `Start time on ${x.date} must be between 5:00 AM and 5:00 PM, on the quarter hour.`;
+    }
   }
   if (d.mode === "book" && !/^[0-9a-z]+\.[0-9a-z]+$/.test(String(d.hash || ""))) return "Confirm from a preview.";
   return "";

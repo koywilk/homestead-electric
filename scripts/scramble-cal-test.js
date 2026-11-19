@@ -36,12 +36,12 @@ const jobs = [
   { id: "a1421", simproNo: "1421", name: "Hightower Remodel", roughStatus: "complete", finishStatus: "waiting_date", finishMaterials: [{ ordered: true }],
     returnTrips: [{ id: "t1", number: 1, rtStatus: "scheduled", rtStatusDate: "11/19/2026", assignedTo: "Jacob Spackman", scope: "Hang CO fixtures" }] },
   { id: "a1402", simproNo: "1402", name: "Cougar Moon Lot 84", roughStatus: "complete", finishStatus: "date_confirmed", finishProjectedStart: "11/23/2026", finishStartConfirmed: true, finishMaterials: [{ ordered: true }] },
-  { id: "a1407", simproNo: "1407", name: "Tolbert Residence", roughStatus: "complete", finishStatus: "waiting_date", finishProjectedStart: "12/1/2026", finishMaterials: [],
+  { id: "a1407", simproNo: "1407", name: "Tolbert Residence", roughStatus: "complete", finishStatus: "waiting_date", finishProjectedStart: "12/1/2026", finishStartConfirmed: true, finishMaterials: [],
     returnTrips: [{ id: "t4", number: 4, rtStatus: "needs", scope: "Add 3 kitchen cans" }] },
   { id: "a959", simproNo: "959", name: "Stratton Residence", roughStatus: "complete", finishStatus: "",
     returnTrips: [{ id: "t2", number: 2, rtStatus: "scheduled", rtStatusDate: "10/28/2026", assignedTo: "Abraham Tristan" }, { id: "old", rtStatus: "complete" }] },
   { id: "a889", simproNo: "889", name: "Rose", roughStatus: "complete", finishStatus: "inprogress", finishProjectedStart: "10/26/2026", finishStartConfirmed: true },
-  { id: "a1382", simproNo: "1382", name: "Riverton Retail", roughStatus: "waiting_date", roughProjectedStart: "10/19/2026", roughMaterials: [{ needsOrder: true }] },
+  { id: "a1382", simproNo: "1382", name: "Riverton Retail", roughStatus: "waiting_date", roughProjectedStart: "10/19/2026", roughStartConfirmed: true, roughMaterials: [{ needsOrder: true }] },
   { id: "a1260", simproNo: "1260", name: "Colton Residence", roughStatus: "complete", finishStatus: "waiting", finishProjectedStart: "11/16/2026", finishStartConfirmed: true },
   { id: "old", simproNo: "100", name: "Done job", roughStatus: "complete", finishStatus: "complete" },
   { id: "arch", simproNo: "101", name: "Archived", archived: true, roughStatus: "inprogress" },
@@ -162,6 +162,9 @@ ok(h1 !== h2 && h1 === SB.hashOf("1402", cc, ents), "the confirm only matches th
 ok(JSON.stringify(SB.bodyOf(ents[1])) === JSON.stringify({ Staff: 89, Date: "2026-11-24", Blocks: [{ StartTime: "07:00", EndTime: "12:00", ScheduleRate: 1 }, { StartTime: "12:00", EndTime: "17:00", ScheduleRate: 2 }] }), "the Simpro body is only Staff, Date and Blocks");
 const base = { mode: "preview", jobNo: "1402", phase: "finish", staffIds: [89], days: [{ date: "2026-11-23", hours: 10 }] };
 ok(SB.validate(base, "2026-11-17") === "", "a good preview passes");
+ok(SB.blocksFor(2, 0, "07:00").blocks[0].EndTime === "09:00" && SB.blocksFor(8, 0, "09:00").blocks[0].StartTime === "09:00" && SB.blocksFor(8, 0, "09:00").blocks[0].EndTime === "17:00", "a booking starts at the day's start time: a 2-hour trip 7 to 9, the job after it 9 to 5");
+ok(SB.buildEntries([{ date: "2026-11-23", hours: 8, start: "09:00" }], [{ id: 1, name: "A" }], {})[0].blocks[0].StartTime === "09:00", "entries carry the start time");
+ok(/between 5:00 AM and 5:00 PM/.test(SB.validate({ ...base, days: [{ date: "2026-11-23", hours: 2, start: "04:00" }] }, "2026-11-17")) && SB.validate({ ...base, days: [{ date: "2026-11-23", hours: 2, start: "09:30" }] }, "2026-11-17") === "", "start times are checked");
 ok(/past/.test(SB.validate({ ...base, days: [{ date: "2026-11-16", hours: 10 }] }, "2026-11-17")), "a past day is refused");
 ok(/quote/.test(SB.validate({ ...base, jobNo: "Q2386" }, "2026-11-17")), "a quote can't be booked");
 ok(/preview/.test(SB.validate({ ...base, mode: "book" }, "2026-11-17")), "booking needs the preview's fingerprint");
@@ -191,7 +194,7 @@ const jS = [{ id: "s1", simproNo: "61", name: "Solo test", roughStatus: "complet
                 { id: "b", number: 2, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Daegan Smith", material: "x" }] }];
 const VS = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 const sa = VS.items.find(x => x.key === "t_s1_a"), sb = VS.items.find(x => x.key === "t_s1_b");
-ok(sa.auto && sa.auto.crew === 2 && !sb.auto && /Daegan or a partner|No pair/.test(VS.needs.find(n => n.key === "t_s1_b").why), "two trips the same day on a 2-person crew: the first gets the pair, the second waits in Needs you");
+ok(sa.auto && sa.auto.crew === 2 && sb.auto && sb.auto.s === "2026-11-24" && SC.slotsOf(sa.auto)[0].label === "7:00 AM–11:00 AM" && SC.slotsOf(sb.auto)[0].label === "11:00 AM–3:00 PM", "two 4-hour trips the same day on a 2-person crew: the pair does one, then the other");
 const VS2 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].returnTrips[0], assignedTo: "Callen Jakeman" }] }], schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "Daegan Smith" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 ok(!VS2.items.find(x => x.key === "t_s1_a").auto && /can't go alone/.test(VS2.needs.find(n => n.key === "t_s1_a").why), "a crew member is never sent alone: no partner free means Needs you");
 const VS3 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].returnTrips[1] }] }], schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "Callen Jakeman" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
@@ -239,6 +242,28 @@ const oa = VO.items.find(x => x.key === "t_s1_a"), ob = VO.items.find(x => x.key
 ok(!(oa.auto && oa.auto.staff.some(p => p.name === "Daegan Smith")) && !(ob.auto && ob.auto.s === "2026-11-24"), "nobody is booked on a day they're off");
 const VO2 = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, plans: { t_s1_b: { s: "2026-11-30", hours: 10, crew: 1, staff: [{ name: "Daegan Smith" }] } }, timeOff: [{ name: "Daegan", start: "11/30/2026" }], effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 ok(VO2.items.find(x => x.key === "t_s1_b").flags.some(f => /Daegan is off 11\/30/.test(f)), "a kept plan on someone's day off is flagged");
+
+// Koy 2026-11-19: "none of them have time assignments. tuhaye hollow RT monday wont take all day"
+ok(SC.tripHours("2 hrs") === 2 && SC.tripHours("half day") === 5 && SC.tripHours("45 min") === 0.75 && SC.tripHours("1 day") === 10 && SC.tripHours("") === 0, "a trip's est. time reads as hours");
+const jT = [{ id: "tt", simproNo: "80", name: "Short trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+  returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/23/2026", assignedTo: "Louis Hoffman", material: "x", time: "2 hrs" }] },
+  { id: "tj", simproNo: "81", name: "Same day job", roughStatus: "inprogress", foreman: "Daegan Smith", roughMaterials: [{ ordered: true }] }];
+const VT = SC.buildCalendar({ jobs: jT, schedules: [], phaseHours: { "81": { r: [0, 80] } }, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const tT = VT.items.find(x => x.key === "t_tt_a").auto, jJ = VT.items.find(x => x.key === "j_tj_r").auto;
+ok(tT.hours === 4 && SC.slotsOf(tT)[0].label === "7:00 AM–9:00 AM", "a 2-hour trip for two is 7:00 to 9:00");
+const jd = (iso) => SC.slotsOf(jJ).find(x => x.date === iso);
+ok(jJ && jd("2026-11-23").from === 9 && jd("2026-11-23").to <= 17 && jd("2026-11-18").from === 7, "the pair goes on to the job after the trip the same day (from 9:00, done by 5:00); other days start at 7:00");
+ok(SC.slotsOf({ s: "2026-11-23", hours: 6, crew: 2, t: "12:30" })[0].label === "12:30 PM–3:30 PM", "a start time someone set is kept");
+// Koy 2026-11-19: "why is kweller finish there? it has no confirmed start date or anything"
+const jK = [{ id: "kw", simproNo: "1107", name: "Kweller", roughStatus: "complete", finishStatus: "waiting_date", foreman: "Daegan Smith",
+  returnTrips: [{ id: "r6", number: 6, rtStatus: "complete", signedOff: true, rtStatusDate: "11/19/2026", assignedTo: "Abraham Tristan" }] }];
+const schK = [{ Type: "job", Reference: "1107-1", Date: "2026-11-19", Staff: { Name: "Abraham Tristan" }, Blocks: [{ Hrs: 8 }] }];
+const VK = SC.buildCalendar({ jobs: jK, schedules: schK, phaseHours: { "1107": { f: [0, 120] } }, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const kF = VK.items.find(x => x.key === "j_kw_f");
+ok(kF && !kF.auto && !kF.booked.length && kF.inList && VK.items.find(x => x.key === "t_kw_r6").booked.length === 1, "a done trip's Simpro day stays the trip's: the finish gets no booking and no forecast, it stays on the list");
+const jU = [{ id: "un", simproNo: "90", name: "Est only", roughStatus: "waiting_date", roughProjectedStart: "11/30/2026", foreman: "Daegan Smith", roughMaterials: [{ ordered: true }] }];
+const VU = SC.buildCalendar({ jobs: jU, schedules: [], phaseHours: { "90": { r: [0, 80] } }, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "j_un_r").inList, "an estimated (not confirmed) start isn't auto-scheduled; it waits on the list");
 
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");
