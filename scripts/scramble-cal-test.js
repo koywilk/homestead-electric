@@ -198,5 +198,24 @@ const VS3 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].retur
 const s3 = VS3.items.find(x => x.key === "t_s1_b").auto;
 ok(s3 && s3.crew === 1 && /Only Daegan free that day, no second person/.test(s3.held), "a foreman may go alone only when no second person is free, held");
 
+// Set pairs on the Crew Board (Koy 2026-11-19): schedule by them instead of guessing.
+const usersP = users6.map(u => u.id === "l" ? { ...u, pairId: "jl" } : u.id === "jl" ? { ...u, pairId: "l" } : u.id === "t" ? { ...u, pairId: "c" } : u.id === "c" ? { ...u, pairId: "t" } : u.id === "au" ? { ...u, pairId: "p" } : u.id === "p" ? { ...u, pairId: "au" } : u);
+const bP = SC.crewBoard(usersP);
+ok(bP.partnerOf("Louis Hoffman") === "James Livingston" && bP.partnerOf("James Livingston") === "Louis Hoffman" && bP.partnerOf("Daegan Smith") === "", "a pair counts when both point at each other");
+ok(SC.crewBoard(users6.map(u => u.id === "l" ? { ...u, pairId: "jl" } : u)).partnerOf("Louis Hoffman") === "", "a one-sided pair is ignored, never guessed");
+ok(SC.crewBoard(usersP.map(u => u.id === "jl" ? { ...u, foremanId: "k" } : u)).partnerOf("Louis Hoffman") === "", "a pair across two crews is ignored");
+const jP = [{ id: "tp", simproNo: "70", name: "Pair trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+  returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Louis Hoffman", material: "x" }] }];
+const VP = SC.buildCalendar({ jobs: jP, schedules: [], phaseHours: {}, today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(VP.items.find(x => x.key === "t_tp_a").auto.staff.map(p => p.name).join() === "Louis Hoffman,James Livingston", "a trip takes its person's set pair");
+const VP0 = SC.buildCalendar({ jobs: jP, schedules: [], phaseHours: {}, today, weeks: 5, users: users6, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(VP0.items.find(x => x.key === "t_tp_a").auto.staff[1].name === "Callen Jakeman", "with no pairs set, the old rule (first crew member) still holds");
+const VP2 = SC.buildCalendar({ jobs: jP, schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "James Livingston" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+ok(VP2.items.find(x => x.key === "t_tp_a").auto.staff[1].name !== "James Livingston" && VP2.items.find(x => x.key === "t_tp_a").auto.crew === 2, "when the pair is out, someone else from the crew goes");
+const V5P = SC.buildCalendar({ jobs: jobs5, schedules: [], phaseHours: { "500": { r: [0, 120] }, "501": { r: [0, 300] }, "502": { r: [0, 200] } }, today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const XP = V5P.items.find(i => i.key === "j_x_r").auto, YP = V5P.items.find(i => i.key === "j_y_r").auto, ZP = V5P.items.find(i => i.key === "j_z_r").auto;
+ok(XP.staff.map(p => p.name).join() === "Daegan Smith,Trever Worley,Callen Jakeman" && YP.staff.map(p => p.name).join() === "Louis Hoffman,James Livingston", "two jobs at once: pairs stay whole (Trever + Callen with Daegan, Louis + James on the other)");
+ok(ZP.crew === 4 && ZP.staff.some(p => p.name === "Austin Schut") && ZP.staff.some(p => p.name === "Payton Bolda"), "a 4-person job is built from whole pairs");
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

@@ -152,7 +152,13 @@ function crewBoard(users) {
     return m.length === 1 ? m[0] : null;
   };
   const crewOfUser = (u) => !u ? null : boardTitle(u) === "foreman" ? crews[u.id] || null : boardTitle(u) === "admin" ? null : (u.foremanId && crews[u.foremanId]) || null;
-  return { crews, find, crewOf: (name) => crewOfUser(find(name)), crewOfUser };
+  // Set pairs (Koy 2026-11-19: "we need to know which junior foreman is with which apprentice, which lead is with
+  // which apprentice ... so that we can schedule by that instead of guessing at who the pairs are"). A pair counts
+  // only when both point at each other and sit on the same crew; anything else is ignored, never guessed.
+  const byId = {}; act.forEach(u => { byId[u.id] = u; });
+  const pairs = {};
+  act.forEach(u => { const o = u.pairId && byId[u.pairId]; if (o && o.pairId === u.id && o.id !== u.id) { const c1 = crewOfUser(u), c2 = crewOfUser(o); if (c1 && c1 === c2) pairs[u.name] = o.name; } });
+  return { crews, find, crewOf: (name) => crewOfUser(find(name)), crewOfUser, pairs, partnerOf: (name) => pairs[name] || "" };
 }
 
 // Lays forecast blocks for what isn't booked: rough-in first, then finish, at 10 h days Mon–Thu, never over a
@@ -228,7 +234,8 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
     const runner = [board.find(it.foreman), board.find(it.jlead)].filter(Boolean).map(x => x.name).filter(x => c.people.includes(x));
     const leadRank = (p) => runner.includes(p) && tt[p] !== "foreman" ? 0 : tt[p] === "lead" ? 1 : tt[p] === "jrforeman" ? 2 : tt[p] === "foreman" ? 3 : 9;
     const leaders = lead0.length ? lead0 : c.people.filter(canLead).sort((x, y) => leadRank(x) - leadRank(y));
-    const mates = (first) => c.people.filter(p => p !== first).sort((x, y) => (tt[x] === "crew" ? 0 : tt[x] === "lead" ? 1 : 2) - (tt[y] === "crew" ? 0 : tt[y] === "lead" ? 1 : 2));
+    const mate = (first) => board.partnerOf(first);   // their set pair goes first
+    const mates = (first) => c.people.filter(p => p !== first).sort((x, y) => (x === mate(first) ? -1 : 0) - (y === mate(first) ? -1 : 0) || (tt[x] === "crew" ? 0 : tt[x] === "lead" ? 1 : 2) - (tt[y] === "crew" ? 0 : tt[y] === "lead" ? 1 : 2));
     // who goes on day d: a pair if there is one; else a lone leader (held); else nobody
     const crewFor = (d) => {
       for (const l of leaders) { if (!free([l], d)) continue; const m = mates(l).find(p => free([p], d)); if (m) return { names: [l, m] }; }
@@ -306,8 +313,17 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
         const other = phases.some(o => o !== it && !doneKeys.has(o.key) && crewKey(o) === c.id && fromOf(o) <= days[days.length - 1]);
         const spareHead = other && avail.length >= 4 ? heads.find(p => p !== head) : "";   // a split needs 2 on each side
         const cap = other && spareHead ? Math.max(2, Math.min(cnt, avail.length - 2)) : cnt;
-        const team = [head, ...avail.filter(p => p !== head && !isHead(p) && p !== runner).sort((x, y) => rest(x) - rest(y)),
-          ...avail.filter(p => p !== head && p !== spareHead && (isHead(p) || p === runner))].slice(0, Math.min(cnt, cap));
+        // Whole set pairs go together: the head brings their pair, then pairs, then people with no pair; the spare
+        // head's pair stays back with them. A pair is split only when one of the two isn't free.
+        const lim = Math.min(cnt, cap), keep = new Set([spareHead, spareHead && board.partnerOf(spareHead)].filter(Boolean));
+        const team = [head]; const used = new Set([head]);
+        const pt = board.partnerOf(head); if (pt && avail.includes(pt) && !keep.has(pt) && team.length < lim) { team.push(pt); used.add(pt); }
+        const units = []; const seen = new Set(used);
+        [...avail.filter(p => !isHead(p) && p !== runner).sort((x, y) => rest(x) - rest(y)), ...avail.filter(p => isHead(p) || p === runner)].forEach(p => {
+          if (seen.has(p) || keep.has(p)) return; seen.add(p);
+          const q = board.partnerOf(p); if (q && avail.includes(q) && !seen.has(q) && !keep.has(q)) { seen.add(q); units.push([p, q]); } else units.push([p]); });
+        units.forEach(u => { if (team.length + u.length <= lim) u.forEach(p => team.push(p)); });
+        if (team.length < lim) units.forEach(u => u.forEach(p => { if (team.length < lim && !team.includes(p)) team.push(p); }));
         if (team.length >= cnt || (team.length >= Math.min(2, want) && team.length === Math.min(cnt, cap))) {
           // the head count may have dropped: lay the hours out again for the team it got
           const nd2 = Math.max(1, Math.ceil(it.left / (team.length * HPD) - 1e-9));
