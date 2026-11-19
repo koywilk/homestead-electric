@@ -20,6 +20,7 @@ import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as
 import inspAtt from "./inspAttempts";
 import MeetingModel from "./meetingModel";   // v648: the Weekly Scramble on /dashboard › Meetings (Koy, 2026-11-17)
 import ScrambleCal from "./scrambleCal";   // v651: the Scramble calendar (all crews, Simpro bookings, forecasts, not-yet-booked list)
+import JobsiteDay from "./jobsiteDay";   // v653: the My jobsite card on My Day (Louis Hoffman via Koy, 2026-11-19)
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
 import { syncPostHogIdentity, trackDash, heTrack, heCaptureError } from "./posthog";
 import { readableInk } from "./a11y";
@@ -64217,9 +64218,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-18 · App SW version: v652
+**Last manifest update:** 2026-11-19 · App SW version: v653
 ---
 
+- **My jobsite on My Day: everyone booked on your job today or tomorrow, with each person's open punch items, unassigned and waiting items** · 'in-flight 2026-11-19' · 'SW v653' · 'JobsiteDayCard' · 'buildJobsiteDay' · 'src/jobsiteDay.js' · Louis Hoffman via Koy: *"a spot to be able to see everyone on his jobsite that day, and every punch item he assigned sorted out to the people."* Koy's picks: every open item on the job (not only the lead's own), today plus tomorrow. A card at the top of My Day for leads, jr. foremen and foremen, on jobs where they are the lead or foreman and someone is booked in Simpro today or tomorrow (one chip per job when there are several). Who's on site = the Simpro schedule via the existing 'getSimproSchedule' callable (one read per 10 minutes, shared); hours show beside each name. Under each person: open, not-waiting items assigned to them (rough, finish, QC, extras floors), then **Show done this week**. Then **Unassigned** (with an Assign picker), **Waiting on others** folded, with the reason, and **Not here** for people with open items who aren't booked. Check off = 'togglePunchItemDone'; Assign = new 'assignPunchItem' (same walk and whole-phase save as the toggle, only 'assignedTo' changes). Harness 'scripts/jobsite-day-test.js' in prebuild. **Why it won't lose data:** the card reads only; its two writes are the existing check-off and the same assign the punch list does; nothing goes to Simpro; no rules or functions change.
 - **Foreman Meeting on the Meetings tab: Team check, Jobs (the Job Costs page, foreman view), Guys, Action items** · 'in-flight 2026-11-18' · 'SW v652' · 'OdMeetings' · 'buildForemanSections' · 'OdJobCosts' · 'src/meetingModel.js' · Koy, 2026-11-18: *"This meeting is going to be with all three foremen, though, not individually"*, *"more about their specific jobs, their guys, maybe morale and margin numbers, rough numbers, like all the job numbers... not schedule or training"*, then *"Okay let's build that and see what it looks like"*. Preview first (claude.ai artifact, read only). **Where:** /dashboard › Meetings, third button **Foreman Meeting · Wed 7:00** (remembered on the device). **Team check:** typed items (week-scoped, TYPED), a "#1291 …" entry ties to the job. **Jobs:** the dashboard's Job Costs page itself, foreman view (Koy: *"I think section 2 should be straight from the job cost tab in the dashboard, the foreman view of it"*). The tab's render, state and reads moved out of OfficeDash into 'OdJobCosts', used by both the Costs tab and the meeting; 'embed' forces the foreman view (percentages and hours, no dollars), starts on Active, uses a slim header and folds How it is counted, and adds + Note / Hide under each job in the table (meetings/foreman_<date>.rowNotes.w_<Simpro #>, foreman__prefs.hidden.jobs.w_<Simpro #>). Hidden jobs leave the table and chart only; the boxes still count them. **Guys:** active users whose foremanId is Keegan, Daegan or Colby (jr. foremen, leads, crew), one typed line each saved to meetings/foreman_<Wednesday>.guys.<userId> (this week only). **Action items:** as the other meetings; last week's carry for Done / Not done. No schedule, training, return trips, upcoming or crew out. Percentages and hours only. **Rules:** /meetings allows type foreman / foreman_prefs (rules deploy). **Why it won't lose data:** same collection and merge-one-field writes; the Scramble and Lead records are untouched; all job data is only read.
 - **Weekly Scramble calendar: all crews on one calendar, Simpro bookings solid, the hours left as forecasts, a list of what isn't on it yet, and Book in Simpro with a preview** · 'in-flight 2026-11-18' · 'SW v651' · 'OdScrambleCal' · 'src/scrambleCal.js' · 'functions/scrambleBook.js' · 'scrambleCalContext' · 'scrambleBook' · 'scripts/scramble-cal-test.js' · Koy, 2026-11-17 (Scramble meeting): *"we want like a calendar view with um, like upcoming jobs and any jobs that are in progress we want them to be like scheduled out through their hours that they have left"*, *"SimPro will be the source of truth with schedule"*, *"on the right or something ... that we can see what needs to be on the calendar and we can put it on there and see what it looks like. And then we can schedule from there"*, *"make the estimated or confirmed start dates visible, and flag anything needing scheduling on a date but not yet"*, *"needs to be clear if its a return trip, rough, or finish"*, then *"lets send it, well adjust when needed"*. Preview first on the real rows (claude.ai/artifact/DF9rkRQuTGGdFkXXk77AL6). **Where:** /dashboard › Meetings, a fold at the top of the Weekly Scramble (open by default). **The calendar:** five weeks from this Monday, all crews in one view, 4-10s (Mon–Thu columns, Friday a thin striped strip, never planned). One block per item, each labelled and coloured **Rough-in** (blue), **Finish** (green) or **Return trip #n** (purple); a Simpro booking with no phase shows as Booked. **Solid** = booked in Simpro (getSimproSchedule, the view's five weeks; days under 2 crew hours are left off), with the first names booked. **Light** = forecast: the phase's hours left from the nightly Job Costs split ('settings/phaseHours': bid − used − hours booked after today) laid out at 10 h a day for the crew Simpro has, else 2 people. A dot marks the CC start date (projected start; filled when its Confirmed box is ticked or the phase is Start Date Set). **Drag** a forecast to move it; **drag the grip on the right end** of any block to add or take off days (a solid booking grows lighter forecast days after it), with a live day count. **The list on the right** (Not on the calendar yet): every phase, open return trip and Upcoming row with nothing booked from today on and no kept plan, grouped *Needs scheduling or a PO* first, then Return trips, In progress Rough-in / Finish, Over bid, Upcoming starts. Drag a card onto a day, tap it then tap a day (phones), or **Place on <start date>**. **Flags (red !):** a start that has passed or falls in the view with nothing booked in Simpro on or after it; a dated rough-in / finish start whose phase has no Materials card ordered ("no material PO" / "material card not ordered yet"); return trips with no date, a schedule-by date, no crew, a date that passed while still open, or set in CC but not booked in Simpro. On-hold and started phases aren't flagged. **Keep as plan** saves the block for everyone in the meeting ('meetings/scramble__prefs.cal.<key>' = { s, hours, crew, staff, by, at }); until then a moved block shows "not kept yet" and only on that screen. **Book in Simpro…** (admin / manager PIN): pick who from Simpro's active staff (the booked crew is ticked), **Show what it would book** lists every entry (day, person, 7:00 start, normal hours, hours at Overtime 1.5x once that person's week passes 40 counting what's already on their Simpro schedule) and the cost center (the Base section's Rough In / Finish; a trip books on Finish), and only **Book these N entries in Simpro** writes. At confirm the server rebuilds the entries from Simpro as it is then; if anything differs from the preview it writes nothing and asks for a new look. One entry at a time, stopping at the first refusal (the card says how many went in). A booked plan comes off the list; the solid days show from Simpro. Upcoming quotes can be planned but not booked until they're a job. Bid hours for Upcoming rows come from the quote or job estimate (whole job, hours only) through 'scrambleCalContext'. **Never** sets or changes a job's stage or status, in CC or Simpro. Each booking is logged to 'scrambleBookings' (server-only). Guide 'dashboard.html' step 6. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scrambleCalContext,functions:scrambleBook' before the app. **Why it won't lose data:** the app writes only its own plans into the existing 'meetings/scramble__prefs' doc, one map key per plan, by merge (no rules change); nothing on a job is written; Simpro gets new schedule entries only, from the server, only on a confirm that matches the preview; no loader, rules or existing function changes.
 - **Lead Meeting laid out like Koy's Nov 11 Doc: Doc order, day-by-day schedule, Hours and margin table with total margin from Simpro** · 'in-flight 2026-11-18' · 'SW v650' · 'OdMeetings' · 'buildLeadSections' · 'src/meetingModel.js' · Koy, 2026-11-18 ("all recs go" on 15 fixes): *"make it more accurate to what the last one, the doc, was"* and show *"the total overall margin"* in hours vs bid. Preview first on real numbers (claude.ai artifact, read only). **Order:** Notes, Highlight, Lowlight, Training, Schedule, Upcoming, Hours and margin, Crew out, Action items (last week's carried items, renamed). **Cut:** Open items from the watches, Needs, Hiring, When it comes up; a week whose record already has something typed in one of them still shows it, last ('secHasContent'). **Schedule:** the meeting day to that week's Friday ('leadRange', also the Simpro read's range), a heading per day, each booked job by number + name (CC, else the Job Costs row, else Simpro via the read-only 'getSimproJobBasics', name only) with its crew; one row (and so one + Note) per job per day; an empty day says so. **Upcoming:** CC rough / finish starts and the Upcoming list (its '#2547 - Name' number parsed out), six weeks, "projected" / "confirmed", past due tagged 'Nd past'; a CC start beats its Upcoming-list copy. **Hours and margin:** every active residential job (in CC, not archived / commercial / quick / temp ped, finish not complete, Simpro stage not Invoiced / Complete, hours or material in) as a table: Job, Simpro status, rough net and finish net margin from settings/phaseCosts ((sell − material − labor with overhead) ÷ sell, the Job Costs page's math), total margin from settings/simproTotals (Simpro's NettMargin, the number the margin watch reads), flags per phase for hours / labor / materials over the bid (red) or at 90%+ (orange, never yellow). A phase reads "not started" until it has 10% of its bid hours. Grouped by crew foreman (a jr. foreman's / lead's job sits with their foreman via foremanId): Keegan, Daegan, Colby, then the rest A–Z, then No foreman; worst total margin first. Percentages only, no dollar figure on the page (a test pins that the model carries none). **Crew out:** six weeks, approved ('settings/crewPTO') and pending requests, dates read in both '11/20/2026' and ISO shapes (the v649 bug that dropped all approved time off), names + dates only, people out the same days share a line, office (title admin or untitled roster record) and former crew left out. Tests: 'scripts/meeting-model-test.js'. Guide 'dashboard.html' step M. **Why it won't lose data:** read only everywhere new (settings/simproTotals and getSimproJobBasics are reads); the meeting record shape, ids and writes are unchanged; old sections' typed content still shows.
@@ -71551,7 +71553,7 @@ function myDayCategories(rows) {
     .sort((a, b) => ((b.urgent > 0) - (a.urgent > 0)) || (a.top - b.top) || (b.overdue - a.overdue) || a.label.localeCompare(b.label));
 }
 
-function MyDay({ roleSlot = null, pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
+function MyDay({ roleSlot = null, pinsSlot = null, messagesSlot = null, qcTracker = null, prioMap = {}, onSetPrio, identity, users = [], jobs = [], needs = [], onPatchNeed, onSaveNeed, onAddNeedUpdate, onEditNeedUpdate, onAddNeedPhotos, onRemoveNeedPhoto, photoBusyIds = null, onOpenJob, onTogglePunch, onAssignPunch, onUpdateJob, onGoHome, onOpenCrew, onOpenBoard, openQuickAdd, canCreate = false, canBoard = false, redlineWalks = [], onUpdateRedline, onOpenCOs, focusEntry = null, onSaveFocus, jumpNeedId = null, onJumped, msgsJump = null, msgCounts = null }) {
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(() => { const h = () => setWinW(window.innerWidth); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []);
   // v505 (Koy, screenshot 2026-10-06: the New-for-you row crushed to one word per line): judge
@@ -72942,6 +72944,7 @@ function MyDay({ roleSlot = null, pinsSlot = null, messagesSlot = null, qcTracke
       </div>
       {(searchOpen || qOn) && <input ref={searchRef} type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks or jobs" aria-label="Search tasks or jobs"
         style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text, marginBottom: 8 }} />}
+      <JobsiteDayCard me={me} title={myTitle} jobs={jobs} users={users} onTogglePunch={onTogglePunch} onAssignPunch={onAssignPunch} onOpenJob={onOpenJob} />
       {roleSlot}
       {pinsSlot}
       <div role="tablist" style={{ background: C.bg, display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto", scrollbarWidth: "none" }}>
@@ -74588,6 +74591,194 @@ function RoleLadderIcon({ size = 24, color = RL_ACC }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M7 3v18M17 3v18M7 7h10M7 12h10M7 17h10"/></svg>;
 }
 // The "My role" card at the top of My Day.
+// ── My jobsite (v653) ─────────────────────────────────────────────────────────
+// Louis Hoffman via Koy, 2026-11-19: "a spot to be able to see everyone on his jobsite that day, and
+// every punch item he assigned sorted out to the people." Koy's picks: every open item on the job,
+// today plus tomorrow. Shown on My Day to leads, jr. foremen and foremen for jobs they lead (or are
+// foreman on) with someone booked in Simpro today or tomorrow. Who's on site = the Simpro schedule
+// (getSimproSchedule, read-only); punch = the job docs My Day already has (model: src/jobsiteDay.js).
+// Writes: only the existing ones (check off = togglePunchItemDone, assign = assignPunchItem).
+let _jsdSched = { key: "", rows: null, at: 0, inflight: null };
+function useJobsiteSchedule(days, enabled) {
+  const key = days.join(",");
+  const fresh = _jsdSched.key === key && _jsdSched.rows && (Date.now() - _jsdSched.at < 10 * 60 * 1000);
+  const [rows, setRows] = useState(fresh ? _jsdSched.rows : null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    const load = () => {
+      if (_jsdSched.key === key && _jsdSched.rows && (Date.now() - _jsdSched.at < 10 * 60 * 1000)) { setRows(_jsdSched.rows); return; }
+      if (!_jsdSched.inflight || _jsdSched.key !== key) {
+        _jsdSched.key = key;
+        _jsdSched.inflight = httpsCallable(functions, "getSimproSchedule")({ dateFrom: days[0], dateTo: days[days.length - 1] })
+          .then(res => { _jsdSched.rows = (res.data || []).filter(s => s && s.Type === "job"); _jsdSched.at = Date.now(); return _jsdSched.rows; })
+          .finally(() => { _jsdSched.inflight = null; });
+      }
+      _jsdSched.inflight.then(r => { if (live) { setRows(r); setFailed(false); } }).catch(() => { if (live) setFailed(true); });
+    };
+    load();
+    const onFocus = () => load();
+    window.addEventListener("focus", onFocus);
+    return () => { live = false; window.removeEventListener("focus", onFocus); };
+  }, [key, enabled]);   // days is derived from key
+  return { rows, failed };
+}
+
+function JobsiteDayCard({ me, title, jobs = [], users = [], onTogglePunch, onAssignPunch, onOpenJob }) {
+  const sees = JobsiteDay.SEES.includes(String(title || ""));
+  const mayLead = sees && (jobs || []).some(j => j && (sameName(j.lead, me) || sameName(j.foreman, me)));
+  const days = useMemo(() => JobsiteDay.cardDays(new Date()), []);
+  const { rows, failed } = useJobsiteSchedule(days, mayLead);
+  const myJobs = useMemo(() => rows ? JobsiteDay.jobsiteJobs(me, title, jobs, rows, days) : [], [rows, me, title, jobs, days]);
+  const [jobId, setJobId] = useState(null);
+  const [day, setDay] = useState(0);
+  const [open, setOpen] = useState(() => new Set());
+  const [showDone, setShowDone] = useState(() => new Set());
+  const [showWaiting, setShowWaiting] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  if (!mayLead) return null;
+  if (failed && !rows) return null;   // the schedule is extra; never block My Day on it
+  if (!rows || !myJobs.length) return null;
+  const job = myJobs.find(j => j.id === jobId) || myJobs[0];
+  const card = JobsiteDay.buildJobsiteDay(job, rows, days[day], new Date());
+  const first = (n) => String(n || "").split(" ")[0];
+  const flip = (setter, k) => setter(prev => { const nx = new Set(prev); nx.has(k) ? nx.delete(k) : nx.add(k); return nx; });
+  const roster = (() => {
+    const names = card.people.map(p => p.name);
+    (users || []).forEach(u => { const t = u && (u.title || u.role); if (u && u.name && u.active !== false && ["crew", "lead", "jrforeman", "foreman"].includes(t) && !names.some(n => sameName(n, u.name))) names.push(String(u.name).trim()); });
+    return names;
+  })();
+  const chip = (txt, fg, bg, line) => <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 99, padding: "2px 9px", color: fg, background: bg, border: `1px solid ${line || bg}`, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{txt}</span>;
+  const sec = (txt) => <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint, padding: "12px 14px 4px" }}>{txt}</div>;
+  const box = (done) => ({ width: 24, height: 24, minWidth: 24, borderRadius: 6, border: `1.5px solid ${done ? C.green : C.slateLine}`, background: done ? C.green : "transparent", cursor: "pointer", padding: 0, display: "grid", placeItems: "center", marginTop: 1 });
+  const item = (i, opts = {}) => (
+    <div key={i.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "7px 0" }}>
+      <button type="button" aria-label={i.done ? `Reopen: ${plainText(i.text)}` : `Mark done: ${plainText(i.text)}`} onClick={() => onTogglePunch && onTogglePunch(card.jobId, i.phase, i.id)} style={box(i.done)}>
+        {i.done && <Icon name="check" size={14} color={C.card} stroke={3} />}
+      </button>
+      <div style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+        <div style={{ fontSize: 14, color: i.done ? C.faint : C.text, textDecoration: i.done ? "line-through" : "none" }}>
+          {plainText(i.text)}
+          {opts.waiting && <span style={{ marginLeft: 6, fontSize: 12, fontWeight: 600, color: C.slate, background: C.slateBg, borderRadius: 6, padding: "0 6px", whiteSpace: "nowrap" }}>{i.waitingOn || "Waiting"}</span>}
+        </div>
+        <div style={{ fontSize: 12, color: C.faint }}>{[i.room, i.phase !== "Finish" ? i.phase : "", opts.who ? first(i.assignedTo) : "", i.done && i.doneOn ? JobsiteDay.dayLabel(i.doneOn) : ""].filter(Boolean).join(" · ")}</div>
+      </div>
+      {opts.assign && onAssignPunch && (
+        <select aria-label={`Assign: ${plainText(i.text)}`} value="" onChange={e => { const v = e.target.value; if (v) onAssignPunch(card.jobId, i.phase, i.id, v); }}
+          style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.blue, background: C.card, border: `1px solid ${C.steelLine}`, borderRadius: 8, minHeight: 32, padding: "0 6px", maxWidth: 120, flexShrink: 0 }}>
+          <option value="">Assign</option>
+          {roster.map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      )}
+    </div>
+  );
+  const personRow = (p, key, booked) => {
+    const ex = open.has(key);
+    const dEx = showDone.has(key);
+    return (
+      <div key={key} style={{ borderTop: `1px solid ${C.border}` }}>
+        <button type="button" aria-expanded={ex} onClick={() => flip(setOpen, key)}
+          style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "10px 14px", minHeight: 52, border: 0, background: "transparent", fontFamily: "inherit", color: C.text, textAlign: "left", cursor: "pointer" }}>
+          <span aria-hidden="true" style={{ width: 32, height: 32, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, flexShrink: 0, background: p.lead ? C.steelBg : C.slateBg, color: p.lead ? C.blue : C.slate }}>
+            {String(p.name).split(" ").filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase()}
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <b style={{ display: "block", fontWeight: 600, fontSize: 14 }}>{p.name}{p.lead ? " · lead" : ""}</b>
+            <small style={{ color: C.faint, fontSize: 12, fontVariantNumeric: "tabular-nums" }}>{booked ? (p.hours || "Booked") : "Not booked this day"}</small>
+          </span>
+          {p.open.length ? chip(`${p.open.length} open`, C.purple, C.bg) : chip("0 open", C.faint, "transparent", C.border)}
+          <Icon name={ex ? "chevronDown" : "chevronRight"} size={16} color={C.faint} />
+        </button>
+        {ex && (
+          <div style={{ padding: "0 14px 10px 56px" }}>
+            {!p.open.length && <div style={{ fontSize: 13, color: C.faint, padding: "2px 0 6px" }}>Nothing open assigned to {first(p.name)} on this job.</div>}
+            {p.open.map(i => item(i))}
+            {(p.done || []).length > 0 && (
+              <>
+                <button type="button" aria-expanded={dEx} onClick={() => flip(setShowDone, key)} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.blue, background: "transparent", border: 0, padding: "6px 0", minHeight: 32, cursor: "pointer" }}>
+                  {dEx ? "Hide" : "Show"} done this week ({p.done.length})
+                </button>
+                {dEx && p.done.map(i => item(i))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const dayBtn = (i) => (
+    <button key={i} type="button" aria-pressed={day === i} onClick={() => setDay(i)}
+      style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, border: 0, minHeight: 32, padding: "0 12px", cursor: "pointer", background: day === i ? C.steelBg : "transparent", color: day === i ? C.blue : C.dim }}>
+      {i === 0 ? "Today" : JobsiteDay.dayLabel(days[1]).split(",")[0]}
+    </button>
+  );
+  return (
+    <section aria-label="My jobsite" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, marginBottom: 10, overflow: "hidden" }}>
+      <div style={{ padding: "12px 14px 10px", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <button type="button" onClick={() => setCollapsed(c => !c)} aria-expanded={!collapsed}
+            style={{ border: 0, background: "transparent", padding: 0, textAlign: "left", fontFamily: "inherit", color: C.text, cursor: "pointer", minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: 12, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: C.faint }}>My jobsite</span>
+            <b style={{ display: "block", fontSize: 16 }}>{card.jobNo} {card.jobName}</b>
+            <small style={{ color: C.faint, fontSize: 12 }}>{JobsiteDay.dayLabel(card.day)} · booked in Simpro</small>
+          </button>
+          <div role="group" aria-label="Day" style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
+            {dayBtn(0)}{dayBtn(1)}
+          </div>
+        </div>
+        {myJobs.length > 1 && (
+          <div role="group" aria-label="Job" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {myJobs.map(j => {
+              const on = j.id === job.id;
+              return <button key={j.id} type="button" aria-pressed={on} onClick={() => { setJobId(j.id); setOpen(new Set()); setShowDone(new Set()); }}
+                style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, borderRadius: 99, minHeight: 32, padding: "0 12px", cursor: "pointer", border: `1px solid ${on ? C.steelLine : C.border}`, background: on ? C.steelBg : C.card, color: on ? C.blue : C.dim }}>
+                {JobsiteDay.jobNoOf(j)} {j.name}
+              </button>;
+            })}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {chip(`${card.counts.onSite} on site`, C.blue, C.steelBg)}
+          {chip(`${card.counts.assignedOpen} assigned open`, C.purple, C.bg)}
+          {chip(`${card.counts.unassigned} unassigned`, C.orange, C.card, C.border)}
+          {chip(`${card.counts.waiting} waiting`, C.slate, C.slateBg)}
+          {onOpenJob && <button type="button" onClick={() => onOpenJob(card.jobId)} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.blue, background: "transparent", border: 0, padding: "0 4px", minHeight: 28, cursor: "pointer", marginLeft: "auto" }}>Open job</button>}
+        </div>
+      </div>
+      {!collapsed && (
+        <>
+          {!card.people.length && <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 14px", fontSize: 13, color: C.faint }}>Nobody is booked on {card.jobNo} {card.jobName} for {JobsiteDay.dayLabel(card.day)} yet. Once people are booked in Simpro they show here.</div>}
+          {card.people.map(p => personRow(p, `p:${p.name}`, true))}
+          {card.unassigned.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.border}` }}>
+              {sec(`Unassigned · ${card.unassigned.length}`)}
+              <div style={{ padding: "0 14px 8px" }}>{card.unassigned.map(i => item(i, { assign: true }))}</div>
+            </div>
+          )}
+          {card.waiting.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.border}` }}>
+              {sec(`Waiting on others · ${card.waiting.length}`)}
+              <div style={{ padding: "0 14px 8px" }}>
+                <button type="button" aria-expanded={showWaiting} onClick={() => setShowWaiting(w => !w)} style={{ fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: C.blue, background: "transparent", border: 0, padding: "4px 0", minHeight: 32, cursor: "pointer" }}>
+                  {showWaiting ? "Hide" : "Show"} waiting items
+                </button>
+                {showWaiting && card.waiting.map(i => item(i, { waiting: true, who: !!i.assignedTo }))}
+              </div>
+            </div>
+          )}
+          {card.notHere.length > 0 && (
+            <div style={{ borderTop: `1px solid ${C.border}` }}>
+              {sec(`Not here ${day === 0 ? "today" : "this day"} · ${card.notHere.length}`)}
+              {card.notHere.map(p => personRow({ ...p, done: [] }, `n:${p.name}`, false))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function MyRoleCard({ level, onOpen }) {
   if (!level) return null;
   return (
@@ -77633,6 +77824,37 @@ function App() {
     return true;
   };
 
+  // v653: assign one punch item from the My jobsite card on My Day. Same walk and same
+  // whole-phase save as togglePunchItemDone (and the punch list's own assign); only
+  // assignedTo changes, so the tick slots stay as they are.
+  const assignPunchItem = (jobId, phase, itemId, name) => {
+    const job = allJobs.find(j => j.id === jobId);
+    if(!job) return null;
+    const phaseKey = phase === "Rough" ? "roughPunch" : phase === "Finish" ? "finishPunch" : "qcPunch";
+    const punch = job[phaseKey];
+    if(!punch) return null;
+    let hit = false;
+    const updateItem = (i) => {
+      if(!i || i.id !== itemId || i.done) return i;
+      hit = true;
+      return { ...i, assignedTo: name || "" };
+    };
+    const updateFloor = (fl) => !fl ? fl : ({
+      ...fl,
+      general:  (fl.general||[]).map(updateItem),
+      hotcheck: (fl.hotcheck||[]).map(updateItem),
+      rooms:    (fl.rooms||[]).map(r => ({...r, items: (r.items||[]).map(updateItem)})),
+    });
+    const newPunch = { ...punch, upper: updateFloor(punch.upper), main: updateFloor(punch.main), basement: updateFloor(punch.basement) };
+    (punch.extras||[]).forEach(e => { if (e && e.key && punch[e.key]) newPunch[e.key] = updateFloor(punch[e.key]); });
+    if(!hit) return null;
+    const who = (identity?.name) || (getIdentity && getIdentity()?.name) || "";
+    const patch = { [phaseKey]: newPunch };
+    Object.assign(patch, punchTickPatches(punch, newPunch, who, new Date().toISOString()));   // no flips, so normally empty
+    updateJob({ ...job, ...patch }, patch);
+    return true;
+  };
+
   // Punch items assigned to the currently-active foreman, across every job.
   // Used by the foreman tab "Assigned" to give them one place to see what's
   // theirs without hopping between jobs. Walks rough/finish/qc punches and
@@ -80188,7 +80410,7 @@ function App() {
         <MyDay identity={identity} users={users} jobs={jobs} needs={needsForMode} onAddNeedUpdate={addNeedUpdate} onEditNeedUpdate={editNeedUpdate}
           qcTracker={mode!=="commercial"&&(can(myLiveRec,"resi.head")||can(myLiveRec,"qc.own")) ? <QCView embedded jobs={jobs} identity={identity} onSelectJob={(j)=>setSelected(j)} onPatchJob={(jobId,patch)=>{ const j=allJobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/> : null}
           onAddNeedPhotos={addNeedPhotos} onRemoveNeedPhoto={removeNeedPhoto} photoBusyIds={needPhotoBusy}
-          onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onUpdateJob={updateJob}
+          onPatchNeed={patchNeed} onSaveNeed={saveNeed} onOpenJob={openJobById} onTogglePunch={togglePunchItemDone} onAssignPunch={assignPunchItem} onUpdateJob={updateJob}
           onGoHome={goHome} onOpenCrew={openForeman} onOpenBoard={()=>setView("needs")}
           redlineWalks={redlineWalksForMode} onUpdateRedline={updateRedlineWalk} onOpenCOs={can(identity,"cos.view")?()=>setView("cos"):undefined}
           openQuickAdd={(preset)=>setQuickAdd(preset||{})} canCreate={can(identity,"tasks.create")} canBoard={can(identity,"board.view")}
