@@ -84,6 +84,43 @@ const cm2 = V2.items.find(x => x.key === "j_a1402_f");
 ok(cm2.plan && cm2.plan.s === "2026-11-23" && cm2.onCal && !cm2.inList, "a kept plan (Saturday rolls to Monday) moves Cougar Moon onto the calendar");
 ok(cm2.flags.join() === "Starts Mon 11/23, not booked", "a plan isn't a booking: the flag stays until Simpro has it");
 
+// ── v656 auto-schedule: crews from the Crew Board (settings/users) ──
+const users = [
+  { id: "d", name: "Daegan Smith", title: "foreman", active: true }, { id: "l", name: "Louis Hoffman", title: "jrforeman", foremanId: "d", active: true },
+  { id: "c", name: "Callen Jakeman", title: "crew", foremanId: "d", active: true }, { id: "b", name: "Bailey Smith", title: "crew", foremanId: "d", active: false },
+  { id: "z", name: "Zane Watkins", title: "foreman", active: true }, { id: "br", name: "Braden Davis", title: "lead", foremanId: "z", active: true },
+  { id: "a", name: "Abraham Tristan", title: "foreman", active: true }, { id: "j", name: "Jose Sanchez", title: "crew", foremanId: "a", active: true },
+  { id: "jo", name: "Joel Fey", title: "lead", active: true },
+];
+const brd = SC.crewBoard(users);
+ok(brd.crews.d.people.join() === "Daegan Smith,Louis Hoffman,Callen Jakeman", "Daegan's crew: Louis and Callen, Bailey (inactive) left off");
+ok(brd.crewOf("Louis H.").id === "d" && brd.crewOf("Braden").id === "z" && brd.crewOf("Joel Fey") === null && brd.crewOf("Nobody") === null, "a jr foreman or lead runs with their foreman's crew; unassigned has no crew");
+const fm = { a1402: "Daegan Smith", a1407: "Louis Hoffman", a1382: "Zane Watkins", a959: "Abraham Tristan", a1412: "Zane Watkins" };
+const jobs3 = jobs.map(j => fm[j.id] ? { ...j, foreman: fm[j.id] } : j).concat([
+  { id: "a77", simproNo: "77", name: "Trip test", roughStatus: "complete", finishStatus: "complete", foreman: "Abraham Tristan",
+    returnTrips: [{ id: "x1", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Joel Fey", material: "2 GFCI" },
+                  { id: "x2", number: 2, rtStatus: "scheduled", rtStatusDate: "11/30/2026", assignedTo: "Jose Sanchez", material: "" }] }]);
+const A = (plans) => SC.buildCalendar({ jobs: jobs3, upcoming, schedules, phaseHours, plans: plans || {}, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const V3 = A(), K3 = (k) => V3.items.find(x => x.key === k), N3 = (k) => V3.needs.find(x => x.key === k);
+const cm3 = K3("j_a1402_f");
+ok(cm3.auto && cm3.auto.src === "auto" && cm3.auto.s === "2026-11-23" && cm3.auto.crew === 3 && !cm3.auto.held && cm3.onCal && !cm3.inList, "Cougar Moon finish: Daegan's 3 on its confirmed Monday, off the list");
+const tb3 = K3("j_a1407_f");
+ok(tb3.auto && tb3.auto.s === "2026-12-01" && tb3.auto.held === "Finish starts with no material PO" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) goes on Daegan's crew after Cougar Moon, held for no material PO");
+ok(K3("j_a1412_r").auto.src === undefined && K3("j_a1412_r").auto.s === "2026-11-23", "a Simpro tail stays as it was");
+ok(!K3("j_a1382_r").auto && N3("j_a1382_r").why === "Zane's crew is booked through 12/18", "Riverton: Zane's crew is on Battle Creek through the view, so it's held for you, not double-booked");
+ok(N3("t_a1407_t4").why === "No date or crew set in Command Center" && /Was set for 10\/28, not done/.test(N3("t_a959_t2").why), "trips with no date or a passed date go to Needs you");
+ok(N3("t_a77_x1").why === "Joel is unassigned on the Crew Board" && !K3("t_a77_x1").auto, "a trip for an unassigned person is never scheduled");
+const x2 = K3("t_a77_x2");
+ok(x2.auto && x2.auto.s === "2026-11-30" && x2.auto.staff[0].name === "Jose Sanchez" && x2.auto.held === "No material listed on the trip", "a dated trip lands on its day for its person, held when no material is listed");
+ok(!V3.items.some(it => it.auto && it.auto.staff && it.auto.staff.some(p => /Joel|Bailey/.test(p.name))), "no unassigned or inactive person is ever on a block");
+ok(K3("j_a1382_r").inList === false && V3.list.every(x => !x.need), "Needs you items leave the Not on the calendar list");
+ok(SC.buildCalendar({ jobs: jobs3, schedules, phaseHours, today, weeks: 5 }).needs.length === 0, "with no Crew Board the auto-schedule stays off");
+const V4 = A({ "j_a1402_f": { s: "2026-11-23", hours: 140, crew: 2, by: "Koy Wilkinson" } });
+const cm4 = V4.items.find(x => x.key === "j_a1402_f"), tb4 = V4.items.find(x => x.key === "j_a1407_f");
+ok(cm4.plan && !cm4.auto && tb4.auto.s === "2026-12-03", "a kept plan never moves, and its crew's days stay taken (Tolbert moves to after it)");
+// every auto day stays Mon–Thu
+ok(V3.items.filter(it => it.auto && it.auto.src).every(it => SC.planDays(it.auto).every(d => SC.isWork(d.date))), "auto blocks only use Mon–Thu");
+
 // ── booking rules (server) ──
 const b1 = SB.blocksFor(10, 35);
 ok(b1.normal === 5 && b1.ot === 5 && b1.blocks.length === 2 && b1.blocks[0].EndTime === "12:00" && b1.blocks[1].ScheduleRate === 2 && b1.blocks[1].EndTime === "17:00", "35 h already: 5 normal, then 5 at 1.5x from noon");
