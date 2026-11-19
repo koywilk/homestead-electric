@@ -109,7 +109,8 @@ const tb3 = K3("j_a1407_f");
 ok(tb3.auto && tb3.auto.s === "2026-12-02" && tb3.auto.staff[0].name === "Louis Hoffman" && tb3.auto.held === "Finish starts with no material PO" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) runs with Daegan's crew after Cougar Moon, Louis leading, held for no material PO");
 ok(K3("j_a1412_r").auto.src === undefined && K3("j_a1412_r").auto.s === "2026-11-23", "a Simpro tail stays as it was");
 ok(!K3("j_a1382_r").auto && N3("j_a1382_r").why === "Zane's crew is booked through 12/18", "Riverton: Zane's crew is on Battle Creek through the view, so it's held for you, not double-booked");
-ok(N3("t_a1407_t4").why === "No date or crew set in Command Center" && /Was set for 10\/28, not done/.test(N3("t_a959_t2").why), "trips with no date or a passed date go to Needs you");
+const t43 = K3("t_a1407_t4");
+ok(t43.auto && t43.auto.src === "auto" && /^No date or crew set in Command Center, so it's on the first open day/.test(t43.auto.held) && t43.auto.staff[0].name === "Louis Hoffman" && N3("t_a1407_t4").held && /Was set for 10\/28, not done/.test(N3("t_a959_t2").why), "a trip with no date or crew goes on the first open day for the job crew, held; a passed date goes to Needs you");
 ok(N3("t_a77_x1").why === "Joel is unassigned on the Crew Board" && !K3("t_a77_x1").auto, "a trip for an unassigned person is never scheduled");
 const x2 = K3("t_a77_x2");
 ok(x2.auto && x2.auto.s === "2026-11-30" && x2.auto.staff[0].name === "Jose Sanchez" && x2.auto.held === "No material listed on the trip", "a dated trip lands on its day for its person, held when no material is listed");
@@ -168,6 +169,17 @@ ok(/twice/.test(SB.validate({ ...base, staffIds: [89, 89] }, "2026-11-17")), "th
 ok(/smaller/.test(SB.validate({ ...base, staffIds: [1, 2, 3, 4, 5, 6, 7, 8, 9], days: Array.from({ length: 10 }, (_, i) => ({ date: SB.addDays("2026-11-23", i), hours: 10 })) }, "2026-11-17")), "more than 80 entries is refused");
 const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleBook.js"), "utf8");
 ok(!/Stage|Status\s*:/.test(src.replace(/\/\/.*$/gm, "")), "the booking rules never touch a stage or status field");
+
+// Koy 2026-11-19: lists split by what they are, each with a count, empty ones hidden.
+const gT = (o) => SC.groupOf(o);
+ok(gT({ kind: "rough" }) === "rough" && gT({ kind: "finish" }) === "finish" && gT({ kind: "trip" }) === "trip" && gT({ kind: "trip", cause: "final" }) === "final" && gT({ kind: "service" }) === "other", "each item has its section");
+const gr = SC.groupBy([{ kind: "trip" }, { kind: "rough" }, { kind: "trip", cause: "final" }, { kind: "rough" }]);
+ok(gr.map(g => g.label + ":" + g.items.length).join() === "Rough-ins:2,Failed finals:1,Return trips:1", "sections in order, with counts, empty ones left out");
+const jf = [{ id: "ff", simproNo: "9", name: "Final fail", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+  returnTrips: [{ id: "f1", number: 1, fromFailedFinal: true, scope: "Failed final inspection items", rtStatus: "needs", material: "" }] }];
+const VF = SC.buildCalendar({ jobs: jf, schedules: [], phaseHours: {}, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+const ffi = VF.items.find(x => x.key === "t_ff_f1");
+ok(ffi.cause === "final" && ffi.auto && ffi.auto.s >= VF.today && /No date or crew set/.test(ffi.auto.held), "a failed-final trip with no date or crew is a Failed final, placed on the first open day for the job's crew, held");
 
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

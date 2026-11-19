@@ -205,24 +205,51 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
   const ord = (a, b) => (a.start.started ? 0 : 1) - (b.start.started ? 0 : 1) || (sIso(a) < sIso(b) ? -1 : sIso(a) > sIso(b) ? 1 : 0) || String(a.no).localeCompare(String(b.no), undefined, { numeric: true });
   const fixed = trips.filter(t => t.start && !t.start.by), byTrips = trips.filter(t => !t.start || t.start.by);
 
+  // Return trips: on their date for their person. One with no person goes to someone on the job's foreman's crew
+  // (the job's own foreman / lead first, then a lead, a jr foreman, crew, the foreman last); one with no date or a
+  // schedule-by date goes on the first open day (before that date). Anything the trip doesn't say is held for a look.
   const doTrip = (it) => {
-    const s = it.start;
-    if (!s) return need(it, it.who ? "No date set in Command Center" : "No date or crew set in Command Center");
-    if (!it.who) return need(it, "No crew assigned in Command Center");
-    const u = board.find(it.who);
-    if (!u) return need(it, `${it.who} isn't on the Crew Board`);
-    if (!board.crewOfUser(u)) return need(it, `${firstOf(u.name)} is unassigned on the Crew Board`);
-    if (!s.by && s.iso < todayIso) return need(it, `Was set for ${md(s.iso)}, not done. Pick a new date`);
-    if (!s.by && !isWork(s.iso)) return need(it, `Set for ${short(s.iso)}, ${isHoliday(s.iso) ? "a holiday" : "Fridays are volunteer only"}`);
-    const held = it.material ? "" : "No material listed on the trip";
+    const s = it.start, notes = [];
+    let pool;
+    if (it.who) {
+      const u = board.find(it.who);
+      if (!u) return need(it, `${it.who} isn't on the Crew Board`);
+      if (!board.crewOfUser(u)) return need(it, `${firstOf(u.name)} is unassigned on the Crew Board`);
+      pool = [u.name];
+    } else {
+      const c = board.crewOf(it.foreman) || board.crewOf(it.jlead);
+      if (!c) return need(it, it.foreman ? `No crew on the trip, and ${it.foreman} has no crew on the Crew Board` : "No date or crew set in Command Center");
+      const tt = c.title || {}, rank = (p) => tt[p] === "lead" ? 0 : tt[p] === "jrforeman" ? 1 : tt[p] === "crew" ? 2 : 3;
+      const runner = [board.find(it.foreman), board.find(it.jlead)].filter(Boolean).map(x => x.name).filter(x => c.people.includes(x) && tt[x] !== "foreman");
+      pool = [...new Set([...runner, ...c.people.slice().sort((x, y) => rank(x) - rank(y))])];
+      notes.push("crew");
+    }
+    if (s && !s.by && s.iso < todayIso) return need(it, `Was set for ${md(s.iso)}, not done. Pick a new date`);
+    if (s && !s.by && !isWork(s.iso)) return need(it, `Set for ${short(s.iso)}, ${isHoliday(s.iso) ? "a holiday" : "Fridays are volunteer only"}`);
+    const noCrew = notes[0] === "crew"; notes.length = 0;
+    if (!s && noCrew) notes.push("No date or crew set in Command Center, so it's on the first open day");
+    else if (!s) notes.push("No date set in Command Center, so it's on the first open day");
+    else if (noCrew) notes.push("No crew set in Command Center");
+    if (!it.material) notes.push("No material listed on the trip");
     const hours = it.defHours || HPD;
-    if (s.by) {
-      const at = fit([u.name], first, 1, s.iso < end ? s.iso : end);
-      return at ? place(it, [u.name], at, hours, held, firstOf(u.name)) : need(it, `${firstOf(u.name)} has no open day before ${md(s.iso)}`);
+    if (!s || s.by) {
+      const last = s ? (s.iso < end ? s.iso : end) : end;
+      for (let d = nextWork(first), g = 0; d <= last && g < 40; d = workAfter(d), g++) {
+        const p = pool.find(n => free([n], d));
+        if (p) return place(it, [p], d, hours, notes.join(". "), firstOf(p));
+      }
+      if (s) {   // nobody free by its date: the first open day after it, held, so it's still on the calendar
+        for (let d = workAfter(last), g = 0; d <= end && g < 40; d = workAfter(d), g++) {
+          const p = pool.find(n => free([n], d));
+          if (p) return place(it, [p], d, hours, [`Wanted by ${md(s.iso)}, but no one on the crew is free until ${md(d)}`, ...notes].join(". "), firstOf(p));
+        }
+      }
+      return need(it, s ? `No one free before ${md(s.iso)}` : "No one on the crew free in the next five weeks");
     }
     if (s.iso > end) return;
-    if (!free([u.name], s.iso)) return need(it, `${firstOf(u.name)} is already booked ${short(s.iso)}`);
-    place(it, [u.name], s.iso, hours, held, firstOf(u.name));
+    const p = pool.find(n => free([n], s.iso));
+    if (!p) return need(it, `${pool.length === 1 ? firstOf(pool[0]) + " is" : "Everyone on the crew is"} already booked ${short(s.iso)}`);
+    place(it, [p], s.iso, hours, notes.join(". "), firstOf(p));
   };
   // Crews (Koy 2026-11-19): "keep the crews at least four on a job if we can. But if there are two jobs going at
   // the same time for a foreman, then the junior foreman is first up to take the job that the foreman's not on."
@@ -283,10 +310,10 @@ function autoPlan(items, { board, schedules, plans, todayIso, end }) {
   const kindRank = (x) => x.kind === "rough" ? 0 : 1;
   fixed.forEach(doTrip);
   phases.filter(conf).sort((a, b) => ord(a, b) || kindRank(a) - kindRank(b)).forEach(doPhase);
+  byTrips.forEach(doTrip);   // return trips are short and owed; they go ahead of open-ended work
   phases.filter(x => x.start.started).sort((a, b) => ord(a, b) || kindRank(a) - kindRank(b)).forEach(doPhase);
   phases.filter(x => !firm(x) && x.kind === "rough").sort(ord).forEach(doPhase);   // rough-in first
   phases.filter(x => !firm(x) && x.kind === "finish").sort(ord).forEach(doPhase);
-  byTrips.forEach(doTrip);
   return needs;
 }
 
@@ -315,8 +342,10 @@ function buildCalendar(input) {
       if (!tripOpen(t)) return;
       const iso = tripIso(t), n = Number(t.number) || i + 1;
       const it = mk({ key: "t_" + safeKey(j.id + "_" + (t.id || i)), kind: "trip", tag: "Return trip #" + n, tripNo: n, no, name: j.name || "", jobId: j.id,
-        who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 1, defHours: HPD,
-        start: iso ? { iso, conf: t.rtStatus === "scheduled", by: t.rtStatus === "needs" } : null });
+        who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 1, defHours: HPD,
+        start: iso ? { iso, conf: t.rtStatus === "scheduled", by: t.rtStatus === "needs" } : null,
+        cause: t.fromFailedFinal || t.scope === "Failed final inspection items" ? "final" : t.fromFailedRough ? "roughfail" : t.fromCOId ? "co"
+          : (t.fromQCFail || /^QC (Fail|Items)/.test(String(t.scope || ""))) ? "qc" : /warrant/i.test(String(t.scope || "") + " " + String(t.task || "")) ? "warranty" : "" });
       if (iso && t.rtStatus === "scheduled" && jb[iso]) { it.booked.push({ iso, ...jb[iso] }); (usedDays[no] = usedDays[no] || new Set()).add(iso); }
     });
     if (j.quickJob) return;
@@ -426,5 +455,14 @@ function buildCalendar(input) {
     counts: { flagged: list.filter(x => x.flags.length).length + cal.filter(x => x.flags.length).length, list: list.length, cal: cal.length, needs: needs.length } };
 }
 
+// Koy 2026-11-19: "if that could be separated into what they are (rough ends, finishes, return trips, failed
+// finals, etc.)". Every list item gets one of these; lists show them in this order, each with a count, empty ones hidden.
+const GROUPS = [["rough", "Rough-ins"], ["finish", "Finishes"], ["final", "Failed finals"], ["roughfail", "Failed rough inspections"],
+  ["co", "Change orders"], ["qc", "QC walk fixes"], ["warranty", "Warranty"], ["trip", "Return trips"], ["other", "Other"]];
+const groupOf = (it) => !it ? "other" : it.kind === "trip" ? (it.cause || "trip") : it.kind === "rough" || it.kind === "finish" ? it.kind : "other";
+function groupBy(list, itemOf) {
+  const by = {}; (list || []).forEach(x => { const g = groupOf(itemOf ? itemOf(x) : x); (by[g] = by[g] || []).push(x); });
+  return GROUPS.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
+}
 module.exports = { HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
-  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar };
+  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, GROUPS, groupOf, groupBy };
