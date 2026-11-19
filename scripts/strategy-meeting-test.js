@@ -71,7 +71,7 @@ t("booked start with lead, prep 5/5 and a PO is on track", sC && sC.tag === "On 
 const t1 = by("trips", /^t_A1_t1/), t2 = by("trips", /^t_A1_t2/), co = by("trips", /^co_A1/);
 t("booked trip shows day and person, material and the PO from its text", t1 && /^Booked Tue 11\/24 · Noah/.test(t1.tag) && /PO 7224/.test(t1.detail) && !t1.bad, t1 && JSON.stringify(t1));
 t("unbooked trip is flagged", t2 && t2.bad);
-t("approved CO not on a trip is listed", co && co.tag === "Approved CO, no trip");
+t("approved CO not on a trip is listed, one row per job", co && co.tag === "Approved CO, no trip" && /CO 1: Add two cans/.test(co.detail));
 
 t("past-due unfinished trip needs a date", !!by("needsdate", /^pd_A1_t2/));
 t("Simpro Job - Scheduled with nothing booked needs a date", !!by("needsdate", /^ss_1320/));

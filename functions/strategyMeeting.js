@@ -65,7 +65,7 @@ function buildPrefill({ model, jobs, totals = {}, now = new Date() }) {
       R.schedule.push(jobRow(j, { key: "b_" + safeKey(b.jobId), title: (j && j.name) || b.name, group: "Booked next week", tag: b.phase === "finish" ? "Finish" : "Rough",
         detail: [`${b.days}: ${arr(b.people).map(first).join(", ")}`, b.pct ? `${b.phase} ${b.pct}%` : ""].filter(Boolean).join(" · ") })); });
     arr(S.idle).forEach(r => { const j = byId.get(r.jobId);
-      const crew = [r.foreman, r.lead].filter(Boolean).map(first);
+      const crew = Array.from(new Set([r.foreman, r.lead].filter(Boolean).map(first)));
       const upd = r.lastUpdate instanceof Date ? daysBetween(today, r.lastUpdate) : null;
       R.schedule.push(jobRow(j, { key: "i_" + safeKey(r.jobId), title: (j && j.name) || r.name, group: "Needs booking", tag: crew.length ? "Not booked" : "NO CREW", bad: true,
         detail: [r.statusText || `${r.phase} ${r.pct || 0}%`, upd == null ? "no update logged" : upd === 0 ? "updated today" : `last update ${upd}d ago`,
@@ -109,11 +109,10 @@ function buildPrefill({ model, jobs, totals = {}, now = new Date() }) {
         tag: booked ? `Booked ${dayOf(d)}${who ? " · " + first(who) : " · nobody"}` : d ? `Needs by ${fmtMD(d)}` : "Not booked", bad: !booked || !who,
         detail: [forWhat, mat ? "material: " + mat : "no material listed", pos.length ? "PO " + pos.join(", ") : mat ? "no PO" : ""].filter(Boolean).join(" · ") }));
     });
-    arr(j.changeOrders).forEach((co, i) => {
-      if (!coOpenApproved(co, j.returnTrips)) return;
-      R.trips.push(jobRow(j, { key: "co_" + safeKey(j.id + "_" + (co.id || i)), title: `${String(j.name).trim()} · change order ${i + 1}`, tag: "Approved CO, no trip", bad: true,
-        detail: clip(stripHtml(co.desc || co.task || ""), 120) || "No description" }));
-    });
+    // One row per job for its approved change orders not on a trip (a job can carry a dozen), each CO named.
+    const cos = arr(j.changeOrders).map((co, i) => ({ co, i })).filter(x => coOpenApproved(x.co, j.returnTrips));
+    if (cos.length) R.trips.push(jobRow(j, { key: "co_" + safeKey(j.id), tag: cos.length > 1 ? `${cos.length} approved COs, no trip` : "Approved CO, no trip", bad: true,
+      detail: cos.slice(0, 8).map(x => `CO ${x.i + 1}: ${clip(stripHtml(x.co.desc || x.co.task || ""), 60) || "no description"}`).join(" · ") + (cos.length > 8 ? ` · +${cos.length - 8} more` : "") }));
   });
   R.trips.sort((a, b) => (a.bad === b.bad ? 0 : a.bad ? -1 : 1) || (+a.no || 0) - (+b.no || 0));
 
@@ -177,8 +176,8 @@ function buildPrefill({ model, jobs, totals = {}, now = new Date() }) {
   if (hard.length) T.push({ key: "top_hard", title: `${hard.length} customer deadline${hard.length > 1 ? "s" : ""} with no start locked in`, tag: "Deadline", bad: true,
     detail: hard.slice(0, 4).map(s => { const j = byId.get(s.jobId); return `#${j ? snOf(j) : ""} ${s.name}${s.hardBy ? " by " + fmtMD(s.hardBy) : ""}`; }).join(" · ") });
   const noTrip = R.trips.filter(r => /^co_/.test(r.key));
-  if (noTrip.length && T.length < 6) T.push({ key: "top_cos", title: `${noTrip.length} approved change order${noTrip.length > 1 ? "s" : ""} not on a trip`, tag: "COs", bad: true,
-    detail: noTrip.slice(0, 4).map(r => `#${r.no} ${String(r.title).replace(/ · change order \d+$/, "")}`).join(" · ") });
+  if (noTrip.length && T.length < 6) T.push({ key: "top_cos", title: `${noTrip.length} job${noTrip.length > 1 ? "s" : ""} with approved change orders not on a trip`, tag: "COs", bad: true,
+    detail: noTrip.slice(0, 4).map(r => `#${r.no} ${r.title}`).join(" · ") + (noTrip.length > 4 ? ` +${noTrip.length - 4}` : "") });
   R.top = T.slice(0, 6);
 
   void addDays;
