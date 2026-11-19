@@ -8457,3 +8457,81 @@ exports.scrambleBook = functions
     functions.logger.info("scrambleBook", { no, phase, by: user.name, created: created.length, failed: !!failed });
     return { ok: !failed, job, costCenter: cc, created, failed, planned: entries.length };
   });
+
+// ─── Team rating and goals on My Day (SW v654) ───────────────────────────────
+// Koy, 2026-11-19: guys see their own crew ratings (as words, no names) and the goal they set
+// with him, at the top of My Day; scores show only "after i release"; they can add goals of their
+// own. myScores / myScoresMeta / crewGoals / myGoals are server-only (rules: no phone access);
+// these three callables are the only way in. Pure logic + tests: functions/myScores.js,
+// scripts/my-scores-test.js. Deploy:
+//   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:myTeamCard,functions:myGoalEdit,functions:crewScoresRelease --project homestead-electric
+const _myScores = require("./myScores.js");
+const MS_GOALS_DOC = () => db.collection("crewGoals").doc("fromKoy");
+// The nightly goal copy writes crewGoals/fromKoy through the Duet door, which only changes a doc
+// that already exists. Make it once, empty, the first time anyone opens the card or Koy's status.
+async function msEnsureGoalsDoc() {
+  const ref = MS_GOALS_DOC();
+  try {
+    await db.runTransaction(async (tx) => {
+      const s = await tx.get(ref);
+      if (!s.exists) tx.create(ref, { byUser: {}, updated_at: new Date().toISOString(), saved_by: "app (Team rating and goals)" });
+    });
+  } catch (e) { functions.logger.warn("[myTeamCard] goals doc", e.message); }
+  return ref;
+}
+// The guy's own card: his scores (if Koy released a round he was rated in), Koy's goal, his goals.
+exports.myTeamCard = functions.https.onCall(async (data) => {
+  const user = await requireMember(data);
+  const uid = String(user.id || "");
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(uid)) throw new functions.https.HttpsError("failed-precondition", "Your Team record has no id. Ask Koy.");
+  const gref = await msEnsureGoalsDoc();
+  const [ss, gs, os] = await Promise.all([db.collection("myScores").doc(uid).get(), gref.get(), db.collection("myGoals").doc(uid).get()]);
+  const byUser = (gs.exists && gs.data().byUser) || {};
+  return _myScores.buildCard({ scores: ss.exists ? ss.data() : null, koyGoal: byUser[uid] || null, own: os.exists ? os.data().goals : [] });
+});
+// Add, tick or remove one of his OWN goals. Koy's goal from the one-on-one is never touched here.
+exports.myGoalEdit = functions.https.onCall(async (data) => {
+  const user = await requireMember(data);
+  const uid = String(user.id || "");
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(uid)) throw new functions.https.HttpsError("failed-precondition", "Your Team record has no id. Ask Koy.");
+  const ref = db.collection("myGoals").doc(uid);
+  const nowIso = new Date().toISOString();
+  let out = null;
+  await db.runTransaction(async (tx) => {
+    const s = await tx.get(ref);
+    const p = _myScores.planGoalEdit(s.exists ? s.data().goals : [], data, nowIso, () => "g" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    if (p.refused) { out = { ok: false, err: p.refused }; return; }
+    tx.set(ref, { goals: p.goals, updatedAt: nowIso, name: String(user.name || "") });
+    out = { ok: true, goals: p.goals };
+  });
+  return out;
+});
+// Koy's Release card in the Claude tab. mode "status" reads; mode "release" { roundId } writes one
+// myScores doc per person rated in that finished round and stamps myScoresMeta/release.
+exports.crewScoresRelease = functions.runWith({ timeoutSeconds: 120 }).https.onCall(async (data) => {
+  const user = await requireAdmin(data);
+  if (gcAdminAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "Releasing crew ratings is for admins.");
+  const [as, cs, ms] = await Promise.all([
+    db.collection("crewRatings").get(),
+    db.collection("crewRatingRounds").doc("current").get(),
+    db.collection("myScoresMeta").doc("release").get(),
+  ]);
+  const answers = as.docs.map(d => d.data());
+  const current = cs.exists ? cs.data() : null;
+  const today = _myScores.denverDay();
+  if (!data || data.mode !== "release") {
+    await msEnsureGoalsDoc();
+    return _myScores.releaseStatus(answers, today, current, ms.exists ? ms.data() : null);
+  }
+  const nowIso = new Date().toISOString();
+  const r = _myScores.buildRelease(answers, String(data.roundId || ""), today, current, nowIso);
+  if (r.refused) return { ok: false, err: r.refused };
+  const batch = db.batch();
+  Object.entries(r.docs).forEach(([pid, doc]) => {
+    if (/^[A-Za-z0-9_-]{1,80}$/.test(pid)) batch.set(db.collection("myScores").doc(pid), doc);
+  });
+  batch.set(db.collection("myScoresMeta").doc("release"), { roundId: r.roundId, startsOn: r.startsOn, endsOn: r.endsOn, people: r.people, releasedAt: nowIso, releasedBy: String(user.name || "") });
+  await batch.commit();
+  functions.logger.info("crewScoresRelease", { roundId: r.roundId, people: r.people, by: user.name });
+  return { ok: true, ..._myScores.releaseStatus(answers, today, current, { roundId: r.roundId, startsOn: r.startsOn, endsOn: r.endsOn, people: r.people, releasedAt: nowIso, releasedBy: user.name }) };
+});

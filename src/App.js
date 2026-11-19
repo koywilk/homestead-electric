@@ -50117,6 +50117,41 @@ function odClaudeJobLabel(r, jobs) {
   if (!j && !no && r.quoteNo) return { job: null, label: `Quote #${String(r.quoteNo).replace(/^Q/i, "")}` };
   return { job: j || null, label: [no, name.replace(new RegExp(`^#?${no}\\s*[-·]?\\s*`), "")].filter(Boolean).join(" ") || "No job" };
 }
+// v654 Team rating and goals: Koy's Release. The guys' cards show crew ratings only for a round
+// Koy released here (Koy: scores show "after i release"). Status and Release go through the
+// crewScoresRelease callable (live admin PIN); it never shows a score, only the round and a count.
+function OdRatingsRelease({ identity }) {
+  const [st, setSt] = useState(undefined);   // undefined loading · null not deployed / failed · {…}
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [armed, setArmed] = useState(false);  // two taps: Release, then Yes, release (the guys see it right away)
+  const load = useCallback(() => {
+    gcAdminCallable("crewScoresRelease", identity)({ mode: "status" }).then(r => setSt(r && r.data && r.data.ok ? r.data : null), () => setSt(null));
+  }, [identity]);
+  useEffect(() => { load(); }, [load]);
+  const day = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""; };
+  const release = async () => {
+    if (busy || !st || !st.latest) return;
+    if (!armed) { setArmed(true); setMsg(`Tap again to show ${st.latest.people} guys their words for this round. They see it on My Day right away.`); return; }
+    setArmed(false); setBusy(true); setMsg("");
+    try {
+      const r = await gcAdminCallable("crewScoresRelease", identity)({ mode: "release", roundId: st.latest.roundId });
+      const d = r && r.data;
+      if (d && d.ok) { setSt(d); setMsg(`Released to ${d.released ? d.released.people : 0} people.`); } else setMsg((d && d.err) || "Couldn't release. Try again.");
+    } catch (e) { setMsg("Couldn't release. Try again."); }
+    setBusy(false);
+  };
+  if (st === undefined) return null;
+  if (st === null) return <OdItem color={OD_SLATE} icon="star" tag="Team rating" title="Release crew ratings" sub="shows here once the new Team rating functions are deployed"/>;
+  const L = st.latest, R = st.released;
+  const sub = !L ? "No finished round yet" + (st.open ? ` · this round ends ${day(st.open.endsOn)}` : "")
+    : st.needsRelease ? `Round of ${day(L.startsOn)} to ${day(L.endsOn)} · ${L.people} people rated · the guys can't see it yet`
+    : `Round of ${day(R.startsOn)} to ${day(R.endsOn)} released${R.releasedAt ? " " + new Date(R.releasedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""} · on ${R.people} My Day cards`;
+  return (<>
+    <OdItem color={st.needsRelease ? OD_B : OD_G} icon="star" tag="Team rating" title={st.needsRelease ? "Release crew ratings to My Day" : "Crew ratings on My Day"} sub={msg || sub}
+      when={st.needsRelease ? (busy ? "Releasing…" : armed ? "Yes, release" : "Release") : null} onClick={st.needsRelease ? release : null}/>
+  </>);
+}
 // One report, read inside the Claude tab (SW v616). The body is markdown drawn as plain React
 // text by src/reportMd.js: headings, paragraphs, lists, tables and bold. No HTML, no links.
 function OdReport({ body }) {
@@ -54564,6 +54599,7 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
       {isKoy && !claudeOwners ? <div className="od-white od-pad"><div className="od-list">
         <OdItem color={OD_G} icon="users" tag="One-on-Ones" title="Residential team one-on-one tracker" sub="your page on claude.ai · opens in a new tab"
           when="Open" onClick={() => { try { window.open(OD_ONE_ON_ONES_URL, "_blank", "noopener,noreferrer"); } catch (e) {} }}/>
+        <OdRatingsRelease identity={identity}/>
       </div></div> : null}
       {/* v633: Needs you (Koy's view: every open flag, answered in place) and Automations (every routine). */}
       {claudeWork === null ? <div className="od-white od-pad">Needs you and Automations show here once the new Claude functions are deployed.</div>
@@ -64218,9 +64254,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-19 · App SW version: v653
+**Last manifest update:** 2026-11-19 · App SW version: v654
 ---
 
+- **Team rating and goals on My Day: each guy's own crew ratings as words once Koy releases the round, his goal from his last one-on-one, and goals of his own** · 'in-flight 2026-11-19' · 'SW v654' · 'TeamRatingCard' · 'OdRatingsRelease' · 'functions/myScores.js' · 'myTeamCard' · 'myGoalEdit' · 'crewScoresRelease' · Koy, 2026-11-19: guys asked "for acess to their one on one scores from the guys that rated them so can see it any remember what they need to work on", at the top of My Day "along with they goal they set with me"; to the mockup: scores "after i release", start it collapsed, title it "team rating and goals", and "give them the ability to add more goals". **Who:** crew, lead, jrforeman and foreman titles (not contractors), above My role. **Card:** closed by default; Goals (Koy's goal from 'crewGoals/fromKoy', copied nightly from his One-on-Ones tracker by a cloud routine through the Duet door, plus up to 10 of his own in 'myGoals/{userId}', add / tick / remove); Team rating (the five areas as Needs work / Getting there / Solid / Strong from 'myScores/{userId}', up / down against the round before, 'Not enough ratings yet' under 2 raters). Never a number, a name or a rater count. **Release:** Koy's Claude tab, under One-on-Ones: the newest finished round, Release then Yes, release; writes one 'myScores' doc per person rated and 'myScoresMeta/release'. **Access:** the app signs in by name + PIN, so phones get nothing from these four collections (rules: read, write false); 'myTeamCard' / 'myGoalEdit' check the guy's own live PIN ('requireMember'), 'crewScoresRelease' the admin PIN. Guides 'myday.html', 'dashboard.html'. Test 'scripts/my-scores-test.js'. **Why it won't lose data:** four new server-only collections; no job, user, rating or existing rule changed; ratings are read, never written.
 - **My jobsite on My Day: everyone booked on your job today or tomorrow, with each person's open punch items, unassigned and waiting items** · 'in-flight 2026-11-19' · 'SW v653' · 'JobsiteDayCard' · 'buildJobsiteDay' · 'src/jobsiteDay.js' · Louis Hoffman via Koy: *"a spot to be able to see everyone on his jobsite that day, and every punch item he assigned sorted out to the people."* Koy's picks: every open item on the job (not only the lead's own), today plus tomorrow. A card at the top of My Day for leads, jr. foremen and foremen, on jobs where they are the lead or foreman and someone is booked in Simpro today or tomorrow (one chip per job when there are several). Who's on site = the Simpro schedule via the existing 'getSimproSchedule' callable (one read per 10 minutes, shared); hours show beside each name. Under each person: open, not-waiting items assigned to them (rough, finish, QC, extras floors), then **Show done this week**. Then **Unassigned** (with an Assign picker), **Waiting on others** folded, with the reason, and **Not here** for people with open items who aren't booked. Check off = 'togglePunchItemDone'; Assign = new 'assignPunchItem' (same walk and whole-phase save as the toggle, only 'assignedTo' changes). Harness 'scripts/jobsite-day-test.js' in prebuild. **Why it won't lose data:** the card reads only; its two writes are the existing check-off and the same assign the punch list does; nothing goes to Simpro; no rules or functions change.
 - **Foreman Meeting on the Meetings tab: Team check, Jobs (the Job Costs page, foreman view), Guys, Action items** · 'in-flight 2026-11-18' · 'SW v652' · 'OdMeetings' · 'buildForemanSections' · 'OdJobCosts' · 'src/meetingModel.js' · Koy, 2026-11-18: *"This meeting is going to be with all three foremen, though, not individually"*, *"more about their specific jobs, their guys, maybe morale and margin numbers, rough numbers, like all the job numbers... not schedule or training"*, then *"Okay let's build that and see what it looks like"*. Preview first (claude.ai artifact, read only). **Where:** /dashboard › Meetings, third button **Foreman Meeting · Wed 7:00** (remembered on the device). **Team check:** typed items (week-scoped, TYPED), a "#1291 …" entry ties to the job. **Jobs:** the dashboard's Job Costs page itself, foreman view (Koy: *"I think section 2 should be straight from the job cost tab in the dashboard, the foreman view of it"*). The tab's render, state and reads moved out of OfficeDash into 'OdJobCosts', used by both the Costs tab and the meeting; 'embed' forces the foreman view (percentages and hours, no dollars), starts on Active, uses a slim header and folds How it is counted, and adds + Note / Hide under each job in the table (meetings/foreman_<date>.rowNotes.w_<Simpro #>, foreman__prefs.hidden.jobs.w_<Simpro #>). Hidden jobs leave the table and chart only; the boxes still count them. **Guys:** active users whose foremanId is Keegan, Daegan or Colby (jr. foremen, leads, crew), one typed line each saved to meetings/foreman_<Wednesday>.guys.<userId> (this week only). **Action items:** as the other meetings; last week's carry for Done / Not done. No schedule, training, return trips, upcoming or crew out. Percentages and hours only. **Rules:** /meetings allows type foreman / foreman_prefs (rules deploy). **Why it won't lose data:** same collection and merge-one-field writes; the Scramble and Lead records are untouched; all job data is only read.
 - **Weekly Scramble calendar: all crews on one calendar, Simpro bookings solid, the hours left as forecasts, a list of what isn't on it yet, and Book in Simpro with a preview** · 'in-flight 2026-11-18' · 'SW v651' · 'OdScrambleCal' · 'src/scrambleCal.js' · 'functions/scrambleBook.js' · 'scrambleCalContext' · 'scrambleBook' · 'scripts/scramble-cal-test.js' · Koy, 2026-11-17 (Scramble meeting): *"we want like a calendar view with um, like upcoming jobs and any jobs that are in progress we want them to be like scheduled out through their hours that they have left"*, *"SimPro will be the source of truth with schedule"*, *"on the right or something ... that we can see what needs to be on the calendar and we can put it on there and see what it looks like. And then we can schedule from there"*, *"make the estimated or confirmed start dates visible, and flag anything needing scheduling on a date but not yet"*, *"needs to be clear if its a return trip, rough, or finish"*, then *"lets send it, well adjust when needed"*. Preview first on the real rows (claude.ai/artifact/DF9rkRQuTGGdFkXXk77AL6). **Where:** /dashboard › Meetings, a fold at the top of the Weekly Scramble (open by default). **The calendar:** five weeks from this Monday, all crews in one view, 4-10s (Mon–Thu columns, Friday a thin striped strip, never planned). One block per item, each labelled and coloured **Rough-in** (blue), **Finish** (green) or **Return trip #n** (purple); a Simpro booking with no phase shows as Booked. **Solid** = booked in Simpro (getSimproSchedule, the view's five weeks; days under 2 crew hours are left off), with the first names booked. **Light** = forecast: the phase's hours left from the nightly Job Costs split ('settings/phaseHours': bid − used − hours booked after today) laid out at 10 h a day for the crew Simpro has, else 2 people. A dot marks the CC start date (projected start; filled when its Confirmed box is ticked or the phase is Start Date Set). **Drag** a forecast to move it; **drag the grip on the right end** of any block to add or take off days (a solid booking grows lighter forecast days after it), with a live day count. **The list on the right** (Not on the calendar yet): every phase, open return trip and Upcoming row with nothing booked from today on and no kept plan, grouped *Needs scheduling or a PO* first, then Return trips, In progress Rough-in / Finish, Over bid, Upcoming starts. Drag a card onto a day, tap it then tap a day (phones), or **Place on <start date>**. **Flags (red !):** a start that has passed or falls in the view with nothing booked in Simpro on or after it; a dated rough-in / finish start whose phase has no Materials card ordered ("no material PO" / "material card not ordered yet"); return trips with no date, a schedule-by date, no crew, a date that passed while still open, or set in CC but not booked in Simpro. On-hold and started phases aren't flagged. **Keep as plan** saves the block for everyone in the meeting ('meetings/scramble__prefs.cal.<key>' = { s, hours, crew, staff, by, at }); until then a moved block shows "not kept yet" and only on that screen. **Book in Simpro…** (admin / manager PIN): pick who from Simpro's active staff (the booked crew is ticked), **Show what it would book** lists every entry (day, person, 7:00 start, normal hours, hours at Overtime 1.5x once that person's week passes 40 counting what's already on their Simpro schedule) and the cost center (the Base section's Rough In / Finish; a trip books on Finish), and only **Book these N entries in Simpro** writes. At confirm the server rebuilds the entries from Simpro as it is then; if anything differs from the preview it writes nothing and asks for a new look. One entry at a time, stopping at the first refusal (the card says how many went in). A booked plan comes off the list; the solid days show from Simpro. Upcoming quotes can be planned but not booked until they're a job. Bid hours for Upcoming rows come from the quote or job estimate (whole job, hours only) through 'scrambleCalContext'. **Never** sets or changes a job's stage or status, in CC or Simpro. Each booking is logged to 'scrambleBookings' (server-only). Guide 'dashboard.html' step 6. **Deploy:** 'FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:scrambleCalContext,functions:scrambleBook' before the app. **Why it won't lose data:** the app writes only its own plans into the existing 'meetings/scramble__prefs' doc, one map key per plan, by merge (no rules change); nothing on a job is written; Simpro gets new schedule entries only, from the server, only on a confirm that matches the preview; no loader, rules or existing function changes.
@@ -74793,6 +74830,105 @@ function MyRoleCard({ level, onOpen }) {
     </button>
   );
 }
+// ── TEAM RATING AND GOALS (v654, Koy 2026-11-19) ─────────────────────────────
+// Koy: guys asked to see "their one on one scores from the guys that rated them so can see it
+// any remember what they need to work on", at the top of My Day "along with they goal they set
+// with me"; to the mockup: show scores "after i release", start it collapsed, title it "team
+// rating and goals", and "give them the ability to add more goals". Field people only (the same
+// crew / lead / jrforeman / foreman check as My role). Everything comes from the myTeamCard
+// callable (his own live PIN): released words per area, never a number, a name or a rater count;
+// an area rated by fewer than 2 people says so. His own goals go through myGoalEdit.
+const TR_GOOD_SOFT = "#E4F2E9", TR_BAD_SOFT = "#FBE9E8";
+const TR_WORD = { 1: [C.red, TR_BAD_SOFT], 2: [C.slate, C.slateBg], 3: [RL_ACC, RL_SOFT], 4: [C.green, TR_GOOD_SOFT] };
+const trDay = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || "")); return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""; };
+function TeamRatingCard({ identity }) {
+  const [open, setOpen] = useState(false);          // Koy: start collapsed, every time
+  const [card, setCard] = useState(undefined);      // undefined loading · null failed · {…}
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const uid = identity && identity.id;
+  useEffect(() => {
+    if (!uid) return;
+    let live = true;
+    memberCallable("myTeamCard", identity)({}).then(r => { if (live) setCard(r && r.data && r.data.ok ? r.data : null); }, () => { if (live) setCard(null); });
+    return () => { live = false; };
+  }, [uid]);
+  if (!uid) return null;
+  const edit = async (payload) => {
+    if (busy) return;
+    setBusy(true); setErr("");
+    try {
+      const r = await memberCallable("myGoalEdit", identity)(payload);
+      const d = r && r.data;
+      if (d && d.ok) { setCard(c => ({ ...(c || {}), goals: d.goals })); if (payload.op === "add") setDraft(""); }
+      else setErr((d && d.err) || "Couldn't save. Try again.");
+    } catch (e) { setErr("Couldn't save. Check your signal and try again."); }
+    setBusy(false);
+  };
+  const goals = (card && card.goals) || [];
+  const openGoals = goals.filter(g => !g.done).length + (card && card.koyGoal ? 1 : 0);
+  const sub = card === undefined ? "Loading…" : card === null ? "Couldn't load. Check your signal and reopen the app."
+    : [openGoals ? `${openGoals} goal${openGoals === 1 ? "" : "s"}` : "No goals yet", card.round ? `rating from ${trDay(card.round.startsOn)} to ${trDay(card.round.endsOn)}` : "no rating yet"].join(" · ");
+  const label = { fontSize: 12, fontWeight: 700, color: C.faint, letterSpacing: "0.07em", textTransform: "uppercase" };
+  const goalRow = (g) => (
+    <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 44 }}>
+      <button type="button" role="checkbox" aria-checked={g.done} aria-label={g.done ? `Mark not done: ${g.text}` : `Mark done: ${g.text}`} disabled={busy} onClick={() => edit({ op: "toggle", id: g.id })}
+        style={{ width: 26, height: 26, flexShrink: 0, borderRadius: 7, border: `2px solid ${g.done ? C.green : C.muted}`, background: g.done ? C.green : C.card, display: "grid", placeItems: "center", cursor: "pointer", padding: 0 }}>
+        {g.done ? <Icon name="check" size={15} color="#fff" stroke={3}/> : null}
+      </button>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 14, color: g.done ? C.faint : C.text, textDecoration: g.done ? "line-through" : "none", overflowWrap: "anywhere" }}>{g.text}</span>
+      <button type="button" aria-label={`Remove goal: ${g.text}`} disabled={busy} onClick={() => edit({ op: "remove", id: g.id })}
+        style={{ width: 40, height: 40, flexShrink: 0, border: "none", background: "transparent", color: C.faint, cursor: "pointer", display: "grid", placeItems: "center" }}><Icon name="x" size={16}/></button>
+    </div>);
+  return (
+    <section style={{ border: `1px solid ${C.border}`, background: C.card, borderRadius: 14, marginBottom: 10, color: C.text, overflow: "hidden" }}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, textAlign: "left", cursor: "pointer", fontFamily: "inherit", border: "none", background: "transparent", padding: "12px 14px", minHeight: 56, color: C.text }}>
+        <span style={{ width: 26, height: 26, flexShrink: 0, display: "grid", placeItems: "center" }}><Icon name="star" size={22} color={RL_ACC}/></span>
+        <span style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+          <b style={{ fontSize: 15 }}>Team rating and goals</b>
+          <small style={{ color: C.dim, fontSize: 13 }}>{sub}</small>
+        </span>
+        <span style={{ color: RL_ACC, fontWeight: 700, fontSize: 14 }}>{open ? "Hide" : "Open"}</span>
+      </button>
+      {open && card ? <div style={{ padding: "2px 14px 14px", display: "flex", flexDirection: "column", gap: 14, borderTop: `1px solid ${C.border}` }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 12 }}>
+          <div style={label}>Goals</div>
+          {card.koyGoal ? <div style={{ borderRadius: 10, background: RL_SOFT, padding: "10px 12px" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: RL_ACC }}>From your one-on-one with Koy{card.koyGoal.date ? " · " + trDay(card.koyGoal.date) : ""}</div>
+            <div style={{ fontSize: 14, marginTop: 3, overflowWrap: "anywhere" }}>{card.koyGoal.text}</div>
+          </div> : <div style={{ fontSize: 13, color: C.dim }}>Your goal from your next one-on-one with Koy shows here.</div>}
+          {goals.map(goalRow)}
+          <form onSubmit={e => { e.preventDefault(); if (draft.trim()) edit({ op: "add", text: draft }); }} style={{ display: "flex", gap: 8, marginTop: 2 }}>
+            <input id="tr-goal-add" type="text" value={draft} maxLength={200} onChange={e => setDraft(e.target.value)} placeholder="Add a goal of your own" aria-label="Add a goal of your own"
+              style={{ flex: 1, minWidth: 0, fontFamily: "inherit", fontSize: 15, padding: "0 12px", minHeight: 44, borderRadius: 10, border: `1px solid ${C.border}`, background: C.card, color: C.text }}/>
+            <button type="submit" disabled={busy || draft.trim().length < 3}
+              style={{ minHeight: 44, padding: "0 16px", borderRadius: 10, border: "none", background: RL_ACC, color: "#fff", fontWeight: 700, fontSize: 14, fontFamily: "inherit", cursor: "pointer", opacity: busy || draft.trim().length < 3 ? 0.5 : 1 }}>Add</button>
+          </form>
+          {err ? <div role="alert" style={{ fontSize: 13, color: C.red }}>{err}</div> : null}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <div style={label}>Team rating</div>
+            {card.round ? <small style={{ color: C.faint, fontSize: 12.5 }}>Round of {trDay(card.round.startsOn)} to {trDay(card.round.endsOn)}</small> : null}
+          </div>
+          {card.round ? <>
+            {card.areas.map(a => { const w = TR_WORD[a.level]; return (
+              <div key={a.key} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "5px 10px", alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 14, fontWeight: 600, minWidth: 0 }}>{a.label}
+                  {a.trend === "up" || a.trend === "down" ? <small style={{ display: "block", fontWeight: 500, color: C.faint, fontSize: 12 }}>{a.trend === "up" ? "Up" : "Down"} from {a.was}</small> : null}</span>
+                <span style={{ borderRadius: 99, padding: "3px 10px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", background: w ? w[1] : C.surface, color: w ? w[0] : C.faint }}>{a.word || "Not enough ratings yet"}</span>
+                {w ? <span aria-hidden="true" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 4 }}>
+                  {[1, 2, 3, 4].map(i => <i key={i} style={{ display: "block", height: 6, borderRadius: 99, background: i <= a.level ? w[0] : C.surface }}/>)}</span> : null}
+              </div>); })}
+            <div style={{ fontSize: 12, color: C.faint, marginTop: 4 }}>What your crew said, averaged. No names.</div>
+          </> : <div style={{ fontSize: 13, color: C.dim }}>Koy shares your team rating after each round. It shows here once he does.</div>}
+        </div>
+      </div> : open && card === null ? <div style={{ padding: "0 14px 14px", fontSize: 13, color: C.dim }}>Couldn't load your card. Check your signal and reopen the app.</div> : null}
+    </section>
+  );
+}
 // The pop-up: name, level, what that level is responsible for, and the next step up.
 function MyRolePopup({ firstName, level, next, onClose, preview = false }) {
   const [openNext, setOpenNext] = useState(false);
@@ -80417,7 +80553,7 @@ function App() {
           focusEntry={mydayFocus[userKeyOf(identity)] || null} onSaveFocus={(entry) => saveMyDayFocus(userKeyOf(identity), entry)}
           prioMap={mydayPrio} onSetPrio={saveMyDayPrio}
           jumpNeedId={mydayJump} onJumped={() => setMydayJump(null)} msgsJump={officeJump} msgCounts={officeMsgCounts(officeMsgs)}
-          roleSlot={myLadderLevel ? <MyRoleCard level={myLadderLevel} onOpen={() => setRoleOpen(true)}/> : null}
+          roleSlot={myLadderKey || myLadderLevel ? <>{myLadderKey ? <TeamRatingCard identity={identity}/> : null}{myLadderLevel ? <MyRoleCard level={myLadderLevel} onOpen={() => setRoleOpen(true)}/> : null}</> : null}
           pinsSlot={announcePins.length > 0 ? <AnnouncePins pins={announcePins} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)}/> : null}
           messagesSlot={(officeMsgs.length || canBroadcast(identity)) ? <OfficeMessages msgs={officeMsgs} identity={identity} onOpen={(bid) => setAnnounceOpen(bid)} jump={officeJump}/> : null}/>
       )}

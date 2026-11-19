@@ -424,6 +424,25 @@ service cloud.firestore {
         && d.updatedAt is string && d.updatedAt.size() <= 40;
     }
 
+    // ── TEAM RATING AND GOALS (SW v654, 2026-11-19) ───────────────────────────
+    // Each guy's released crew-rating words, Koy's goal from his one-on-one and
+    // his own goals. The app signs in by name + PIN, not a Firebase login, so a
+    // rule can't tell one guy from another: phones get NOTHING here. The
+    // callables myTeamCard / myGoalEdit (his own live PIN) and
+    // crewScoresRelease (admin PIN) read and write with the admin SDK.
+    match /myScores/{id} {
+      allow read, write: if false;
+    }
+    match /myScoresMeta/{id} {
+      allow read, write: if false;
+    }
+    match /crewGoals/{id} {
+      allow read, write: if false;
+    }
+    match /myGoals/{id} {
+      allow read, write: if false;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
