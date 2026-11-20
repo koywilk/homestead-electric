@@ -54,10 +54,10 @@ const K = (k) => V.items.find(x => x.key === k);
 ok(V.days.length === 25 && V.end === "2026-12-18", "five weeks, Monday 11/16 to Friday 12/18");
 const bc = K("j_a1412_r");
 ok(bc && bc.kind === "rough" && bc.tag === "Rough-in" && bc.booked.length === 4, "Battle Creek is a rough-in block with its 4 Simpro days");
-ok(bc.crewBooked === 2 && bc.left === 2485 && bc.auto && bc.auto.s === "2026-11-23" && bc.auto.crew === 2, "its hours left run on from Monday at the booked crew size");
+ok(bc.crewBooked === 2 && bc.left === 2465 && bc.auto && bc.auto.s === "2026-11-23" && bc.auto.crew === 2, "its hours left (less today's booked hours, which last night's Job Costs doesn't have yet) run on from Monday at the booked crew size");
 ok(!bc.inList && bc.onCal && !bc.flags.length, "booked ahead: on the calendar, not on the list, no flag");
 const trip = K("t_a1421_t1");
-ok(trip && trip.kind === "trip" && trip.tag === "Return trip #1" && trip.booked.length === 1 && !trip.flags.length, "Hightower trip #1 takes its booked Thursday and isn't flagged");
+ok(trip && trip.kind === "trip" && trip.tag === "Return trip #1" && trip.booked.length === 1 && trip.flags.length === 1 && /Booked in Simpro 11\/19, no material on the trip: send a PO/.test(trip.flags[0]), "Hightower trip #1 takes its booked Thursday; booked with no material on the trip, so it's flagged (v663)");
 const hf = K("j_a1421_f");
 ok(hf && !hf.booked.length, "the trip's Simpro day isn't counted on Hightower's finish too");
 const cm = K("j_a1402_f");
@@ -65,9 +65,9 @@ ok(cm.start.iso === "2026-11-23" && cm.start.conf && cm.inList && cm.flags.join(
 const tb = K("j_a1407_f");
 ok(tb.flags.includes("Starts Tue 12/1, not booked") && tb.flags.includes("Finish starts with no material PO"), "Tolbert finish: not booked and no material PO");
 const t4 = K("t_a1407_t4");
-ok(t4 && t4.flags.join() === "Not scheduled, no date or crew" && t4.inList, "Tolbert trip #4 has no date or crew");
+ok(t4 && t4.flags.join() === "No material on the trip: send a PO,Not scheduled, no date or crew" && t4.inList, "Tolbert trip #4 has no date or crew, and no material so it asks for a PO");
 const st2 = K("t_a959_t2");
-ok(st2 && st2.flags.join() === "Was set for 10/28, not done", "Stratton trip #2 is past its date and still open");
+ok(st2 && st2.flags.filter(f => !/send a PO/.test(f)).join() === "Was set for 10/28, not done", "Stratton trip #2 is past its date and still open");
 ok(!V.items.some(x => x.key === "t_a959_old"), "a completed trip doesn't show");
 const rose = K("j_a889_f");
 ok(rose.over && rose.leftBy && rose.left > 0 && !rose.flags.length, "Rose is over bid but in progress: the rest comes from its stage (v661: \"those are both actively going right now\"), not flagged");
@@ -106,20 +106,24 @@ const V3 = A(), K3 = (k) => V3.items.find(x => x.key === k), N3 = (k) => V3.need
 const cm3 = K3("j_a1402_f");
 ok(cm3.auto && cm3.auto.src === "auto" && cm3.auto.s === "2026-11-23" && cm3.auto.crew === 3 && cm3.auto.staff[0].name === "Daegan Smith" && !cm3.auto.held && cm3.onCal && !cm3.inList, "Cougar Moon finish: Daegan's whole 3-person crew (under 4, so no split) on its confirmed Monday, foreman first, off the list");
 const tb3 = K3("j_a1407_f");
-ok(tb3.auto && tb3.auto.s === "2026-12-02" && tb3.auto.staff[0].name === "Louis Hoffman" && tb3.auto.held === "Finish starts with no material PO" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) runs with Daegan's crew after Cougar Moon, Louis leading, held for no material PO");
+ok(tb3.auto && tb3.auto.s === "2026-12-02" && tb3.auto.staff[0].name === "Louis Hoffman" && tb3.auto.held === "Confirmed start 12/1, but Daegan's crew isn't free until 12/2. Finish starts with no material PO" && tb3.redDay === "2026-12-01" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) runs with Daegan's crew after Cougar Moon, Louis leading, held because its confirmed 12/1 start can't be met and for no material PO; 12/1 keeps a red marker");
 ok(K3("j_a1412_r").auto.src === undefined && K3("j_a1412_r").auto.s === "2026-11-23", "a Simpro tail stays as it was");
 ok(!K3("j_a1382_r").auto && N3("j_a1382_r").why === "Zane's crew is booked through 12/18", "Riverton: Zane's crew is on Battle Creek through the view, so it's held for you, not double-booked");
 const t43 = K3("t_a1407_t4");
 ok(t43.auto && t43.auto.src === "auto" && /^No date or crew set in Command Center, so it's on the first open day/.test(t43.auto.held) && t43.auto.staff[0].name === "Louis Hoffman" && N3("t_a1407_t4").held && /Was set for 10\/28, not done/.test(N3("t_a959_t2").why), "a trip with no date or crew goes on the first open day for the job crew, held; a passed date goes to Needs you");
 ok(N3("t_a77_x1").why === "Joel is unassigned on the Crew Board" && !K3("t_a77_x1").auto, "a trip for an unassigned person is never scheduled");
 const x2 = K3("t_a77_x2");
-ok(x2.auto && x2.auto.s === "2026-11-30" && x2.auto.staff[0].name === "Jose Sanchez" && x2.auto.held === "No material listed on the trip", "a dated trip lands on its day for its person, held when no material is listed");
+ok(x2.auto && x2.auto.s === "2026-11-30" && x2.auto.staff[0].name === "Jose Sanchez" && !x2.auto.held && x2.flags.includes("No material on the trip: send a PO"), "a dated trip with no material still lands on its day for its person, not held, flagged to send a PO (v663)");
 ok(!V3.items.some(it => it.auto && it.auto.staff && it.auto.staff.some(p => /Joel|Bailey/.test(p.name))), "no unassigned or inactive person is ever on a block");
 ok(K3("j_a1382_r").inList === false && V3.list.every(x => !x.need), "Needs you items leave the Not on the calendar list");
 ok(SC.buildCalendar({ jobs: jobs3, schedules, phaseHours, today, weeks: 5 }).needs.length === 0, "with no Crew Board the auto-schedule stays off");
 const V4 = A({ "j_a1402_f": { s: "2026-11-23", hours: 140, crew: 2, by: "Koy Wilkinson" } });
 const cm4 = V4.items.find(x => x.key === "j_a1402_f"), tb4 = V4.items.find(x => x.key === "j_a1407_f");
-ok(cm4.plan && !cm4.auto && tb4.auto.s === "2026-12-07", "a kept plan never moves, and its crew's days stay taken (Tolbert moves to after it)");
+// v663: a plan with no names has nobody on it (red on the calendar), so it holds nobody; a plan with names holds those people
+ok(cm4.plan && !cm4.auto && tb4.auto && tb4.auto.s < "2026-12-07", "a kept plan with no names never moves and holds nobody (Tolbert isn't pushed behind it)");
+{ const tbPpl = tb4.auto.staff.map(x => x.name), V4n = A({ "j_a1402_f": { s: "2026-11-23", hours: 140, crew: tbPpl.length, staff: tbPpl.map(name => ({ name })), by: "Koy Wilkinson" } });
+  const tbN = V4n.items.find(x => x.key === "j_a1407_f");
+  ok(!tbN.auto || tbN.auto.s > tb4.auto.s || !tbN.auto.staff.some(x => tbPpl.includes(x.name)) || tbN.auto.pd, "a kept plan with names holds those people's days"); }
 // Koy: "keep the crews at least four on a job if we can. But if there are two jobs going at the same time for a
 // foreman, then the junior foreman is first up to take the job that the foreman's not on."
 const users5 = users.concat([{ id: "t", name: "Trever Worley", title: "lead", foremanId: "d", active: true }, { id: "jl", name: "James Livingston", title: "crew", foremanId: "d", active: true }]);
@@ -263,7 +267,7 @@ const kF = VK.items.find(x => x.key === "j_kw_f");
 ok(kF && !kF.auto && !kF.booked.length && kF.inList && VK.items.find(x => x.key === "t_kw_r6").booked.length === 1, "a done trip's Simpro day stays the trip's: the finish gets no booking and no forecast, it stays on the list");
 const jU = [{ id: "un", simproNo: "90", name: "Est only", roughStatus: "waiting_date", roughProjectedStart: "11/30/2026", foreman: "Daegan Smith", roughMaterials: [{ ordered: true }] }];
 const VU = SC.buildCalendar({ jobs: jU, schedules: [], phaseHours: { "90": { r: [0, 80] } }, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
-ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "j_un_r").inList, "an estimated (not confirmed) start isn't auto-scheduled; it waits on the list");
+ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "j_un_r").auto.s === "2026-11-30" && !VU.items.find(x => x.key === "j_un_r").inList, "an estimated start is placed on its date too, so it doesn't get missed (v663); Remove takes it off");
 
 // v660: other work that needs a date (Koy 2026-11-20: "Would be really awesome if QC's that need to be scheduled show up here too")
 {
@@ -349,6 +353,122 @@ ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === 
   const C1 = SC.buildCalendar({ jobs: jB, schedules: sC, phaseHours: { "620": { r: [0, 60] } }, today, weeks: 5, users, effRS: ef, effFS: eff }).items.find(x => x.key === "j_tb_r");
   ok(C1.auto && !SC.slotsOf(C1.auto).some(d => d.date === "2026-11-23") && SC.slotsOf(C1.auto)[0].date === "2026-11-24", "a forecast day when nobody on it is free is skipped");
   ok(SC.pdOf([{ d: "2026-11-23", x: 1 }])["2026-11-23"].skip === true, "a skipped day saves and loads back");
+}
+
+// ── v663: the review's fixes ─────────────────────────────────────────────────
+{
+  const t0 = new Date(2026, 10, 23, 9);   // Mon 11/23/2026
+  const us = [{ id: "f1", name: "Colby Stone", title: "foreman" }, { id: "j1", name: "Jake Reed", title: "jrforeman", foremanId: "f1" },
+    { id: "c1", name: "Noah Pine", title: "crew", foremanId: "f1" }, { id: "c2", name: "Daegan", title: "crew", foremanId: "f1" },
+    { id: "u1", name: "Uri Loose", title: "crew" }, { id: "f2", name: "Solo Sam", title: "foreman" }];
+  const sc = (ref, name, date, st, en) => ({ Type: "job", Reference: ref, Date: date, Staff: { ID: 1, Name: name }, Blocks: [{ Hrs: parseInt(en, 10) - parseInt(st, 10), StartTime: st, EndTime: en }] });
+  const jb = (o) => Object.assign({ id: "J" + o.simproNo, name: "Job " + o.simproNo, foreman: "Colby Stone", roughMaterials: [{ ordered: true }], finishMaterials: [{ ordered: true }] }, o);
+  const run = (jobs, schedules, phaseHours) => SC.buildCalendar({ jobs, schedules, phaseHours, today: t0, weeks: 3, users: us, timeOff: [] });
+  const crew4 = ["Colby Stone", "Jake Reed", "Noah Pine", "Daegan"], conf = jb({ simproNo: "100", roughStatus: "date_confirmed", roughStatusDate: "2026-11-24" });
+  const on = (it, iso) => SC.slotsOf(it.auto).filter(d => d.date === iso).flatMap(d => (d.staff || it.auto.staff).map(x => x.name));
+  // a Simpro booking under a longer name still blocks the Crew Board person
+  let V6 = run([conf], ["2026-11-24", "2026-11-25"].map(d => sc("900-1", "Daegan Smith", d, "07:00", "17:00")), { 100: { r: [0, 80] } }), a = V6.items.find(x => x.key === "j_J100_r");
+  ok(a.auto && !on(a, "2026-11-24").includes("Daegan") && !on(a, "2026-11-25").includes("Daegan"), "Simpro's \"Daegan Smith\" blocks the Crew Board's \"Daegan\": he isn't forecast on a day he's booked");
+  // an afternoon booking is not "the first 4 hours of the day"
+  V6 = run([conf], crew4.map(n => sc("900-1", n, "2026-11-24", "13:00", "17:00")), { 100: { r: [0, 40] } }); a = V6.items.find(x => x.key === "j_J100_r");
+  ok(a.auto && !SC.slotsOf(a.auto).some(d => d.date === "2026-11-24"), "a 1:00 PM Simpro booking holds the day: nothing is laid 11:00 to 5:00 on top of it");
+  ok(/Confirmed start 11\/24, but Colby's crew isn't free until 11\/25/.test(a.auto.held) && a.redDay === "2026-11-24" && V6.needs.some(n => n.key === a.key && n.held), "a confirmed start the crew can't make is held under Needs you and its day keeps a red marker");
+  // nobody free in the view: still on its day
+  const all = []; for (let i = 0; i < 21; i++) crew4.forEach(n => all.push(sc("900-1", n, SC.addDays("2026-11-23", i), "07:00", "17:00")));
+  V6 = run([conf], all, { 100: { r: [0, 40] } }); a = V6.items.find(x => x.key === "j_J100_r");
+  ok(!a.auto && a.need && a.redDay === "2026-11-24", "a job nobody can be put on stays on its day (red marker 11/24)");
+  // the tail's people are the people forecast: nobody Unassigned, head count matches
+  V6 = run([jb({ simproNo: "100", roughStatus: "inprogress", roughStatusDate: "2026-11-16" })],
+    [...crew4.map(n => sc("100-1", n, "2026-11-23", "07:00", "17:00")), ...["Colby Stone", "Uri Loose"].map(n => sc("100-1", n, "2026-11-24", "07:00", "17:00"))], { 100: { r: [100, 300] } });
+  a = V6.items.find(x => x.key === "j_J100_r");
+  ok(a.auto && a.auto.crew === 1 && a.auto.staff.map(x => x.name).join() === "Colby Stone" && a.flags.some(f => /Uri is unassigned/.test(f)), "a forecast after a booking leaves off someone Unassigned and counts only its own people");
+  ok(a.left === 140, "hours left take off today's booked hours too (300 est, 100 used, 40 today, 20 tomorrow)");
+  // rough in progress keeps the calendar while the finish only has a date
+  V6 = run([jb({ simproNo: "100", roughStatus: "inprogress", finishStatus: "date_confirmed", finishStatusDate: "2026-12-08" })], [], { 100: { r: [50, 200], f: [0, 120] } });
+  a = V6.items.find(x => x.jobId === "J100");
+  ok(a.kind === "rough" && a.auto && a.flags.some(f => /Finish is set for 12\/8/.test(f)), "a rough-in in progress stays on the calendar when its finish already has a date");
+  // confirmed start, no Job Costs hours yet
+  V6 = run([jb({ simproNo: "100", roughStatus: "", roughProjectedStart: "2026-11-24", roughStartConfirmed: true })], [], {});
+  a = V6.items.find(x => x.jobId === "J100");
+  ok(a && /No hours in Job Costs/.test(a.need || "") && a.redDay === "2026-11-24", "a confirmed start with no Job Costs hours yet shows under Needs you, on its day");
+  // one person alone is held
+  V6 = run([jb({ simproNo: "200", foreman: "Solo Sam", roughStatus: "date_confirmed", roughStatusDate: "2026-11-24" })], [], { 200: { r: [0, 40] } });
+  a = V6.items.find(x => x.jobId === "J200");
+  ok(a.auto && /Only Solo on it, no second person/.test(a.auto.held), "a foreman with no crew is placed alone only as a held block");
+  const bk = SC.bookingsByNo([sc("900-1", "Noah Pine", "2026-11-24", "13:00", "17:00")])["900"]["2026-11-24"];
+  ok(bk.from === 13 && bk.to === 17, "a Simpro day keeps its real clock window");
+}
+
+// ── v663: Book (server rules) ────────────────────────────────────────────────
+{
+  const SBK = require("../functions/scrambleBook.js");
+  const rows = [{ Type: "activity", Reference: "PTO", Date: "2026-11-23", Staff: { ID: 5 }, Blocks: [{ Hrs: 10 }] }, { Type: "job", Reference: "900-1", Date: "2026-11-24", Staff: { ID: 5 }, Blocks: [{ Hrs: 10 }] }];
+  ok(SBK.weekHours(rows, [5])[5]["2026-11-23"] === 10, "time off (a Simpro activity) doesn't count toward the 40; job hours do");
+  const STK = require("../functions/scrambleTrip.js"), tsrc = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleTrip.js"), "utf8").replace(/\/\/.*$/gm, "");
+  ok(!/Stage|roughStatus|finishStatus|quickJobStatus|qcStatus/.test(tsrc), "the trip marker only knows a trip's own schedule fields, never a job's stage or status");
+  const trips = [{ id: "x1", rtStatus: "needs", rtStatusDate: "2026-12-01", needsByStart: "2026-11-25", needsSchedule: true }, { id: "x2", rtStatus: "complete" }];
+  const b = STK.planTripBooked(trips, "x1", "2026-11-24", { at: "t", by: "Koy", path: "/jobs/77/sections/1/costCenters/2/schedules/", ids: [9001] });
+  ok(b && b.after.rtStatus === "scheduled" && b.after.rtStatusDate === "2026-11-24" && b.after.rtScheduled && !b.after.needsSchedule && b.after.needsByStart === "" && b.after.calBooked.prev.rtStatus === "needs" && b.returnTrips[1] === trips[1],
+    "a booked return trip is marked scheduled on the day booked; other trips untouched");
+  ok(STK.planTripBooked(trips, "x2", "2026-11-24", {}) === null && STK.planTripBooked(trips, "nope", "2026-11-24", {}) === null, "a finished or unknown trip is never touched");
+  const u = STK.planTripUnbooked(b.returnTrips, "x1", []);
+  ok(u && u.after.rtStatus === "needs" && u.after.needsSchedule && !u.after.rtScheduled && u.after.rtStatusDate === "2026-12-01" && u.after.needsByStart === "2026-11-25" && !u.after.calBooked, "unscheduled in Simpro: the trip goes back to needs scheduling, as it was");
+  const m = STK.planTripUnbooked(b.returnTrips, "x1", ["2026-11-30"]);
+  ok(m && m.after.rtStatus === "scheduled" && m.after.rtStatusDate === "2026-11-30", "moved in Simpro: the trip's date follows");
+  ok(STK.planTripUnbooked(b.returnTrips, "x1", ["2026-11-24"]) === null && STK.planTripUnbooked(trips, "x1", []) === null, "still booked, or never booked from the calendar: nothing changes");
+}
+
+// ── v663: Fridays by hand, trip cost center ──────────────────────────────────
+{
+  ok(SC.planDays({ s: "2026-11-27", hours: 40, crew: 2 }).map(d => d.date).join() === "2026-11-27,2026-11-30", "a block put on a Friday by hand starts that Friday, then carries on Monday");
+  ok(SC.planDays({ s: "2026-11-28", hours: 20, crew: 2 })[0].date === "2026-11-30" && SC.nextWork("2026-11-27") === "2026-11-30", "a weekend still rolls to Monday, and the auto-schedule's own next workday skips Friday");
+  const SBK = require("../functions/scrambleBook.js"), secs = [{ ID: 1, Name: "Base", ccs: [{ ID: 10, Name: "Rough In" }, { ID: 11, Name: "Finish" }] }];
+  ok(SBK.pickCostCenter(secs, "trip", "rough").id === 10 && SBK.pickCostCenter(secs, "trip", "finish").id === 11 && SBK.pickCostCenter(secs, "trip").id === 11, "a return trip books to Rough In or Finish as its work says");
+  ok(SBK.blocksFor(10, 30).ot === 0 && SBK.blocksFor(10, 40).ot === 10, "a Friday is normal time under 40 for the week and 1.5x once the week is past 40");
+  const jt = [{ id: "ct", simproNo: "55", name: "CC test", roughStatus: "inprogress", returnTrips: [{ id: "a", number: 1, scope: "x" }, { id: "b", number: 2, scope: "y", fromFailedFinal: true }] }];
+  const Vc = SC.buildCalendar({ jobs: jt, schedules: [], phaseHours: {}, today: new Date(2026, 10, 23, 9), weeks: 2 });
+  ok(Vc.items.find(x => x.tripId === "a").cc === "rough" && Vc.items.find(x => x.tripId === "b").cc === "finish", "a trip on a job still in rough-in is Rough In work; a failed-final trip is Finish");
+}
+
+// ── v663: everybody can come off a block; it stays on its day ────────────────
+{
+  const p = { s: "2026-11-23", hours: 60, crew: 2, staff: [{ name: "A" }, { name: "B" }], pd: { "2026-11-24": { none: true } } };
+  const sl = SC.slotsOf(p);
+  ok(sl.map(d => d.date).join() === "2026-11-23,2026-11-24,2026-11-25" && sl[1].none && sl[1].staff.length === 0 && !sl[0].none && !sl[2].none, "a day with nobody on it keeps its place; the job's other days don't move");
+  const one = SC.slotsOf({ s: "2026-11-23", hours: 10, crew: 1, staff: [], t: "07:00", e: "17:00", pd: { "2026-11-23": { none: true, t: "07:00", e: "17:00" } } });
+  ok(one.length === 1 && one[0].none && one[0].date === "2026-11-23", "a one-day block with nobody on it stays on its day");
+  const bb = SC.bookingsByNo([{ Type: "job", Reference: "70-1", Date: "2026-11-23", Staff: { Name: "Payton X" }, Blocks: [{ StartTime: "07:00", EndTime: "12:00", Hrs: 5 }] }, { Type: "job", Reference: "70-1", Date: "2026-11-23", Staff: { Name: "Gage Y" }, Blocks: [{ StartTime: "07:00", EndTime: "17:00", Hrs: 10 }] }])["70"]["2026-11-23"];
+  ok(bb.from === 7 && bb.to === 17 && bb.win["Payton X"].join() === "7,12" && bb.win["Gage Y"].join() === "7,17", "a Simpro day keeps each person's own times (a half day isn't read as the whole day)");
+}
+
+// ── v663: Book the week counts the blocks ahead; short trips show as booked ──
+{
+  const SBK = require("../functions/scrambleBook.js");
+  const ex = SBK.addPending({ 7: { "2026-11-23": 10 } }, [{ staffId: 7, date: "2026-11-24", hours: 10 }, { staffId: 7, date: "2026-11-25", hours: 20 }, { staffId: 9, date: "2026-11-24", hours: 10 }, { staffId: 7, date: "bad", hours: 5 }], [7]);
+  ok(ex[7]["2026-11-23"] === 40 && !ex[9], "the week's earlier blocks count toward a person's 40, only for the people being booked");
+  const fri = SBK.buildEntries([{ date: "2026-11-27", hours: 10 }], [{ id: 7, name: "P" }], ex);
+  ok(fri[0].ot === 10 && fri[0].normal === 0, "a Friday after 40 hours of earlier blocks previews at 1.5x");
+  const base = { mode: "preview", jobNo: "5", phase: "finish", staffIds: [7], days: [{ date: "2026-11-27", hours: 10 }] };
+  ok(SBK.validate({ ...base, pending: [{ staffId: 7, date: "2026-11-24", hours: 10 }] }, "2026-11-23") === "" && SBK.validate({ ...base, mode: "book", hash: "a.b", pending: [] }, "2026-11-23") !== "" && SBK.validate({ ...base, pending: [{ staffId: 7, date: "x", hours: 1 }] }, "2026-11-23") !== "", "pending hours are a preview-only input and are checked");
+  const sch = [{ Type: "job", Reference: "60-1", Date: "2026-11-24", Staff: { Name: "A B" }, Blocks: [{ StartTime: "07:00", EndTime: "07:30", Hrs: 0.5 }] }];
+  ok(!SC.bookingsByNo(sch)["60"] || !SC.bookingsByNo(sch)["60"]["2026-11-24"], "a half-hour visit still doesn't count as a booked day for a phase");
+  const Vt = SC.buildCalendar({ jobs: [{ id: "st", simproNo: "60", name: "Short trip", roughStatus: "complete", returnTrips: [{ id: "r1", number: 1, scope: "x", rtStatus: "scheduled", rtStatusDate: "2026-11-24" }] }], schedules: sch, phaseHours: {}, today: new Date(2026, 10, 23, 9), weeks: 2 });
+  const tr = Vt.items.find(x => x.tripId === "r1");
+  ok(tr && tr.booked.length === 1 && tr.booked[0].iso === "2026-11-24", "a half-hour return trip booked in Simpro shows as booked on its day");
+}
+
+// ── v663: set pairs stay whole (Koy 2026-11-20) ──────────────────────────────
+{
+  const opt = { today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const jD = [{ id: "td", simproNo: "72", name: "Foreman trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+    returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Daegan Smith", material: "x" }] }];
+  const td = SC.buildCalendar({ jobs: jD, schedules: [], phaseHours: {}, ...opt }).items.find(x => x.key === "t_td_a");
+  ok(td.auto && td.auto.staff.length === 1 && td.auto.held, "a trip never takes one half of a set pair to fill the second seat (the foreman goes alone, held for a call)");
+  const pairs = [["Louis Hoffman", "James Livingston"], ["Trever Worley", "Callen Jakeman"], ["Austin Schut", "Payton Bolda"]];
+  const jF = [1, 2, 3].map(n => ({ id: "pf" + n, simproNo: String(80 + n), name: "Pair phase " + n, roughStatus: "complete", finishStatus: "inprogress", foreman: "Daegan Smith" }));
+  const Vp = SC.buildCalendar({ jobs: jF, schedules: [], phaseHours: { "81": { f: [0, 30] }, "82": { f: [0, 60] }, "83": { f: [0, 100] } }, ...opt });
+  const blocks = Vp.items.filter(x => x.auto && x.auto.staff && x.auto.staff.length);
+  ok(blocks.length > 0 && blocks.every(x => { const on = x.auto.staff.map(p => p.name); return pairs.every(([a, b]) => on.includes(a) === on.includes(b)); }), "every auto block has both people of a set pair or neither");
 }
 
 if (fails) { console.error(fails + " failed"); process.exit(1); }

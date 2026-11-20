@@ -197,10 +197,10 @@ const AUTO_TASK_FIXED = {
   _comm_ready: { title: null, desc: "All 12 pre-con phases closed", category: "commercial" },
   _comm_gearcheck: { title: null, desc: null, category: "commercial" },
 };
-// `_co_<coId>_send|approved|sched|done`, `_rt_<rtId>_done|needs|sched`, `_comm_owed_<n>_<k>`, `_comm_gearlate_<id>`.
+// `_co_<coId>_send|approved|sched|done`, `_rt_<rtId>_done|needs|sched|po`, `_comm_owed_<n>_<k>`, `_comm_gearlate_<id>`.
 const AUTO_TASK_DYNAMIC = [
   { re: /^_co_([A-Za-z0-9]+)_(send|approved|sched|done)$/, category: "co", list: "changeOrders" },
-  { re: /^_rt_([A-Za-z0-9]+)_(done|needs|sched)$/, category: "rt", list: "returnTrips" },
+  { re: /^_rt_([A-Za-z0-9]+)_(done|needs|sched|po)$/, category: "rt", list: "returnTrips" },   // v663: _po = a scheduled trip with no material (send a PO)
   { re: /^_comm_owed_(\d+)_([A-Za-z0-9_]+)$/, category: "commercial" },
   { re: /^_comm_gearlate_([A-Za-z0-9 _.-]+)$/, category: "commercial" },
 ];

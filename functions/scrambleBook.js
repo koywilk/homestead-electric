@@ -58,10 +58,24 @@ function weekHours(schedules, staffIds) {
   const out = {};
   (schedules || []).forEach(s => {
     const id = Number(s && s.Staff && s.Staff.ID); if (!want.has(id) || !isIso(String(s.Date || "").slice(0, 10))) return;
+    // v663 (Koy's rule 4: "time off and lunch don't count"): only job bookings count toward the 40. A Simpro activity
+    // (time off, lunch, anything that isn't a job) used to push the week over and turn real work into overtime.
+    if (s.Type && String(s.Type) !== "job") return;
     const hrs = (s.Blocks || []).reduce((a, b) => a + (Number(b && b.Hrs) || 0), 0) || Number(s.TotalHours) || 0;
     const wk = mondayOf(String(s.Date).slice(0, 10));
     ((out[id] = out[id] || {})[wk] = (out[id][wk] || 0) + hrs);
   });
+  return out;
+}
+
+// v663: "Book the week" previews several blocks before any is written. `pending` is what the blocks ahead of this one
+// will add ([{ staffId, date, hours }]), so this preview's 40-hour line is where it will really be at Book time.
+// Preview only: at Book the earlier blocks are in Simpro and are read from there.
+function addPending(existing, pending, staffIds) {
+  const want = new Set((staffIds || []).map(Number)), out = {};
+  Object.keys(existing || {}).forEach(id => { out[id] = { ...existing[id] }; });
+  (Array.isArray(pending) ? pending : []).forEach(p => { const id = Number(p && p.staffId), d = String((p && p.date) || ""), h = Number(p && p.hours) || 0;
+    if (!want.has(id) || !isIso(d) || !(h > 0)) return; const wk = mondayOf(d); (out[id] = out[id] || {})[wk] = (out[id][wk] || 0) + h; });
   return out;
 }
 
@@ -96,8 +110,9 @@ function hashOf(no, cc, entries) {
 
 // Which cost center the booking goes on: the Base section's "Rough In" or "Finish" cost center
 // (a return trip goes on Finish). sections: [{ ID, Name, DisplayOrder, ccs: [{ ID, Name }] }].
-function pickCostCenter(sections, phase) {
-  const want = phase === "rough" ? /rough/i : /finish/i;
+// v663: a return trip says which it belongs on (`cc`: "rough" or "finish"); without it, Finish as before.
+function pickCostCenter(sections, phase, cc) {
+  const want = (phase === "trip" ? cc === "rough" : phase === "rough") ? /rough/i : /finish/i;
   const list = (sections || []).filter(s => s && Array.isArray(s.ccs));
   const ordered = list.filter(s => /^\s*base\s*$/i.test(s.Name || "")).concat(list.slice().sort((a, b) => (Number(a.DisplayOrder) || 0) - (Number(b.DisplayOrder) || 0)));
   for (const s of ordered) {
@@ -138,8 +153,15 @@ function validate(data, today) {
       const m = startMinOf(x.start); if (m < 5 * 60 || m > 17 * 60 || m % 15) return `Start time on ${x.date} must be between 5:00 AM and 5:00 PM, on the quarter hour.`;
     }
   }
+  if (d.cc != null && !["rough", "finish"].includes(d.cc)) return "cc must be rough or finish";
+  if (d.jobId != null && !/^[A-Za-z0-9_-]{1,80}$/.test(String(d.jobId))) return "Bad job id.";
+  if (d.tripId != null && !/^[A-Za-z0-9_.-]{1,80}$/.test(String(d.tripId))) return "Bad trip id.";
+  if (d.pending != null) {
+    if (d.mode !== "preview") return "Confirm from a preview.";
+    if (!Array.isArray(d.pending) || d.pending.length > 400 || d.pending.some(p => !p || !(Number(p.staffId) > 0) || !isIso(p.date) || !(Number(p.hours) > 0 && Number(p.hours) <= 24))) return "The week's earlier blocks didn't read right. Close and open Book the week again.";
+  }
   if (d.mode === "book" && !/^[0-9a-z]+\.[0-9a-z]+$/.test(String(d.hash || ""))) return "Confirm from a preview.";
   return "";
 }
 
-module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, buildEntries, bodyOf, hashOf, pickCostCenter, validate, mondayOf, addDays };
+module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, addPending, buildEntries, bodyOf, hashOf, pickCostCenter, validate, mondayOf, addDays };

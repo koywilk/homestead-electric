@@ -8449,6 +8449,7 @@ exports.scheduledSimproStageSync = functions
 //                       time and stops at the first error. Creates schedule entries only: never a job's
 //                       stage or status. Each run is logged to scrambleBookings (server-only).
 const SB = require("./scrambleBook");
+const ST = require("./scrambleTrip");
 async function requireOffice(data) {
   const user = await requireMember(data);
   if (!["admin", "manager"].includes(gcAdminAccessOf(user))) {
@@ -8501,8 +8502,8 @@ exports.scrambleBook = functions
       const cr = await simproReqWithRetry("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250&columns=ID,Name`);
       s.ccs = Array.isArray(cr.data) ? cr.data : [];
     }
-    const cc = SB.pickCostCenter(sections, phase);
-    if (!cc) throw new functions.https.HttpsError("failed-precondition", `Job #${no} has no ${phase === "rough" ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Book it in Simpro.`);
+    const cc = SB.pickCostCenter(sections, phase, data.cc);
+    if (!cc) throw new functions.https.HttpsError("failed-precondition", `Job #${no} has no ${phase === "rough" || (phase === "trip" && data.cc === "rough") ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Book it in Simpro.`);
     // Who, by Simpro's own names.
     const staffAll = await sbActiveStaff();
     const staff = ids.map(id => staffAll.find(s => s.id === id)).filter(Boolean);
@@ -8516,8 +8517,10 @@ exports.scrambleBook = functions
       if (!r.ok || !Array.isArray(r.data)) throw new functions.https.HttpsError("unavailable", "Couldn't read Simpro's schedule to check overtime. Nothing was written; try again.");
       rows = rows.concat(r.data);
       if (r.data.length < 250) break;
+      // v663: a schedule too big to read whole is not a schedule to check against. Refuse instead of checking part of it.
+      if (page === 12) throw new functions.https.HttpsError("failed-precondition", "That's too long a stretch to check against Simpro's schedule in one go. Nothing was written; book it in shorter pieces.");
     }
-    const entries = SB.buildEntries(days, staff, SB.weekHours(rows, ids));
+    const entries = SB.buildEntries(days, staff, data.mode === "preview" ? SB.addPending(SB.weekHours(rows, ids), data.pending, ids) : SB.weekHours(rows, ids));
     // Nobody is booked over time they already have in Simpro (another job, an activity or time off), in preview or book.
     const clash = SB.overlaps(rows, entries);
     if (clash.length) {
@@ -8547,7 +8550,56 @@ exports.scrambleBook = functions
         planned: entries.map(e => ({ date: e.date, staffId: e.staffId, name: e.name, hours: e.hours, ot: e.ot })), created, failed, ok: !failed });
     } catch (e) { functions.logger.warn("[scrambleBook] log failed", e.message); }
     functions.logger.info("scrambleBook", { no, phase, by: user.name, created: created.length, failed: !!failed });
-    return { ok: !failed, job, costCenter: cc, created, failed, planned: entries.length };
+    // v663: a return trip that made it into Simpro is scheduled, so the trip says so in the app, on the day booked.
+    // Only the trip's own schedule fields; never the job's stage or status. A failure here never undoes the booking.
+    let trip = null;
+    if (phase === "trip" && created.length && data.jobId && data.tripId) {
+      try {
+        const date = created.map(c => c.date).sort()[0];
+        trip = await sbTripWrite(String(data.jobId), no, (trips) => ST.planTripBooked(trips, String(data.tripId), date,
+          { at: new Date().toISOString(), by: user.name || "", path, ids: created.map(c => c.scheduleId).filter(Boolean) }), user.name);
+      } catch (e) { functions.logger.warn("[scrambleBook] trip mark failed", e.message); trip = { ok: false }; }
+    }
+    return { ok: !failed, job, costCenter: cc, created, failed, planned: entries.length, trip };
+  });
+// One return trip's schedule fields on jobs/<id>, the way every server job write goes: re-read in a transaction, write
+// data.returnTrips back as a dotted key, updated_at strictly newer, the version-lock stamp, merged:false.
+const SB_BUILD = 663;
+async function sbTripWrite(jobId, no, plan, who) {
+  const ref = db.collection("jobs").doc(jobId); let out = { ok: false };
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref), raw = snap.exists ? snap.data() : null, jd = raw && raw.data;
+    if (!jd || String(jd.simproNo || "").trim() !== String(no)) { out = { ok: false, why: "job" }; return; }
+    const p = plan(jd.returnTrips);
+    if (!p) { out = { ok: true, noop: true }; return; }
+    let t = Date.now(); const prev = Date.parse(raw.updated_at || ""); if (!isNaN(prev) && t <= prev) t = prev + 1;
+    tx.update(ref, { "data.returnTrips": p.returnTrips, updated_at: new Date(t).toISOString(), lastActivityAt: admin.firestore.FieldValue.serverTimestamp(),
+      saved_by: `Crew calendar (${who || "office"})`, device: "server", tab: "scramble-book", app_build: SB_BUILD, w: `${SB_BUILD}.cal${Math.random().toString(36).slice(2, 10)}`, merged: false });
+    out = { ok: true, rtStatus: p.after.rtStatus || "", rtStatusDate: p.after.rtStatusDate || "" };
+  });
+  return out;
+}
+// A trip the calendar booked whose Simpro entries may be gone or moved: ask Simpro about the exact entries it wrote.
+// Every one gone (404) puts the trip back to needs scheduling; one moved to another day moves the trip's date; anything
+// Simpro couldn't answer leaves the trip alone.
+exports.scrambleTripSync = functions
+  .runWith({ timeoutSeconds: 60 })
+  .https.onCall(async (data) => {
+    const user = await requireOffice(data);
+    const jobId = String((data && data.jobId) || ""), tripId = String((data && data.tripId) || "");
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(jobId) || !/^[A-Za-z0-9_.-]{1,80}$/.test(tripId)) throw new functions.https.HttpsError("invalid-argument", "Which trip?");
+    const snap = await db.collection("jobs").doc(jobId).get(), jd = snap.exists && snap.data().data;
+    const t = jd && (jd.returnTrips || []).find(x => x && String(x.id) === tripId), cb = t && t.calBooked;
+    if (!cb || !cb.path || !Array.isArray(cb.ids) || !cb.ids.length || !/^\/jobs\/\d+\/sections\/\d+\/costCenters\/\d+\/schedules\/$/.test(cb.path)) return { ok: true, noop: true };
+    const found = [];
+    for (const id of cb.ids.slice(0, 40)) {
+      const r = await simproReqWithRetry("GET", `${cb.path}${Number(id)}?columns=ID,Date`);
+      if (r.ok && r.data && r.data.Date) found.push(String(r.data.Date).slice(0, 10));
+      else if (r.status !== 404) return { ok: true, noop: true, unsure: true };
+    }
+    const res = await sbTripWrite(jobId, String(jd.simproNo || "").trim(), (trips) => ST.planTripUnbooked(trips, tripId, found), user.name);
+    functions.logger.info("scrambleTripSync", { jobId, tripId, found: found.length, by: user.name, res });
+    return res;
   });
 
 // ─── Team rating and goals on My Day (SW v654) ───────────────────────────────
