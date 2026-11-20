@@ -1,5 +1,18 @@
 [
  {
+  "v": 674,
+  "heads": [
+   {
+    "h": "FIXED on the crew calendar (office)",
+    "first": "Someone on leave in Simpro now shows as Off on the calendar, even if their time-off request in the app isn't approved yet. Before, they showed as open."
+   },
+   {
+    "h": "CHANGED",
+    "first": "Warranty work books to the job's Warranty cost center. If Finish or Rough In is already invoiced, the booking goes to Warranty instead and the preview says so. If the job has no open Warranty cost cen"
+   }
+  ]
+ },
+ {
   "v": 673,
   "heads": [
    {
@@ -198,15 +211,6 @@
    {
     "h": "NEW when you send a PO (Send to CED, New order from the bid)",
     "first": "Under the CC box, tap Pick from team. Search a name and tick who to copy, up to 5. Tap Done picking."
-   }
-  ]
- },
- {
-  "v": 654,
-  "heads": [
-   {
-    "h": "NEW on My Day (crew, leads, jr. foremen and foremen)",
-    "first": "Team rating and goals: a new card at the top of My Day, above My role. It starts closed. Tap Open."
    }
   ]
  }

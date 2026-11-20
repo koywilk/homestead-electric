@@ -111,13 +111,37 @@ function hashOf(no, cc, entries) {
 // Which cost center the booking goes on: the Base section's "Rough In" or "Finish" cost center
 // (a return trip goes on Finish). sections: [{ ID, Name, DisplayOrder, ccs: [{ ID, Name }] }].
 // v663: a return trip says which it belongs on (`cc`: "rough" or "finish"); without it, Finish as before.
+// v674 (Koy 2026-11-20: "warranty trips need to look for a warranty cost center, or one needs to be made if there isn't
+// one. It just can't be an invoice cost center, or else it won't work"). Simpro's own data says which is which: each
+// cost center carries what has been claimed (invoiced) to date, and warranty lines sit in a "Warranty" section with the
+// company cost center "Residential (Warranty)".
+const invoiced = (c) => Number(c && c.Claimed && c.Claimed.ToDate && c.Claimed.ToDate.Percent) >= 100;
+const isWarranty = (c, s) => /warrant/i.test(String((c && c.CostCenter && c.CostCenter.Name) || "")) || /warrant/i.test(String((s && s.Name) || "")) || /warrant/i.test(String((c && c.Name) || ""));
+const ccOut = (s, c, more) => ({ sectionId: Number(s.ID), sectionName: String(s.Name || ""), id: Number(c.ID), name: String(c.Name || ""), ...(more || {}) });
+// An open warranty cost center on the job: the newest one that isn't fully invoiced. null when there is none.
+function pickWarranty(sections) {
+  const open = [];
+  (sections || []).forEach(s => (Array.isArray(s && s.ccs) ? s.ccs : []).forEach(c => { if (c && isWarranty(c, s) && !invoiced(c)) open.push([s, c]); }));
+  if (!open.length) return null;
+  open.sort((a, b) => Number(b[1].ID) - Number(a[1].ID));
+  return ccOut(open[0][0], open[0][1], { warranty: true, ...(open.length > 1 ? { otherOpenWarranty: open.slice(1).map(x => ({ sectionId: Number(x[0].ID), id: Number(x[1].ID), name: String(x[1].Name || "") })) } : {}) });
+}
+// Which cost center the booking goes on. cc (a trip's work, or "warranty") or the phase says Rough In or Finish, in
+// the Base section first. Warranty work, or a Rough In / Finish that is already fully invoiced, goes to an open
+// warranty cost center instead. Returns the cost center, { refused } when the job has nowhere it can go, or null when
+// the job has no such cost center at all. sections: [{ ID, Name, DisplayOrder, ccs: [Simpro cost centers] }].
 function pickCostCenter(sections, phase, cc) {
+  const NO_WARRANTY = "This is warranty work, and the job has no open Warranty cost center in Simpro (none, or they are all invoiced). Add a Warranty cost center on the job in Simpro, then book.";
+  if (cc === "warranty") return pickWarranty(sections) || { refused: NO_WARRANTY };
   const want = (phase === "trip" ? cc === "rough" : phase === "rough") ? /rough/i : /finish/i;
   const list = (sections || []).filter(s => s && Array.isArray(s.ccs));
   const ordered = list.filter(s => /^\s*base\s*$/i.test(s.Name || "")).concat(list.slice().sort((a, b) => (Number(a.DisplayOrder) || 0) - (Number(b.DisplayOrder) || 0)));
   for (const s of ordered) {
-    const cc = s.ccs.find(c => c && want.test(c.Name || ""));
-    if (cc) return { sectionId: Number(s.ID), sectionName: String(s.Name || ""), id: Number(cc.ID), name: String(cc.Name || "") };
+    const c = s.ccs.find(x => x && want.test(x.Name || "") && !isWarranty(x, s));
+    if (!c) continue;
+    if (!invoiced(c)) return ccOut(s, c);
+    const w = pickWarranty(sections);
+    return w ? { ...w, because: `${c.Name} is fully invoiced` } : { refused: `${c.Name} on this job is fully invoiced, so a booking can't go there. ${NO_WARRANTY.replace("This is warranty work, and the", "The")}` };
   }
   return null;
 }
@@ -153,7 +177,7 @@ function validate(data, today) {
       const m = startMinOf(x.start); if (m < 5 * 60 || m > 17 * 60 || m % 15) return `Start time on ${x.date} must be between 5:00 AM and 5:00 PM, on the quarter hour.`;
     }
   }
-  if (d.cc != null && !["rough", "finish"].includes(d.cc)) return "cc must be rough or finish";
+  if (d.cc != null && !["rough", "finish", "warranty"].includes(d.cc)) return "cc must be rough, finish or warranty";
   if (d.jobId != null && !/^[A-Za-z0-9_-]{1,80}$/.test(String(d.jobId))) return "Bad job id.";
   if (d.tripId != null && !/^[A-Za-z0-9_.-]{1,80}$/.test(String(d.tripId))) return "Bad trip id.";
   if (d.pending != null) {
@@ -164,4 +188,4 @@ function validate(data, today) {
   return "";
 }
 
-module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, addPending, buildEntries, bodyOf, hashOf, pickCostCenter, validate, mondayOf, addDays };
+module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, addPending, buildEntries, bodyOf, hashOf, pickCostCenter, pickWarranty, invoiced, validate, mondayOf, addDays };

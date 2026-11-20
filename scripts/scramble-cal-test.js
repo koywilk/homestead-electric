@@ -503,5 +503,23 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(!SC.buildCalendar({ jobs: jobs2, schedules: [], phaseHours: { "95": { f: [50, 100] } }, ...opt, openPunch: () => 0 }).items.find(x => x.key === "j_h1_f").done100, "under 100% it is never treated as done");
 }
 
+// ── v674: Simpro leave and activities; a leader alone because their pair is off ──
+{
+  const opt = { today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const leave = (name, date, s, e, type) => ({ Type: type || "leave", Date: date, Staff: { Name: name }, Blocks: [{ StartTime: s, EndTime: e, Hrs: 1 }] });
+  const jobs = [{ id: "lv", simproNo: "96", name: "Leave test", roughStatus: "complete", finishStatus: "inprogress", finishStage: "20", foreman: "Daegan Smith" }];
+  const V = SC.buildCalendar({ jobs, schedules: [leave("Trever Worley", "2026-11-25", "07:00", "17:00"), leave("Callen Jakeman", "2026-11-25", "07:00", "09:00", "activity")], phaseHours: { "96": { f: [0, 200] } }, ...opt });
+  const board = SC.crewBoard(usersP), chips = SC.chipsOf(V, board), busy = SC.busyOf(chips, board, V), k = SC.dayCounts("2026-11-25", chips, busy, board, V, "All");
+  ok((V.offByDay["2026-11-25"] || []).includes("Trever Worley") && k.out.includes("Trever Worley") && !k.open.includes("Trever Worley"), "a full day of leave in Simpro is a day off: listed Off, never open");
+  ok(!V.items.some(it => it.auto && SC.slotsOf(it.auto).some(d => d.date === "2026-11-25" && (d.staff ? d.staff.map(x => x.name) : (it.auto.staff || []).map(x => x.name)).includes("Trever Worley"))), "and the auto-schedule doesn't put them on anything that day");
+  ok(!(V.offByDay["2026-11-25"] || []).includes("Callen Jakeman") && (busy["Callen Jakeman"]["2026-11-25"] || []).some(b => b.key === "simpro-other" && b.from === 7 && b.to === 9 && /activity in Simpro/.test(b.label)), "two hours at an activity is busy for those two hours, not a day off");
+  const jT = [{ id: "sl", simproNo: "97", name: "Solo trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith", returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Louis Hoffman", material: "x" }] }];
+  const others = ["Daegan Smith", "Trever Worley", "Callen Jakeman"].map(n => leave(n, "2026-11-24", "07:00", "17:00"));
+  const off = SC.buildCalendar({ jobs: jT, schedules: others, phaseHours: {}, timeOff: [{ name: "James Livingston", start: "2026-11-24", end: "2026-11-24" }], ...opt }).items.find(x => x.key === "t_sl_a");
+  ok(off.auto && off.auto.staff.length === 1 && off.auto.staff[0].name === "Louis Hoffman" && !off.auto.held && off.flags.some(f => /Louis goes alone 11\/24: James is off/.test(f)), "a junior foreman whose pair is off goes alone on the trip: placed, not held, with a note");
+  const busyPair = SC.buildCalendar({ jobs: jT, schedules: others.concat([{ Type: "job", Reference: "500-1", Date: "2026-11-24", Staff: { Name: "James Livingston" }, Blocks: [{ StartTime: "07:00", EndTime: "17:00", Hrs: 10 }] }]), phaseHours: {}, ...opt }).items.find(x => x.key === "t_sl_a");
+  ok(busyPair.auto && busyPair.auto.staff.length === 1 && !!busyPair.auto.held, "alone because the pair is booked elsewhere (not off) is still held for a call");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

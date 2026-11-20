@@ -75,7 +75,7 @@ async function propose(deps, args) {
   SB.overlaps(inp.schedules, D.entriesFor(rows, {})).forEach(c => { const r = rows.find(x => x.staffId === c.staffId && x.date === c.date);
     refusals.push({ person: r ? r.person : c.name, date: c.date, rule: "in-simpro", why: `${first(r ? r.person : c.name)} is already booked in Simpro ${c.date} ${c.at}${c.ref ? " on job " + c.ref.split("-")[0] : ""}.` }); });
   // a plan a person placed for that person at that time
-  const chips = SC.chipsOf(V, board), busy = SC.busyOf(chips, board);
+  const chips = SC.chipsOf(V, board), busy = SC.busyOf(chips, board, V);
   rows.forEach(r => (((busy[r.person] || {})[r.date]) || []).forEach(b => { if (b.soft || b.booked || b.key === it.key) return;
     if (r.from / 60 < b.to - 1e-6 && b.from < r.to / 60 - 1e-6) refusals.push({ person: r.person, date: r.date, rule: "on-a-plan", why: `${first(r.person)} is on a plan a person placed then (${b.label}).` }); }));
   // Simpro already has this job or trip on one of those days: its booking is the block
@@ -119,6 +119,59 @@ async function wait(deps, args) {
     message: "It is under Waiting on the crew calendar and the auto-schedule leaves it alone. The job's status was not changed. A person ticks Wait cleared to put it back." };
 }
 
+// v674 (Koy 2026-11-20: "why can't it make its own editing calendar?" → "yes build it"): Duet changes a block on the
+// calendar itself, including one a person placed, but only after Koy's yes. Two steps like a booking: a preview that
+// shows what the block is now, what it would become and what changes, then the same request with the preview's hash.
+// The same people rules as a booking apply. It is saved as a plan ("Duet (Koy's yes)"), so the auto-schedule leaves it
+// alone, and it goes in the edit log like any hand edit. backToAuto: true hands the block back to the auto-schedule.
+// It books nothing and touches no job. deps adds fp(...segs) (a Firestore field path, so one block is replaced whole).
+const hashOf = (x) => { const t = JSON.stringify(x); let h = 5381; for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0; return h.toString(36) + "." + t.length.toString(36); };
+async function edit(deps, args) {
+  const a = args || {}, apply = a.mode === "apply", inp = await R.gather(deps), today = SC.ymd(inp.now), prefs = inp.prefs || {};
+  const reason = String(a.reason || "").replace(/\s+/g, " ").trim();
+  if (reason.length < 8) throw new Refused("Say why in a line: what Koy asked for.");
+  const V = R.calendarOf(inp), it = findItem(V, a);
+  if (!it) throw new Refused(a.phase === "trip" ? "That return trip isn't open on the calendar's list." : `Job #${a.jobNo}'s ${a.phase === "rough" ? "rough-in" : "finish"} isn't on the calendar's list.`);
+  if (it.off && !a.backToAuto) throw new Refused(`This was taken off the calendar${it.off.why ? ` (${it.off.why})` : ""}. A person clears that on the calendar first.`);
+  const f0 = it.plan || it.auto || null, was = SC.planSummary(f0), src = it.plan ? "plan" : f0 ? (f0.src === "duet" ? "duet" : "auto") : "list";
+  const cur = (prefs.cal || {})[it.key] || null, what = { key: it.key, jobNo: String(it.no || ""), job: String(it.name || ""), what: String(it.tag || ""), ...(it.plan && it.plan.by ? { placedBy: it.plan.by } : {}) };
+  let plan = null, notes = [], list = [];
+  if (a.backToAuto) { if (!cur) return { ok: true, noop: true, ...what, message: "Nobody has placed that block; it is already the auto-schedule's." }; }
+  else {
+    const bad = D.checkRequest({ ...a, mode: "preview", jobId: a.phase === "trip" ? (a.jobId || "x") : undefined }, today);
+    if (bad) throw new Refused(bad);
+    const board = SC.crewBoard(inp.users || []);
+    const byName = {}; (inp.schedules || []).forEach(x => { const n = x && x.Staff && x.Staff.Name, id = x && x.Staff && x.Staff.ID; if (n && id) byName[String(n).toLowerCase()] = { id: Number(id), name: String(n) }; });
+    const staffAll = Object.values(byName); let fake = -1;
+    (inp.users || []).forEach(u => { if (u && u.name && !staffAll.some(x => { const y = board.find(x.name); return y && y.id === u.id; })) staffAll.push({ id: fake--, name: u.name }); });
+    const who = D.resolvePeople(a.entries, board, staffAll), rows = who.rows; list = [...who.refusals];
+    const g = D.guard({ rows, board, isOff: D.offDays(inp.pto, board), holidays: D.holidayMap(prefs.holidays), schedules: inp.schedules, staffAll, jobNo: String(a.jobNo), aloneOk: !!a.aloneOk, splitPairs: !!a.splitPairs, unplaced: who.refusals.map(x => x.date) });
+    list.push(...g.refusals); notes = g.notes;
+    rows.forEach(r => { if ((V.offByDay[r.date] || []).includes(r.person) && !list.some(x => x.person === r.person && x.date === r.date)) list.push({ person: r.person, date: r.date, rule: "time-off", why: `${first(r.person)} is off ${r.date} (leave in Simpro).` }); });
+    SB.overlaps(inp.schedules, D.entriesFor(rows, {})).forEach(c => { const r = rows.find(x => x.staffId === c.staffId && x.date === c.date);
+      list.push({ person: r ? r.person : c.name, date: c.date, rule: "in-simpro", why: `${first(r ? r.person : c.name)} is already booked in Simpro ${c.date} ${c.at}${c.ref ? " on job " + c.ref.split("-")[0] : ""}.` }); });
+    const chips = SC.chipsOf(V, board), busy = SC.busyOf(chips, board, V);
+    rows.forEach(r => (((busy[r.person] || {})[r.date]) || []).forEach(b => { if (b.soft || b.booked || b.key === it.key) return;
+      if (r.from / 60 < b.to - 1e-6 && b.from < r.to / 60 - 1e-6) list.push({ person: r.person, date: r.date, rule: "on-a-plan", why: `${first(r.person)} is on another placed block then (${b.label}). Change that block first.` }); }));
+    rows.forEach(r => { if (it.booked.some(b => b.iso === r.date)) list.push({ person: r.person, date: r.date, rule: "already-booked", why: `Simpro already has this ${it.kind === "trip" ? "trip" : "job"} booked ${r.date}; the booking is the block that day.` }); });
+    const seen = new Set(); list = list.filter(x => { const k = x.person + "|" + x.date + "|" + x.rule; if (seen.has(k)) return false; seen.add(k); return true; });
+    if (!list.length) { const made = planFromRows(rows); if (made.why) throw new Refused(made.why); plan = made.plan; }
+  }
+  const now = a.backToAuto ? { backToAuto: true } : plan ? SC.planSummary({ ...plan, pd: SC.pdOf(plan.pdl) }) : null;
+  const hash = hashOf([it.key, plan, !!a.backToAuto, (cur && cur.at) || ""]);
+  const base = { ...what, isNow: was || "not on the calendar", cameFrom: src === "plan" ? "a plan a person placed" : src === "duet" ? "Duet's suggestion" : src === "auto" ? "the auto-schedule's guess" : "the list (not placed)" };
+  if (list.length) return { ok: false, mode: "preview", canApply: false, ...base, refused: list, notes, message: "Nothing was changed. Fix what is refused and preview again." };
+  if (!apply) return { ok: true, mode: "preview", canApply: true, ...base, wouldBecome: now, whatChanges: SC.planDiff(was, now), notes, hash, message: "Nothing is changed yet. Show Koy this. To make exactly this change, send the same request with mode apply and this hash." };
+  if (String(a.hash || "") !== hash) throw new Refused("The calendar changed since that preview, or the request isn't the same one. Nothing was changed. Preview again.");
+  const at = new Date().toISOString(), by = "Duet (Koy's yes)", ref = deps.db.collection("meetings").doc("scramble__prefs");
+  const logId = (String(it.key).replace(/[^A-Za-z0-9_-]/g, "_") + "_" + today.replace(/-/g, "")).slice(0, 90), prevLog = (prefs.calLog || {})[logId] || null;
+  const entry = { key: it.key, job: `${it.no ? "#" + it.no + " " : ""}${it.name || ""}`.trim(), what: String(it.tag || ""), src: prevLog ? prevLog.src : src, by, at, reason: reason.slice(0, 200),
+    ...((prevLog ? prevLog.was : was) ? { was: prevLog ? prevLog.was : was } : {}), now, changed: SC.planDiff(prevLog ? prevLog.was : was, now).slice(0, 6) };
+  await ref.update(deps.fp("cal", it.key), plan ? { ...plan, by, at } : deps.del(), deps.fp("duet", it.key), deps.del(), deps.fp("calLog", logId), entry, "updated_at", at, "saved_by", by);
+  return { ok: true, mode: "apply", changed: true, ...base, isNow: now, whatChanged: entry.changed, notes,
+    message: a.backToAuto ? "Handed back to the auto-schedule." : "Changed on the crew calendar as a plan. Nothing was booked; book it from the calendar or with cc_book_schedule when it's right." };
+}
+
 // A rule Duet proposes about how Koy schedules, from what it saw in duetOutcomes and handEdits. It is saved as
 // "proposed" and does nothing until a person approves it on the calendar; only approved rules are handed back as rules.
 // deps: { db, id?() }. args: { rule, evidence }.
@@ -137,4 +190,4 @@ async function lesson(deps, args) {
   return { ok: true, saved: true, id, status: "proposed", rule: text, message: "Saved as a proposed rule. It does nothing until a person approves it on the crew calendar, under How you schedule." };
 }
 
-module.exports = { MAX_PROPOSALS, MAX_LESSONS, WAIT_WHY, findItem, planFromRows, propose, withdraw, wait, lesson, Refused };
+module.exports = { MAX_PROPOSALS, MAX_LESSONS, WAIT_WHY, findItem, planFromRows, propose, withdraw, wait, lesson, edit, Refused };

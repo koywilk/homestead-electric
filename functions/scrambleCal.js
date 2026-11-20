@@ -400,7 +400,11 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
     else if (!s) notes.push("No date set in Command Center, so it's on the first open day");
     else if (noCrew) notes.push("No crew set in Command Center");
     const go = (d, r, pre) => {
-      const why = [...(pre ? [pre] : []), ...(r.solo ? [`Only ${firstOf(r.names[0])} free that day, no second person`] : []), ...notes].join(". ");
+      // v674 (Koy 2026-11-20: "Sometimes people are going to be alone because their help is out of town, so Louis alone
+      // in Mangum should be fine"): a leader alone because their set pair is off that day is placed, not held.
+      const pairOff = r.solo && okMate(r.names[0]) && (offByDay[d] || []).includes(okMate(r.names[0]));
+      if (pairOff) it.flags.push(`${firstOf(r.names[0])} goes alone ${md(d)}: ${firstOf(okMate(r.names[0]))} is off`);
+      const why = [...(pre ? [pre] : []), ...(r.solo && !pairOff ? [`Only ${firstOf(r.names[0])} free that day, no second person`] : []), ...notes].join(". ");
       return place(it, r.names, d, th * r.names.length, why, firstOf(r.names[0]) + (r.names[1] ? " + " + firstOf(r.names[1]) : ""));
     };
     const alone = lead0.length && !canLead(lead0[0]) ? `${firstOf(lead0[0])} is crew and can't go alone, and no one on ${label(c)} is free with them` : "";
@@ -593,7 +597,7 @@ function buildCalendar(input) {
       const it = mk({ key: "t_" + safeKey(j.id + "_" + (t.id || i)), kind: "trip", tag: "Return trip #" + n, tripNo: n, no, name: j.name || "", jobId: j.id, tripId: t.id ? String(t.id) : "",
         // v663 (Koy: "Always book to the relevant cost centers"): a trip from a failed rough inspection, or on a job whose
         // rough-in isn't complete, is Rough In work; anything else is Finish.
-        cc: t.fromFailedRough ? "rough" : (t.fromFailedFinal || t.scope === "Failed final inspection items") ? "finish" : DONE.includes(effRS ? effRS(j) : j.roughStatus || "") ? "finish" : "rough", calBooked: t.calBooked ? { date: t.calBooked.date || "" } : null,
+        cc: /warrant/i.test(String(t.scope || "") + " " + String(t.task || "")) ? "warranty" : t.fromFailedRough ? "rough" : (t.fromFailedFinal || t.scope === "Failed final inspection items") ? "finish" : DONE.includes(effRS ? effRS(j) : j.roughStatus || "") ? "finish" : "rough", calBooked: t.calBooked ? { date: t.calBooked.date || "" } : null,
         who: String(t.assignedTo || "").trim(), material: plain(t.material).slice(0, 140), foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(), scope: plain(t.scope || t.task).slice(0, 140), defCrew: 2, tripH: tripHours(t.time), defHours: 2 * (tripHours(t.time) || TRIP_DEFAULT_H),
         start: iso ? { iso, conf: t.rtStatus === "scheduled", by: t.rtStatus === "needs" } : null,
         cause: t.fromFailedFinal || t.scope === "Failed final inspection items" ? "final" : t.fromFailedRough ? "roughfail" : t.fromCOId ? "co"
@@ -752,6 +756,18 @@ function buildCalendar(input) {
     const lo = a <= b ? a : b, hi = a <= b ? b : a, who = (board0 && board0.find(p.name) || { name: String(p.name).trim() }).name;
     for (let d = lo < todayIso ? todayIso : lo, g = 0; d <= hi && d <= end && g < 400; d = addDays(d, 1), g++) { const l = offByDay[d] = offByDay[d] || []; if (!l.includes(who)) l.push(who); }
   });
+  // v674 (Duet's review, 2026-11-20: "Treycen shows as open, but Simpro has him on leave"): Simpro's own leave and
+  // activities (anything that isn't a job) count too. Most of the workday gone (8 of the 10 hours) is a day off, the
+  // same as approved time off: never scheduled, listed under Off. Less than that is busy for those hours only.
+  const simOther = {};
+  (schedules || []).forEach(s => { if (!s || s.Type === "job" || !s.Date || !s.Staff || !s.Staff.Name) return; const iso = String(s.Date).slice(0, 10); if (iso < todayIso || iso > end) return;
+    const who = (board0 && board0.find(s.Staff.Name) || { name: String(s.Staff.Name).trim() }).name;
+    (s.Blocks || []).forEach(b => { const a = hoursOf(String((b && b.StartTime) || "").slice(0, 5)), z = hoursOf(String((b && b.EndTime) || "").slice(0, 5));
+      if (a != null && z != null && z > a) { const d = simOther[iso] = simOther[iso] || {}; (d[who] = d[who] || []).push([a, z, String(s.Type || "activity")]); } }); });
+  Object.keys(simOther).forEach(iso => Object.keys(simOther[iso]).forEach(who => {
+    const iv = simOther[iso][who].map(x => [Math.max(DAY0, x[0]), Math.min(DAY0 + HPD, x[1])]).filter(x => x[1] > x[0]).sort((a, b) => a[0] - b[0]); let t = 0, at = -1;
+    iv.forEach(([a, z]) => { if (z <= at) return; t += z - Math.max(a, at); at = z; });
+    if (t >= HPD - 2) { const l = offByDay[iso] = offByDay[iso] || []; if (!l.includes(who)) l.push(who); simOther[iso][who].off = true; } }));
   const needs = users ? autoPlan(items, { board: board0, schedules, plans, todayIso, end, offByDay }) : [];
   // A plan someone kept, or a Simpro booking, on a day a person on it is off, or on a holiday: flagged, never moved.
   items.forEach(it => {
@@ -774,7 +790,7 @@ function buildCalendar(input) {
   const firstIso = (it) => it.booked.length ? it.booked[0].iso : it.plan ? it.plan.s : "9999";
   const cal = items.filter(it => it.onCal).sort((a, b) => (a.booked.length ? 0 : 1) - (b.booked.length ? 0 : 1) || (firstIso(a) < firstIso(b) ? -1 : 1));
   const holidays = {}; days.forEach(d => { if (isHoliday(d.iso)) holidays[d.iso] = holidayName(d.iso) || "Holiday"; });
-  return { start, end, today: todayIso, days, items, cal, list, needs, offByDay, holidays,
+  return { start, end, today: todayIso, days, items, cal, list, needs, offByDay, simOther, holidays,
     counts: { flagged: list.filter(x => x.flags.length).length + cal.filter(x => x.flags.length).length, list: list.length, cal: cal.length, needs: needs.length } };
 }
 
@@ -831,8 +847,11 @@ function chipsOf(V, board) {
 const winsOf = (c, n) => (c.win && c.win[n] && c.win[n].length) ? c.win[n] : [[c.from, c.to]];
 // Each person's busy times per day, from every block: { name: { iso: [{ from, to, booked, soft, key, base, label }] } }.
 // soft = an auto forecast (a guess; it never blocks a hand pick).
-function busyOf(chips, board) {
+function busyOf(chips, board, V) {
   const out = {};
+  // v674: part of a day on leave or at an activity in Simpro is busy for those hours (a whole day is already Off)
+  Object.entries((V && V.simOther) || {}).forEach(([iso, by]) => Object.entries(by).forEach(([who, l]) => { if (l.off) return;
+    l.forEach(([a, z, type]) => ((out[who] = out[who] || {})[iso] = out[who][iso] || []).push({ from: a, to: z, booked: true, soft: false, key: "simpro-other", base: "simpro-other", label: `${/leave/i.test(type) ? "leave" : "an activity"} in Simpro ${clock(a)}–${clock(z)}` })); }));
   Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
     if (c.from == null || c.to == null) return;
     (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held" || c.style === "duet", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` })); });
@@ -869,7 +888,7 @@ function whyOf(it) {
 // same chipsOf / busyOf / dayCounts the screen uses, so it says what the screen says. No money, no contact details.
 const KIND_WORDS = { booked: "simpro", kept: "plan", duet: "duet-proposal", auto: "forecast", held: "forecast-held", open: "nobody-on-it", cc: "command-center-date" };
 function viewOf(V, users, opts) {
-  const o = opts || {}, board = crewBoard(users || []), chips = chipsOf(V, board), busy = busyOf(chips, board);
+  const o = opts || {}, board = crewBoard(users || []), chips = chipsOf(V, board), busy = busyOf(chips, board, V);
   const from = o.from && o.from > V.today ? o.from : V.today, to = o.to && o.to < V.end ? o.to : V.end;
   const days = [], seen = new Set();
   for (let d = from, g = 0; d <= to && g < 200; d = addDays(d, 1), g++) {

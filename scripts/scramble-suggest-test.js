@@ -18,17 +18,19 @@ const NOW = new Date(2026, 10, 23, 9);   // Monday 11/23/2026
 const sched = (id, name, date, s, e, ref) => ({ Type: "job", Reference: ref, Date: date, Staff: { ID: id, Name: name }, Blocks: [{ StartTime: s, EndTime: e, Hrs: (parseInt(e, 10) - parseInt(s, 10)) }] });
 
 function world(over) {
-  const w = { schedules: [], pto: [], prefs: {}, sets: [], simpro: [], ...(over || {}) };
+  const w = { schedules: [], pto: [], prefs: {}, sets: [], updates: [], simpro: [], ...(over || {}) };
   w.jobs = [
     { id: "J1", data: { data: { id: "J1", simproNo: "900", name: "Suggest test", roughStatus: "complete", finishStatus: "inprogress", finishStage: "20", foreman: "Daegan Smith",
       returnTrips: [{ id: "r1", number: 1, scope: "x", rtStatus: "needs", needsByStart: "11/30/2026", material: "wire" }] } } },
     { id: "J2", data: { data: { id: "J2", simproNo: "901", name: "Other job", roughStatus: "complete", finishStatus: "inprogress", finishStage: "20", foreman: "Daegan Smith" } } }];
   const docOf = (data) => ({ exists: data != null, data: () => data });
-  w.deps = { now: NOW, tz: "America/Denver", getUsers: async () => users, del: () => "__DELETE__", id: () => "dpTEST",
+  w.deps = { now: NOW, tz: "America/Denver", getUsers: async () => users, del: () => "__DELETE__", fp: (...segs) => segs, id: () => "dpTEST",
     simproReq: async (method, path) => { w.simpro.push(method + " " + path); const m = /between\((\S+?),(\S+?)\)/.exec(path); return { ok: true, data: w.schedules.filter(s => s.Date >= m[1] && s.Date <= m[2]) }; },
     db: { collection: (n) => n === "jobs" ? { get: async () => ({ docs: w.jobs.map(d => ({ id: d.id, data: () => d.data })) }) }
       : n === "settings" ? { doc: (id) => ({ get: async () => docOf(id === "crewPTO" ? { list: w.pto } : id === "phaseHours" ? { jobs: { "900": { f: [20, 100] }, "901": { f: [20, 100] } } } : id === "upcoming_jobs" ? { items: [] } : {}) }) }
-      : { doc: (id) => ({ get: async () => docOf(w.prefs), set: async (patch, opt) => { w.sets.push({ id, patch, opt });
+      : { doc: (id) => ({ get: async () => docOf(w.prefs), update: async (...kv) => { const u = {}; for (let i = 0; i < kv.length; i += 2) u[Array.isArray(kv[i]) ? kv[i].join("/") : kv[i]] = kv[i + 1]; w.updates.push(u);
+          Object.keys(u).forEach(k => { const [m, key] = k.split("/"); if (!key) return; w.prefs[m] = { ...(w.prefs[m] || {}) }; if (u[k] === "__DELETE__") delete w.prefs[m][key]; else w.prefs[m][key] = u[k]; }); },
+        set: async (patch, opt) => { w.sets.push({ id, patch, opt });
           ["cal", "duet", "lessons"].forEach(k => { if (patch[k]) { w.prefs[k] = { ...(w.prefs[k] || {}) }; Object.keys(patch[k]).forEach(x => { if (patch[k][x] === "__DELETE__") delete w.prefs[k][x]; else w.prefs[k][x] = patch[k][x]; }); } }); } }) } } };
   return w;
 }
@@ -152,9 +154,51 @@ const viewOf = async (w, from, to) => R.assemble({ ...(await R.gather(w.deps)), 
     }
   }
 
+  // ── Duet edits a block a person placed, with Koy's yes (v674) ──
+  {
+    const placed = { cal: { "j_J1_f": { s: "2026-11-24", hours: 20, crew: 2, staff: [{ name: "Daegan Smith" }, { name: "Callen Jakeman" }], by: "Koy Wilkinson", at: "2026-11-20T01:00:00Z" } } };
+    const ed = (entries, more) => ({ jobNo: "900", phase: "finish", entries, reason: "Koy asked to move it to Wednesday with Trever.", ...(more || {}) });
+    const wed = [E("Trever", "2026-11-25", "07:00", "12:00"), E("Callen", "2026-11-25", "07:00", "12:00")];
+    w = world({ prefs: JSON.parse(JSON.stringify(placed)) });
+    p = await S.edit(w.deps, ed(wed));
+    ok(p.ok && p.mode === "preview" && p.canApply && p.hash && p.placedBy === "Koy Wilkinson" && p.cameFrom === "a plan a person placed" && p.isNow[0].d === "2026-11-24" && p.wouldBecome[0].d === "2026-11-25" && w.updates.length === 0 && w.sets.length === 0, "a preview shows what the block is now and what it would become, and changes nothing");
+    ok(p.whatChanges.join(" | ").includes("days 2026-11-24 → 2026-11-25") && p.whatChanges.join(" | ").includes("took off Daegan") && p.whatChanges.join(" | ").includes("put on Trever"), "the preview says the change in words");
+    threw = ""; try { await S.edit(w.deps, { ...ed(wed), mode: "apply", hash: "nope.1" }); } catch (e) { threw = e.message; }
+    ok(/changed since that preview/.test(threw) && w.updates.length === 0, "apply without the preview's hash changes nothing");
+    let ap = await S.edit(w.deps, { ...ed(wed), mode: "apply", hash: p.hash });
+    const u = w.updates[0];
+    ok(ap.ok && ap.changed && w.updates.length === 1 && u["cal/j_J1_f"].s === "2026-11-25" && u["cal/j_J1_f"].by === "Duet (Koy's yes)" && u["cal/j_J1_f"].staff.map(x => x.name).join() === "Trever Worley,Callen Jakeman" && u["duet/j_J1_f"] === "__DELETE__", "apply replaces that one block whole, as a plan by Duet with Koy's yes");
+    const lg = Object.keys(u).find(k => k.startsWith("calLog/"));
+    ok(lg && u[lg].by === "Duet (Koy's yes)" && u[lg].src === "plan" && u[lg].was[0].d === "2026-11-24" && u[lg].now[0].d === "2026-11-25" && /Koy asked/.test(u[lg].reason), "the change goes in the edit log with what it was and what it became");
+    v = await viewOf(w, "2026-11-23", "2026-11-27");
+    const blk = v.days.find(d => d.date === "2026-11-25").blocks.find(b => b.key === "j_J1_f");
+    ok(blk && blk.kind === "plan" && blk.people.join() === "Trever Worley,Callen Jakeman" && blk.to === "12:00" && !v.days.find(d => d.date === "2026-11-24").blocks.some(b => b.key === "j_J1_f"), "the calendar then shows the block where it was moved to");
+    threw = ""; try { await S.edit(w.deps, { ...ed(wed), mode: "apply", hash: p.hash }); } catch (e) { threw = e.message; }
+    ok(/changed since that preview/.test(threw) && w.updates.length === 1, "the same preview can't be applied twice (the block has changed)");
+    // the same rules as everything else
+    w = world({ prefs: JSON.parse(JSON.stringify(placed)), pto: [{ name: "Trever Worley", start: "2026-11-25", end: "2026-11-25" }] });
+    p = await S.edit(w.deps, ed(wed));
+    ok(!p.ok && !p.canApply && !p.hash && rules(p).includes("time-off:Trever"), "an edit that breaks a rule is refused in the preview");
+    ok(!(await S.edit(w.deps, { ...ed(wed), mode: "apply", hash: "a.b" })).ok && w.updates.length === 0, "and apply on a refused edit changes nothing");
+    w = world({ prefs: { cal: { ...placed.cal, "j_J2_f": { s: "2026-11-25", hours: 20, crew: 2, staff: [{ name: "Trever Worley" }, { name: "Callen Jakeman" }], by: "Josh Cloward" } } } });
+    ok(rules(await S.edit(w.deps, ed(wed))).includes("on-a-plan:Trever"), "people on another placed block then are refused; that block has to change first");
+    w = world({ prefs: JSON.parse(JSON.stringify(placed)) });
+    ok(rules(await S.edit(w.deps, ed([E("Callen", "2026-11-25", "07:00", "12:00")], { aloneOk: true }))) === "alone:Callen", "a crew member alone is refused even on an edit Koy asked for");
+    p = await S.edit(w.deps, ed([E("Trever", "2026-11-25", "07:00", "12:00")], { aloneOk: true }));
+    ok(p.ok && p.notes.some(n => /goes alone/.test(n)), "a lead alone is allowed when Koy said so, and noted");
+    threw = ""; try { await S.edit(w.deps, { ...ed(wed), reason: "x" }); } catch (e) { threw = e.message; }
+    ok(/Say why/.test(threw), "an edit needs the reason");
+    // back to the auto-schedule
+    p = await S.edit(w.deps, { jobNo: "900", phase: "finish", backToAuto: true, reason: "Koy said let the auto-schedule have it." });
+    ok(p.ok && p.canApply && p.wouldBecome.backToAuto && p.whatChanges[0] === "handed back to the auto-schedule", "handing a block back to the auto-schedule previews too");
+    ap = await S.edit(w.deps, { jobNo: "900", phase: "finish", backToAuto: true, reason: "Koy said let the auto-schedule have it.", mode: "apply", hash: p.hash });
+    ok(ap.ok && w.updates[0]["cal/j_J1_f"] === "__DELETE__" && !w.prefs.cal["j_J1_f"], "and applying it removes only that block's plan");
+    ok((await S.edit(world().deps, { jobNo: "900", phase: "finish", backToAuto: true, reason: "Koy said let the auto-schedule have it." })).noop, "handing back a block nobody placed is a no-op");
+  }
+
   // ── never a booking, a job write, a stage or a status ──
   const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleSuggest.js"), "utf8").replace(/\/\/[^\n]*/g, "");
-  ok(!/"POST"|"PATCH"|"DELETE"|collection\("jobs"\)\.doc|Status\s*:|Stage\s*:/.test(src) && (src.match(/\.set\(/g) || []).length === 4 && !/\.update\(|\)\.add\(|runTransaction|batch\(/.test(src), "the suggest door writes only the calendar's plans doc: no Simpro write, no job write, no stage or status");
+  ok(!/"POST"|"PATCH"|"DELETE"|collection\("jobs"\)\.doc|Status\s*:|Stage\s*:/.test(src) && (src.match(/\.set\(/g) || []).length === 4 && (src.match(/\.update\(/g) || []).length === 1 && /await ref\.update\(deps\.fp\("cal", it\.key\)/.test(src) && !/\)\.add\(|runTransaction|batch\(/.test(src), "the suggest door writes only the calendar's plans doc: no Simpro write, no job write, no stage or status");
 
   if (fails) { console.error(fails + " failed"); process.exit(1); }
   console.log("scramble-suggest-test: all passed");

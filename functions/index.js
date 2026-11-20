@@ -8519,12 +8519,15 @@ exports.scrambleBook = functions
     if (!jr.ok || !jr.data || !jr.data.ID) throw new functions.https.HttpsError("not-found", `Simpro has no job #${no}.`);
     const sr = await simproReqWithRetry("GET", `/jobs/${no}/sections/?pageSize=250&columns=ID,Name,DisplayOrder`);
     const sections = Array.isArray(sr.data) ? sr.data : [];
-    for (const s of sections.filter(x => /^\s*base\s*$/i.test(x.Name || "")).concat(sections).slice(0, 4)) {
+    // v674: every section's cost centers, whole (what has been invoiced is on each one), so a warranty cost center in
+    // its own section can be found and a fully invoiced one is never booked.
+    for (const s of sections.slice(0, 20)) {
       if (s.ccs) continue;
-      const cr = await simproReqWithRetry("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250&columns=ID,Name`);
+      const cr = await simproReqWithRetry("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250`);
       s.ccs = Array.isArray(cr.data) ? cr.data : [];
     }
     const cc = SB.pickCostCenter(sections, phase, data.cc);
+    if (cc && cc.refused) throw new functions.https.HttpsError("failed-precondition", `Job #${no}: ${cc.refused} Nothing was written.`);
     if (!cc) throw new functions.https.HttpsError("failed-precondition", `Job #${no} has no ${phase === "rough" || (phase === "trip" && data.cc === "rough") ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Book it in Simpro.`);
     // Who, by Simpro's own names.
     const staffAll = await sbActiveStaff();

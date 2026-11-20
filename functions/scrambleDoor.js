@@ -125,7 +125,14 @@ function guard({ rows, board, isOff, holidays, schedules, staffAll, jobNo, alone
       const already = (schedules || []).some(s => String(s.Type || "") === "job" && String(s.Reference || "").split("-")[0] === String(jobNo) && String(s.Date || "").slice(0, 10) === date
         && Number(s.Staff && s.Staff.ID) !== r.staffId && (s.Blocks || []).some(b => { const a = toMin(String(b.StartTime || "").slice(0, 5)), z = toMin(String(b.EndTime || "").slice(0, 5)); return a != null && z != null && overlap(a, z, r.from, r.to); }));
       if (withMe || already) return;
-      if (r.title === "crew") refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}. A crew member never goes alone; add someone.` });
+      // v674 (Koy 2026-11-20: "Sometimes people are going to be alone because their help is out of town"): a lead, jr
+      // foreman or foreman whose set pair is off that day may go alone. It is noted, not refused.
+      const mate = board.partnerOf(r.person), mateOff = mate && board.crewOf(mate) && isOff(mate, date);
+      // Only a foreman, jr foreman or lead can ever be alone. Everyone else (crew, apprentice, any other title) never is
+      // (Koy 2026-11-20: "an apprentice or a crew level should never be alone").
+      const leader = ["foreman", "jrforeman", "lead"].includes(r.title);
+      if (leader && mateOff) { notes.push(`${first(r.person)} goes alone ${date}: their set pair ${first(mate)} is off.`); return; }
+      if (!leader) refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}. A crew member or apprentice never goes alone; add someone.` });
       else if (!aloneOk) refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}. Add someone, or have Koy say it's OK for them to go alone.` });
       else notes.push(`${first(r.person)} goes alone ${date} (Koy said it's OK).`);
     });
@@ -152,6 +159,7 @@ function entriesFor(rows, existing) {
 // job's rough-in isn't complete, else Finish (the same rule the calendar uses). A change order's own cost center is
 // passed in as costCenter instead (Koy 2026-11-20: CO work books to the CO's own cost center).
 function tripCc(trip, job) {
+  if (/warrant/i.test(String(trip.scope || "") + " " + String(trip.task || ""))) return "warranty";   // v674: warranty work goes on a Warranty cost center
   if (trip.fromFailedRough) return "rough";
   if (trip.fromFailedFinal || trip.scope === "Failed final inspection items") return "finish";
   const rs = job.roughStatus || ((parseInt(job.roughStage, 10) || 0) === 100 ? "complete" : "");
@@ -208,15 +216,17 @@ async function run(deps, args) {
     const cr = await deps.simproReq("GET", `/jobs/${no}/sections/${sec.ID}/costCenters/?pageSize=250&columns=ID,Name`);
     const c = (cr && Array.isArray(cr.data) ? cr.data : []).find(x => Number(x.ID) === Number(a.costCenter.id));
     if (!c) throw new Refused(`Job #${no} has no cost center ${a.costCenter.id} in section ${sec.Name || sec.ID}.`);
+    if (SB.invoiced(c)) throw new Refused(`${c.Name || "That cost center"} on job #${no} is fully invoiced, so a booking can't go there. Use an open one (a Warranty cost center for warranty work).`);
     cc = { sectionId: Number(sec.ID), sectionName: String(sec.Name || ""), id: Number(c.ID), name: String(c.Name || "") };
   } else {
-    for (const s of sections.filter(x => /^\s*base\s*$/i.test(x.Name || "")).concat(sections).slice(0, 4)) {
+    for (const s of sections.slice(0, 20)) {   // every section, whole: warranty lives in its own section, and what is invoiced is on each cost center
       if (s.ccs) continue;
-      const cr = await deps.simproReq("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250&columns=ID,Name`);
+      const cr = await deps.simproReq("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250`);
       s.ccs = cr && Array.isArray(cr.data) ? cr.data : [];
     }
-    const want = phase === "trip" ? tripCc(trip, ccJob) : phase;
+    const want = a.warranty === true ? "warranty" : phase === "trip" ? tripCc(trip, ccJob) : phase;
     cc = SB.pickCostCenter(sections, phase, want);
+    if (cc && cc.refused) throw new Refused(`Job #${no}: ${cc.refused}`);
     if (!cc) throw new Refused(`Job #${no} has no ${want === "rough" ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Name the cost center, or book it in Simpro.`);
   }
   // who

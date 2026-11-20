@@ -100,6 +100,17 @@ const rules = (r) => (r.refused || []).map(x => x.rule + ":" + x.person.split(" 
   w = world({ schedules: [sched(1, "2026-11-24", "07:00", "17:00", "900-1")] });
   ok((await D.run(w.deps, base([E("Callen", "2026-11-24", "07:00", "12:00")]))).ok, "joining someone Simpro already has on this job that day isn't alone");
   ok(rules(await D.run(world().deps, base([E("Callen", "2026-11-24", "07:00", "11:00"), E("Trever", "2026-11-24", "13:00", "17:00")]))) === "alone:Callen,alone:Trever", "two people at different times of the day are each alone");
+  // v674: a leader whose set pair is off may go alone; a crew member or apprentice never
+  w = world({ pto: [{ name: "James Livingston", start: "2026-11-24", end: "2026-11-24" }] });
+  p = await D.run(w.deps, base([E("Louis", "2026-11-24", "07:00", "17:00")]));
+  ok(p.ok && p.notes.some(n => /Louis goes alone 2026-11-24: their set pair James is off/.test(n)), "a junior foreman whose pair is off goes alone without asking, and the preview says why");
+  w = world({ pto: [{ name: "Louis Hoffman", start: "2026-11-24", end: "2026-11-24" }] });
+  ok(rules(await D.run(w.deps, base([E("James Livingston", "2026-11-24", "07:00", "17:00")], { aloneOk: true }))) === "alone:James", "a crew member whose pair is off still never goes alone");
+  {
+    const SCx = require("../functions/scrambleCal.js"), us = users.map(u => u.id === "c" ? { ...u, title: "apprentice" } : u), bd = SCx.crewBoard(us);
+    const g2 = D.guard({ rows: [{ person: "Callen Jakeman", staffId: 5, title: (bd.crewOf("Callen Jakeman").title || {})["Callen Jakeman"], date: "2026-11-24", from: 420, to: 1020 }], board: bd, isOff: () => false, holidays: {}, schedules: [], staffAll: staff, jobNo: "900", aloneOk: true, splitPairs: false });
+    ok(g2.refusals.length === 1 && g2.refusals[0].rule === "alone", "an apprentice (any title that isn't foreman, jr foreman or lead) never goes alone, even when asked");
+  }
 
   // ── the 40-hour line ──
   w = world({ schedules: [sched(4, "2026-11-23", "07:00", "17:00"), sched(5, "2026-11-23", "07:00", "17:00"), sched(4, "2026-11-23", "17:00", "19:00", "", "activity")] });
@@ -124,6 +135,24 @@ const rules = (r) => (r.refused || []).map(x => x.rule + ":" + x.person.split(" 
   ok(/no cost center 999/.test(threw), "a cost center that isn't on that job is refused");
   threw = ""; try { await D.run(world().deps, { ...base(pair), jobNo: "12345" }); } catch (e) { threw = e.message; }
   ok(/no job #12345/.test(threw), "a job number Simpro doesn't have is refused");
+
+  // ── warranty and invoiced cost centers (v674) ──
+  {
+    const CL = (pct) => ({ Claimed: { ToDate: { Percent: pct } } });
+    const secs = (finPct, warr) => [{ ID: 11, Name: "Base", DisplayOrder: 1, ccs: [{ ID: 101, Name: "Rough In", CostCenter: { Name: "Residential (Rough In)" }, ...CL(100) }, { ID: 102, Name: "Finish", CostCenter: { Name: "Residential (Finish)" }, ...CL(finPct) }] },
+      { ID: 19, Name: "Warranty", DisplayOrder: 9, ccs: warr }];
+    const W = (id, name, pct) => ({ ID: id, Name: name, CostCenter: { Name: "Residential (Warranty)" }, ...CL(pct) });
+    ok(SB.pickCostCenter(secs(0, []), "finish").id === 102, "an open Finish cost center is used as before");
+    let c = SB.pickCostCenter(secs(100, [W(901, "Final inspection items", 100), W(902, "Vanity lights", 0)]), "finish");
+    ok(c.id === 902 && c.sectionName === "Warranty" && c.warranty && /Finish is fully invoiced/.test(c.because), "a fully invoiced Finish sends the booking to the open warranty cost center, and says why");
+    ok(/fully invoiced/.test(SB.pickCostCenter(secs(100, [W(901, "Final inspection items", 100)]), "finish").refused) && /fully invoiced/.test(SB.pickCostCenter(secs(100, []), "finish").refused), "invoiced Finish and no open warranty cost center: refused, never booked to an invoiced one");
+    c = SB.pickCostCenter(secs(0, [W(902, "Vanity lights", 0), W(905, "Newer warranty item", 0)]), "trip", "warranty");
+    ok(c.id === 905 && c.otherOpenWarranty.length === 1 && c.otherOpenWarranty[0].id === 902, "warranty work goes to the newest open warranty cost center, and lists the others");
+    ok(/no open Warranty cost center/.test(SB.pickCostCenter(secs(0, []), "trip", "warranty").refused), "warranty work with no warranty cost center is refused with what to do");
+    ok(SB.pickCostCenter(secs(0, [W(902, "Finish touch-up", 0)]), "finish").id === 102, "a warranty line that happens to say Finish is never mistaken for the Finish cost center");
+    ok(D.tripCc({ scope: "Warranty punch list per Owusu" }, { roughStatus: "complete" }) === "warranty" && D.tripCc({ scope: "x", fromFailedRough: true }, {}) === "rough", "a trip whose scope says warranty is warranty work");
+    ok(SB.validate({ mode: "preview", jobNo: "5", phase: "trip", cc: "warranty", staffIds: [1], days: [{ date: "2026-11-24", hours: 4 }] }, "2026-11-23") === "", "the Book button can ask for warranty");
+  }
 
   // ── return trips ──
   w = world();
