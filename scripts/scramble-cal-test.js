@@ -326,5 +326,30 @@ ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === 
   ok(/isn't in the people picked/.test(SB.validate({ ...v, days: [{ date: "2026-11-24", hours: 5, staffIds: [3] }] }, "2026-11-17")), "a day can't book someone not picked");
 }
 
+// v662: the auto layout can't double-book anyone
+{
+  const ef = j => j.roughStatus || "", eff = j => j.finishStatus || "";
+  // a late first day (Zane has 5 h elsewhere Wed) rolls the job onto Thu, when Braden is booked all day: it must not go there
+  const jA = [{ id: "za", simproNo: "610", name: "Late start", foreman: "Zane Watkins", roughStatus: "inprogress", roughMaterials: [{ ordered: true }] }];
+  const sA = [{ Type: "job", Reference: "900-1", Date: "2026-11-18", Staff: { Name: "Zane Watkins" }, Blocks: [{ Hrs: 5 }] },
+    { Type: "job", Reference: "901-1", Date: "2026-11-19", Staff: { Name: "Braden Davis" }, Blocks: [{ Hrs: 10 }] }];
+  const A1 = SC.buildCalendar({ jobs: jA, schedules: sA, phaseHours: { "610": { r: [0, 20] } }, today, weeks: 5, users, effRS: ef, effFS: eff }).items.find(x => x.key === "j_za_r");
+  const onThu = A1.auto && SC.slotsOf(A1.auto).some(d => d.date === "2026-11-19");
+  ok(A1.auto && !onThu, "a job that would roll onto a day someone is booked elsewhere waits for a clear run (starts " + (A1.auto && A1.auto.s) + ")");
+  // the forecast after a Simpro booking: Callen is booked on another job Mon 11/23, so he comes off that day and the hours run on
+  const jB = [{ id: "tb", simproNo: "620", name: "Tail", foreman: "Daegan Smith", roughStatus: "inprogress", roughMaterials: [{ ordered: true }] }];
+  const sB = [{ Type: "job", Reference: "620-1", Date: "2026-11-19", Staff: { Name: "Daegan Smith" }, Blocks: [{ Hrs: 10 }] }, { Type: "job", Reference: "620-1", Date: "2026-11-19", Staff: { Name: "Callen Jakeman" }, Blocks: [{ Hrs: 10 }] },
+    { Type: "job", Reference: "700-1", Date: "2026-11-23", Staff: { Name: "Callen Jakeman" }, Blocks: [{ Hrs: 10 }] }];
+  const B1 = SC.buildCalendar({ jobs: jB, schedules: sB, phaseHours: { "620": { r: [0, 60] } }, today, weeks: 5, users, effRS: ef, effFS: eff }).items.find(x => x.key === "j_tb_r");
+  const sl = B1.auto ? SC.slotsOf(B1.auto) : [], mon = sl.find(d => d.date === "2026-11-23");
+  ok(mon && mon.staff && mon.staff.map(x => x.name).join() === "Daegan Smith", "Callen comes off the forecast on the day he's booked elsewhere; Daegan goes on");
+  ok(Math.abs(sl.reduce((a, d) => a + d.hours * (d.crew || 2), 0) - 40) < 0.01, "the forecast still lays all 40 hours left (" + sl.map(d => d.date.slice(5) + ":" + d.hours + "x" + (d.crew || 2)).join(" ") + ")");
+  // nobody free that day: the day is skipped
+  const sC = sB.concat([{ Type: "activity", Reference: "7", Date: "2026-11-23", Staff: { Name: "Daegan Smith" }, Blocks: [{ Hrs: 10 }] }]);
+  const C1 = SC.buildCalendar({ jobs: jB, schedules: sC, phaseHours: { "620": { r: [0, 60] } }, today, weeks: 5, users, effRS: ef, effFS: eff }).items.find(x => x.key === "j_tb_r");
+  ok(C1.auto && !SC.slotsOf(C1.auto).some(d => d.date === "2026-11-23") && SC.slotsOf(C1.auto)[0].date === "2026-11-24", "a forecast day when nobody on it is free is skipped");
+  ok(SC.pdOf([{ d: "2026-11-23", x: 1 }])["2026-11-23"].skip === true, "a skipped day saves and loads back");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");
