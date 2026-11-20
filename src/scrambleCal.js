@@ -776,6 +776,23 @@ function buildCalendar(input) {
     const ppl = f ? ((f.staff || []).length ? f.staff : ((it.booked[it.booked.length - 1] || {}).names || []).map(name => ({ name }))) : [];
     if (f) planDays(f).forEach(d => (d.staff || ppl).forEach(x => { const n = x && x.name; if (n && (offByDay[d.date] || []).includes((board0 && board0.find(n) || { name: n }).name) && !seen.has(n + d.date)) { seen.add(n + d.date); it.flags.push(`${firstOf(n)} is off ${md(d.date)}`); } }));
     if (it.done100 && !it.need) it.flags.push(`${it.tag} is at 100% with nothing left open. Mark it Complete on the job`);
+    // v675 (Duet's review 2026-11-20: "Jacob alone ... while 8 people sit open", "Nobody on it: Maddox, Chapman"): a block
+    // a person placed is never moved by the auto-schedule, so its problems used to sit silently on the calendar. They
+    // are calls for a person like any other, so they go under Needs you: a day with nobody on it, or one person alone.
+    // A foreman, jr foreman or lead whose set pair is off that day is fine alone (Koy 2026-11-20), and isn't listed.
+    if (it.plan && board0 && !it.done) {
+      const names0 = (it.plan.staff || []).map(x => x && x.name).filter(Boolean), probs = [];
+      slotsOf(it.plan).forEach(d => { if (d.date < todayIso || d.date > end || it.booked.some(b => b.iso === d.date)) return;
+        const offD = offByDay[d.date] || [], on = (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names0).map(n => (board0.find(n) || { name: n }).name).filter(n => !offD.includes(n));
+        if (d.none || !on.length) { probs.push(`nobody on it ${md(d.date)}`); return; }
+        if (on.length !== 1) return;
+        const c = board0.crewOf(on[0]), t = (c && c.title && c.title[on[0]]) || "", leader = ["foreman", "jrforeman", "lead"].includes(t), mate = board0.partnerOf(on[0]);
+        const withThem = (schedules || []).some(x => x && x.Type === "job" && String(x.Reference || "").split("-")[0] === String(it.no) && String(x.Date || "").slice(0, 10) === d.date);
+        if (withThem) return;
+        if (leader && mate && offD.includes(mate)) return;
+        probs.push(leader ? `${firstOf(on[0])} is alone on it ${md(d.date)}` : `${firstOf(on[0])} is alone on it ${md(d.date)}, and a crew member or apprentice never goes alone`); });
+      if (probs.length) { it.planNeed = probs.slice(0, 3).join("; ") + (probs.length > 3 ? `; and ${probs.length - 3} more` : ""); needs.push({ key: it.key, why: it.planNeed.charAt(0).toUpperCase() + it.planNeed.slice(1), held: true, placed: true }); }
+    }
     // v671 (Koy's rule 5: a return trip's block should be the trip's own crew): the trip names someone, and nobody on
     // the block is that person or on their crew.
     if (f && it.kind === "trip" && !it.done && it.who && board0) { const w = board0.find(it.who), wc = w && board0.crewOfUser(w), on = (f.staff || []).map(x => x && x.name).filter(Boolean);

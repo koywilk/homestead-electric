@@ -521,5 +521,18 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(busyPair.auto && busyPair.auto.staff.length === 1 && !!busyPair.auto.held, "alone because the pair is booked elsewhere (not off) is still held for a call");
 }
 
+// ── v675: a placed block's problems go under Needs you ──
+{
+  const opt = { today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const jT = [{ id: "pn", simproNo: "98", name: "Plan needs", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith", returnTrips: [{ id: "a", number: 1, rtStatus: "needs", needsByStart: "11/30/2026", material: "x" }] }];
+  const run = (plan, more) => { const V = SC.buildCalendar({ jobs: jT, schedules: [], phaseHours: {}, plans: { "t_pn_a": plan }, ...opt, ...(more || {}) }); return V.needs.find(n => n.key === "t_pn_a"); };
+  const one = (name) => ({ s: "2026-11-24", hours: 4, crew: 1, staff: [{ name }], t: "07:00", e: "11:00" });
+  ok(/Louis is alone on it 11\/24/.test((run(one("Louis Hoffman")) || {}).why || "") && run(one("Louis Hoffman")).placed, "a junior foreman alone on a placed block is listed under Needs you");
+  ok(/crew member or apprentice never goes alone/.test((run(one("Callen Jakeman")) || {}).why || ""), "a crew member alone on a placed block is listed, and it says they never go alone");
+  ok(!run(one("Louis Hoffman"), { timeOff: [{ name: "James Livingston", start: "2026-11-24", end: "2026-11-24" }] }), "a junior foreman alone because their pair is off is fine and isn't listed");
+  ok(!run({ s: "2026-11-24", hours: 8, crew: 2, staff: [{ name: "Louis Hoffman" }, { name: "James Livingston" }], t: "07:00", e: "11:00" }), "two people on a placed block is not a problem");
+  ok(/Nobody on it 11\/24/.test((run({ s: "2026-11-24", hours: 4, crew: 1, staff: [], t: "07:00", e: "11:00" }) || {}).why || ""), "a placed block with nobody on it is listed under Needs you");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

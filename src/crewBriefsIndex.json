@@ -1,5 +1,14 @@
 [
  {
+  "v": 675,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "Needs you now also lists blocks a person placed that have a problem: a day with nobody on it, or one person alone. It says who and which day. A lead or foreman whose partner is off that day isn't list"
+   }
+  ]
+ },
+ {
   "v": 674,
   "heads": [
    {
@@ -198,19 +207,6 @@
    {
     "h": "NEW for the office: the crew calendar",
     "first": "Dashboard › Meetings and Forecast › Calendar now show a real calendar: a week view with each day's jobs, a Month view, and a 4 months view to see how far out work is scheduled."
-   }
-  ]
- },
- {
-  "v": 655,
-  "heads": [
-   {
-    "h": "NEW on My Day (everyone)",
-    "first": "Team phone list: a new card on My Day. It starts closed. Tap Open."
-   },
-   {
-    "h": "NEW when you send a PO (Send to CED, New order from the bid)",
-    "first": "Under the CC box, tap Pick from team. Search a name and tick who to copy, up to 5. Tap Done picking."
    }
   ]
  }
