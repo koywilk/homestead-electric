@@ -1732,13 +1732,33 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
         res.status(500).json({ ok: false, error: "Couldn't complete the change. Nothing is known to have been written; check the task before asking again." });
       }
     });
+  // v668 (Koy 2026-11-20, Duet's build spec, Build 2 "the read door"): duetRead — reads that need the app's own code to
+  // answer. Same bearer token as duetApi, POST only, and it can never write: it is not handle(), has no writers, and its
+  // one action lays the crew calendar out with the screen's rules (functions/scrambleRead.js) and returns it as data.
+  const SR = require("../scrambleRead.js");
+  const duetRead = functions
+    .runWith({ timeoutSeconds: 120, memory: "1GB", secrets: [SECRET], invoker: "public" })
+    .https.onRequest(async (req, res) => {
+      if (!tokenOk(req)) { res.status(401).json({ ok: false, error: "unauthorized" }); return; }
+      if (req.method !== "POST") { res.status(405).json({ ok: false, error: "POST only" }); return; }
+      const b = req.body || {};
+      if (b.action !== "calendar.read") { res.status(400).json({ ok: false, refused: "Unknown read. The only one is calendar.read." }); return; }
+      if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function") { res.status(500).json({ ok: false, error: "Simpro reads are not wired into duetRead." }); return; }
+      try {
+        res.status(200).json(await SR.readCalendar({ db, getUsers, simproReq: materialDeps.simproReqWithRetry, tz: TZ }, b.args || {}));
+      } catch (e) {
+        if (e && e.bad) { res.status(400).json({ ok: false, refused: e.message }); return; }
+        functions.logger.error("[duetRead] failed", { action: b.action, error: e && e.message });
+        res.status(502).json({ ok: false, error: `Couldn't read the crew calendar: ${(e && e.message) || "unknown"} Nothing was changed.` });
+      }
+    });
   // v633: Koy's own Yes on a dashboard flag runs each proposed change through this
   // same handle() in-process (claudeFlagAnswer in index.js): same checks, audit, undo.
   const runAsKoy = async (body) => {
     try { return await handle(body, io, { okBy: "Koy (dashboard)" }); }
     catch (e) { if (e instanceof Refusal) return { status: e.status, body: { ok: false, refused: e.message } }; throw e; }
   };
-  return { duetApi, runAsKoy, io };
+  return { duetApi, duetRead, runAsKoy, io };
 };
 module.exports.handle = handle;
 module.exports.tokenOk = tokenOk;

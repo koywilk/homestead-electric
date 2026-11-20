@@ -7753,6 +7753,7 @@ const _duet = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.
   materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send },
   officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById } });
 exports.duetApi = _duet.duetApi;
+exports.duetRead = _duet.duetRead;   // v668: the crew calendar as data for Duet (read only)
 
 // ─── Claude tab on /dashboard (2026-11-04) ───────────────────────────────────
 // Koy: one page for him, one Josh and Brady can view, and no more separate

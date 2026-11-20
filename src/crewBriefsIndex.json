@@ -1,5 +1,9 @@
 [
  {
+  "v": 668,
+  "heads": []
+ },
+ {
   "v": 667,
   "heads": [
    {
@@ -203,15 +207,6 @@
    {
     "h": "NEW (Dashboard › Meetings: the Lead Meeting)",
     "first": "Open /dashboard › Meetings and tap Lead Meeting · Wed 6:30 at the top. The page remembers which meeting you picked."
-   }
-  ]
- },
- {
-  "v": 648,
-  "heads": [
-   {
-    "h": "NEW (Dashboard: Meetings tab, the Weekly Scramble)",
-    "first": "Open /dashboard and tap Meetings (between People and Automations)."
    }
   ]
  }

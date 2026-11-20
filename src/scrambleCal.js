@@ -763,5 +763,106 @@ function groupBy(list, itemOf) {
   const by = {}; (list || []).forEach(x => { const g = groupOf(itemOf ? itemOf(x) : x); (by[g] = by[g] || []).push(x); });
   return GROUPS.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
 }
-module.exports = { isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
+// ── What the screen shows (v668) ─────────────────────────────────────────────
+// Pure, so the calendar screen and the calendar read for Duet (functions/scrambleRead.js) draw from the same rules:
+// which blocks are on each day, who is busy when, who is open or under 10 hours, and why a job is there.
+const fcOf = (it) => it.plan || it.auto;
+// The blocks on each day: { iso: [chip] }. A chip is { it, style: booked|cc|kept|auto|held|open, names, who, from, to, ... }.
+function chipsOf(V, board) {
+  const out = {};
+  const fmOf = (names) => [...new Set(names.map(n => { const c = board.crewOf(n); return c ? firstOf(c.foreman) : ""; }).filter(Boolean))];
+  const push = (iso, c) => { (out[iso] = out[iso] || []).push(c); };
+  // v665 (Koy 2026-11-20, Webb drawn three times: "tf is webb there 3 times"): Simpro wins. Each person's Simpro times per
+  // day, so a plan or forecast never shows someone at a time Simpro has them, and never draws a day Simpro already has for it.
+  const canon = (n) => { const u = board.find(n); return u ? u.name : n; }, sim = {};
+  V.items.forEach(it => it.booked.forEach(b => (b.names || []).forEach(n => { const k = canon(n), w = (b.win && b.win[n] && b.win[n].length) ? b.win[n] : [[b.from != null ? b.from : DAY0, b.to != null ? b.to : DAY0 + HPD]];
+    ((sim[k] = sim[k] || {})[b.iso] = sim[k][b.iso] || []).push(...w); })));
+  V.items.forEach(it => {
+    it.booked.forEach(b => push(b.iso, { it, style: "booked", n: b.who.length, who: b.who, names: b.names || [], win: b.win || null, fm: fmOf(b.names || []), hrs: b.hrs, from: b.from != null ? b.from : DAY0, to: b.to != null ? b.to : DAY0 + Math.min(HPD, (b.hrs || HPD) / Math.max(1, b.who.length)) }));
+    // v663: a job the auto-schedule couldn't staff (or a confirmed start it had to hold) stays on its day, in red
+    if (it.redDay && it.redDay <= V.end && !(fcOf(it) && slotsOf(fcOf(it)).some(d => d.date === it.redDay))) push(it.redDay, { it, style: "open", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 });
+    const f = fcOf(it);
+    if (!f) { (it.ccDays || []).forEach(iso => { if (iso <= V.end) push(iso, { it, style: "cc", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 }); }); return; }
+    const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
+    // v663: only an auto forecast borrows the last booked day's people; a saved plan shows exactly who is on it
+    const nm = names.length ? names : it.plan ? [] : ((it.booked[it.booked.length - 1] || {}).names || []);
+    const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
+    slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
+      if (it.booked.some(b => b.iso === d.date)) return;   // Simpro already has this job or trip that day: its booking is the block
+      const inSim = (n) => ((sim[canon(n)] || {})[d.date] || []).some(([a, z]) => d.from < z - 1e-6 && a < d.to - 1e-6);
+      // v663 (Koy: "it shouldn't even be possible"): time off wins. Someone off that day is never shown on a forecast or plan that day.
+      const isOff = (n) => { const u = board.find(n); return offD.includes(u ? u.name : n); };
+      const rawD = d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : nm, nmD = rawD.filter(n => !isOff(n) && !inSim(n)), offLeft = rawD.filter(isOff).map(firstOf), simLeft = rawD.filter(n => !isOff(n) && inSim(n)).map(firstOf);
+      if (d.none || (it.plan && !nmD.length)) { push(d.date, { it, style: "open", none: true, offLeft, simLeft, n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0, time: d.label, from: d.from, to: d.to }); return; }
+      push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(firstOf), names: nmD, offLeft, simLeft, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
+  });
+  const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4, open: 5 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
+  Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
+  return out;
+}
+// One person's own clock times on a chip: Simpro's times for them on a booked day, else the chip's window.
+const winsOf = (c, n) => (c.win && c.win[n] && c.win[n].length) ? c.win[n] : [[c.from, c.to]];
+// Each person's busy times per day, from every block: { name: { iso: [{ from, to, booked, soft, key, base, label }] } }.
+// soft = an auto forecast (a guess; it never blocks a hand pick).
+function busyOf(chips, board) {
+  const out = {};
+  Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
+    if (c.from == null || c.to == null) return;
+    (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` })); });
+  }));
+  return out;
+}
+// A day's crew count: everyone on a crew who isn't off (all), how many are on something (on), who is on nothing (open),
+// who is off (out), and (v665, Koy: "everyone needs to be scheduled 10 hours a day") who is on something but under 10
+// hours, with their hours (short; Simpro, plans and forecasts, overlaps counted once; not on Fridays).
+function dayCounts(iso, chips, busy, board, V, crewF) {
+  const only = crewF && crewF !== "All" ? crewF : "";
+  const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); }));
+  const off = new Set((V.offByDay && V.offByDay[iso]) || []);
+  let all = 0, n = 0; const open = [], out = [], short = [];
+  const hrsOf = (p) => { const iv = (((busy[p] || {})[iso]) || []).map(b => [b.from, b.to]).sort((a, b) => a[0] - b[0]); let t = 0, end = -1;
+    iv.forEach(([a, z]) => { if (z <= end) return; t += z - Math.max(a, end); end = z; }); return Math.round(t * 4) / 4; };
+  Object.values(board.crews).sort((a, b) => a.foreman.localeCompare(b.foreman)).forEach(c => { if (only && firstOf(c.foreman) !== only) return;
+    c.people.forEach(p => { if (off.has(p)) { out.push(p); return; } all++; if (on.has(p)) { n++; const h = hrsOf(p); if (!isFri(iso) && h > 0 && h < HPD - 1e-6) short.push({ n: p, h }); } else open.push(p); }); });
+  return { on: n, all, open, out, short };
+}
+// v663 (Koy 2026-11-19: "why is vista meadows even showing ... can there be a small reason why its there?"): one line on why a block is on the calendar.
+function whyOf(it) {
+  if (it.kind === "rough" || it.kind === "finish") { const ph = it.kind === "rough" ? "Rough-in" : "Finish", st = it.start || {};
+    const a = st.started ? `${ph} is marked In Progress on the job${it.stage ? ` (${Math.round(it.stage)}%)` : ""}, so it stays until it's marked Complete` : st.conf && st.iso ? `${ph} has a confirmed start ${md(st.iso)}` : st.iso ? `${ph} has an estimated start ${md(st.iso)}` : it.booked.length ? "Booked in Simpro" : "";
+    const h = it.left > 0 && it.est != null ? `${Math.round(it.left)} h left of the ${Math.round(it.est)} h bid` : it.over ? "past its bid hours" : "";
+    return [a, h].filter(Boolean).join(" · "); }
+  if (it.kind === "trip") return it.done ? "Done; kept so its Simpro booking shows" : it.booked.length ? "Booked in Simpro" : "Open return trip on the job";
+  return "";
+}
+// The calendar as plain data for a date range (v668, the read door for Duet): per workday the blocks, the open people,
+// the people under 10 hours and who is off; the Needs you list; and one line per job on why it is there. Built from the
+// same chipsOf / busyOf / dayCounts the screen uses, so it says what the screen says. No money, no contact details.
+const KIND_WORDS = { booked: "simpro", kept: "plan", auto: "forecast", held: "forecast-held", open: "nobody-on-it", cc: "command-center-date" };
+function viewOf(V, users, opts) {
+  const o = opts || {}, board = crewBoard(users || []), chips = chipsOf(V, board), busy = busyOf(chips, board);
+  const from = o.from && o.from > V.today ? o.from : V.today, to = o.to && o.to < V.end ? o.to : V.end;
+  const days = [], seen = new Set();
+  for (let d = from, g = 0; d <= to && g < 200; d = addDays(d, 1), g++) {
+    if (dowOf(d) > 4) continue;   // Monday to Friday
+    const k = dayCounts(d, chips, busy, board, V, "All");
+    days.push({ date: d, friday: isFri(d), crewNotOff: k.all, onSomething: k.on, open: k.open, under10h: k.short.map(x => ({ name: x.n, hours: x.h })), off: k.out,
+      blocks: (chips[d] || []).map(c => { seen.add(c.it.key); const f = fcOf(c.it);
+        return { kind: KIND_WORDS[c.style] || c.style, key: c.it.key, jobNo: String(c.it.no || ""), job: String(c.it.name || ""), what: String(c.it.tag || ""), people: c.names || [],
+          ...(c.time ? { time: c.time } : {}), ...(c.from != null && c.to != null ? { from: hhmmOf(c.from), to: hhmmOf(c.to) } : {}), ...(c.hrs ? { crewHours: c.hrs } : {}),
+          ...(c.team ? { team: c.team } : {}), ...(c.style === "held" && f && f.held ? { heldBecause: f.held } : {}), ...(c.style === "kept" && c.it.plan && c.it.plan.by ? { placedBy: c.it.plan.by } : {}),
+          ...(c.offLeft && c.offLeft.length ? { leftOffBecauseOff: c.offLeft } : {}), ...(c.simLeft && c.simLeft.length ? { leftOffBecauseInSimpro: c.simLeft } : {}) }; }) });
+  }
+  const line = (it) => ({ key: it.key, jobNo: String(it.no || ""), job: String(it.name || ""), what: String(it.tag || ""), ...(whyOf(it) ? { why: whyOf(it) } : {}),
+    ...(it.left != null ? { hoursLeft: it.left } : {}), ...(it.est != null ? { bidHours: it.est, usedHours: it.used } : {}),
+    ...(it.start && it.start.iso ? { start: it.start.iso, startIs: it.start.started ? "in progress" : it.start.conf ? "confirmed" : it.start.by ? "schedule by" : "estimated" } : it.start && it.start.started ? { startIs: "in progress" } : {}),
+    ...(it.foreman ? { foreman: it.foreman } : {}), ...((it.flags || []).length ? { flags: it.flags } : {}) });
+  const byKey = {}; V.items.forEach(it => { byKey[it.key] = it; });
+  return { today: V.today, from, to, days,
+    needsYou: (V.needs || []).filter(n => byKey[n.key]).map(n => ({ ...line(byKey[n.key]), reason: n.why, placed: !!n.held })),
+    onCalendar: V.items.filter(it => seen.has(it.key)).map(line),
+    notOnCalendar: (V.list || []).slice(0, 300).map(it => ({ key: it.key, jobNo: String(it.no || ""), job: String(it.name || ""), what: String(it.tag || ""), ...(it.off ? { removed: true, ...(it.off.why ? { waitingOn: it.off.why } : {}) } : {}), ...((it.flags || []).length ? { flags: it.flags } : {}) })) };
+}
+
+module.exports = { chipsOf, winsOf, busyOf, dayCounts, whyOf, viewOf, fcOf, isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
   DAY0, winOf, pdOf, hhmmOf, md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };

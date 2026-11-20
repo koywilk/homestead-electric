@@ -52197,13 +52197,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // v663 (Koy 2026-11-19: "why is vista meadows even showing ... can there be a small reason why its there?"): one line on why a block is on the calendar.
   // The job behind a block or a list row, when it has a card to open (an upcoming job from Simpro has none yet).
   const cardOf = (it) => (onOpenJob && it && it.jobId && (jobs || []).find(x => x && x.id === it.jobId)) || null;
-  const whyOf = (it) => {
-    if (it.kind === "rough" || it.kind === "finish") { const ph = it.kind === "rough" ? "Rough-in" : "Finish", st = it.start || {};
-      const a = st.started ? `${ph} is marked In Progress on the job${it.stage ? ` (${Math.round(it.stage)}%)` : ""}, so it stays until it's marked Complete` : st.conf && st.iso ? `${ph} has a confirmed start ${SC.md(st.iso)}` : st.iso ? `${ph} has an estimated start ${SC.md(st.iso)}` : it.booked.length ? "Booked in Simpro" : "";
-      const h = it.left > 0 && it.est != null ? `${Math.round(it.left)} h left of the ${Math.round(it.est)} h bid` : it.over ? "past its bid hours" : "";
-      return [a, h].filter(Boolean).join(" · "); }
-    if (it.kind === "trip") return it.done ? "Done; kept so its Simpro booking shows" : it.booked.length ? "Booked in Simpro" : "Open return trip on the job";
-    return ""; };
+  const whyOf = SC.whyOf;
   // A move or copy never puts someone on a day they're off: they come off the block, and it says so.
   const dropOff = (p) => {
     const gone = []; const staff = (p.staff || []).filter(x => { const n = x && x.name; const u = n && board.find(n);
@@ -52216,40 +52210,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const fc = (it) => it.plan || it.auto;
   const nowIso = () => new Date().toISOString();
 
-  // Chips per day.
-  const chips = useMemo(() => {
-    const out = {};
-    const fmOf = (names) => [...new Set(names.map(n => { const c = board.crewOf(n); return c ? SC.firstOf(c.foreman) : ""; }).filter(Boolean))];
-    const push = (iso, c) => { (out[iso] = out[iso] || []).push(c); };
-    // v665 (Koy 2026-11-20, Webb drawn three times: "tf is webb there 3 times"): Simpro wins. Each person's Simpro times per
-    // day, so a plan or forecast never shows someone at a time Simpro has them, and never draws a day Simpro already has for it.
-    const canon = (n) => { const u = board.find(n); return u ? u.name : n; }, sim = {};
-    V.items.forEach(it => it.booked.forEach(b => (b.names || []).forEach(n => { const k = canon(n), w = (b.win && b.win[n] && b.win[n].length) ? b.win[n] : [[b.from != null ? b.from : SC.DAY0, b.to != null ? b.to : SC.DAY0 + SC.HPD]];
-      ((sim[k] = sim[k] || {})[b.iso] = sim[k][b.iso] || []).push(...w); })));
-    V.items.forEach(it => {
-      it.booked.forEach(b => push(b.iso, { it, style: "booked", n: b.who.length, who: b.who, names: b.names || [], win: b.win || null, fm: fmOf(b.names || []), hrs: b.hrs, from: b.from != null ? b.from : SC.DAY0, to: b.to != null ? b.to : SC.DAY0 + Math.min(SC.HPD, (b.hrs || SC.HPD) / Math.max(1, b.who.length)) }));
-      // v663: a job the auto-schedule couldn't staff (or a confirmed start it had to hold) stays on its day, in red
-      if (it.redDay && it.redDay <= V.end && !(fc(it) && SC.slotsOf(fc(it)).some(d => d.date === it.redDay))) push(it.redDay, { it, style: "open", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 });
-      const f = fc(it);
-      if (!f) { (it.ccDays || []).forEach(iso => { if (iso <= V.end) push(iso, { it, style: "cc", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 }); }); return; }
-      const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
-      // v663: only an auto forecast borrows the last booked day's people; a saved plan shows exactly who is on it
-      const nm = names.length ? names : it.plan ? [] : ((it.booked[it.booked.length - 1] || {}).names || []);
-      const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
-      // a forecast after a Simpro booking runs on with that day's people, less anyone off that day (v661)
-      SC.slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
-        if (it.booked.some(b => b.iso === d.date)) return;   // Simpro already has this job or trip that day: its booking is the block
-        const inSim = (n) => ((sim[canon(n)] || {})[d.date] || []).some(([a, z]) => d.from < z - 1e-6 && a < d.to - 1e-6);
-        // v663 (Koy: "it shouldn't even be possible"): time off wins. Someone off that day is never shown on a forecast or plan that day.
-        const isOff = (n) => { const u = board.find(n); return offD.includes(u ? u.name : n); };
-        const rawD = d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : nm, nmD = rawD.filter(n => !isOff(n) && !inSim(n)), offLeft = rawD.filter(isOff).map(SC.firstOf), simLeft = rawD.filter(n => !isOff(n) && inSim(n)).map(SC.firstOf);
-        if (d.none || (it.plan && !nmD.length)) { push(d.date, { it, style: "open", none: true, offLeft, simLeft, n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0, time: d.label, from: d.from, to: d.to }); return; }
-        push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(SC.firstOf), names: nmD, offLeft, simLeft, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
-    });
-    const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4, open: 5 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
-    Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
-    return out;
-  }, [V, board]); // eslint-disable-line
+  // Blocks per day. v666: the rules for what is drawn live in scrambleCal.js (chipsOf), so the calendar read for Duet
+  // (functions/scrambleRead.js) shows exactly what this screen shows.
+  const chips = useMemo(() => SC.chipsOf(V, board), [V, board]); // eslint-disable-line
   const shown = (c) => (!simOnly || c.style === "booked") && (crewF === "All" || c.fm.includes(crewF) || (!c.fm.length && crewF === "All"));
   const dayChips = (iso) => (chips[iso] || []).filter(shown);
   const crewText = (c) => c.team ? `${c.team} · ${c.n}` : c.who.length ? (c.who.length > 3 ? `${c.who.slice(0, 2).join(", ")} +${c.who.length - 2}` : c.who.join(", ")) : `${c.n} ppl`;
@@ -52264,16 +52227,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // v661 (Koy 2026-11-20: "it just let me double-book Noah and Jacob ... That needs to not be able to even happen at
   // all. If they're scheduled somewhere else, that time is blocked off"): each person's busy times per day, from every
   // block on the calendar (Simpro bookings, plans, auto) plus their time off. Every change that names people is checked.
-  // One person's own clock times on a chip: Simpro's times for them on a booked day, else the chip's window.
-  const winsOf = (c, n) => (c.win && c.win[n] && c.win[n].length) ? c.win[n] : [[c.from, c.to]];
-  const busy = useMemo(() => {
-    const out = {};
-    Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
-      if (c.from == null || c.to == null) return;
-      (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` })); });
-    }));
-    return out;
-  }, [chips, board]); // eslint-disable-line
+  const winsOf = SC.winsOf;
+  const busy = useMemo(() => SC.busyOf(chips, board), [chips, board]); // eslint-disable-line
   const nameOf = (n) => { const u = board.find(n); return u ? u.name : n; };
   // What `p` (a plan for item `key`) would clash with: [{ name, date, why }]. Its own days don't count.
   const clashesOf = (key, p, ign) => {
@@ -52578,22 +52533,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const weekStart = SC.addDays(start, wk * 7);
   // Crew count per day (Nov 19 strategy meeting: "want the number visible at the top of each day"): everyone on a
   // crew who isn't off, and how many of them are on something that day. The crew buttons narrow it to that crew.
-  const crewCnt = useMemo(() => {
-    const memo = {};
-    return (iso) => {
-      if (memo[iso]) return memo[iso];
-      const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); }));
-      const off = new Set((V.offByDay && V.offByDay[iso]) || []);
-      let all = 0, n = 0; const open = [], out = [], short = [];
-      // v665 (Koy 2026-11-20: "everyone needs to be scheduled 10 hours a day"): hours each person has that day (Simpro,
-      // plans and forecasts, overlaps counted once); anyone on something but under 10 is listed as short, with their hours.
-      const hrsOf = (p) => { const iv = (((busy[p] || {})[iso]) || []).map(b => [b.from, b.to]).sort((a, b) => a[0] - b[0]); let t = 0, end = -1;
-        iv.forEach(([a, z]) => { if (z <= end) return; t += z - Math.max(a, end); end = z; }); return Math.round(t * 4) / 4; };
-      Object.values(board.crews).sort((a, b) => a.foreman.localeCompare(b.foreman)).forEach(c => { if (crewF !== "All" && SC.firstOf(c.foreman) !== crewF) return;
-        c.people.forEach(p => { if (off.has(p)) { out.push(p); return; } all++; if (on.has(p)) { n++; const h = hrsOf(p); if (!SC.isFri(iso) && h > 0 && h < SC.HPD - 1e-6) short.push({ n: p, h }); } else open.push(p); }); });
-      return (memo[iso] = { on: n, all, open, out, short });
-    };
-  }, [chips, busy, board, V, crewF]);
+  const crewCnt = useMemo(() => { const memo = {}; return (iso) => memo[iso] || (memo[iso] = SC.dayCounts(iso, chips, busy, board, V, crewF)); }, [chips, busy, board, V, crewF]);
   const ccEl = (iso) => { const k = crewCnt(iso); return k.all ? <span className="sc-cc" title={`${k.on} of ${k.all} crew scheduled`}>{k.on}/{k.all}</span> : null; };
   // "11 on · 6 open" under a day's date; the open number is bold, and a check shows when everyone's on something.
   const countsEl = (iso) => { const k = crewCnt(iso); if (!k.all) return null; const o = k.all - k.on;
@@ -65491,9 +65431,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-20 · App SW version: v667
+**Last manifest update:** 2026-11-20 · App SW version: v668
 ---
 
+- **Crew calendar read for Duet (the read door): the calendar as data, from the screen's own rules** · 'in-flight 2026-11-20' · 'SW v668' · 'duetRead' · 'functions/scrambleRead.js' · 'SC.viewOf' · 'SC.chipsOf' · 'SC.busyOf' · 'SC.dayCounts' · 'scripts/scramble-cal-sync.js' · Koy handed Duet a brief on the calendar; Duet's build spec asked first for a way to read the calendar *as the screen shows it* (it could only see Simpro and the old Crew Planner). **What it is:** a new HTTPS function 'duetRead' (same bearer token as 'duetApi', POST only, one action 'calendar.read', no writers of any kind) that lays the calendar out with the screen's code and returns, for a date range: every block per workday (simpro / plan / forecast / forecast-held / nobody-on-it / command-center-date) with job, phase or trip, people and clock times; each day's **open** people, people **under 10 h** with hours, and who is **off**; **Needs you** with reasons; one line per job on **why it's here** with hours left, bid and used; and the Not on the calendar list. **Same rules, one copy:** what is drawn on a day, who is busy when, the day counts and the Why line moved out of the screen component into 'src/scrambleCal.js' ('chipsOf', 'busyOf', 'dayCounts', 'whyOf'); the screen now calls them, and 'functions/scrambleCal.js' is a byte-for-byte copy the build checks ('scripts/scramble-cal-sync.js', same pattern as punchTicks). It reads what the screen reads: residential jobs, settings/upcoming_jobs, the Crew Board, settings/crewPTO, settings/phaseHours, meetings/scramble__prefs and Simpro's schedule live. One known difference: hours for Upcoming jobs that are only in Simpro are left out (the screen asks Simpro per job; they are never auto-placed either way). The connector tool is 'cc_read_calendar' (homestead-connector v0.25.0). Nothing on the screen changes. Tests: 'scripts/scramble-read-test.js' (in prebuild). Guide unchanged. **Deploy:** hosting and functions ('Deploy-functions: duetRead, duetApi'). **Why it won't lose data:** read only; the module is scanned in its test for any Firestore or Simpro write and has none; the screen change is the same code moved, checked against the live calendar before and after.
 - **Reports on the Claude tab: Copy (for a foreman or for owners, as a text or an email) and a Share link for the team; the foreman copy never carries dollar or cost lines** · 'in-flight 2026-11-20' · 'SW v667' · 'OdReport' · 'ReportLinkView' · 'reportToText' · 'foremanSafe' · 'planShare' · 'claudeReports' · Koy: *"would be really nice if these were easily shown somewhere or copyable to send to people"*, then *"yes build and deploy when done"*. An open report has **Copy** and **Share link**. Copy: For Foreman / crew or Owners / admins, As Text or Email; the preview is exactly what copies (job number and name first, no markdown marks, a table row reads "Rough: Hours 120, Margin 31%"), with Send… where the phone has a share sheet. **The foreman copy is made on the server** ('functions/duetWrites/reports.js' foremanSafe): a line goes when it has a dollar sign / USD, or a money word (cost, price, sell, revenue, profit, budget, spent, billed, paid, wages…) with a number that isn't a percent, hours or days; a table loses any column headed by a money word. Margin %, hours and days stay. The callable 'claudeReports' now hands non-admins only the foreman copy (never the full text), and admins the full text plus the foreman copy, so Copy for foreman copies exactly what a foreman would see. Owners-only reports have no foreman copy and no link; in Foreman view only the foreman copy shows. **Share link** '/?report=<id>' opens over the app for a signed-in team member (live PIN), read-only, with Copy text; archived or shared-off reports read as "Not available" to non-admins. **Turn sharing off / on** is the callable's one write ('{ id, share }', admins only: 'shareOff' / 'shareOffAt' on that report); a newer version of the report keeps it. **Filing guard tightened:** a report with a cost figure and no $ ("material spent 14,820") now needs ownersOnly too. Test: 'scripts/claude-reports-test.js' (19 checks). Guide 'dashboard.html' (Reports). Deploys functions 'claudeReports,duetApi'. **Why it won't lose data:** no job, need or settings doc is touched; the only new write is the shareOff flag on one claude_reports doc through the server; rules unchanged (claude_reports stays server-only); nothing is deleted.
 - **Meetings: every meeting prefills, Lead Meeting ideas for Highlight / Lowlight / Training (field and app), and photos on every item** · 'in-flight 2026-11-20' · 'SW v666' · 'OdMeetings' · 'buildPrefill' · 'leadSuggestions' · 'trainingIdeas' · 'appIdeas' · 'foremanSuggestions' · 'scripts/crew-briefs-index.js' · 'src/crewBriefsIndex.json' · Koy, 2026-11-20: *"all the meetings on the dashboard need pre fills. aslo noticing i cant put pictures anywhere especially the highlight and low light of lead meeting needs this"*, *"yeah i want ideas for training pre filled"*, *"app training ideas as well"*. **Prefill (Scramble, Lead, Foreman):** the browser builds the same rows the page shows and saves them on meetings/<kind>_<date>.prefill ({at, by, appVersion, rows, errors}, setDoc mergeFields so nothing else on the record moves) the first time this week's meeting opens; **Prefill again** remakes it. This week the live sections stay live and the suggestion sections ('PREFILL_SECS': Lead highlight, lowlight, training; Foreman team) read the saved rows so they hold still; a past week reads every section from its prefill (before, past weeks showed today's rows). Friday Strategy unchanged (Thursday 9 PM cloud prefill). **Lead suggestions** (since last meeting): Highlight = inspections passed (first try marked), rough / finish done (status date), trips signed off, top three total margins 30%+; Lowlight = failed inspections with their items, open trips past their date, jobs over the bid or with negative total margin (percent only). **Training ideas** (two weeks, five at most): failed-inspection items by kind, the same fix on 3+ punch / trip items across 2+ jobs ('FIX_BUCKETS'), QC walk items, punch / trip text that reads like added work, then this week's standard (the crew SOP guides in turn, Open the guide). **App ideas** (three at most, tag App): crew-brief sections newer than last week's prefill appVersion (office, owners, dashboard and calendar sections left out; 'crewBriefsIndex.json' made from docs/crew-briefs in prebuild), then the weakest habit first: jobs in progress with no daily update in a week, punch items open two weeks with nobody on them, open trips with no material or PO, past-due My Day tasks. Each suggestion: **Keep** (meetings/<id>.kept), Edit, Hide (that week); Add still works. **Foreman:** Team check starts with a line per crew (out, failed inspections, losing money, over bid; counts and percents), each guy's time off under his name. **Photos:** + Photo on every row of every meeting (rows, Hours and margin, Job numbers, Foreman Jobs, Guys) and + Add a photo to this section under Section notes ('rowPhotos.sec_<sec>'); one picker (phones offer camera or library); tap a thumbnail for a big view with Back / Next, Full size, Delete, Close; × asks first. Stored as before ('taskPhotoPath', jobs/_tasks/task-photos/mtg_<meeting>/…). No dollars on the Lead or Foreman pages; no job, stage or Simpro write. Guide 'dashboard.html'. Test 'scripts/meeting-model-test.js'. **Deploy:** hosting only. **Why it won't lose data:** only the meeting's own record gains 'prefill' and 'kept' fields (replaced field-wise, never the whole doc); everything on jobs is only read; photos are added and unlinked the way v649 did.
 - **Crew calendar: use the hours someone is free** · 'in-flight 2026-11-20' · 'SW v665' · 'trimFor' · 'doTrim' · Koy: *"jacob is scheduled 10-12 somewhere so i should be able to schedule him somewhere else that isn't those hours"*. Ticking someone who is busy for only part of a block's time now offers their free hours first: **Add Jacob, make it 7:00 AM–10:00 AM**. The block's time changes for everyone on it (a block has one start and finish) and the other job is left alone. It ends when their other work starts or starts when it ends, whichever leaves more time, and is offered only when that leaves at least half an hour. **Move Jacob here** stays as the second choice for another plan. Someone part-busy on a **Simpro booking** can now be ticked too, with the free-hours choice only (the Simpro booking can't be moved from here). Time off still blocks. The box says what this job's time is and what each choice does. Same choices from **+ Someone from another crew**. **Simpro wins on the blocks too** (Koy, Webb drawn three times: *"tf is webb there 3 times"*): a plan or forecast is not drawn on a day Simpro already has that same job or trip booked (the booking is the block), and anyone Simpro has elsewhere at that time is left off a plan or forecast that day with *booked in Simpro then, left off* ('sim', 'simLeft'); a Simpro block only says *booked twice in Simpro* when the other one is in Simpro too. **Under 10 h** (Koy: *"everyone needs to be scheduled 10 hours a day"*): each workday's header counts who is on something but short of 10 hours, and lists them after the open names with their hours (*Jacob 4.5h*), drag or tap like an open name ('crewCnt.short'; Simpro, plans and forecasts, overlaps counted once; Fridays and people off are left out). The auto-schedule does not fill those gaps yet. Guide 'dashboard.html'. **Deploy:** hosting only. **Why it won't lose data:** the same plan save as setting a block's time and people by hand; every clash check still runs on the new time.

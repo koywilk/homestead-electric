@@ -1,0 +1,78 @@
+// scrambleRead.js — the crew calendar as data, for Duet (SW v668, Koy 2026-11-20).
+//
+// Read only. Builds the same calendar the Weekly Scramble screen shows, with the same code: scrambleCal.js here is a
+// byte-for-byte copy of src/scrambleCal.js (scripts/scramble-cal-sync.js fails the build when they differ), and
+// SC.viewOf() uses the same chipsOf / busyOf / dayCounts the screen draws from. It reads what the screen reads:
+//   jobs (residential, not archived) · settings/upcoming_jobs · settings/users (the Crew Board) · settings/crewPTO ·
+//   settings/phaseHours (last night's Job Costs hours) · meetings/scramble__prefs (plans, holidays) · Simpro's schedule.
+// It writes nothing, books nothing and never touches a stage or a status. No money and no contact details go out.
+// One known difference from the screen: hours for Upcoming jobs that are only in Simpro (the screen asks Simpro for
+// each one) are left out; those jobs are on the list either way and are never auto-placed.
+"use strict";
+const SC = require("./scrambleCal.js");
+
+const WEEKS = 17;   // the screen's SCAL_WEEKS
+// The app's effective status (src/App.js effRS / effFS): the stored status, else from the stage percent.
+const effRS = (j) => { if (j.tempPed) { const s = j.tempPedStatus || ""; return s === "completed" ? "complete" : s === "scheduled" ? "scheduled" : s === "ready" ? "waiting_date" : ""; }
+  if (j.roughStatus) return j.roughStatus; const p = parseInt(j.roughStage, 10) || 0; return p === 100 ? "complete" : p > 0 ? "inprogress" : ""; };
+const effFS = (j) => { if (j.tempPed) return ""; if (j.finishStatus) return j.finishStatus; const p = parseInt(j.finishStage, 10) || 0; return p === 100 ? "complete" : p > 0 ? "inprogress" : ""; };
+
+// "Now" as a Date whose own year / month / day / hour are the wall clock in `tz` (the functions run in UTC; the
+// calendar's day math reads the Date's local fields, the way the browser's does in Denver).
+function wallNow(tz, at) {
+  const p = {}; new Intl.DateTimeFormat("en-US", { timeZone: tz || "America/Denver", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .formatToParts(at || new Date()).forEach(x => { p[x.type] = x.value; });
+  return new Date(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
+}
+const isIso = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+
+// Residential, live jobs in the shape the app holds them (the job's `data`, with its id).
+function jobsOf(docs) {
+  return (docs || []).map(d => { const raw = (d && d.data) || {}, j = raw.data; return j && typeof j === "object" ? { ...j, id: j.id || d.id } : null; })
+    .filter(j => j && j.division !== "commercial");
+}
+
+// Pure: everything already read → the view. inputs: { jobDocs: [{ id, data }], upcoming, users, pto, prefs, phaseHours,
+// schedules, now (wall-clock Date), from, to }.
+function assemble(inp) {
+  const i = inp || {}, prefs = i.prefs || {};
+  const V = SC.buildCalendar({ jobs: jobsOf(i.jobDocs), upcoming: Array.isArray(i.upcoming) ? i.upcoming : [], schedules: Array.isArray(i.schedules) ? i.schedules : [],
+    phaseHours: i.phaseHours || {}, upHours: {}, plans: prefs.cal || {}, today: i.now, weeks: WEEKS, effRS, effFS, users: Array.isArray(i.users) ? i.users : [],
+    holidays: Array.isArray(prefs.holidays) ? prefs.holidays : SC.DEFAULT_HOLIDAYS, timeOff: Array.isArray(i.pto) ? i.pto : [] });
+  return SC.viewOf(V, i.users || [], { from: isIso(i.from) ? i.from : "", to: isIso(i.to) ? i.to : "" });
+}
+
+// The Simpro schedule for the calendar's 17 weeks, in six-week reads like the screen. Throws if Simpro can't be read:
+// a calendar laid out without Simpro's bookings would be wrong, so there is no partial answer.
+async function readSchedules(simproReq, startIso) {
+  let rows = [];
+  for (let w = 0; w < WEEKS; w += 6) {
+    const a = SC.addDays(startIso, w * 7), z = SC.addDays(startIso, Math.min(WEEKS, w + 6) * 7 - 1);
+    for (let page = 1; page <= 12; page++) {
+      const r = await simproReq("GET", `/schedules/?pageSize=250&page=${page}&Date=between(${a},${z})`);
+      if (!r || !r.ok || !Array.isArray(r.data)) throw new Error("Couldn't read Simpro's schedule.");
+      rows = rows.concat(r.data.filter(s => s && s.Date >= a && s.Date <= z));
+      if (r.data.length < 250) break;
+      if (page === 12) throw new Error("Simpro's schedule is too long to read whole.");
+    }
+  }
+  return rows;
+}
+
+// deps: { db, getUsers, simproReq, tz }. args: { from, to } (YYYY-MM-DD, optional; default the next two weeks).
+async function readCalendar(deps, args) {
+  const now = wallNow(deps.tz), today = SC.ymd(now), a = args || {};
+  const from = isIso(a.from) ? a.from : today, to = isIso(a.to) ? a.to : SC.addDays(from, 13);
+  if (to < from) throw Object.assign(new Error("to is before from"), { bad: true });
+  const settings = (id) => deps.db.collection("settings").doc(id).get().then(s => (s.exists ? s.data() : {}) || {});
+  const [jobSnap, up, pto, ph, prefSnap, users, schedules] = await Promise.all([
+    deps.db.collection("jobs").get(), settings("upcoming_jobs"), settings("crewPTO"), settings("phaseHours"),
+    deps.db.collection("meetings").doc("scramble__prefs").get(), deps.getUsers(), readSchedules(deps.simproReq, SC.mondayOf(today)) ]);
+  const view = assemble({ jobDocs: jobSnap.docs.map(d => ({ id: d.id, data: d.data() })), upcoming: up.items, users, pto: pto.list,
+    prefs: prefSnap.exists ? prefSnap.data() : {}, phaseHours: ph.jobs, schedules, now, from, to });
+  return { ok: true, asOf: new Date().toISOString(), source: "Command Center crew calendar (same rules as the screen), Simpro schedule read live",
+    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date. Hours for Upcoming jobs that are only in Simpro are not included.",
+    ...view };
+}
+
+module.exports = { WEEKS, effRS, effFS, wallNow, jobsOf, assemble, readSchedules, readCalendar };
