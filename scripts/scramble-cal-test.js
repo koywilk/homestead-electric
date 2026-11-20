@@ -70,7 +70,7 @@ const st2 = K("t_a959_t2");
 ok(st2 && st2.flags.join() === "Was set for 10/28, not done", "Stratton trip #2 is past its date and still open");
 ok(!V.items.some(x => x.key === "t_a959_old"), "a completed trip doesn't show");
 const rose = K("j_a889_f");
-ok(rose.over && rose.left === 0 && !rose.auto && !rose.flags.length, "Rose is over bid: no forecast tail, not flagged (already started)");
+ok(rose.over && rose.leftBy && rose.left > 0 && !rose.flags.length, "Rose is over bid but in progress: the rest comes from its stage (v661: \"those are both actively going right now\"), not flagged");
 const rv = K("j_a1382_r");
 ok(rv.flags.includes("Start date 10/19 has passed, not booked") && rv.flags.includes("Rough-in material card not ordered yet"), "Riverton: start passed, card not ordered");
 ok(!K("j_a1260_f").flags.length, "an on-hold phase isn't flagged");
@@ -286,6 +286,27 @@ ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === 
   const VW = SC.buildCalendar({ jobs: jT, schedules: [], phaseHours: {}, today, weeks: 5, users, plans: { x_rqc_qa: { off: true, why: "Waiting on material", note: "panel", at: "2026-11-20T00:00:00Z" } }, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
   const w = VW.items.find(x => x.key === "x_rqc_qa");
   ok(w.off && w.off.why === "Waiting on material" && w.inList && SC.groupOf(w) === "wait" && SC.GROUPS[0][0] === "wait", "removed with a reason: Waiting, first on the list, with its reason");
+}
+
+// v661: a finish in progress with Job Costs used up still goes on (Koy: "why is Ashcraft not showing up on the finishes?")
+{
+  const jR = [{ id: "rose", simproNo: "889", name: "Rose", foreman: "Keegan Wilkinson", roughStatus: "complete", finishStatus: "inprogress", finishStage: "80%", finishProjectedStart: "10/26/2026", finishStartConfirmed: true }];
+  const VR = SC.buildCalendar({ jobs: jR, schedules: [], phaseHours: { "889": { f: [1080, 1027] } }, today, weeks: 5, users: users6, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+  const r = VR.items.find(x => x.key === "j_rose_f");
+  ok(r && r.leftBy === "stage" && Math.abs(r.left - 205.4) < 0.2 && r.auto && !r.auto.held && !VR.needs.some(n => n.key === "j_rose_f"), "an in-progress finish over bid is placed from its stage (20% of 1027 h), not held or dropped");
+  const VQ = SC.buildCalendar({ jobs: jR, schedules: [], phaseHours: {}, today, weeks: 5, users: users6, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+  const q = VQ.items.find(x => x.key === "j_rose_f");
+  ok(q && q.leftBy === "week" && q.auto, "an in-progress finish with no bid hours gets a week");
+}
+
+// v661: Book refuses overlap with anything already in Simpro for that person that day
+{
+  const e = SB.buildEntries([{ date: "2026-11-23", hours: 2.5, start: "07:00" }], [{ id: 338, name: "Noah Davis" }, { id: 77, name: "Jacob Spackman" }], {});
+  const rows = [{ Type: "activity", Reference: "7", Staff: { ID: 338 }, Date: "2026-11-23", Blocks: [{ StartTime: "07:00", EndTime: "17:00" }] },
+    { Type: "job", Reference: "1277-1", Staff: { ID: 77 }, Date: "2026-11-23", Blocks: [{ StartTime: "09:30", EndTime: "12:00" }] }];
+  const o = SB.overlaps(rows, e);
+  ok(o.length === 1 && o[0].name === "Noah Davis" && o[0].type === "activity", "Book refuses a person with time off over that time; a booking that only touches (9:30 start) is fine");
+  ok(SB.overlaps(rows, SB.buildEntries([{ date: "2026-11-23", hours: 3, start: "07:00" }], [{ id: 77, name: "Jacob Spackman" }], {})).length === 1, "Book refuses an overlap with another job already booked");
 }
 
 if (fails) { console.error(fails + " failed"); process.exit(1); }

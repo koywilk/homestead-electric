@@ -35,6 +35,23 @@ function blocksFor(hours, weekBefore, start) {
   return { blocks, normal, ot };
 }
 
+// v661 (Koy 2026-11-20: "That needs to not be able to even happen at all. If they're scheduled somewhere else, that time
+// is blocked off."): every entry checked against what Simpro already has for that person that day (any job, activity or
+// time off). Returns [{ date, name, staffId, at: "07:00–17:00", type }] for each overlap; empty when clear.
+function overlaps(schedules, entries) {
+  const toMin = (v) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(v || "")); return m ? +m[1] * 60 + +m[2] : null; };
+  const out = [];
+  (entries || []).forEach(e => {
+    const mine = (e.blocks || []).map(b => [toMin(b.StartTime), toMin(b.EndTime)]).filter(x => x[0] != null && x[1] != null);
+    (schedules || []).forEach(s => {
+      if (Number(s && s.Staff && s.Staff.ID) !== Number(e.staffId) || String(s.Date || "").slice(0, 10) !== e.date) return;
+      (s.Blocks || []).forEach(b => { const a0 = toMin(b.StartTime), a1 = toMin(b.EndTime); if (a0 == null || a1 == null) return;
+        if (mine.some(([m0, m1]) => m0 < a1 && a0 < m1)) out.push({ date: e.date, name: e.name, staffId: e.staffId, at: `${b.StartTime}–${b.EndTime}`, type: String(s.Type || ""), ref: String(s.Reference || "") }); });
+    });
+  });
+  return out;
+}
+
 // Hours already on each person's Simpro schedule, per week: { staffId: { mondayIso: hours } }.
 function weekHours(schedules, staffIds) {
   const want = new Set((staffIds || []).map(Number));
@@ -118,4 +135,4 @@ function validate(data, today) {
   return "";
 }
 
-module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, weekHours, buildEntries, bodyOf, hashOf, pickCostCenter, validate, mondayOf, addDays };
+module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, buildEntries, bodyOf, hashOf, pickCostCenter, validate, mondayOf, addDays };

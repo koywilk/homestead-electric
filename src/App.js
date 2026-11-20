@@ -51998,6 +51998,27 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // give me an option to clear the hold or do anything").
   const [insAt, setInsAt] = useState(null);            // { left, top }
   const [rm, setRm] = useState(null);                  // { key, why, note } the Remove reason being picked
+  // v661 (Koy 2026-11-20: "What about an option to pop this thing up to full screen so that I can see more?"): the
+  // calendar covers the whole screen (over the app's sidebar and header), and the browser's own full screen too where
+  // it allows it. Exit full screen or Esc brings it back; Esc first closes an open box.
+  const [full, setFull] = useState(false);
+  // v661 (Koy: "make all the sections on the left drop-downs that start collapsed"): each type on the lists is a
+  // dropdown with its count, closed until tapped.
+  const [openG, setOpenG] = useState(() => new Set());
+  const togG = (k) => setOpenG(o => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const grpHead = (k, label, n) => <button type="button" className={"sc-grp sc-grpb" + (openG.has(k) ? " open" : "")} aria-expanded={openG.has(k)} onClick={() => togG(k)}><span>{label} · {n}</span><Icon name={openG.has(k) ? "chevronDown" : "chevronRight"} size={13}/></button>;
+  const fullRef = useRef(null);
+  useEffect(() => {
+    if (!full) return undefined;
+    const prev = document.body.style.overflow; document.body.style.overflow = "hidden";
+    const el = fullRef.current;
+    try { if (el && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {}); } catch (_) {}
+    const esc = e => { if (e.key !== "Escape") return; if (document.querySelector(".sc2 .sc-pop")) return; setFull(false); };
+    let was = false; const left = () => { if (document.fullscreenElement) was = true; else if (was) setFull(false); };   // the browser's own exit (Esc) ends it too
+    document.addEventListener("keydown", esc); document.addEventListener("fullscreenchange", left);
+    return () => { document.body.style.overflow = prev; document.removeEventListener("keydown", esc); document.removeEventListener("fullscreenchange", left);
+      try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {}); } catch (_) {} };
+  }, [full]);
   const insRef = useRef(null);
   useEffect(() => onSnapshot(doc(db, "settings", "crewPTO"), x => setPto((x.exists() && Array.isArray((x.data() || {}).list)) ? x.data().list : []), () => setPto([])), []);
   const popRef = useRef(null);
@@ -52080,13 +52101,16 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const fmOf = (names) => [...new Set(names.map(n => { const c = board.crewOf(n); return c ? SC.firstOf(c.foreman) : ""; }).filter(Boolean))];
     const push = (iso, c) => { (out[iso] = out[iso] || []).push(c); };
     V.items.forEach(it => {
-      it.booked.forEach(b => push(b.iso, { it, style: "booked", n: b.who.length, who: b.who, names: b.names || [], fm: fmOf(b.names || []), hrs: b.hrs }));
+      it.booked.forEach(b => push(b.iso, { it, style: "booked", n: b.who.length, who: b.who, names: b.names || [], fm: fmOf(b.names || []), hrs: b.hrs, from: SC.DAY0, to: SC.DAY0 + Math.min(SC.HPD, (b.hrs || SC.HPD) / Math.max(1, b.who.length)) }));
       const f = fc(it);
       if (!f) { (it.ccDays || []).forEach(iso => { if (iso <= V.end) push(iso, { it, style: "cc", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 }); }); return; }
       const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
       const nm = names.length ? names : ((it.booked[it.booked.length - 1] || {}).names || []);
       const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
-      SC.slotsOf(f).forEach(d => { if (d.date <= V.end) push(d.date, { it, style, n: f.crew, who: nm.map(SC.firstOf), names: nm, fm: fmOf(nm), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from }); });
+      // a forecast after a Simpro booking runs on with that day's people, less anyone off that day (v661)
+      SC.slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
+        const nmD = names.length ? nm : nm.filter(n => { const u = board.find(n); return !offD.includes(u ? u.name : n); });
+        push(d.date, { it, style, n: f.crew, who: nmD.map(SC.firstOf), names: nmD, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
     });
     const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
     Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
@@ -52100,16 +52124,53 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const commit = (key, p) => {
     setDrafts(d => ({ ...d, [key]: p }));
     if (p && p.off) savePrefs({ cal: { [key]: { off: true, ...(p.why ? { why: String(p.why).slice(0, 60), note: String(p.note || "").slice(0, 200) } : {}), by: me, at: nowIso() } } });
-    else if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), ...(SC.hoursOf(p.t) != null ? { t: p.t } : {}), by: me, at: nowIso() } } });
+    else if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), ...(SC.hoursOf(p.t) != null ? { t: p.t } : {}), ...(SC.hoursOf(p.t) != null && SC.hoursOf(p.e) != null ? { e: p.e } : {}), by: me, at: nowIso() } } });
     else savePrefs({ cal: { [key]: deleteField() } });
   };
+  // v661 (Koy 2026-11-20: "it just let me double-book Noah and Jacob ... That needs to not be able to even happen at
+  // all. If they're scheduled somewhere else, that time is blocked off"): each person's busy times per day, from every
+  // block on the calendar (Simpro bookings, plans, auto) plus their time off. Every change that names people is checked.
+  const busy = useMemo(() => {
+    const out = {};
+    Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
+      if (c.from == null || c.to == null) return;
+      (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: c.from, to: c.to, key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` }); });
+    }));
+    return out;
+  }, [chips, board]); // eslint-disable-line
+  const nameOf = (n) => { const u = board.find(n); return u ? u.name : n; };
+  // What `p` (a plan for item `key`) would clash with: [{ name, date, why }]. Its own days don't count.
+  const clashesOf = (key, p) => {
+    const out = [];
+    const names = (p.staff || []).map(x => x && x.name).filter(Boolean).map(nameOf);
+    SC.slotsOf(p).forEach(d => names.forEach(n => {
+      if (offOn(d.date).includes(n)) { out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is off ${SC.short(d.date)}` }); return; }
+      ((busy[n] || {})[d.date] || []).forEach(b => {
+        if (b.key !== key && d.from < b.to - 1e-6 && b.from < d.to - 1e-6) out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is on ${b.label} ${SC.short(d.date)}` }); });
+    }));
+    return out;
+  };
+  // Drop the people who'd clash (a move or copy); say who came off.
+  const dropClash = (key, p) => {
+    const bad = new Set(clashesOf(key, p).map(c => c.name));
+    if (!bad.size) return { p, gone: [] };
+    const staff = (p.staff || []).filter(x => !bad.has(nameOf(x && x.name)));
+    const each = p.hours / Math.max(1, p.crew), it = byKey[key], trip = it && (it.kind === "trip" || it.kind === "task");
+    const crew = Math.max(1, staff.length || p.crew - bad.size);
+    return { p: { ...p, staff, crew, ...(trip ? { hours: each * crew } : {}) }, gone: [...bad].map(SC.firstOf) };
+  };
+  // Refuse a change that would put someone on two things at once (an add, a time change, clearing a hold).
+  const okOrSay = (key, p) => { const it = byKey[key], was = new Set((it && fc(it) ? clashesOf(key, fc(it)) : []).map(c => c.why));
+    const c = clashesOf(key, p).filter(x => !was.has(x.why)); if (!c.length) return true; toast.error(`${c[0].why}${c.length > 1 ? ` (and ${c.length - 1} more)` : ""}. Nothing changed.`); return false; };
+  const clashOnChip = (c, iso) => (c.names || []).some(n => { const k = nameOf(n);
+    return offOn(iso).includes(k) && c.style !== "booked" || ((busy[k] || {})[iso] || []).some(b => b.key !== c.it.key && c.from != null && c.to != null && c.from < b.to - 1e-6 && b.from < c.to - 1e-6); });
   const moveTo = (key, iso) => {
     const it = byKey[key]; if (!it || it.kind === "service") return;
     const f = fc(it), s = SC.nextWork(iso);
     let gone = [];
-    if (f) { const { times, ...rest } = f; const r = dropOff({ ...rest, s, staff: f.staff || [] }); gone = r.gone; commit(key, r.p); }
+    if (f) { const { times, ...rest } = f; const r = dropOff({ ...rest, s, staff: f.staff || [] }); const r2 = dropClash(key, r.p); gone = [...r.gone, ...r2.gone]; commit(key, r2.p); }
     else commit(key, { s, hours: it.defHours || SC.HPD, crew: it.defCrew || 2, staff: [] });
-    if (gone.length) toast.info(`${gone.join(", ")} ${gone.length > 1 ? "are" : "is"} off then, so ${gone.length > 1 ? "they're" : "they're"} off this block.`);
+    if (gone.length) toast.info(`${gone.join(", ")} ${gone.length > 1 ? "are" : "is"} off or booked then, so ${gone.length > 1 ? "they're" : "they're"} off this block.`);
     setSel(key); setPicked(""); setDrag(""); setOver(""); setBk(null); setPop(null);
     say(`${it.no ? "#" + it.no + " " : ""}${it.tag} moved to ${SC.short(s)}. Saved as a plan.`);
   };
@@ -52119,19 +52180,30 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // Remove can carry a reason (Koy 2026-11-20: "put a reason why I'm removing it off of the schedule, like we're waiting
   // on something ... Then I can check a box ... 'wait cleared' ... and then go back on"). With a reason it goes to
   // Waiting at the top of the list and stays off the auto-schedule until Wait cleared.
-  const removeIt = (it, why = "", note = "") => { if (it.copyOf) { commit(it.key, null); setSel(""); } else commit(it.key, { off: true, why, note }); setBk(null); setCopyOpen(false); setPicked(""); setRm(null); setInsAt(null);
-    say(`${it.no ? "#" + it.no + " " : ""}${it.tag} taken off the calendar.${why ? ` Waiting: ${why}.` : " It stays on the list as needing scheduling."}`); };
+  // v661 (Koy: "when I removed Pierce from that day, it didn't go back on the [rough-ins] list. I don't know where it
+  // went"): Remove opens the job's own type on Not on the calendar yet (or Waiting), scrolls to it and says where it is.
+  const removeIt = (it, why = "", note = "") => {
+    if (it.copyOf) { commit(it.key, null); setSel(""); } else commit(it.key, { off: true, why, note }); setBk(null); setCopyOpen(false); setPicked(""); setRm(null); setInsAt(null);
+    if (it.copyOf) { say("That copy is off the calendar. The job's other days stay."); return; }
+    const g = SC.groupOf({ ...it, off: { why } }), gl = (SC.GROUPS.find(x => x[0] === g) || [, "Other"])[1];
+    setListOpen(true); setOpenG(o => new Set([...o, "l:" + g])); setSel(it.key);
+    setTimeout(() => { try { const el = document.querySelector(`.sc2 [data-key="${String(it.key).replace(/"/g, "")}"]`); if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (_) {} }, 120);
+    say(`${it.no ? "#" + it.no + " " : ""}${it.tag} is off the calendar. It's under ${gl} on Not on the calendar yet${why ? `: ${why}` : ""}.`); };
   const waitCleared = (x) => { commit(x.key, null); say(`${label(x)}: wait cleared. Back on the schedule.`); };
   const copyTo = (it, iso) => {
     const f = fc(it); if (!f) return;
     const key = (it.copyOf || it.key) + "~" + iso;
-    const r = dropOff({ s: iso, hours: Math.max(1, f.crew) * SC.HPD, crew: Math.max(1, f.crew), staff: f.staff || [] });
+    const r0 = dropOff({ s: iso, hours: Math.max(1, f.crew) * SC.HPD, crew: Math.max(1, f.crew), staff: f.staff || [], ...(f.t ? { t: f.t } : {}), ...(f.e ? { e: f.e } : {}) });
+    const r2 = dropClash(key, { ...r0.p, hours: Math.max(1, r0.p.crew) * SC.HPD }), r = { p: r2.p, gone: [...r0.gone, ...r2.gone] };
     commit(key, { ...r.p, hours: Math.max(1, r.p.crew) * SC.HPD });
     say(`Copied to ${SC.short(iso)}.${r.gone.length ? ` ${r.gone.join(", ")} ${r.gone.length > 1 ? "are" : "is"} off that day, so left off the copy.` : ""}`);
   };
   const setStaff = (it, names) => {
     const f = fc(it); if (!f || !names.length) return;
-    commit(it.key, { ...f, staff: names.map(name => ({ name })), crew: names.length });
+    const each = f.hours / Math.max(1, f.crew);
+    const next = { ...f, staff: names.map(name => ({ name })), crew: names.length, ...(it.kind === "trip" || it.kind === "task" ? { hours: each * names.length } : {}) };
+    if (!okOrSay(it.key, next)) return;
+    commit(it.key, next);
   };
   // Add someone to a job on one of its days; their set pair comes too when they're open that day.
   const openOn = (iso) => { const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); })); const off = new Set(offOn(iso)); return (n) => !on.has(n) && !off.has(n); };
@@ -52142,17 +52214,29 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const cur = ((f.staff || []).map(x => x && x.name).filter(Boolean));
     const base = cur.length ? cur : (c.names || []).map(n => { const u = board.find(n); return u ? u.name : n; });
     if (base.includes(name)) { toast.info(`${SC.firstOf(name)} is already on ${label(it)}.`); return; }
-    const isOpen = openOn(iso), pt = board.partnerOf(name), add = [name, ...(pt && !base.includes(pt) && isOpen(pt) ? [pt] : [])];
+    const isOpen = openOn(iso), pt = board.partnerOf(name), add = [name, ...(pt && !base.includes(pt) && isOpen(pt) && !clashesOf(it.key, { ...f, staff: [{ name: pt }], crew: 1 }).length ? [pt] : [])];
     const names = [...base, ...add];
     const each = f.hours / Math.max(1, f.crew);
     const next = { ...f, staff: names.map(n => ({ name: n })), crew: names.length, hours: it.kind === "trip" ? each * names.length : f.hours };
+    if (!okOrSay(it.key, next)) return;
     const r = dropOff(next); commit(it.key, r.p); setSel(it.key);
     const days = SC.slotsOf(r.p).map(d => d.date);
     say(`${add.map(SC.firstOf).join(" and ")} added to ${label(it)}${days.length > 1 ? `, ${SC.short(days[0])} to ${SC.short(days[days.length - 1])}` : ""}.${r.gone.length ? ` ${r.gone.join(", ")} off part of it.` : ""}`);
   };
   // Clear a hold: keep the block as it is, as a plan (it then books like any plan).
-  const clearHold = (it) => { const f = fc(it); if (!f) return; const { held, ...rest } = f; commit(it.key, { ...rest, staff: f.staff || [] }); say(`${label(it)} kept as it is. It can be booked now.`); };
-  const setDays = (it, days) => { const f = fc(it); if (!f || days < 0.5) return; commit(it.key, { ...f, hours: days * f.crew * SC.HPD }); };
+  const clearHold = (it) => { const f = fc(it); if (!f) return; const { held, ...rest } = f; if (!okOrSay(it.key, { ...rest, staff: f.staff || [] })) return; commit(it.key, { ...rest, staff: f.staff || [] }); say(`${label(it)} kept as it is. It can be booked now.`); };
+  // Start / Finish in the job box: the window runs every day. A trip, quick job or other one-day item takes its hours from
+  // the window (times its people); a rough-in or finish keeps its hours left and its days follow.
+  const setWin = (it, t, e) => {
+    const f = fc(it); if (!f) return; const sl = SC.slotsOf(f)[0] || {};
+    const tt = t || sl.start || "07:00", ee = e || SC.hhmmOf(sl.to || 17);
+    if (!/^\d{2}:\d{2}$/.test(tt) || !/^\d{2}:\d{2}$/.test(ee)) return;
+    const per = SC.hoursOf(ee) - SC.hoursOf(tt); if (!(per >= 0.25)) { toast.error("Finish has to be after Start."); return; }
+    const { times, ...rest } = f;
+    const next = { ...rest, t: tt, e: ee, ...(it.kind === "trip" || it.kind === "task" ? { hours: per * Math.max(1, f.crew) } : {}) };
+    if (!okOrSay(it.key, next)) return;
+    commit(it.key, next);
+  };
 
   // Press and hold a chip (phones) to pick it up; then tap a day.
   const holdStart = (e, c) => {
@@ -52236,7 +52320,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!s.iso) return "";
     return it.kind === "trip" ? `${s.by ? "Schedule by" : "Set for"} ${SC.md(s.iso)}` : `Start ${SC.md(s.iso)} ${s.conf ? "confirmed" : "est."}`;
   };
-  const hoursTxt = (it) => it.copyOf ? "" : it.kind === "task" ? (it.tripH ? `Est. ${it.tripH} h` : "") : it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
+  const hoursTxt = (it) => it.copyOf ? "" : it.kind === "task" ? (it.tripH ? `Est. ${it.tripH} h` : "") : it.leftBy === "stage" ? `About ${Math.round(it.left)} h left (${Math.round(it.stage)}% done; Job Costs hours used)` : it.leftBy === "week" ? "No bid hours; a week planned" : it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
   const Pill = ({ it }) => <span className="sc-pill" style={{ background: SCAL_SOFT[it.kind], color: SCAL_KIND[it.kind], border: `1px solid ${SCAL_KIND[it.kind]}` }}>{it.tag}</span>;
   const kv = (k) => ({ "--c": SCAL_KIND[k], "--s": SCAL_SOFT[k], "--b": SCAL_ON[k][0], "--bt": SCAL_ON[k][1] });
   const label = (it) => `${it.no ? "#" + it.no + " " : ""}${it.name}`;
@@ -52244,7 +52328,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const chipEl = (c, iso, compact) => {
     const it = c.it, movable = c.style !== "booked" && c.style !== "cc" && it.kind !== "service";
     return (
-      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
+      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${clashOnChip(c, iso) ? " clash" : ""}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
         style={kv(it.kind)}
         draggable={movable} onDragStart={e => { if (!movable) return; setDrag(it.key); try { e.dataTransfer.setData("text/plain", it.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }}
         onDragEnd={() => { setDrag(""); setOver(""); }}
@@ -52257,6 +52341,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         <span className="t">{compact && c.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{label(it)}</span>
         {compact ? null : <span className="m"><i>{c.style === "held" ? <><span className="sc-bang" aria-hidden="true">!</span>Held · </> : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{c.style === "cc" ? "Set in Command Center" : crewText(c)}</span>}
         {compact || !c.time ? null : <span className="m">{c.time}</span>}
+        {compact || !clashOnChip(c, iso) ? null : <span className="m sc-clash">Double-booked or off. Tap to fix who.</span>}
       </button>);
   };
   const dayProps = (iso) => ({
@@ -52471,7 +52556,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const pool = (() => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead) || board.crewOf(it.who); return c ? c.people : []; })();
     const cur = ((f && f.staff) || []).map(x => x && x.name).filter(Boolean);
     const others = Object.values(board.crews).flatMap(c => c.people).filter(n => !pool.includes(n) && !cur.includes(n));
-    const days = f ? Math.round(f.hours / (Math.max(1, f.crew) * SC.HPD) * 2) / 2 : 0;
+    const sl0 = f ? (SC.slotsOf(f)[0] || {}) : {};
     const copyDays = []; for (let d = SC.workAfter(V.today), g = 0; d <= V.end && g < 25; d = SC.workAfter(d), g++) copyDays.push(d);
     const copied = new Set(Object.keys(plans).filter(k => k.startsWith((it.copyOf || it.key) + "~")).map(k => k.split("~")[1]));
     return (
@@ -52486,21 +52571,23 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change booked days in Simpro.</small> : null}
         {f ? (<>
           <small>{SC.slotsOf(f).slice(0, 4).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}{SC.slotsOf(f).length > 4 ? " · …" : ""}{f.crew > 1 ? ` · ${Math.round(SC.slotsOf(f).reduce((a, d) => a + d.hours, 0) * 4) / 4} h each` : ""}</small>
-          {it.kind === "trip" && !it.tripH && !it.plan ? <small className="sc-sub">No est. time on the trip, so {SC.TRIP_DEFAULT_H} hours each. Change Hours or Time here to fit the day.</small> : null}
+          {it.kind === "trip" && !it.tripH && !it.plan ? <small className="sc-sub">No est. time on the trip, so {SC.TRIP_DEFAULT_H} hours each. Set Start and Finish to fit the day.</small> : null}
           <small className="sc-state">{it.plan ? `Plan${it.plan.by ? " by " + SC.firstOf(it.plan.by) : ""}: the auto-schedule won't move it.` : f.src === "auto" ? `Auto-scheduled for ${f.team}. Move or change it to keep it.` : "Forecast from Simpro's crew."}</small>
           <div className="sc-ctl">
-            <label>Start<input type="date" value={f.s} onChange={e => e.target.value && commit(it.key, { ...f, s: SC.nextWork(e.target.value) })}/></label>
-            <label>Time<input type="time" step="900" min="05:00" max="17:00" value={(SC.slotsOf(f)[0] || {}).start || "07:00"} onChange={e => { const v = e.target.value; if (/^\d{2}:\d{2}$/.test(v)) { const { times, ...rest } = f; commit(it.key, { ...rest, t: v }); } }}/></label>
-            <label>Days<span className="sc-step"><button type="button" onClick={() => setDays(it, days - 0.5)} aria-label="One half day less">−</button><b>{days}</b><button type="button" onClick={() => setDays(it, days + 0.5)} aria-label="One half day more">+</button></span></label>
-            <label>Hours<input type="number" min="5" step="5" value={Math.round(f.hours)} onChange={e => commit(it.key, { ...f, hours: Math.max(1, +e.target.value || 0) })}/></label>
+            {/* v661 (Koy: "just let me select a start time and a finish time. Get rid of all other bullshit"): the day, then
+                Start and Finish. The hours for booking and overtime come from them; a job's days follow from its hours left. */}
+            <label>Day<input type="date" value={f.s} onChange={e => e.target.value && moveTo(it.key, e.target.value)}/></label>
+            <label>Start<input type="time" step="900" min="05:00" max="17:00" value={sl0.start || "07:00"} onChange={e => setWin(it, e.target.value, null)}/></label>
+            <label>Finish<input type="time" step="900" min="05:15" max="19:00" value={SC.hhmmOf(sl0.to || 17)} onChange={e => setWin(it, null, e.target.value)}/></label>
           </div>
           {pool.length || cur.length ? (
             <div className="sc-who">
               <span className="mt-lab">Who · {cur.length || f.crew}</span>
               <div className="sc-ppl">{[...new Set([...cur, ...pool])].map(n => (
-                <label key={n}><input type="checkbox" checked={cur.includes(n)} onChange={() => setStaff(it, cur.includes(n) ? cur.filter(x => x !== n) : [...cur, n])}/>{n}</label>))}</div>
+                (() => { const why = cur.includes(n) ? "" : (clashesOf(it.key, { ...f, staff: [{ name: n }], crew: 1 })[0] || {}).why || "";
+                  return <label key={n} className={why ? "busy" : ""} title={why}><input type="checkbox" checked={cur.includes(n)} disabled={!!why} onChange={() => setStaff(it, cur.includes(n) ? cur.filter(x => x !== n) : [...cur, n])}/>{n}{why ? <i> · {why.replace(SC.firstOf(n) + " ", "")}</i> : null}</label>; })()))}</div>
               {others.length ? <select value="" onChange={e => e.target.value && setStaff(it, [...cur, e.target.value])} aria-label="Add someone from another crew">
-                <option value="">+ Someone from another crew</option>{others.map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
+                <option value="">+ Someone from another crew</option>{others.filter(n => !clashesOf(it.key, { ...f, staff: [{ name: n }], crew: 1 }).length).map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
             </div>) : null}
           <div className="sc-btns">
             {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => { setPicked(it.key); setBk(null); setInsAt(null); }}>Move…</button> : null}
@@ -52554,8 +52641,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       <span className="mt-lab">Needs you · {V.needs.length}</span>
       <small className="sc-sub">Calls the auto-schedule won't make on its own. Tap one to see it.</small>
       <div className="sc-scroll">{SC.groupBy(V.needs.filter(n => byKey[n.key]), n => byKey[n.key]).map(g => (<Fragment key={g.k}>
-        <div className="sc-grp">{g.label} · {g.items.length}</div>
-        {[...g.items].sort((a, b) => (b.held ? 1 : 0) - (a.held ? 1 : 0)).map(n => { const x = byKey[n.key]; return (
+        {grpHead("n:" + g.k, g.label, g.items.length)}
+        {!openG.has("n:" + g.k) ? null : [...g.items].sort((a, b) => (b.held ? 1 : 0) - (a.held ? 1 : 0)).map(n => { const x = byKey[n.key]; return (
         <button type="button" key={n.key} className={"sc-need" + (sel === n.key ? " on" : "")} draggable={x.kind !== "service"}
           onDragStart={e => { setDrag(n.key); try { e.dataTransfer.setData("text/plain", n.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }} onDragEnd={() => { setDrag(""); setOver(""); }}
           onClick={e => {
@@ -52573,11 +52660,11 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       {listOpen ? (<>
         <input type="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Find by job number or name" aria-label="Find a job"/>
         <div className="sc-scroll">{SC.groupBy(list).map(g => (<Fragment key={g.k}>
-          <div className="sc-grp">{g.label} · {g.items.length}</div>
-          {g.items.map(x => {
+          {grpHead("l:" + g.k, g.label, g.items.length)}
+          {!openG.has("l:" + g.k) && !q ? null : g.items.map(x => {
           const s = x.start && x.start.iso && x.start.iso >= V.today && x.start.iso <= V.end ? x.start.iso : "";
           return (
-            <div key={x.key} className={"sc-card" + (picked === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")} draggable
+            <div key={x.key} data-key={x.key} className={"sc-card" + (picked === x.key || sel === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")} draggable
               onDragStart={e => { setDrag(x.key); try { e.dataTransfer.setData("text/plain", x.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }} onDragEnd={() => { setDrag(""); setOver(""); }}>
               <b>{label(x)}</b>
               <small><Pill it={x}/>{hoursTxt(x)}</small>
@@ -52597,8 +52684,11 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     </div>);
 
   return (
-    <div className="sc2">
+    <div className={"sc2" + (full ? " full" : "")} ref={fullRef}>
       <style>{`
+        .sc2.full{position:fixed;inset:0;z-index:1000;background:#F4F6F8;padding:12px max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px));overflow:auto;-webkit-overflow-scrolling:touch}
+        .sc2.full .sc-pop{z-index:1010}.sc2.full .sc-dl{max-height:calc(100vh - 230px)}.sc2.full .sc-left{max-height:calc(100vh - 140px)}
+        .sc2 .sc-fullbtn{margin-left:auto}
         .sc2{display:flex;flex-direction:column;gap:10px;--o:#2F5EA8;--o-ink:#24508F;--cline:#E1E4E9;--inset:#F2F4F7;--cdim:#5E6670;--cink:#1B1F24}
         .sc2 .sc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
         .sc2 .sc-seg{display:inline-flex;border:1px solid var(--cline);border-radius:999px;overflow:hidden;background:var(--card)}
@@ -52701,6 +52791,10 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-wrow{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--cline)}
         .sc2 .sc-wrh{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--cink)}
         .sc2 .sc-wrow small{font-size:12px;color:var(--cdim)}
+        .sc2 .sc-grpb{all:unset;box-sizing:border-box;cursor:pointer;display:flex;justify-content:space-between;align-items:center;width:100%;position:static;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim);padding:8px 2px 6px;border-bottom:1px solid var(--cline)}
+        .sc2 .sc-grpb.open{color:var(--cink)}.sc2 .sc-grpb:focus-visible{outline:2px solid var(--o);outline-offset:1px}
+        .sc2 .sc-chip2.clash{border-color:#1B1F24;border-style:solid;border-width:2px;border-left-width:5px}.sc2 .sc-clash{color:#1B1F24!important;font-weight:800}
+        .sc2 .sc-ppl label.busy{opacity:.45}
         .sc2 .sc-cw{overflow-x:auto}
         .sc2 .sc-cwr{display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(4,minmax(96px,1fr)) minmax(70px,.6fr);min-width:620px}
         .sc2 .sc-cwr>b{font-size:12.5px;color:var(--cink);padding:6px 8px;border-top:1px solid var(--cline);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -52775,6 +52869,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         </span> : null}
         {foremen.length ? <span className="sc-seg" role="group" aria-label="Crew">{["All", ...foremen].map(f => <button type="button" key={f} aria-pressed={crewF === f} onClick={() => setCrewF(f)}>{f}</button>)}</span> : null}
         <span className="sc-seg" role="group" aria-label="Show"><button type="button" aria-pressed={!simOnly} onClick={() => setSimOnly(false)}>Everything</button><button type="button" aria-pressed={simOnly} onClick={() => setSimOnly(true)}>Simpro only</button></span>
+        <button type="button" className="mt-btn ghost sc-fullbtn" onClick={() => setFull(f => !f)} aria-pressed={full}>{full ? "Exit full screen" : "Full screen"}</button>
       </div>
       <div className="sc-key">
         <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Booked in Simpro</span>
@@ -65037,9 +65132,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-19 · App SW version: v660
+**Last manifest update:** 2026-11-20 · App SW version: v661
 ---
 
+- **Crew calendar: nobody booked twice; Remove shows where it went; Ashcraft/Rose finishes back; Start/Finish only; collapsed lists; Full screen** · 'in-flight 2026-11-20' · 'SW v661' · 'busy' · 'clashesOf' · 'SB.overlaps' · 'leftBy' · 'winOf' · 'OdScrambleCal full' · **No double booking** (Koy: *"it just let me double-book Noah and Jacob ... That needs to not be able to even happen at all"*): each person's busy times per day come from every block (Simpro bookings, plans, auto) and their time off. Adding someone, Who, Start/Finish and Clear hold refuse a change that adds a clash; a move, Day change or copy drops the people who'd clash and says so; busy people are grayed in Who and left out of the open names; a block already clashing shows *Double-booked or off*. The auto-schedule treats a block starting after 7:00 as the person's whole day. **Book refuses** (preview and book) any entry that overlaps what that person already has in Simpro that day, job, activity or time off ('SB.overlaps', functions/index.js scrambleBook). A forecast after a Simpro booking no longer carries people who are off that day. **Remove** opens the job's type on Not on the calendar yet (or Waiting), scrolls to it and says where (Koy: *"it didn't go back on the [rough-ins] list. I don't know where it went"*). **In-progress phases keep going** (Koy: *"why is Ashcraft not showing up on the finishes? Same with Rose"*): when Job Costs has no hours left, the rest comes from the stage, (100 − stage)% of the bid hours, or a week for the booked crew without bid hours ('leftBy'); not held. **Job box time** (Koy: *"just let me select a start time and a finish time"*): Day, Start, Finish only ('plan.e'; the window runs every day; a trip's hours are the window times its people, a phase's days follow its hours left). **Lists:** every type is a dropdown that starts closed with its count. Then **Full screen:** Koy: *"What about an option to pop this thing up to full screen so that I can see more?"* A **Full screen** button on the calendar bar: the calendar covers the whole screen over the app's sidebar and header ('.sc2.full', fixed, z-index 1000; its boxes at 1010), and asks the browser for its own full screen where allowed. **Exit full screen** or Esc goes back (Esc first closes an open box; the browser's own exit ends it too). Drag, the job box, the day checklist and Book all work the same. Guide 'dashboard.html'. **Deploy:** hosting only. **Why it won't lose data:** display only; no write, loader, rules or function change.
 - **Crew calendar blocks get times; a short trip and a job fit the same day; only confirmed starts are auto-scheduled** · 'in-flight 2026-11-19' · 'SW v660' · 'slotsOf' · 'tripHours' · 'autoPlan' · 'functions/scrambleBook.js blocksFor' · Koy: *"noticing none of them have time assignents. tuhaye hollow RT monday wont take all day"*, then *"an why is kweller finish there? it has no confirmed start date or anything"*. **Times:** each block shows its clock time per day (*7:00 AM–9:00 AM*), and a day's chips sort by start time. A return trip takes its **est. time** (the trip's 'time', carried from a change order: "3 hrs", "half day", "45 min", "1 day") per person, else **4 hours** each (the details say so). The auto-schedule now counts hours per person per day instead of whole days: a 2-hour trip for a pair is 7:00–9:00 and the same pair can go on to a job 9:00–5:00 that day (a job can start a person's day after up to half a day of other work; a late start ends at 5:00 and the hours roll to the next day); a Simpro booking holds only its hours. **Time** in a block's details sets the first day's start (quarter hours, 5:00 AM–5:00 PM), saved with the plan ('t'). **Book in Simpro** books each day from its start time (new optional 'days[].start' on 'scrambleBook', checked 5:00–17:00 on the quarter hour; without it, 7:00 as before). **Why Kweller showed:** its return trip #6 was booked in Simpro today and signed off, so it wasn't an open trip; today's booking fell to the finish, and a finish with a booking got a forecast of its Job Costs hours left. Now a done trip keeps its own Simpro day, a forecast after a booking runs only for a phase in progress or with a confirmed start, and the auto-schedule places only phases in progress or with a **confirmed** start; an estimated start stays on Not on the calendar yet (with Place on its date). Guide 'dashboard.html'. **Deploy:** functions 'scrambleBook' (the start time); without it the app's bookings still start at 7:00. **New look** (Koy: *"the red and green is terrible christmas vibes and the slashing red is so hard to look at"*): one accent and neutrals, no stripes. Rough-in copper, finish slate, return trips charcoal ('SCAL_KIND'); held = dark outline with a ! mark; holidays and time off plain gray; the day checklist and warnings in copper and ink. **Crew count** on every workday (week header *9/17 crew*, month and 4-month cells *9/17*): people on a crew who aren't off, and how many are on something; the crew buttons narrow it. **Crew week** view (Nov 19 strategy meeting: "a week view with all crew listed as available or booked"): one row per Crew Board person by crew, Mon to Fri, each day their jobs with times, Open or Off ('crewWeekView'). Quote-stage jobs untouched (Koy: already in the app). **Then** (Koy: *"I hate the brown"*, *"I need all to be easily visible, clickable, and movable"*): one blue family (rough navy, finish medium blue, trips white with a blue outline, held gray dashed; 'SCAL_KIND/SCAL_SOFT/SCAL_ON'); under each date *"9 on · 8 open"* and the open people as chips ('countsEl', 'openEl'), drag or tap a person onto a job that day, their set pair comes along when open ('addPerson'); Week and Crew week are one board (to-schedule list left and draggable, days middle, checklist right); the job box opens beside the job ('insAt') with **Clear hold** ('clearHold'); **Book this week in Simpro** (preview of every block, then book each; 'openWeekBook'). Scheduler: 4 is the goal, not a minimum; 2 or 3 isn't held (Koy: *"We want 4 but sometimes it's just 2. That's fine"*). **Remove…** asks a reason + note ('SCAL_WAIT'); with one the plan is '{off, why, note}' and the job is under **Waiting** first on the list until **Wait cleared**. **Other work on the list** ('kind: "task"', never auto-placed, not bookable here): QC walks rough/final ('qcStatus'/'finishQcStatus' needs or scheduled), quick jobs ('quickJobStatus' new or scheduled, no longer skipped), temp ped installs ('tempPedStatus'), Matterport scans, approved COs not converted, and inspections with a target date as day markers. Set-in-CC dates show on their day ('ccDays'); placing one here is a calendar plan only. Left out: redline walks (own collection, not passed to the calendar), inspections to call in, GC walkthroughs, meter sets, low voltage, punch visits (not tracked). **Why it won't lose data:** display and the same plan write (one more field, 't', on the plan's map key, by merge); the booking still writes only after its preview and confirm, with the same hash check (the start time is part of what's hashed); no loader or rules change.
 - **Pair anybody with anybody on the Crew Board; time off and company holidays on the crew calendar** · 'in-flight 2026-11-19' · 'SW v659' · 'CrewBoard' · 'pairId' · 'crewBoard().partnerOf' · 'setHolidays' · 'DEFAULT_HOLIDAYS' · 'offByDay' · Koy: *"I need to be able to pair anybody with anybody, so a foreman with an apprentice. I can't do that right now with Colby. I'm trying to pair him with Treycen but his name doesn't even show up"*. **Why Treycen was missing:** v658 only offered the other side (a leader paired only with a crew member, on the same crew); Colby (foreman) and Treycen (lead) are both leaders, so he was filtered out. **Now:** **Paired with** lists everyone on the board (admins left off), the person's own crew first, with role and crew on each name, *(with X)* when they're already paired, and *(not scheduled)* for Unassigned; a search box finds anyone. A pair stays when someone changes role or crew. Same-crew pairs still show as one linked card; a pair across crews shows a *with X (Colby's crew)* line under the person. **Crew calendar:** a pair counts when both point at each other, any role, any crew; a trip takes its person's pair even from another crew, and a job's head brings their pair from another crew when that person is free on every day; someone Unassigned is never scheduled, pair or not. **Time off and holidays** (Koy: *"we need to make sure that time off is shown in this view, the scheduler view, so that we don't book people that are off. We also need to make sure that holidays don't get booked on Thanksgiving, Christmas, New Year's Eve, and Memorial Day. I think there's a couple more that I don't remember"*): approved time off ('settings/crewPTO', read only) shows as *Off: names* on each day in Week, Month and 4 months and in the day checklist; the auto-schedule never books anyone on a day off; a move or copy takes anyone who's off those days off the block and says so; a kept plan, a Simpro booking or a forecast tail with someone off that day is flagged (*Braden is off 12/21*), never moved. **Company holidays** are a list in the calendar's side panel, **Company holidays · N** (everyone sees it; admins add a date and name or Remove one), saved for everyone in 'meetings/scramble__prefs.holidays'. Default list: Thanksgiving 11/26/2026, Christmas 12/25/2026, New Year's Eve 12/31/2026, New Year's Day 1/1/2027, Memorial Day 5/31/2027, Independence Day (observed) 7/5/2027, Labor Day 9/6/2027 (the last three were already off in v656). Nobody is booked on one, a block running into one picks up the next workday, the day is shaded with its name, and a Simpro booking on one is flagged. Guides 'settings.html', 'dashboard.html'. **Why it won't lose data:** same single field ('pairId') through the same guarded save; the holiday list is one more field in the same meeting prefs doc by merge (no rules change); time off is only read; no loader or function change.
 - **Set pairs on the Crew Board, the crew calendar sends pairs together, + more opens over the calendar, and a day checklist of who's scheduled** · 'in-flight 2026-11-19' · 'SW v658' · 'CrewBoard' · 'pairId' · 'crewBoard().partnerOf' · 'autoPlan' · 'OdScrambleCal' · 'scripts/scramble-cal-test.js' · Koy, 2026-11-19: *"we need to know which junior foreman is with which apprentice, which lead is with which apprentice, and which foreman is which. We just need the pairs, right, so that we can schedule by that instead of guessing at who the pairs are"*, then *"when I book, right-click the "+1 more," etc., on the calendar: can it just drop down with the calendar view still up and not open up the day view?"* **Crew Board (Settings):** tap a person, **PAIRED WITH** lists the people on the same crew on the other side (a leader, meaning foreman, jr. foreman or lead, pairs with a crew member, and the other way round), with who they're already with; tap one to pair, tap again or **No pair** to undo. Each pair shows in its crew's column as one linked card (PAIR), then everyone without one. Saved as 'pairId' on both people through the same guarded 'saveUsers' (pending list says *Louis: paired with James*); moving either to another crew, or across leader / crew, drops the pair. Nothing is guessed: pairs start empty. **Crew calendar:** a pair counts only when both point at each other on the same crew. A return trip takes its person's pair first; a job's crew is its head plus their pair, then whole pairs, then people with no pair; when the crew splits, the jr foreman's pair stays back with them. A pair is split only when one of the two is booked, or to make up the 4. With no pairs set, v656's rules are unchanged. **+ more** (Month and 4 months) opens that day's full list over the calendar (tap a job for its details, drag one to another day); Esc or a tap outside closes it. **Day checklist** (Koy: *"it'd be very cool if I could select a day and when I click on a day, it tells me a checklist of who's scheduled and who isn't scheduled yet"*): tap a day's date or empty space (not a job or + more) and a panel beside the calendar lists everyone on the Crew Board (Unassigned left off) by crew: **N of M scheduled** on top, then per crew the people not scheduled yet first (red, unticked), those on a job ticked with the job number and name (any block that day: booked, plan or auto), and anyone off that day (settings/crewPTO, read only) marked Off and not counted. Guides 'settings.html', 'dashboard.html'. **Why it won't lose data:** one new field ('pairId') on team rows, written only by the Crew Board through the existing guarded save that spreads every other field through; the calendar reads it and the time-off list; no loader, rules or function change; nothing goes to Simpro.

@@ -8518,6 +8518,12 @@ exports.scrambleBook = functions
       if (r.data.length < 250) break;
     }
     const entries = SB.buildEntries(days, staff, SB.weekHours(rows, ids));
+    // Nobody is booked over time they already have in Simpro (another job, an activity or time off), in preview or book.
+    const clash = SB.overlaps(rows, entries);
+    if (clash.length) {
+      const c = clash[0], more = clash.length > 1 ? ` (${clash.length - 1} more)` : "";
+      throw new functions.https.HttpsError("failed-precondition", `${c.name} already has ${c.type === "activity" ? "time off or an activity" : "a booking" + (c.ref ? " on " + c.ref.split("-")[0] : "")} in Simpro ${c.date} ${c.at}${more}. Nothing was written; change the time or the person.`);
+    }
     const hash = SB.hashOf(no, cc, entries);
     const job = { no, name: String(jr.data.Name || ""), stage: String(jr.data.Stage || "") };
     const totals = { entries: entries.length, hours: entries.reduce((a, e) => a + e.hours, 0), ot: entries.reduce((a, e) => a + e.ot, 0) };

@@ -84,9 +84,9 @@ const hhmmOf = (h) => { const m = Math.round(h * 60); return `${String(Math.floo
 const hoursOf = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || "")); return m ? +m[1] + +m[2] / 60 : null; };
 function slotsOf(plan) {
   if (!plan) return [];
-  const t0 = hoursOf(plan.t);
+  const t0 = hoursOf(plan.t), win = winOf(plan);
   return planDays(plan).map((d, i) => {
-    const from = i === 0 && t0 != null ? t0 : DAY0 + ((plan.times && plan.times[d.date]) || 0);
+    const from = win ? win[0] : i === 0 && t0 != null ? t0 : DAY0 + ((plan.times && plan.times[d.date]) || 0);
     return { date: d.date, hours: d.hours, from, to: from + d.hours, start: hhmmOf(from), label: `${clock(from)}–${clock(from + d.hours)}` };
   });
 }
@@ -113,8 +113,15 @@ function span(startIso, hours, crew, endIso) {
 // Workdays covered from startIso up to and including endIso (whole days).
 function workdaysBetween(startIso, endIso) { let n = 0, d = nextWork(startIso); for (let g = 0; d <= endIso && g < 400; g++) { n++; d = workAfter(d); } return n; }
 // The person-days a plan books: per day, hours for each person (the last day can be short).
+// v661 (Koy 2026-11-20: "just let me select a start time and a finish time"): a plan with both `t` and `e` ("HH:MM")
+// runs that window every day; its days follow from the hours (a trip's hours are the window times its people).
+const winOf = (plan) => { const a = hoursOf(plan && plan.t), b = hoursOf(plan && plan.e); return a != null && b != null && b - a >= 0.25 ? [a, b] : null; };
 function planDays(plan) {
   if (!plan || !plan.s) return [];
+  const win = winOf(plan);
+  if (win) { const crew = Math.max(1, Number(plan.crew) || 1), per = win[1] - win[0]; let left = Math.max(0, Number(plan.hours) || 0) / crew, d = nextWork(plan.s); const out = [];
+    for (let g = 0; left > 1e-6 && g < 120; g++) { const h = Math.min(per, left); out.push({ date: d, hours: Math.round(h * 4) / 4 }); left -= h; d = workAfter(d); }
+    return out.filter(x => x.hours > 0); }
   const crew = Math.max(1, Number(plan.crew) || 1);
   let left = Math.max(0, Number(plan.hours) || 0) / crew, d = nextWork(plan.s);
   const out = [];
@@ -230,7 +237,9 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
     const names = (f.staff || []).map(x => x && x.name).filter(Boolean);
     const lastDay = it.booked.length ? it.booked[it.booked.length - 1] : null;   // a Simpro tail runs on with the last booked day's people
     const who = names.length ? names : it.plan ? crewNames(it) : ((lastDay && lastDay.names) || []);
-    planDays(f).forEach(d => { if (d.date <= end) who.forEach(n => mark(n, d.date, d.hours)); });
+    // a block set to start after 7:00 holds the person's whole day, so nothing auto lands under it (v661: no double booking)
+    const late = (hoursOf(f.t) || DAY0) > DAY0 + 1e-6;
+    slotsOf(f).forEach(d => { if (d.date <= end) who.forEach(n => mark(n, d.date, late || d.from > DAY0 + 1e-6 && it.plan ? HPD : d.hours)); });
   });
   const first = workAfter(todayIso);
   const fit = (names, from, nDays, last) => {
@@ -341,7 +350,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   const fromOf = (it) => it.start.started || !sIso(it) || sIso(it) < first ? first : nextWork(sIso(it));
   const doPhase = (it) => {
     doneKeys.add(it.key);
-    if (it.over) return need(it, "Over bid. Set the hours by hand");
+    if (it.over && !it.leftBy) return need(it, "Over bid. Set the hours by hand");
     if (it.left == null) return need(it, "No hours in Job Costs. Set the hours by hand");
     if (!(it.left > 0)) return;
     const c = board.crewOf(it.foreman) || board.crewOf(it.jlead);
@@ -513,7 +522,7 @@ function buildCalendar(input) {
     const pre = ph === "finish" ? "finish" : "rough";
     const psIso = anyIso(j[pre + "ProjectedStart"]), sdIso = anyIso(j[pre + "StatusDate"]);
     const sIso = psIso || (["date_confirmed", "scheduled", "inprogress"].includes(st) ? sdIso : "");
-    const it = mk({ key: "j_" + safeKey(j.id) + "_" + ph.charAt(0), kind: ph, tag: KIND_TAG[ph], no, name: j.name || "", jobId: j.id, status: st,
+    const it = mk({ key: "j_" + safeKey(j.id) + "_" + ph.charAt(0), kind: ph, tag: KIND_TAG[ph], no, name: j.name || "", jobId: j.id, status: st, stage: parseFloat(j[pre + "Stage"]) || 0,
       foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim(),
       hold: st === "waiting", po: poState(ph === "finish" ? j.finishMaterials : j.roughMaterials),
       start: sIso ? { iso: sIso, conf: !!j[pre + "StartConfirmed"] || st === "date_confirmed", started: st === "inprogress" } : (st === "inprogress" ? { iso: "", started: true } : null) });
@@ -563,12 +572,21 @@ function buildCalendar(input) {
       const futureHrs = ahead.filter(b => b.iso > todayIso).reduce((a, b) => a + b.hrs, 0);
       it.left = Math.max(0, r1(it.est - it.used - futureHrs));
     }
+    // v661 (Koy 2026-11-20: "why is Ashcraft not showing up on the finishes? Same with Rose. Those are both actively
+    // going right now"): a phase in progress keeps going until it's marked complete. When Job Costs has no hours left
+    // (used up or over bid), the rest comes from its stage instead: (100 − stage)% of the bid hours, or a week for the
+    // crew Simpro has on it when there are no bid hours. It's placed like any job in progress, not held.
+    if ((it.kind === "rough" || it.kind === "finish") && it.start && it.start.started && !(it.left > 0)) {
+      const pct = Math.min(99, Math.max(0, it.stage || 0));
+      if (it.est > 0) { it.left = Math.max(HPD, r1(it.est * (100 - pct) / 100)); it.leftBy = "stage"; }
+      else { it.left = Math.max(1, it.crewBooked || 4) * HPD * 4; it.leftBy = "week"; }
+    }
     if (it.defHours == null) it.defHours = it.left > 0 ? it.left : HPD;
     const p = plans && plans[it.key];
     // v656: { off: true } = taken off the calendar by hand (Koy: "if I don't want a job scheduled, I just delete it
     // off there"): no block, the auto-schedule leaves it alone, it stays on the list as needing scheduling.
     if (p && p.off) it.off = { by: p.by || "", at: p.at || "", why: String(p.why || "").slice(0, 60), note: String(p.note || "").slice(0, 200) };
-    else if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "", ...(hoursOf(p.t) != null ? { t: p.t } : {}) };
+    else if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "", ...(hoursOf(p.t) != null ? { t: p.t } : {}), ...(hoursOf(p.t) != null && hoursOf(p.e) != null ? { e: p.e } : {}) };
     if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
       it.auto = { s: workAfter(it.booked[it.booked.length - 1].iso), hours: it.left, crew: Math.max(1, it.crewBooked) };
     }
@@ -640,4 +658,4 @@ function groupBy(list, itemOf) {
   return GROUPS.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
 }
 module.exports = { HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
-  md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };
+  DAY0, winOf, hhmmOf, md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };
