@@ -7819,7 +7819,9 @@ exports.teamContacts = functions.https.onCall(async (data) => {
 // (requireMember). Owners-only reports (any with dollar figures) go to the
 // ADMIN tier alone; to anyone else they don't exist (not found, title never
 // sent). List mode sends no report bodies; { id } sends that one report.
-// Read-only: no write anywhere. Deploy ONLY this one:
+// v667: non-admins get the foreman copy only (no dollar or cost lines), and
+// not at all once archived or shared off; { id, share } is the one write
+// (admins: turn the share link off / on). Deploy ONLY this one:
 //   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeReports,functions:duetApi --project homestead-electric
 const _claudeReports = require("./duetWrites/reports.js");
 exports.claudeReports = functions.https.onCall(async (data) => {
@@ -7828,11 +7830,26 @@ exports.claudeReports = functions.https.onCall(async (data) => {
   const id = String((data && data.id) || "");
   if (id) {
     if (!/^rep_[A-Za-z0-9_-]{6,48}$/.test(id)) throw new functions.https.HttpsError("invalid-argument", "Bad report id.");
-    const s = await db.collection("claude_reports").doc(id).get();
+    const ref = db.collection("claude_reports").doc(id);
+    // v667: an admin turns a report's share link off or back on ({ id, share }).
+    // The only write here: shareOff / shareOffAt on that one report.
+    if (data && typeof data.share === "boolean") {
+      if (!isAdmin) throw new functions.https.HttpsError("permission-denied", "Only admins turn sharing on or off.");
+      let out = null;
+      await db.runTransaction(async (tx) => {
+        const s = await tx.get(ref);
+        const p = _claudeReports.planShare({ id, share: data.share }, s.exists ? s.data() : null, new Date().toISOString());
+        if (p.refused) { out = { ok: false, refused: p.refused }; return; }
+        if (p.patch) tx.update(ref, p.patch);
+        out = { ok: true, shareOff: !data.share };
+      });
+      return out;
+    }
+    const s = await ref.get();
     return _claudeReports.buildOne(id, s.exists ? s.data() : null, { isAdmin });
   }
   const snap = await db.collection("claude_reports").orderBy("updatedAt", "desc").limit(1000)
-    .select("jobId", "jobNo", "jobName", "type", "title", "forWho", "ownersOnly", "filedAt", "updatedAt", "version", "chars", "archived").get();
+    .select("jobId", "jobNo", "jobName", "type", "title", "forWho", "ownersOnly", "filedAt", "updatedAt", "version", "chars", "archived", "shareOff").get();
   return { ok: true, isAdmin, reports: _claudeReports.buildList(snap.docs.map(d => [d.id, d.data()]), { isAdmin, includeArchived: false }) };
 });
 

@@ -1,5 +1,18 @@
 [
  {
+  "v": 667,
+  "heads": [
+   {
+    "h": "NEW for admins: copy and share Claude reports",
+    "first": "Dashboard, Claude tab, Reports: open a report and tap Copy. Pick Foreman / crew or Owners / admins, and Text or Email, then Copy and paste it anywhere."
+   },
+   {
+    "h": "NEW for everyone",
+    "first": "If someone sends you a report link, open it on your phone, sign in if asked, and the report opens over the app. Copy text is at the bottom."
+   }
+  ]
+ },
+ {
   "v": 666,
   "heads": [
    {
@@ -199,19 +212,6 @@
    {
     "h": "NEW (Dashboard: Meetings tab, the Weekly Scramble)",
     "first": "Open /dashboard and tap Meetings (between People and Automations)."
-   }
-  ]
- },
- {
-  "v": 647,
-  "heads": [
-   {
-    "h": "NEW (Dashboard: the four weekly meeting pages)",
-    "first": "Open /dashboard. The closed row at the top of the Overview, Meeting and planning artifacts, now has 10 links instead of 6. Tap it to open the list."
-   },
-   {
-    "h": "FIXED (Return trips)",
-    "first": "Signing off a return trip now also clears its \"needs scheduling\" mark, so finished trips stop showing up as needing a date. Trips signed off before today keep the old mark until someone touches them."
    }
   ]
  }

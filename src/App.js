@@ -50223,20 +50223,95 @@ function OdRatingsRelease({ identity }) {
 }
 // One report, read inside the Claude tab (SW v616). The body is markdown drawn as plain React
 // text by src/reportMd.js: headings, paragraphs, lists, tables and bold. No HTML, no links.
-function OdReport({ body }) {
+function ReportBlocks({ content }) {
+  const blocks = ReportMd.parseReportMd(content);
+  const R = (rs) => (rs || []).map((x, i) => x.b ? <b key={i}>{x.text}</b> : <Fragment key={i}>{x.text}</Fragment>);
+  return blocks.map((b, i) => b.t === "h" ? (b.level === 1 ? <h3 key={i}>{R(b.runs)}</h3> : b.level === 2 ? <h4 key={i}>{R(b.runs)}</h4> : <h5 key={i}>{R(b.runs)}</h5>)
+    : b.t === "p" ? <p key={i}>{R(b.runs)}</p>
+    : b.t === "ul" ? <ul key={i}>{b.items.map((it, k) => <li key={k}>{R(it)}</li>)}</ul>
+    : b.t === "ol" ? <ol key={i}>{b.items.map((it, k) => <li key={k}>{R(it)}</li>)}</ol>
+    : <div className="od-rep-tw" key={i}><table><thead><tr>{b.head.map((c, k) => <th key={k}>{R(c)}</th>)}</tr></thead>
+        <tbody>{b.rows.map((row, k) => <tr key={k}>{row.map((c, m) => <td key={m}>{R(c)}</td>)}</tr>)}</tbody></table></div>);
+}
+// Copy text in the click handler (iOS needs the tap); on refusal, select the preview instead.
+function reportCopy(text, preEl, setMsg) {
+  const pick = () => { try { const r = document.createRange(); r.selectNodeContents(preEl); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); } catch (e) {} setMsg("Selected. Press copy on your keyboard or phone."); };
+  try { navigator.clipboard.writeText(text).then(() => setMsg("Copied"), pick); } catch (e) { pick(); }
+}
+// v667 Copy and Share (Koy, 2026-11-18: "would be really nice if these were easily shown somewhere
+// or copyable to send to people"). Copy: for a foreman (the server's foreman copy: no dollar or cost
+// lines, margin % stays) or for owners/admins (the full text), as a text message or an email.
+// Share link: /?report=<id>, opens in the app for signed-in team only; non-admins get the foreman
+// copy from the server, and the link stops when the report is archived or sharing is turned off.
+// Owners-only reports have no foreman copy and no link. In Foreman view only the foreman copy shows.
+function OdReport({ body, identity, fview, onShareChange }) {
+  const [sheet, setSheet] = useState(null);     // null | "copy" | "share"
+  const [who, setWho] = useState(null);         // "foreman" | "owners"
+  const [fmt, setFmt] = useState("text");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const preRef = useRef(null);
   if (!body || body === "loading") return <div className="od-rep-body od-empty">Opening…</div>;
   if (body.err) return <div className="od-rep-body od-empty">{body.err}</div>;
-  const blocks = ReportMd.parseReportMd(body.content);
-  const R = (rs) => (rs || []).map((x, i) => x.b ? <b key={i}>{x.text}</b> : <Fragment key={i}>{x.text}</Fragment>);
+  const canForeman = !body.ownersOnly && typeof body.foremanContent === "string";
+  const canOwners = !fview;
+  const whoNow = who === "owners" && canOwners ? "owners" : canForeman ? "foreman" : canOwners ? "owners" : null;
+  const text = whoNow ? ReportMd.reportToText(whoNow === "foreman" ? body.foremanContent : body.content, body, fmt) : "";
+  const cut = body.foremanCut || 0;
+  const canShare = !body.ownersOnly && !fview;
+  const link = `${window.location.origin}/?report=${encodeURIComponent(body.id || "")}`;
+  const open = (k) => { setSheet(s => s === k ? null : k); setMsg(""); };
+  const setShare = async (on) => {
+    if (busy) return;
+    setBusy(true); setMsg("");
+    try {
+      const r = await memberCallable("claudeReports", identity)({ id: body.id, share: on });
+      const d = r && r.data;
+      if (d && d.ok) { onShareChange && onShareChange(body.id, !on); setMsg(on ? "Sharing is on." : "Sharing is off. The link shows \"Not available\" now."); }
+      else setMsg((d && d.refused) || "Couldn't change it. Try again.");
+    } catch (e) { setMsg((e && e.message) || "Couldn't change it. Try again."); }
+    setBusy(false);
+  };
   return (
     <div className="od-rep-body">
-      {blocks.map((b, i) => b.t === "h" ? (b.level === 1 ? <h3 key={i}>{R(b.runs)}</h3> : b.level === 2 ? <h4 key={i}>{R(b.runs)}</h4> : <h5 key={i}>{R(b.runs)}</h5>)
-        : b.t === "p" ? <p key={i}>{R(b.runs)}</p>
-        : b.t === "ul" ? <ul key={i}>{b.items.map((it, k) => <li key={k}>{R(it)}</li>)}</ul>
-        : b.t === "ol" ? <ol key={i}>{b.items.map((it, k) => <li key={k}>{R(it)}</li>)}</ol>
-        : <div className="od-rep-tw" key={i}><table><thead><tr>{b.head.map((c, k) => <th key={k}>{R(c)}</th>)}</tr></thead>
-            <tbody>{b.rows.map((row, k) => <tr key={k}>{row.map((c, m) => <td key={m}>{R(c)}</td>)}</tr>)}</tbody></table></div>)}
+      <ReportBlocks content={body.content}/>
       <div className="od-rep-foot">{body.ownersOnly ? "Owners only: has dollar figures" : "No dollar figures"}{body.forWho ? ` · for ${body.forWho}` : ""} · version {body.version || 1}</div>
+      {whoNow || canShare ? <div className="od-rep-acts">
+        {whoNow ? <button type="button" className={"od-mini-btn" + (sheet === "copy" ? " on" : "")} aria-expanded={sheet === "copy"} onClick={() => open("copy")}>Copy</button> : null}
+        {canShare ? <button type="button" className={"od-mini-btn" + (sheet === "share" ? " on" : "")} aria-expanded={sheet === "share"} onClick={() => open("share")}>Share link</button> : null}
+      </div> : null}
+      {sheet === "copy" && whoNow ? <div className="od-rep-sheet">
+        <div className="od-rep-row">
+          <span className="od-rep-lbl">For</span>
+          <div className="od-seg" role="group" aria-label="Copy for">
+            {canForeman ? <button type="button" aria-pressed={whoNow === "foreman"} onClick={() => { setWho("foreman"); setMsg(""); }}>Foreman / crew</button> : null}
+            {canOwners ? <button type="button" aria-pressed={whoNow === "owners"} onClick={() => { setWho("owners"); setMsg(""); }}>Owners / admins</button> : null}
+          </div>
+        </div>
+        <div className="od-rep-row">
+          <span className="od-rep-lbl">As</span>
+          <div className="od-seg" role="group" aria-label="Format">
+            <button type="button" aria-pressed={fmt === "text"} onClick={() => { setFmt("text"); setMsg(""); }}>Text</button>
+            <button type="button" aria-pressed={fmt === "email"} onClick={() => { setFmt("email"); setMsg(""); }}>Email</button>
+          </div>
+        </div>
+        <pre className="od-rep-pre" ref={preRef}>{text}</pre>
+        <div className="od-rep-note">{whoNow === "foreman" ? (cut ? `${cut} ${cut === 1 ? "line" : "lines"} with dollar or cost figures left out. Margin % stays.` : "Nothing to leave out: no dollar or cost figures.") : "Full report, dollar figures included. Owners and admins only."}</div>
+        <div className="od-rep-acts">
+          <button type="button" className="od-mini-btn od-yes" onClick={() => reportCopy(text, preRef.current, setMsg)}>Copy</button>
+          {typeof navigator !== "undefined" && navigator.share ? <button type="button" className="od-mini-btn" onClick={() => { navigator.share({ text }).catch(() => {}); }}>Send…</button> : null}
+          {msg ? <span className="od-rep-msg" role="status">{msg}</span> : null}
+        </div>
+      </div> : null}
+      {sheet === "share" && canShare ? <div className="od-rep-sheet">
+        <pre className="od-rep-pre od-rep-link" ref={sheet === "share" ? preRef : null}>{link}</pre>
+        <div className="od-rep-note">{body.shareOff ? "Sharing is off: the link shows \"Not available\"." : "Opens in the app for signed-in team only. Admins see the full report; everyone else sees the foreman copy (no dollar or cost lines). Stops working if the report is archived or you turn sharing off."}</div>
+        <div className="od-rep-acts">
+          {!body.shareOff ? <button type="button" className="od-mini-btn od-yes" onClick={() => reportCopy(link, preRef.current, setMsg)}>Copy link</button> : null}
+          <button type="button" className="od-mini-btn" disabled={busy} onClick={() => setShare(!!body.shareOff)}>{busy ? "Saving…" : body.shareOff ? "Turn sharing on" : "Turn sharing off"}</button>
+          {msg ? <span className="od-rep-msg" role="status">{msg}</span> : null}
+        </div>
+      </div> : null}
     </div>);
 }
 // ── Needs you + Automations (SW v633) ───────────────────────────────────────
@@ -55735,7 +55810,8 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
           tag={[r.forWho && `For ${r.forWho}`, r.ownersOnly && "Owners only"].filter(Boolean).join(" · ") || r.typeLabel}
           title={r.title} sub={r.version > 1 ? `Updated ${odShort(D(r.updatedAt))} · version ${r.version} · first filed ${odShort(D(r.filedAt))}` : `Filed ${odShort(D(r.filedAt))}`}
           when={reportOpen === r.id ? "Close" : dayName(D(r.updatedAt))} onClick={() => openReport(r.id)}/>
-        {reportOpen === r.id ? <OdReport body={reportBody[r.id]}/> : null}
+        {reportOpen === r.id ? <OdReport body={reportBody[r.id]} identity={identity} fview={fview}
+          onShareChange={(id, off) => setReportBody(m => (m[id] && typeof m[id] === "object" ? { ...m, [id]: { ...m[id], shareOff: off } } : m))}/> : null}
       </Fragment>);
     main = (<>
       <div className="od-head"><div><h1>Claude</h1><p>{full ? "Every change I made in Simpro and Command Center, and every message I checked" : "Every change Claude made in Simpro and Command Center for Koy"} · last 14 days</p></div>
@@ -56214,6 +56290,15 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
         .odash .od-rep-body th,.odash .od-rep-body td{border-bottom:1px solid var(--cline);padding:6px 8px;text-align:left;vertical-align:top}
         .odash .od-rep-body th{font-weight:700;color:var(--cdim);white-space:nowrap}
         .odash .od-rep-foot{margin-top:10px;font-size:11.5px;color:var(--cdim)}
+        .odash .od-rep-acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+        .odash .od-mini-btn.on{border-color:var(--cink)}
+        .odash .od-rep-sheet{border-top:1px solid var(--cline);margin-top:10px;padding-top:10px;display:flex;flex-direction:column;gap:8px}
+        .odash .od-rep-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        .odash .od-rep-lbl{font-size:11.5px;font-weight:700;color:var(--cdim);text-transform:uppercase;letter-spacing:.04em;min-width:28px}
+        .odash .od-rep-pre{margin:0;background:var(--inset);border-radius:10px;padding:10px 12px;font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;user-select:text;-webkit-user-select:text}
+        .odash .od-rep-link{max-height:none}
+        .odash .od-rep-note,.odash .od-rep-msg{font-size:12px;color:var(--cdim)}
+        .odash .od-rep-msg{font-weight:700;color:var(--cink)}
         .odash .od-flag-meta{font-size:11.5px;color:var(--cdim);margin-bottom:6px}
         .odash .od-flag-job{margin:4px 0 8px}
         .odash .od-flag-detail{white-space:pre-wrap}
@@ -65406,9 +65491,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-20 · App SW version: v665
+**Last manifest update:** 2026-11-20 · App SW version: v667
 ---
 
+- **Reports on the Claude tab: Copy (for a foreman or for owners, as a text or an email) and a Share link for the team; the foreman copy never carries dollar or cost lines** · 'in-flight 2026-11-20' · 'SW v667' · 'OdReport' · 'ReportLinkView' · 'reportToText' · 'foremanSafe' · 'planShare' · 'claudeReports' · Koy: *"would be really nice if these were easily shown somewhere or copyable to send to people"*, then *"yes build and deploy when done"*. An open report has **Copy** and **Share link**. Copy: For Foreman / crew or Owners / admins, As Text or Email; the preview is exactly what copies (job number and name first, no markdown marks, a table row reads "Rough: Hours 120, Margin 31%"), with Send… where the phone has a share sheet. **The foreman copy is made on the server** ('functions/duetWrites/reports.js' foremanSafe): a line goes when it has a dollar sign / USD, or a money word (cost, price, sell, revenue, profit, budget, spent, billed, paid, wages…) with a number that isn't a percent, hours or days; a table loses any column headed by a money word. Margin %, hours and days stay. The callable 'claudeReports' now hands non-admins only the foreman copy (never the full text), and admins the full text plus the foreman copy, so Copy for foreman copies exactly what a foreman would see. Owners-only reports have no foreman copy and no link; in Foreman view only the foreman copy shows. **Share link** '/?report=<id>' opens over the app for a signed-in team member (live PIN), read-only, with Copy text; archived or shared-off reports read as "Not available" to non-admins. **Turn sharing off / on** is the callable's one write ('{ id, share }', admins only: 'shareOff' / 'shareOffAt' on that report); a newer version of the report keeps it. **Filing guard tightened:** a report with a cost figure and no $ ("material spent 14,820") now needs ownersOnly too. Test: 'scripts/claude-reports-test.js' (19 checks). Guide 'dashboard.html' (Reports). Deploys functions 'claudeReports,duetApi'. **Why it won't lose data:** no job, need or settings doc is touched; the only new write is the shareOff flag on one claude_reports doc through the server; rules unchanged (claude_reports stays server-only); nothing is deleted.
 - **Meetings: every meeting prefills, Lead Meeting ideas for Highlight / Lowlight / Training (field and app), and photos on every item** · 'in-flight 2026-11-20' · 'SW v666' · 'OdMeetings' · 'buildPrefill' · 'leadSuggestions' · 'trainingIdeas' · 'appIdeas' · 'foremanSuggestions' · 'scripts/crew-briefs-index.js' · 'src/crewBriefsIndex.json' · Koy, 2026-11-20: *"all the meetings on the dashboard need pre fills. aslo noticing i cant put pictures anywhere especially the highlight and low light of lead meeting needs this"*, *"yeah i want ideas for training pre filled"*, *"app training ideas as well"*. **Prefill (Scramble, Lead, Foreman):** the browser builds the same rows the page shows and saves them on meetings/<kind>_<date>.prefill ({at, by, appVersion, rows, errors}, setDoc mergeFields so nothing else on the record moves) the first time this week's meeting opens; **Prefill again** remakes it. This week the live sections stay live and the suggestion sections ('PREFILL_SECS': Lead highlight, lowlight, training; Foreman team) read the saved rows so they hold still; a past week reads every section from its prefill (before, past weeks showed today's rows). Friday Strategy unchanged (Thursday 9 PM cloud prefill). **Lead suggestions** (since last meeting): Highlight = inspections passed (first try marked), rough / finish done (status date), trips signed off, top three total margins 30%+; Lowlight = failed inspections with their items, open trips past their date, jobs over the bid or with negative total margin (percent only). **Training ideas** (two weeks, five at most): failed-inspection items by kind, the same fix on 3+ punch / trip items across 2+ jobs ('FIX_BUCKETS'), QC walk items, punch / trip text that reads like added work, then this week's standard (the crew SOP guides in turn, Open the guide). **App ideas** (three at most, tag App): crew-brief sections newer than last week's prefill appVersion (office, owners, dashboard and calendar sections left out; 'crewBriefsIndex.json' made from docs/crew-briefs in prebuild), then the weakest habit first: jobs in progress with no daily update in a week, punch items open two weeks with nobody on them, open trips with no material or PO, past-due My Day tasks. Each suggestion: **Keep** (meetings/<id>.kept), Edit, Hide (that week); Add still works. **Foreman:** Team check starts with a line per crew (out, failed inspections, losing money, over bid; counts and percents), each guy's time off under his name. **Photos:** + Photo on every row of every meeting (rows, Hours and margin, Job numbers, Foreman Jobs, Guys) and + Add a photo to this section under Section notes ('rowPhotos.sec_<sec>'); one picker (phones offer camera or library); tap a thumbnail for a big view with Back / Next, Full size, Delete, Close; × asks first. Stored as before ('taskPhotoPath', jobs/_tasks/task-photos/mtg_<meeting>/…). No dollars on the Lead or Foreman pages; no job, stage or Simpro write. Guide 'dashboard.html'. Test 'scripts/meeting-model-test.js'. **Deploy:** hosting only. **Why it won't lose data:** only the meeting's own record gains 'prefill' and 'kept' fields (replaced field-wise, never the whole doc); everything on jobs is only read; photos are added and unlinked the way v649 did.
 - **Crew calendar: use the hours someone is free** · 'in-flight 2026-11-20' · 'SW v665' · 'trimFor' · 'doTrim' · Koy: *"jacob is scheduled 10-12 somewhere so i should be able to schedule him somewhere else that isn't those hours"*. Ticking someone who is busy for only part of a block's time now offers their free hours first: **Add Jacob, make it 7:00 AM–10:00 AM**. The block's time changes for everyone on it (a block has one start and finish) and the other job is left alone. It ends when their other work starts or starts when it ends, whichever leaves more time, and is offered only when that leaves at least half an hour. **Move Jacob here** stays as the second choice for another plan. Someone part-busy on a **Simpro booking** can now be ticked too, with the free-hours choice only (the Simpro booking can't be moved from here). Time off still blocks. The box says what this job's time is and what each choice does. Same choices from **+ Someone from another crew**. **Simpro wins on the blocks too** (Koy, Webb drawn three times: *"tf is webb there 3 times"*): a plan or forecast is not drawn on a day Simpro already has that same job or trip booked (the booking is the block), and anyone Simpro has elsewhere at that time is left off a plan or forecast that day with *booked in Simpro then, left off* ('sim', 'simLeft'); a Simpro block only says *booked twice in Simpro* when the other one is in Simpro too. **Under 10 h** (Koy: *"everyone needs to be scheduled 10 hours a day"*): each workday's header counts who is on something but short of 10 hours, and lists them after the open names with their hours (*Jacob 4.5h*), drag or tap like an open name ('crewCnt.short'; Simpro, plans and forecasts, overlaps counted once; Fridays and people off are left out). The auto-schedule does not fill those gaps yet. Guide 'dashboard.html'. **Deploy:** hosting only. **Why it won't lose data:** the same plan save as setting a block's time and people by hand; every clash check still runs on the new time.
 - **Crew calendar: the job box always fits on screen** · 'in-flight 2026-11-20' · 'SW v664' · 'openIns' · 'insAt.maxH' · Koy: *"i cant even see the whole pop up"*. The box that opens beside a block was pinned up to 420px from the bottom of the window but could be 80% of the window tall, so on a block low on the page the Time buttons, Move, Book and Remove ran off the screen with no way to scroll. It now opens no lower than leaves it about 640px (or the whole window), its height is capped to the room below it ('insAt.maxH'), and the inside scrolls. Phones (the bottom sheet) are unchanged. Guide 'dashboard.html' unchanged (no step changes). **Deploy:** hosting only. **Why it won't lose data:** placement and scrolling of one box only; nothing is read or written differently.
@@ -76221,6 +76307,54 @@ function TeamRatingCard({ identity }) {
     </section>
   );
 }
+// v667 Share link for a Claude report: /?report=<rep_id> (Koy: reports "easily shown somewhere or
+// copyable to send to people"). Opens over the app for a signed-in team member only (the live-PIN
+// callable claudeReports). The server decides what they see: admins the full report, everyone else
+// the foreman copy (no dollar or cost lines); an owners-only, archived or shared-off report reads
+// as "Not available". Read-only: nothing here writes.
+const reportLinkParam = () => { try { const v = new URLSearchParams(window.location.search).get("report") || ""; return /^rep_[A-Za-z0-9_-]{6,48}$/.test(v) ? v : ""; } catch (e) { return ""; } };
+function ReportLinkView({ id, identity, onClose }) {
+  const [rep, setRep] = useState(undefined);   // undefined loading · { ok, report } · { err }
+  const [msg, setMsg] = useState("");
+  const preRef = useRef(null);
+  useEffect(() => {
+    let dead = false;
+    memberCallable("claudeReports", identity)({ id }).then(
+      r => { if (dead) return; const d = r && r.data; setRep(d && d.ok && d.report ? d : { err: "Not available. The report was taken down, or it isn't shared with you." }); },
+      e => { if (!dead) setRep({ err: /not-found|internal/.test(String(e && e.code)) ? "Couldn't open it. Try again." : (e && e.message) || "Couldn't open it. Try again." }); });
+    return () => { dead = true; };
+  }, [id]); // eslint-disable-line
+  useEffect(() => { const k = e => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  const r = rep && rep.report;
+  const text = r ? ReportMd.reportToText(r.content, r, "text") : "";
+  return createPortal(
+    <div className="he-scrim" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(13,18,32,.45)", zIndex: 99990, display: "flex", flexDirection: "column", justifyContent: ON_MOBILE ? "flex-end" : "center", alignItems: ON_MOBILE ? "stretch" : "center" }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="replink-t" onClick={e => e.stopPropagation()} className="rlv"
+        style={{ background: C.card, color: C.text, width: ON_MOBILE ? "auto" : "min(640px, calc(100vw - 32px))", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box",
+          borderRadius: ON_MOBILE ? "22px 22px 0 0" : 18, padding: `14px 18px calc(18px + env(safe-area-inset-bottom, 0px))`, display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 18px 50px rgba(10,20,50,.25)" }}>
+        <style>{`.rlv .od-rep-body{font-size:14px;line-height:1.5;overflow-wrap:anywhere}.rlv h3{font-size:16px;margin:2px 0 8px}.rlv h4{font-size:15px;margin:14px 0 6px}.rlv h5{font-size:14px;margin:12px 0 4px}
+          .rlv p{margin:6px 0}.rlv ul,.rlv ol{margin:6px 0;padding-left:20px}.rlv li{margin:3px 0}.rlv .od-rep-tw{overflow-x:auto;margin:8px 0}
+          .rlv table{border-collapse:collapse;font-size:13px;min-width:100%}.rlv th,.rlv td{border-bottom:1px solid ${C.border};padding:6px 8px;text-align:left;vertical-align:top}
+          .rlv th{font-weight:700;color:${C.dim};white-space:nowrap}.rlv .od-rep-foot{margin-top:10px;font-size:12px;color:${C.faint}}`}</style>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{ color: C.faint, fontSize: 12.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em" }}>{r ? [r.jobNo && `#${r.jobNo}`, r.jobName, r.typeLabel].filter(Boolean).join(" · ") : "Report"}</span>
+          <h2 id="replink-t" style={{ margin: 0, fontSize: 19, lineHeight: 1.2, color: C.text }}>{r ? ReportMd.reportHead(r) : rep === undefined ? "Opening…" : "Not available"}</h2>
+        </div>
+        {rep === undefined ? <div style={{ color: C.dim, fontSize: 14 }}>Opening…</div>
+          : rep.err ? <div style={{ color: C.dim, fontSize: 14 }}>{rep.err}</div>
+          : <div className="od-rep-body" style={{ margin: 0 }}>
+              <ReportBlocks content={r.content}/>
+              <div className="od-rep-foot">{r.foremanCopy ? "Foreman copy: no dollar or cost figures" : r.ownersOnly ? "Owners only: has dollar figures" : "Full report"} · version {r.version || 1}</div>
+              <pre ref={preRef} aria-hidden="true" style={{ position: "absolute", left: -9999, top: 0, whiteSpace: "pre-wrap" }}>{text}</pre>
+            </div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {r ? <button type="button" onClick={() => reportCopy(text, preRef.current, setMsg)} style={{ border: 0, borderRadius: 12, background: RL_ACC, color: "#fff", fontWeight: 700, fontSize: 15, minHeight: 44, padding: "0 18px", cursor: "pointer", fontFamily: "inherit" }}>Copy text</button> : null}
+          <button type="button" onClick={onClose} autoFocus style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.card, color: C.text, fontWeight: 600, fontSize: 15, minHeight: 44, padding: "0 18px", cursor: "pointer", fontFamily: "inherit" }}>Close</button>
+          {msg ? <span role="status" style={{ fontSize: 13, color: C.dim, fontWeight: 600 }}>{msg}</span> : null}
+        </div>
+      </section>
+    </div>, document.body);
+}
 // The pop-up: name, level, what that level is responsible for, and the next step up.
 function MyRolePopup({ firstName, level, next, onClose, preview = false }) {
   const [openNext, setOpenNext] = useState(false);
@@ -76370,6 +76504,12 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
+  // v667: a report share link (/?report=rep_…) opens over the app once signed in.
+  const [reportLinkId, setReportLinkId] = useState(reportLinkParam);
+  const closeReportLink = useCallback(() => {
+    setReportLinkId("");
+    try { const u = new URL(window.location.href); u.searchParams.delete("report"); window.history.replaceState(null, "", u.pathname + (u.search || "") + u.hash); } catch (e) {}
+  }, []);
   // v627: keep Simpro's "on the schedule" read fresh app-wide so every scheduling pill is live.
   useSimproOnSchedule(!!identity);
   // v433 usage tracking: count only for a logged-in internal identity. Set at
@@ -82040,6 +82180,9 @@ function App() {
         </div>
       )}
 
+      {reportLinkId && identity && (
+        <ReportLinkView id={reportLinkId} identity={identity} onClose={closeReportLink}/>
+      )}
       {roleOpen && myLadderLevel && (
         <MyRolePopup firstName={String((myLiveRec && myLiveRec.name) || "").trim().split(/\s+/)[0]} level={myLadderLevel} next={myLadderNext} onClose={closeRole}/>
       )}

@@ -82,4 +82,66 @@ function parse(md) {
   return merged;
 }
 
-module.exports = { parseReportMd: parse, runs };
+// ── Copy as text (SW v667) ──────────────────────────────────────────────────
+// Koy, 2026-11-18: reports "easily shown somewhere or copyable to send to
+// people". Turns a report into plain text to paste in a text message or an
+// email: no markdown marks, no table pipes. A table row reads "Rough: Hours
+// 120, Margin 31%". The heading is the job number and name, then the title.
+// This only formats: what may be copied (the foreman copy, with no dollar or
+// cost lines) is decided on the server (functions/duetWrites/reports.js).
+//   meta:   { jobNo, jobName, title, updatedAt }
+//   format: "text" (compact, "-" bullets) | "email" (Subject line, spaced, "•")
+const plain = (rs) => (rs || []).map(r => r.text).join("").replace(/\s+/g, " ").trim();
+function reportHead(meta) {
+  const m = meta || {};
+  const no = String(m.jobNo || "").replace(/^#/, "").trim();
+  const name = String(m.jobName || "").trim();
+  const job = [no && `#${no}`, name].filter(Boolean).join(" ");
+  // Titles often start with the job ("889 Rose Residence: Margin Watch"): keep only the rest.
+  let t = String(m.title || "").trim();
+  const low = (x) => x.toLowerCase();
+  if (no && low(t).startsWith(low(no))) t = t.slice(no.length).replace(/^[\s#:·-]+/, "");
+  if (name && low(t).startsWith(low(name))) t = t.slice(name.length).replace(/^[\s:·-]+/, "");
+  return [job, t || String(m.title || "").trim()].filter(Boolean).join(": ");
+}
+function reportToText(md, meta, format) {
+  const email = format === "email";
+  const blocks = parse(md);
+  const head = reportHead(meta);
+  const m = meta || {};
+  // Drop a first heading that only repeats the job and title.
+  if (blocks[0] && blocks[0].t === "h") {
+    const h = plain(blocks[0].runs).toLowerCase();
+    const no = String(m.jobNo || "").replace(/^#/, "");
+    if ((no && h.indexOf(no) >= 0) || (m.title && h.indexOf(String(m.title).toLowerCase()) >= 0)) blocks.shift();
+  }
+  const d = m.updatedAt ? new Date(m.updatedAt) : null;
+  const when = d && !isNaN(d) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "";
+  const bullet = email ? "• " : "- ";
+  const parts = [];
+  blocks.forEach(b => {
+    if (b.t === "h") parts.push({ gap: true, heading: true, lines: [plain(b.runs) + (email ? "" : ":")] });
+    else if (b.t === "p") parts.push({ gap: email, lines: [plain(b.runs)] });
+    else if (b.t === "ul") parts.push({ gap: email, lines: b.items.map(it => bullet + plain(it)) });
+    else if (b.t === "ol") parts.push({ gap: email, lines: b.items.map((it, k) => `${k + 1}. ${plain(it)}`) });
+    else if (b.t === "table") {
+      const hd = b.head.map(plain);
+      parts.push({ gap: email, lines: b.rows.map(row => {
+        const c = row.map(plain);
+        const rest = c.slice(1).map((v, k) => v ? (hd[k + 1] ? `${hd[k + 1]} ${v}` : v) : "").filter(Boolean).join(", ");
+        return bullet + [c[0], rest].filter(Boolean).join(": ");
+      }) });
+    }
+  });
+  const out = [];
+  if (email) out.push(`Subject: ${head}`, "");
+  else out.push(head + (when ? ` (${when})` : ""));
+  parts.forEach((p, i) => {
+    const afterHeading = i > 0 && parts[i - 1].heading;
+    if (p.gap && i > 0 && !afterHeading) out.push("");
+    out.push(...p.lines.filter(Boolean));
+  });
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+module.exports = { parseReportMd: parse, runs, reportHead, reportToText };
