@@ -10,6 +10,10 @@
 // same way. Upcoming rows with only an estimated start are on the list without hours (the screen shows theirs).
 "use strict";
 const SC = require("./scrambleCal.js");
+const PLS = require("./punchListStage.js");
+// What is still open on a phase, counted the way the screen counts it (src/App.js scalOpenPunch).
+const openPunch = (j, ph) => { if (ph === "rough") return PLS.openPunchItems(j && j.roughPunch).length + (j && j.roughInspectionResult === "fail" ? (j.roughInspectionItems || []).filter(i => i && typeof i === "object" && !i.done).length : 0);
+  const o = PLS.punchListOpen(j); return o.finishPunch + o.qcPunch + o.inspection; };
 
 const WEEKS = 17;   // the screen's SCAL_WEEKS
 // The app's effective status (src/App.js effRS / effFS): the stored status, else from the stage percent.
@@ -39,7 +43,7 @@ function jobsOf(docs) {
 function calendarOf(inp, opts) {
   const i = inp || {}, prefs = i.prefs || {};
   return SC.buildCalendar({ jobs: jobsOf(i.jobDocs), upcoming: Array.isArray(i.upcoming) ? i.upcoming : [], schedules: Array.isArray(i.schedules) ? i.schedules : [],
-    phaseHours: i.phaseHours || {}, upHours: i.upHours || {}, plans: prefs.cal || {}, proposals: opts && opts.proposals === false ? {} : prefs.duet || {}, today: i.now, weeks: WEEKS, effRS, effFS,
+    phaseHours: i.phaseHours || {}, upHours: i.upHours || {}, plans: prefs.cal || {}, proposals: opts && opts.proposals === false ? {} : prefs.duet || {}, openPunch, today: i.now, weeks: WEEKS, effRS, effFS,
     users: Array.isArray(i.users) ? i.users : [], holidays: Array.isArray(prefs.holidays) ? prefs.holidays : SC.DEFAULT_HOLIDAYS, timeOff: Array.isArray(i.pto) ? i.pto : [] });
 }
 // What became of Duet's proposals (the screen records one line when a person keeps, changes or removes one), newest first.

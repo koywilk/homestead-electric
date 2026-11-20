@@ -435,6 +435,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   const fromOf = (it) => it.start.started || !sIso(it) || sIso(it) < first ? first : nextWork(sIso(it));
   const doPhase = (it) => {
     doneKeys.add(it.key);
+    if (it.done100) return need(it, `${it.tag} is at 100% with nothing left open. Mark it Complete on the job`);
     if (it.over && !it.leftBy) return need(it, "Over bid. Set the hours by hand");
     if (it.left == null) return need(it, "No hours in Job Costs. Set the hours by hand");
     if (!(it.left > 0)) return;
@@ -518,7 +519,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
 //   input: { jobs, upcoming, schedules, phaseHours ({ no: { r: [used, est], f: [...] } }),
 //            upHours ({ no: { est, used } }), plans ({ key: plan }), today (Date), weeks, effRS, effFS }
 function buildCalendar(input) {
-  const { jobs = [], upcoming = [], schedules = [], phaseHours = {}, upHours = {}, plans = {}, proposals = {}, today = new Date(), weeks = 5, effRS, effFS, users = null, timeOff = [] } = input || {};
+  const { jobs = [], upcoming = [], schedules = [], phaseHours = {}, upHours = {}, plans = {}, proposals = {}, today = new Date(), weeks = 5, effRS, effFS, users = null, timeOff = [], openPunch = null } = input || {};
   setHolidays(input && "holidays" in input ? input.holidays : null);
   const todayIso = ymd(today), start = mondayOf(today);
   const days = viewDays(start, weeks), end = days[days.length - 1].iso;
@@ -628,6 +629,11 @@ function buildCalendar(input) {
       hold: st === "waiting", po: poState(ph === "finish" ? j.finishMaterials : j.roughMaterials),
       start: sIso ? { iso: sIso, conf: !!j[pre + "StartConfirmed"] || st === "date_confirmed", started: st === "inprogress" } : (st === "inprogress" ? { iso: "", started: true } : null) });
     if (hrs) { it.used = r1(hrs[0]); it.est = r1(hrs[1]); it.over = it.est > 0 && it.used >= it.est; }
+    // v672 (Koy 2026-11-20, Vista Meadows: "it is done"): a phase still marked In Progress at 100% with nothing left
+    // open (no punch, no failed-inspection items) stops holding people. It stays visible as a call for a person (mark it
+    // Complete), with no crew or hours forecast. openPunch(job, phase) is passed in by the screen and by the server
+    // read, the same count both ways; without it the rule is off.
+    if (st === "inprogress" && it.stage >= 100 && typeof openPunch === "function" && openPunch(j, ph) === 0) it.done100 = true;
     if (ph === "rough" && LIVE.includes(fs) && fs !== "waiting") { const fd = anyIso(j.finishProjectedStart) || anyIso(j.finishStatusDate); if (fd) it.flags.push(`Finish is set for ${md(fd)}; it goes on the calendar when rough-in is complete`); }
     it._ph = true;
   });
@@ -700,7 +706,7 @@ function buildCalendar(input) {
       if (planDays(f).some(d => d.date >= todayIso)) it.auto = f;
     }
     if (it.auto && it.auto.src === "duet") { /* Duet's proposal stands in for the forecast */ }
-    else if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
+    else if (!it.plan && !it.off && !it.done100 && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
       it.auto = { s: workAfter(it.booked[it.booked.length - 1].iso), hours: it.left, crew: Math.max(1, it.crewBooked) };
     }
     const bookedFrom = (iso) => it.booked.some(b => b.iso >= iso);
@@ -753,6 +759,7 @@ function buildCalendar(input) {
     const f = it.plan || (it.auto && it.auto.src !== "auto" ? it.auto : null); const seen = new Set();
     const ppl = f ? ((f.staff || []).length ? f.staff : ((it.booked[it.booked.length - 1] || {}).names || []).map(name => ({ name }))) : [];
     if (f) planDays(f).forEach(d => (d.staff || ppl).forEach(x => { const n = x && x.name; if (n && (offByDay[d.date] || []).includes((board0 && board0.find(n) || { name: n }).name) && !seen.has(n + d.date)) { seen.add(n + d.date); it.flags.push(`${firstOf(n)} is off ${md(d.date)}`); } }));
+    if (it.done100 && !it.need) it.flags.push(`${it.tag} is at 100% with nothing left open. Mark it Complete on the job`);
     // v671 (Koy's rule 5: a return trip's block should be the trip's own crew): the trip names someone, and nobody on
     // the block is that person or on their crew.
     if (f && it.kind === "trip" && !it.done && it.who && board0) { const w = board0.find(it.who), wc = w && board0.crewOfUser(w), on = (f.staff || []).map(x => x && x.name).filter(Boolean);

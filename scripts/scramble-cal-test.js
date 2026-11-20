@@ -490,5 +490,18 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(!T(["Trever Worley", "Callen Jakeman"]).flags.some(f => /assigned to/.test(f)) && !T(["Louis Hoffman", "James Livingston"]).flags.some(f => /assigned to/.test(f)), "the named person, or anyone on their crew, is not flagged");
 }
 
+// ── v672: a phase at 100% with nothing left open stops holding people ──
+{
+  const opt = { today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const jobs = [{ id: "h1", simproNo: "95", name: "Hundred", roughStatus: "complete", finishStatus: "inprogress", finishStage: "100%", foreman: "Daegan Smith" }];
+  const run = (openPunch) => SC.buildCalendar({ jobs, schedules: [], phaseHours: { "95": { f: [50, 100] } }, ...opt, ...(openPunch ? { openPunch } : {}) }).items.find(x => x.key === "j_h1_f");
+  const done = run(() => 0), open = run(() => 2), off = run(null);
+  ok(done.done100 && !done.auto && /100% with nothing left open/.test(done.need || "") && done.redDay, "at 100% with nothing open: no crew or hours forecast, and it's a call for a person, on its day");
+  ok(!open.done100 && open.auto && open.auto.staff.length >= 2, "at 100% with punch still open: it keeps its forecast");
+  ok(!off.done100 && off.auto, "without the open-items count the rule is off (older callers are unchanged)");
+  const jobs2 = [{ ...jobs[0], finishStage: "90%" }];
+  ok(!SC.buildCalendar({ jobs: jobs2, schedules: [], phaseHours: { "95": { f: [50, 100] } }, ...opt, openPunch: () => 0 }).items.find(x => x.key === "j_h1_f").done100, "under 100% it is never treated as done");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

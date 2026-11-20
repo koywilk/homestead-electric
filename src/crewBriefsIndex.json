@@ -1,5 +1,14 @@
 [
  {
+  "v": 672,
+  "heads": [
+   {
+    "h": "CHANGED (office)",
+    "first": "The Forecast tab now opens on the crew calendar. The Crew Planner button is gone; the crew calendar replaced it. A small \"Old Crew Planner\" link at the end of the row still opens the old board if you "
+   }
+  ]
+ },
+ {
   "v": 671,
   "heads": [
    {
@@ -198,15 +207,6 @@
    {
     "h": "NEW (My Day: My jobsite)",
     "first": "Leads, jr. foremen and foremen: if you lead a job and someone is booked on it in Simpro today or tomorrow, a My jobsite card shows at the top of My Day."
-   }
-  ]
- },
- {
-  "v": 652,
-  "heads": [
-   {
-    "h": "NEW (Dashboard › Meetings: the Foreman Meeting)",
-    "first": "Open /dashboard › Meetings and tap Foreman Meeting · Wed 7:00 at the top. One page for Koy and all three foremen."
    }
   ]
  }
