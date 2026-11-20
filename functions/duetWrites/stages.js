@@ -514,6 +514,12 @@ function planSetScheduleDates(args, ctx) {
   const p = phase, k = (s) => `${p}${s}`;
   const given = ["statusDate", "scheduledEnd", "needsSchedHard", "projectedStart", "startConfirmed"].filter(x => a[x] != null);
   if (!given.length) return refuse("Say what to set: statusDate, scheduledEnd, needsSchedHard, projectedStart and/or startConfirmed.");
+  // tellGc: false (Koy 2026-11-20: an estimated start learned from a text shouldn't email the GC): the projected start
+  // is saved quietly. Only for an estimate. A confirmed start always tells the GC, so the two can't be combined.
+  if (a.tellGc != null && typeof a.tellGc !== "boolean") return refuse("tellGc must be true or false.");
+  const quiet = a.tellGc === false;
+  if (quiet && a.projectedStart == null) return refuse("tellGc: false goes with a projectedStart (it keeps an estimated start from emailing the GC).");
+  if (quiet && (a.startConfirmed === true || (a.startConfirmed == null && ctx.job.data[`${phase}StartConfirmed`]))) return refuse("A confirmed start always tells the GC. Leave tellGc off, or unconfirm the start first.");
   const patch = {};
   const did = [];
   // (a) the schedule window — saveNeedsSchedModal writes all three from its state.
@@ -549,10 +555,11 @@ function planSetScheduleDates(args, ctx) {
   if (!changed.length) return { noop: true, result: { phase, message: "Those dates are already set that way — nothing to change." } };
   const { before, after } = auditOf(fields, data);
   const pushes = statusPushes(data, fields);
-  const gcEmail = k("ProjectedStart") in fields && !holds(data, k("ProjectedStart"), fields[k("ProjectedStart")]) ? [`${P(phase)} projected start changed (gcNotify)`] : [];
-  return { fields, before, after,
+  const startMoved = k("ProjectedStart") in fields && !holds(data, k("ProjectedStart"), fields[k("ProjectedStart")]);
+  const gcEmail = startMoved && !quiet ? [`${P(phase)} projected start changed (gcNotify)`] : [];
+  return { fields, before, after, ...(quiet && startMoved ? { quietGc: true } : {}),
     result: { phase, set: did, changed, statusDate: fields[k("StatusDate")], scheduledEnd: fields[k("ScheduledEnd")], needsSchedHard: fields[k("NeedsSchedHard")], projectedStart: fields[k("ProjectedStart")], startConfirmed: fields[k("StartConfirmed")], status: fields[k("Status")],
-      pushes, pushTo: [...new Set(pushes.flatMap(x => x.to))], gcEmail: gcEmail.length ? gcEmail : undefined } };
+      pushes, pushTo: [...new Set(pushes.flatMap(x => x.to))], gcEmail: gcEmail.length ? gcEmail : undefined, ...(quiet && startMoved ? { gcQuiet: "Estimated start saved quietly: the GC is not emailed about it." } : {}) } };
 }
 
 module.exports = { STATUS_VALUES, QC_VALUES, PREP_KEYS, toMdy, sanitize, holds, odRealAtts, inspFailCount, inspItemsNotOnTrip, prepItemPatch, prepItemState, allPrepDoneServer, allPrepChecked, statusPushes,

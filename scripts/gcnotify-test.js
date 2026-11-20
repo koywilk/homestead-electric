@@ -158,5 +158,14 @@ console.log("svix webhook signature (Resend bounce webhook):");
   t("non-v1 scheme entries ignored", !N.verifySvixSignature(secret, msgId, ts, body, "v2," + sig, now));
 }
 
+// quietSchedule: an estimated start saved quietly skips the GC's schedule email for that one write only
+{
+  t("quiet write: the mark is this write's own tab and the stamp changed", N.quietSchedule({ w: "1.a", tab: "x" }, { w: "1.b", tab: "duet-1234", gc_quiet: "duet-1234" }));
+  t("a later write by anyone: the old mark no longer matches the tab", !N.quietSchedule({ w: "1.b", tab: "duet-1234", gc_quiet: "duet-1234" }, { w: "1.c", tab: "phone-9", gc_quiet: "duet-1234" }));
+  t("no mark: not quiet", !N.quietSchedule({ w: "1.a" }, { w: "1.b", tab: "duet-1" }));
+  t("same stamp (not a new write): not quiet", !N.quietSchedule({ w: "1.b", tab: "duet-1", gc_quiet: "duet-1" }, { w: "1.b", tab: "duet-1", gc_quiet: "duet-1" }));
+  t("a non-string mark is ignored", !N.quietSchedule({ w: "1.a" }, { w: "1.b", tab: true, gc_quiet: true }));
+}
+
 console.log(failures ? "\n" + failures + " FAILURES" : "\nALL PASS");
 process.exit(failures ? 1 : 0);

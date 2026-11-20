@@ -1715,7 +1715,8 @@ exports.onJobUpdate = functions.firestore
     // on the mail provider and never depends on email being configured. Keyed on
     // the job's CURRENT gc — only GCs with an active link get notified.
     try {
-      const triggers = gcNotify.detectTriggers(before, after).filter(t => !(bySimproSync && t.type === "milestone"));
+      const gcQuiet = gcNotify.quietSchedule(_rawB, _rawA);   // an estimated start saved quietly: no schedule email for this one write
+      const triggers = gcNotify.detectTriggers(before, after).filter(t => !(bySimproSync && t.type === "milestone") && !(gcQuiet && t.type === "schedule"));
       if (triggers.length) {
         const gcKeyNow = gcPortal.gcKeyOf(after.gc);
         if (gcKeyNow) {

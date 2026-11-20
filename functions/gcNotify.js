@@ -306,7 +306,16 @@ function newAttempts(b, a) {
   return fresh.filter((x) => x && !x.restored);
 }
 
+// A write that asked not to email the GC about a schedule date (an estimated start Duet saved from a text, Koy
+// 2026-11-20). True only for the one write that set the mark: gc_quiet holds that write's own tab id, and the version
+// stamp changed with it. A later write by anyone has a different tab, so an old mark never silences a real change.
+function quietSchedule(rawBefore, rawAfter) {
+  const a = rawAfter || {}, b = rawBefore || {};
+  return !!a.gc_quiet && typeof a.gc_quiet === "string" && a.gc_quiet === a.tab && a.w !== b.w;
+}
+
 module.exports = {
+  quietSchedule,
   renderGcEmail,
   newAttempts,
   digestSections,

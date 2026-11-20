@@ -382,6 +382,9 @@ async function jobWrite(io, requestId, action, jobId, plan, finish) {
     const updatedAt = freshIso(raw.updated_at);
     const upd = { ...stamp(requestId, updatedAt), lastActivityAt: io.serverTimestamp(), merged: false };
     Object.keys(p.fields).forEach(k => { upd["data." + k] = p.fields[k]; });
+    // An estimated start saved quietly (phase.setDates tellGc: false): the mark is this write's own tab id, so the
+    // job trigger skips the GC's schedule email for THIS write only. Any later write has another tab and it no longer matches.
+    if (p.quietGc) upd.gc_quiet = upd.tab;
     tx.update(io.jobRef(jobId), upd);
     const result = { ok: true, requestId, action, jobId, jobName: job.data.name || "", ...p.result };
     out = finish(200, result, { ok: true, coll: "jobs", docId: jobId, fields: Object.keys(p.fields), itemId: p.itemId || null, before: p.before, after: p.after, ...(p.audit || {}) });

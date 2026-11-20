@@ -446,6 +446,14 @@ await ok("phase.setDates: the window (start / end / hard in one patch, hard clea
   assert.deepStrictEqual(ps.fields, { finishProjectedStart: "12/1/2026", finishStatus: "waiting_date" }); assert.deepStrictEqual(ps.result.pushes.map(x => x.push), ["job_hold"]); assert.deepStrictEqual(ps.result.gcEmail, ["Finish projected start changed (gcNotify)"]);
   const ps2 = SG.planSetScheduleDates({ phase: "rough", projectedStart: "2026-12-01" }, J());
   assert.deepStrictEqual(ps2.fields, { roughProjectedStart: "12/1/2026" }, "status already set → untouched");
+  // tellGc: false — an estimated start saved quietly (Koy 2026-11-20)
+  const q = SG.planSetScheduleDates({ phase: "rough", projectedStart: "2026-12-01", tellGc: false }, J({ roughStartConfirmed: false }));
+  assert.deepStrictEqual(q.fields, { roughProjectedStart: "12/1/2026" }); assert.strictEqual(q.quietGc, true); assert.strictEqual(q.result.gcEmail, undefined); assert.ok(/not emailed/.test(q.result.gcQuiet), "quiet: no GC email line, and it says so");
+  assert.strictEqual(ps2.quietGc, undefined, "the default still tells the GC");
+  assert.ok(SG.planSetScheduleDates({ phase: "rough", projectedStart: "2026-12-01", startConfirmed: true, tellGc: false }, J()).refused, "a confirmed start can't be quiet");
+  assert.ok(SG.planSetScheduleDates({ phase: "rough", projectedStart: "2026-12-01", tellGc: false }, J({ roughStartConfirmed: true })).refused, "nor a new date on an already confirmed start");
+  assert.ok(SG.planSetScheduleDates({ phase: "rough", statusDate: "2026-12-01", tellGc: false }, J({ roughStartConfirmed: false })).refused, "tellGc: false needs a projectedStart");
+  assert.ok(SG.planSetScheduleDates({ phase: "rough", projectedStart: "2026-12-01", tellGc: "no" }, J()).refused, "tellGc must be a boolean");
   const cf = SG.planSetScheduleDates({ phase: "finish", startConfirmed: true }, J());
   assert.deepStrictEqual(cf.fields, { finishStartConfirmed: true, finishStatus: "date_confirmed" }); assert.deepStrictEqual(cf.result.pushes, []);
   const un = SG.planSetScheduleDates({ phase: "rough", startConfirmed: false }, J({ roughStatus: "date_confirmed" }));
