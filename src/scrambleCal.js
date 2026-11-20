@@ -341,7 +341,10 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   };
   const label = (c) => c ? firstOf(c.foreman) + "'s crew" : "";
 
-  const isCand = (it) => !it.plan && !it.auto && !it.off && !it.upcoming && it.kind !== "service";
+  // v671 (Koy 2026-11-18 plan, open until now): an Upcoming job (not a job in the app yet) is a candidate once its start
+  // is CONFIRMED, so a promised start is never just a row on a list. With a foreman and bid hours it is placed; without,
+  // it goes to Needs you and sits red on its day.
+  const isCand = (it) => !it.plan && !it.auto && !it.off && (!it.upcoming || !!(it.start && it.start.conf && it.start.iso)) && it.kind !== "service";
   const sIso = (it) => (it.start && it.start.iso) || "";
   const trips = items.filter(it => isCand(it) && it.kind === "trip" && !it.booked.length);
   const phases = items.filter(it => isCand(it) && (it.kind === "rough" || it.kind === "finish") && !it.bookedAhead && !it.hold
@@ -646,6 +649,7 @@ function buildCalendar(input) {
     const sIso = anyIso(u.projectedStart || u.startDate);
     const h = (no && upHours[no]) || null;
     const it = mk({ key: "u_" + safeKey(u.id || u.name), kind: "rough", tag: "Rough-in", upcoming: true, no, name: upName(u), upId: u.id,
+      foreman: String(u.foreman || "").trim(),   // v671: so an Upcoming job with a confirmed start can be placed with its foreman's crew
       start: sIso ? { iso: sIso, conf: !!u.startConfirmed } : null });
     if (h && h.est) { it.est = r1(h.est); it.used = r1(h.used || 0); it.wholeJob = true; }
   });
@@ -749,6 +753,10 @@ function buildCalendar(input) {
     const f = it.plan || (it.auto && it.auto.src !== "auto" ? it.auto : null); const seen = new Set();
     const ppl = f ? ((f.staff || []).length ? f.staff : ((it.booked[it.booked.length - 1] || {}).names || []).map(name => ({ name }))) : [];
     if (f) planDays(f).forEach(d => (d.staff || ppl).forEach(x => { const n = x && x.name; if (n && (offByDay[d.date] || []).includes((board0 && board0.find(n) || { name: n }).name) && !seen.has(n + d.date)) { seen.add(n + d.date); it.flags.push(`${firstOf(n)} is off ${md(d.date)}`); } }));
+    // v671 (Koy's rule 5: a return trip's block should be the trip's own crew): the trip names someone, and nobody on
+    // the block is that person or on their crew.
+    if (f && it.kind === "trip" && !it.done && it.who && board0) { const w = board0.find(it.who), wc = w && board0.crewOfUser(w), on = (f.staff || []).map(x => x && x.name).filter(Boolean);
+      if (wc && on.length && !on.some(n => wc.people.includes((board0.find(n) || { name: n }).name))) it.flags.push(`The trip is assigned to ${firstOf(w.name)}, but the block has ${on.map(firstOf).join(", ")}`); }
     it.booked.forEach(b => { if (isHoliday(b.iso)) it.flags.push(`Booked in Simpro on ${holidayName(b.iso) || "a holiday"} (${md(b.iso)})`);
       (b.names || []).forEach(n => { const nm = (board0 && board0.find(n) || { name: n }).name; if ((offByDay[b.iso] || []).includes(nm)) it.flags.push(`${firstOf(n)} is booked ${md(b.iso)} but off that day`); }); });
   });
@@ -843,8 +851,10 @@ function whyOf(it) {
   if (it.kind === "rough" || it.kind === "finish") { const ph = it.kind === "rough" ? "Rough-in" : "Finish", st = it.start || {};
     const a = st.started ? `${ph} is marked In Progress on the job${it.stage ? ` (${Math.round(it.stage)}%)` : ""}, so it stays until it's marked Complete` : st.conf && st.iso ? `${ph} has a confirmed start ${md(st.iso)}` : st.iso ? `${ph} has an estimated start ${md(st.iso)}` : it.booked.length ? "Booked in Simpro" : "";
     const h = it.left > 0 && it.est != null ? `${Math.round(it.left)} h left of the ${Math.round(it.est)} h bid` : it.over ? "past its bid hours" : "";
-    return [a, h].filter(Boolean).join(" · "); }
-  if (it.kind === "trip") return it.done ? "Done; kept so its Simpro booking shows" : it.booked.length ? "Booked in Simpro" : "Open return trip on the job";
+    // v671: where the material stands, so a start with nothing ordered stands out
+    const m = it.po === "ordered" ? "material ordered" : it.po === "notOrdered" ? "material card not ordered yet" : it.po === "none" ? "no material card" : "";
+    return [a, h, m].filter(Boolean).join(" · "); }
+  if (it.kind === "trip") return it.done ? "Done; kept so its Simpro booking shows" : [it.booked.length ? "Booked in Simpro" : "Open return trip on the job", it.who ? `assigned to ${firstOf(it.who)}` : "nobody assigned on the trip", it.material ? "material on the trip" : "no material on the trip"].join(" · ");
   return "";
 }
 // The calendar as plain data for a date range (v668, the read door for Duet): per workday the blocks, the open people,

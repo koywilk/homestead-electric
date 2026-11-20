@@ -471,5 +471,24 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(blocks.length > 0 && blocks.every(x => { const on = x.auto.staff.map(p => p.name); return pairs.every(([a, b]) => on.includes(a) === on.includes(b)); }), "every auto block has both people of a set pair or neither");
 }
 
+// ── v671: Upcoming jobs with a confirmed start; a trip's block vs. who the trip names ──
+{
+  const opt = { today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const up = (o) => [{ id: "up1", name: "#1999 Upcoming House", foreman: "Daegan Smith", projectedStart: "12/1/2026", startConfirmed: true, ...o }];
+  const U = (o, hrs) => SC.buildCalendar({ jobs: [], upcoming: up(o), schedules: [], phaseHours: {}, upHours: hrs || {}, ...opt }).items.find(x => x.upcoming);
+  const a = U({}, { "1999": { est: 60, used: 0 } });
+  ok(a && a.auto && a.auto.s === "2026-12-01" && a.auto.staff.length >= 2 && !a.inList, "an Upcoming job with a confirmed start, a foreman and bid hours is placed on its day with that crew");
+  const b = U({ startConfirmed: false }, { "1999": { est: 60, used: 0 } });
+  ok(b && !b.auto && b.inList, "an Upcoming job with only an estimated start stays on the list");
+  const c = U({});
+  ok(c && !c.auto && c.need && c.redDay === "2026-12-01" && !c.inList, "a confirmed Upcoming start with no hours goes to Needs you and sits red on its day");
+  const d = U({ foreman: "" }, { "1999": { est: 60, used: 0 } });
+  ok(d && !d.auto && d.need && d.redDay === "2026-12-01", "a confirmed Upcoming start with no foreman goes to Needs you, red on its day");
+  const jT = [{ id: "tw", simproNo: "73", name: "Who trip", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith", returnTrips: [{ id: "a", number: 1, rtStatus: "scheduled", rtStatusDate: "11/24/2026", assignedTo: "Louis Hoffman", material: "x" }] }];
+  const T = (staff) => SC.buildCalendar({ jobs: jT, schedules: [], phaseHours: {}, plans: { "t_tw_a": { s: "2026-11-24", hours: 8, crew: 2, staff: staff.map(name => ({ name })) } }, ...opt }).items.find(x => x.key === "t_tw_a");
+  ok(T(["Austin Schut", "Payton Bolda"]).flags.some(f => /assigned to Louis, but the block has Austin, Payton/.test(f)), "a trip block with another crew on it is flagged");
+  ok(!T(["Trever Worley", "Callen Jakeman"]).flags.some(f => /assigned to/.test(f)) && !T(["Louis Hoffman", "James Livingston"]).flags.some(f => /assigned to/.test(f)), "the named person, or anyone on their crew, is not flagged");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

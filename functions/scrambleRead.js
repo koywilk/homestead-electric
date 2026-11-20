@@ -6,8 +6,8 @@
 //   jobs (residential, not archived) · settings/upcoming_jobs · settings/users (the Crew Board) · settings/crewPTO ·
 //   settings/phaseHours (last night's Job Costs hours) · meetings/scramble__prefs (plans, holidays) · Simpro's schedule.
 // It writes nothing, books nothing and never touches a stage or a status. No money and no contact details go out.
-// One known difference from the screen: hours for Upcoming jobs that are only in Simpro (the screen asks Simpro for
-// each one) are left out; those jobs are on the list either way and are never auto-placed.
+// Upcoming rows with a confirmed start get their bid hours from Simpro here, as on the screen, so they are placed the
+// same way. Upcoming rows with only an estimated start are on the list without hours (the screen shows theirs).
 "use strict";
 const SC = require("./scrambleCal.js");
 
@@ -39,7 +39,7 @@ function jobsOf(docs) {
 function calendarOf(inp, opts) {
   const i = inp || {}, prefs = i.prefs || {};
   return SC.buildCalendar({ jobs: jobsOf(i.jobDocs), upcoming: Array.isArray(i.upcoming) ? i.upcoming : [], schedules: Array.isArray(i.schedules) ? i.schedules : [],
-    phaseHours: i.phaseHours || {}, upHours: {}, plans: prefs.cal || {}, proposals: opts && opts.proposals === false ? {} : prefs.duet || {}, today: i.now, weeks: WEEKS, effRS, effFS,
+    phaseHours: i.phaseHours || {}, upHours: i.upHours || {}, plans: prefs.cal || {}, proposals: opts && opts.proposals === false ? {} : prefs.duet || {}, today: i.now, weeks: WEEKS, effRS, effFS,
     users: Array.isArray(i.users) ? i.users : [], holidays: Array.isArray(prefs.holidays) ? prefs.holidays : SC.DEFAULT_HOLIDAYS, timeOff: Array.isArray(i.pto) ? i.pto : [] });
 }
 // What became of Duet's proposals (the screen records one line when a person keeps, changes or removes one), newest first.
@@ -51,6 +51,8 @@ function outcomesOf(prefs) {
 function assemble(inp) {
   const i = inp || {};
   const view = SC.viewOf(calendarOf(i), i.users || [], { from: isIso(i.from) ? i.from : "", to: isIso(i.to) ? i.to : "" });
+  const fri = (i.prefs && i.prefs.fri) || {};   // who said yes to each Friday (kept with the calendar)
+  view.days.forEach(d => { if (d.friday && Array.isArray(fri[d.date])) d.saidYesToFriday = fri[d.date].filter(Boolean); });
   return { ...view, duetOutcomes: outcomesOf(i.prefs) };
 }
 
@@ -71,6 +73,21 @@ async function readSchedules(simproReq, startIso) {
   return rows;
 }
 
+// Bid hours for Upcoming rows that aren't jobs in the app yet (the screen asks Simpro for each one too): only rows with
+// a CONFIRMED start, since those are the ones the auto-schedule places (v671). A number above every app job's number is
+// a quote. Read failures just leave that row without hours; it then goes to Needs you, never a wrong block.
+async function upcomingHours(simproReq, upcoming, jobs) {
+  const have = new Set((jobs || []).map(j => String((j && j.simproNo) || ""))), maxNo = (jobs || []).reduce((m, j) => Math.max(m, parseInt(j && j.simproNo, 10) || 0), 0), out = {};
+  const want = (Array.isArray(upcoming) ? upcoming : []).filter(u => u && u.startConfirmed).map(u => SC.upNo(u)).filter(n => n && !have.has(n)).slice(0, 40);
+  for (const no of [...new Set(want)]) {
+    try {
+      const r = await simproReq("GET", `/${+no > maxNo ? "quotes" : "jobs"}/${no}?columns=ID,Totals`);
+      const lh = r && r.ok && r.data && r.data.Totals && r.data.Totals.ResourcesCost && r.data.Totals.ResourcesCost.LaborHours;
+      if (lh && Number(lh.Estimate) > 0) out[no] = { est: Math.round(Number(lh.Estimate) * 10) / 10, used: Math.round((Number(lh.Actual) || 0) * 10) / 10 };
+    } catch (e) { /* that row has no hours */ }
+  }
+  return out;
+}
 // Everything the calendar is built from, read once. deps: { db, getUsers, simproReq, tz, now? }.
 async function gather(deps) {
   const now = deps.now || wallNow(deps.tz);
@@ -78,8 +95,9 @@ async function gather(deps) {
   const [jobSnap, up, pto, ph, prefSnap, users, schedules] = await Promise.all([
     deps.db.collection("jobs").get(), settings("upcoming_jobs"), settings("crewPTO"), settings("phaseHours"),
     deps.db.collection("meetings").doc("scramble__prefs").get(), deps.getUsers(), readSchedules(deps.simproReq, SC.mondayOf(now)) ]);   // mondayOf takes the Date, not the day string
-  return { jobDocs: jobSnap.docs.map(d => ({ id: d.id, data: d.data() })), upcoming: up.items, users, pto: pto.list,
-    prefs: prefSnap.exists ? prefSnap.data() || {} : {}, phaseHours: ph.jobs, schedules, now };
+  const jobDocs = jobSnap.docs.map(d => ({ id: d.id, data: d.data() }));
+  return { jobDocs, upcoming: up.items, users, pto: pto.list, prefs: prefSnap.exists ? prefSnap.data() || {} : {}, phaseHours: ph.jobs, schedules, now,
+    upHours: await upcomingHours(deps.simproReq, up.items, jobsOf(jobDocs)) };
 }
 // deps: { db, getUsers, simproReq, tz }. args: { from, to } (YYYY-MM-DD, optional; default the next two weeks).
 async function readCalendar(deps, args) {
@@ -88,7 +106,7 @@ async function readCalendar(deps, args) {
   if (to < from) throw Object.assign(new Error("to is before from"), { bad: true });
   const view = assemble({ ...(await gather({ ...deps, now })), from, to });
   return { ok: true, asOf: new Date().toISOString(), source: "Command Center crew calendar (same rules as the screen), Simpro schedule read live",
-    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date; duet-proposal = a block Duet proposed, with its reason, that a person can keep, change or remove. duetOutcomes lists what people did with earlier proposals. Hours for Upcoming jobs that are only in Simpro are not included.",
+    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date; duet-proposal = a block Duet proposed, with its reason, that a person can keep, change or remove. duetOutcomes lists what people did with earlier proposals. Upcoming jobs with only an estimated start are listed without hours.",
     ...view };
 }
 

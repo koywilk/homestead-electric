@@ -146,6 +146,21 @@ const rules = (r) => (r.refused || []).map(x => x.rule + ":" + x.person.split(" 
   w = world({ failAt: 2 }); p = await D.run(w.deps, base(pair)); b = await D.run(w.deps, { ...base(pair), mode: "book", hash: p.hash });
   ok(!b.ok && b.created.length === 1 && b.failed.person === "Louis Hoffman" || (!b.ok && b.created.length === 1 && b.failed), "if Simpro refuses an entry part way, it stops and says what was and wasn't written");
 
+  // ── the calendar's own Book button: the same hard rules, pair and alone as notes ──
+  {
+    const ent = (id, name, date, s, e) => ({ staffId: id, name, date, blocks: [{ StartTime: s, EndTime: e }] });
+    let h = D.humanCheck({ entries: [ent(2, "Louis Hoffman", "2026-11-24", "07:00", "17:00"), ent(4, "Trever Worley", "2026-11-24", "07:00", "17:00")], users, pto: [], holidays: null, schedules: [], jobNo: "900" });
+    ok(h.refused.length === 0 && h.notes.some(n => /set pair James/.test(n)) && !h.notes.some(n => /Koy said/.test(n)), "a person's Book: a split pair is a note on the preview, not a refusal");
+    h = D.humanCheck({ entries: [ent(5, "Callen Jakeman", "2026-11-24", "07:00", "17:00")], users, pto: [], holidays: null, schedules: [], jobNo: "900" });
+    ok(h.refused.length === 0 && h.notes.some(n => /alone/.test(n)), "a person's Book: someone alone is a note");
+    h = D.humanCheck({ entries: [ent(5, "Callen Jakeman", "2026-11-24", "07:00", "17:00"), ent(4, "Trever Worley", "2026-11-24", "07:00", "17:00")], users, pto: [{ name: "Callen Jakeman", start: "2026-11-24", end: "2026-11-24" }], holidays: null, schedules: [], jobNo: "900" });
+    ok(h.refused.length === 1 && h.refused[0].rule === "time-off", "a person's Book: someone off that day is refused");
+    h = D.humanCheck({ entries: [ent(6, "Joel Fey", "2026-11-24", "07:00", "17:00"), ent(4, "Trever Worley", "2026-11-28", "07:00", "17:00"), ent(5, "Callen Jakeman", "2026-11-26", "07:00", "17:00")], users, pto: [], holidays: null, schedules: [], jobNo: "900" });
+    ok(h.refused.map(x => x.rule).sort().join() === "crew-board,holiday,weekend", "a person's Book: unassigned, a Saturday and a holiday are refused");
+    h = D.humanCheck({ entries: [ent(5, "Callen Jakeman", "2026-11-27", "07:00", "17:00"), ent(4, "Trever Worley", "2026-11-27", "07:00", "17:00")], users, pto: [], holidays: null, schedules: [], jobNo: "900" });
+    ok(h.refused.length === 0, "a person's Book: a Friday is allowed");
+  }
+
   // ── never a stage or status ──
   const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleDoor.js"), "utf8").replace(/\/\/[^\n]*/g, "");
   ok(!/Stage\s*:|Status\s*:|roughStatus\s*[:=][^=]|finishStatus\s*[:=][^=]|"PATCH"|"DELETE"|"PUT"/.test(src), "the door never writes a stage or status, and only ever creates schedule entries (no edit, no delete)");

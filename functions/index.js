@@ -8549,10 +8549,19 @@ exports.scrambleBook = functions
       const c = clash[0], more = clash.length > 1 ? ` (${clash.length - 1} more)` : "";
       throw new functions.https.HttpsError("failed-precondition", `${c.name} already has ${c.type === "activity" ? "time off or an activity" : "a booking" + (c.ref ? " on " + c.ref.split("-")[0] : "")} in Simpro ${c.date} ${c.at}${more}. Nothing was written; change the time or the person.`);
     }
+    // The people rules, on the server for a person's Book too (they were browser-only until Duet's booking door needed
+    // them): a Crew Board crew, not off, not a holiday or a weekend refuse the booking; a split pair or someone alone is
+    // shown on the preview as a note, since a person pressing Book is the one who decides that.
+    const [sbUsers, sbPto, sbPrefs] = await Promise.all([getUsers(), db.collection("settings").doc("crewPTO").get(), db.collection("meetings").doc("scramble__prefs").get()]);
+    const people = require("./scrambleDoor.js").humanCheck({ entries, users: sbUsers, pto: sbPto.exists ? (sbPto.data() || {}).list : [], holidays: sbPrefs.exists ? (sbPrefs.data() || {}).holidays : null, schedules: rows, jobNo: no });
+    if (people.refused.length) {
+      const c = people.refused[0], more = people.refused.length > 1 ? ` (${people.refused.length - 1} more)` : "";
+      throw new functions.https.HttpsError("failed-precondition", `${c.why}${more} Nothing was written.`);
+    }
     const hash = SB.hashOf(no, cc, entries);
     const job = { no, name: String(jr.data.Name || ""), stage: String(jr.data.Stage || "") };
     const totals = { entries: entries.length, hours: entries.reduce((a, e) => a + e.hours, 0), ot: entries.reduce((a, e) => a + e.ot, 0) };
-    if (data.mode === "preview") return { ok: true, job, costCenter: cc, entries, hash, totals };
+    if (data.mode === "preview") return { ok: true, job, costCenter: cc, entries, hash, totals, notes: people.notes };
     if (data.hash !== hash) {
       throw new functions.https.HttpsError("aborted", "Simpro changed since that preview (someone booked or moved a day). Nothing was written. Look at the new preview and confirm again.");
     }

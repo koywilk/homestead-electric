@@ -158,6 +158,27 @@ function tripCc(trip, job) {
   return ["complete", "invoice"].includes(rs) ? "finish" : "rough";
 }
 
+// The calendar's own Book button: a person previews and presses Book. The hard rules are the same as Duet's (a Crew
+// Board crew, not off, not a holiday or a weekend) and refuse the booking. A split pair or someone alone is the
+// person's call to make, so those come back as notes on the preview instead of refusals.
+// entries: SB.buildEntries() output; users: the Team list; schedules: Simpro rows for the weeks touched.
+function humanCheck({ entries, users, pto, holidays, schedules, jobNo }) {
+  const board = SC.crewBoard(users || []), rows = [], refused = [];
+  (entries || []).forEach(e => {
+    const u = board.find(e.name), crew = u && board.crewOfUser(u);
+    if (!crew) { refused.push({ person: String(e.name), date: e.date, rule: "crew-board", why: `${e.name} isn't on a Crew Board crew, so can't be booked from the calendar.` }); return; }
+    const bl = e.blocks || [], from = toMin(String((bl[0] || {}).StartTime || "").slice(0, 5)), to = toMin(String((bl[bl.length - 1] || {}).EndTime || "").slice(0, 5));
+    if (from == null || to == null) return;
+    rows.push({ person: u.name, staffId: Number(e.staffId), title: (crew.title && crew.title[u.name]) || "crew", date: e.date, from, to });
+  });
+  const seen = {}; const staffAll = (entries || []).filter(e => !seen[e.staffId] && (seen[e.staffId] = 1)).map(e => ({ id: Number(e.staffId), name: String(e.name) }));
+  const g = guard({ rows, board, isOff: offDays(pto, board), holidays: holidayMap(holidays), schedules, staffAll, jobNo: String(jobNo), aloneOk: true, splitPairs: true, unplaced: refused.map(x => x.date) });
+  const soft = g.refusals.filter(x => x.rule === "alone" || x.rule === "pair");
+  refused.push(...g.refusals.filter(x => x.rule !== "alone" && x.rule !== "pair"));
+  const notes = [...g.notes.map(n => n.replace(/ \(Koy said[^)]*\)/, "")), ...soft.map(x => x.why.replace(/ Add someone.*$/, "").replace(/ A crew member never goes alone; add someone\./, " A crew member shouldn't go alone."))];
+  return { refused, notes: [...new Set(notes)] };
+}
+
 class Refused extends Error { constructor(message, extra) { super(message); this.refused = true; Object.assign(this, extra || {}); } }
 
 // The whole door. deps: { simproReq(method, path, body), staff(): [{ id, name }], getUsers(), db, tripWrite(jobId, no,
@@ -215,6 +236,10 @@ async function run(deps, args) {
   }
   const prefs = prefSnap.exists ? prefSnap.data() || {} : {}, pto = ptoSnap.exists ? (ptoSnap.data() || {}).list : [];
   const g = guard({ rows: who.rows, board, isOff: offDays(pto, board), holidays: holidayMap(prefs.holidays), schedules, staffAll, jobNo: no, aloneOk: !!a.aloneOk, splitPairs: !!a.splitPairs, unplaced: who.refusals.map(x => x.date) });
+  // Fridays: the calendar keeps who said yes (prefs.fri[date]). Booking someone who isn't on that list is allowed
+  // (Koy can put a Friday by hand) but the preview says so.
+  who.rows.forEach(r => { const said = prefs.fri && Array.isArray(prefs.fri[r.date]) ? prefs.fri[r.date] : null;
+    if (SC.dowOf(r.date) === 4 && said && !said.includes(r.person)) g.notes.push(`${first(r.person)} isn't on the said-yes list for Friday ${r.date}.`); });
   const entries = entriesFor(who.rows, SB.weekHours(schedules, who.rows.map(r => r.staffId)));
   const clash = SB.overlaps(schedules, entries).map(c => ({ person: c.name, date: c.date, rule: "double-booked",
     why: `${c.name} already has ${c.type === "activity" ? "time off or an activity" : c.type === "leave" ? "leave" : "a booking" + (c.ref ? " on job " + c.ref.split("-")[0] : "")} in Simpro ${c.date} ${c.at}.` }));
@@ -248,4 +273,4 @@ async function run(deps, args) {
     ...(trip ? { trip: tripDone && tripDone.ok ? { markedScheduledOn: tripDone.rtStatusDate || created.map(c => c.date).sort()[0] } : { marked: false, note: "The booking is in Simpro but the trip was not marked Scheduled; set it on the job." } } : {}) };
 }
 
-module.exports = { MAX_ROWS, checkRequest, resolvePeople, offDays, holidayMap, simproDay, guard, entriesFor, tripCc, run, Refused };
+module.exports = { humanCheck, MAX_ROWS, checkRequest, resolvePeople, offDays, holidayMap, simproDay, guard, entriesFor, tripCc, run, Refused };

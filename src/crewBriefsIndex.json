@@ -1,5 +1,18 @@
 [
  {
+  "v": 671,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "Fridays have a \"Said yes\" list. Tap \"Add who said yes\", tick the people, and their names show on that Friday to drag onto a job."
+   },
+   {
+    "h": "CHANGED",
+    "first": "Book now refuses someone who is off, not on a crew, or on a holiday or weekend, even if the screen missed it."
+   }
+  ]
+ },
+ {
   "v": 670,
   "heads": [
    {
@@ -194,15 +207,6 @@
    {
     "h": "NEW (Dashboard › Meetings: the Foreman Meeting)",
     "first": "Open /dashboard › Meetings and tap Foreman Meeting · Wed 7:00 at the top. One page for Koy and all three foremen."
-   }
-  ]
- },
- {
-  "v": 651,
-  "heads": [
-   {
-    "h": "NEW (Dashboard: Meetings tab, the Scramble calendar)",
-    "first": "Open /dashboard, tap Meetings. The Calendar · all crews fold is at the top of the Weekly Scramble."
    }
   ]
  }
