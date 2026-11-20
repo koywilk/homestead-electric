@@ -51999,6 +51999,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const [insAt, setInsAt] = useState(null);            // { left, top }
   const [selDay, setSelDay] = useState("");            // the day of the job tapped (its box is about that day)
   const [custom, setCustom] = useState(false);         // Custom time pickers showing
+  const [sw, setSw] = useState(null);                  // v662: { lines, warns, yes, yesLabel, alt, altLabel } the "move them here?" box
   const [rm, setRm] = useState(null);                  // { key, why, note } the Remove reason being picked
   // v661 (Koy 2026-11-20: "What about an option to pop this thing up to full screen so that I can see more?"): the
   // calendar covers the whole screen (over the app's sidebar and header), and the browser's own full screen too where
@@ -52107,12 +52108,12 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       const f = fc(it);
       if (!f) { (it.ccDays || []).forEach(iso => { if (iso <= V.end) push(iso, { it, style: "cc", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 }); }); return; }
       const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
-      const nm = names.length ? names : ((it.booked[it.booked.length - 1] || {}).names || []);
+      const nm = names.length || f.empty ? names : ((it.booked[it.booked.length - 1] || {}).names || []);
       const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
       // a forecast after a Simpro booking runs on with that day's people, less anyone off that day (v661)
       SC.slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
         const nmD = d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names.length ? nm : nm.filter(n => { const u = board.find(n); return !offD.includes(u ? u.name : n); });
-        push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(SC.firstOf), names: nmD, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
+        push(d.date, { it, style, none: !nmD.length, n: nmD.length || 0, who: nmD.map(SC.firstOf), names: nmD, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
     });
     const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
     Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
@@ -52120,7 +52121,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   }, [V, board]); // eslint-disable-line
   const shown = (c) => (!simOnly || c.style === "booked") && (crewF === "All" || c.fm.includes(crewF) || (!c.fm.length && crewF === "All"));
   const dayChips = (iso) => (chips[iso] || []).filter(shown);
-  const crewText = (c) => c.team ? `${c.team} · ${c.n}` : c.who.length ? (c.who.length > 3 ? `${c.who.slice(0, 2).join(", ")} +${c.who.length - 2}` : c.who.join(", ")) : `${c.n} ppl`;
+  const crewText = (c) => c.none ? "Nobody on it" : c.team ? `${c.team} · ${c.n}` : c.who.length ? (c.who.length > 3 ? `${c.who.slice(0, 2).join(", ")} +${c.who.length - 2}` : c.who.join(", ")) : `${c.n} ppl`;
 
   // Saving: every move, copy or change is a plan everyone sees right away.
   const commit = (key, p) => {
@@ -52136,7 +52137,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const out = {};
     Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
       if (c.from == null || c.to == null) return;
-      (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: c.from, to: c.to, key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` }); });
+      (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: c.from, to: c.to, key: c.it.key, base: c.it.copyOf || c.it.key, style: c.style, time: c.time || "", label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` }); });
     }));
     return out;
   }, [chips, board]); // eslint-disable-line
@@ -52148,13 +52149,13 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     SC.slotsOf(p).forEach(d => (d.staff ? d.staff.map(x => x && x.name).filter(Boolean).map(nameOf) : names).forEach(n => {
       if (offOn(d.date).includes(n)) { out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is off ${SC.short(d.date)}` }); return; }
       ((busy[n] || {})[d.date] || []).forEach(b => {
-        if (b.key !== key && d.from < b.to - 1e-6 && b.from < d.to - 1e-6) out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is on ${b.label} ${SC.short(d.date)}` }); });
+        if (b.key !== key && d.from < b.to - 1e-6 && b.from < d.to - 1e-6) out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is on ${b.label} ${SC.short(d.date)}`, b }); });
     }));
     return out;
   };
   // Drop the people who'd clash (a move or copy); say who came off.
-  const dropClash = (key, p) => {
-    const bad = new Set(clashesOf(key, p).map(c => c.name));
+  const dropClash = (key, p, only) => {
+    const bad = new Set(clashesOf(key, p).map(c => c.name).filter(n => !only || only.has(n)));
     if (!bad.size) return { p, gone: [] };
     const staff = (p.staff || []).filter(x => !bad.has(nameOf(x && x.name)));
     const each = p.hours / Math.max(1, p.crew), it = byKey[key], trip = it && (it.kind === "trip" || it.kind === "task");
@@ -52169,12 +52170,26 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const moveTo = (key, iso) => {
     const it = byKey[key]; if (!it || it.kind === "service") return;
     const f = fc(it), s = SC.nextWork(iso);
-    let gone = [];
-    if (f) { const { times, ...rest } = f; const r = dropOff({ ...rest, s, staff: f.staff || [] }); const r2 = dropClash(key, r.p); gone = [...r.gone, ...r2.gone]; commit(key, r2.p); }
-    else commit(key, { s, hours: it.defHours || SC.HPD, crew: it.defCrew || 2, staff: [] });
-    if (gone.length) toast.info(`${gone.join(", ")} ${gone.length > 1 ? "are" : "is"} off or booked then, so ${gone.length > 1 ? "they're" : "they're"} off this block.`);
-    setSel(key); setPicked(""); setDrag(""); setOver(""); setBk(null); setPop(null);
-    say(`${it.no ? "#" + it.no + " " : ""}${it.tag} moved to ${SC.short(s)}. Saved as a plan.`);
+    const done = (p, gone) => {
+      commit(key, p);
+      if (gone.length) toast.info(`${gone.join(", ")} ${gone.length > 1 ? "are" : "is"} off or booked then, so ${gone.length > 1 ? "they're" : "they're"} off this block.`);
+      setSel(key); setPicked(""); setDrag(""); setOver(""); setBk(null); setPop(null);
+      say(`${it.no ? "#" + it.no + " " : ""}${it.tag} moved to ${SC.short(s)}. Saved as a plan.`);
+    };
+    if (!f) { done({ s, hours: it.defHours || SC.HPD, crew: it.defCrew || 2, staff: [] }, []); return; }
+    const { times, ...rest } = f; const r = dropOff({ ...rest, s, staff: f.staff || [] });
+    // v662: people busy elsewhere then: ask before taking them off the other job (Koy 2026-11-20: "a popup ... 'Do you
+    // want to change it to this place at this time?' and then I say yes/no")
+    const cl = clashesOf(key, r.p).filter(c => c.b);
+    if (!cl.length) { const r2 = dropClash(key, r.p); done(r2.p, [...r.gone, ...r2.gone]); return; }
+    const mv = cl.filter(c => canPull(c.b)), fx = cl.filter(c => !canPull(c.b));
+    const byKey2 = {}; mv.forEach(c => { const m = (byKey2[c.b.key] = byKey2[c.b.key] || {}); (m[c.date] = m[c.date] || []).includes(c.name) || m[c.date].push(c.name); });
+    const lines = groupLines(cl), warns = Object.entries(byKey2).flatMap(([k2, m]) => Object.entries(m).flatMap(([d, n]) => pullWarn(k2, d, n).w));
+    const empty = Object.entries(byKey2).some(([k2, m]) => Object.entries(m).some(([d, n]) => pullWarn(k2, d, n).empty));
+    setSw({ lines, warns: [...warns, ...(fx.length ? [`${[...new Set(fx.map(c => SC.firstOf(c.name)))].join(", ")} can't move: change ${fx.length > 1 ? "those" : "that"} in Simpro or on the job.`] : [])],
+      ask: mv.length && !empty ? `Move ${[...new Set(mv.map(c => SC.firstOf(c.name)))].join(" and ")} to ${label(it)}, ${SC.short(s)}?` : "",
+      yes: mv.length && !empty ? () => { Object.entries(byKey2).forEach(([k2, m]) => pullOff(k2, m)); const r2 = dropClash(key, r.p, new Set(fx.map(c => c.name))); done(r2.p, [...r.gone, ...r2.gone]); } : null,
+      alt: () => { const r2 = dropClash(key, r.p); done(r2.p, [...r.gone, ...r2.gone]); }, altLabel: "Move without them" });
   };
   const backToAuto = (it) => { commit(it.key, null); setBk(null); setCopyOpen(false); if (it.copyOf) setSel(""); };
   // Remove: off the calendar and left open on the list (Koy: "if I don't want a job scheduled, I just delete it off
@@ -52216,16 +52231,59 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const setDay = (it, iso, patch) => {
     const f = fc(it); if (!f) return false; const d = slotOn(f, iso); if (!d) return false;
     const cur = dayNames(it, f, iso), names = (patch.names || cur).map(nameOf).filter((x, i, a) => a.indexOf(x) === i);
-    if (!names.length) { toast.error("Someone has to be on it. Use Remove to take it off."); return false; }
     const t = patch.t || d.start || "07:00", e = patch.e || SC.hhmmOf(d.to || 17), from = SC.hoursOf(t), to = SC.hoursOf(e);
     if (from == null || to == null || !(to - from >= 0.25)) { toast.error("Finish has to be after Start."); return false; }
     const before = new Set(cur.map(n => dayWhy(it.key, iso, n, d.from, d.to)).filter(Boolean));
-    const bad = names.map(n => dayWhy(it.key, iso, n, from, to)).filter(w => w && !before.has(w))[0];
+    const bad = names.filter(n => !(patch.ok || []).includes(n)).map(n => dayWhy(it.key, iso, n, from, to)).filter(w => w && !before.has(w))[0];
     if (bad) { toast.error(`${bad}. Nothing changed.`); return false; }
     const { times, ...rest } = f;
-    if (oneDay(it, f)) commit(it.key, { ...rest, s: iso, staff: names.map(name => ({ name })), crew: names.length, t, e, hours: (to - from) * names.length, pd: null });
+    // v662: nobody on it is fine (Koy 2026-11-20: "I should be able to make it so there's nobody on it and then it should turn red")
+    if (oneDay(it, f)) { const { empty, ...r1 } = rest; commit(it.key, { ...r1, s: iso, staff: names.map(name => ({ name })), crew: Math.max(1, names.length), t, e, hours: (to - from) * Math.max(1, names.length), pd: null }); }
     else commit(it.key, { ...rest, pd: { ...(f.pd || {}), [iso]: { staff: names.map(name => ({ name })), t, e } } });
     return true;
+  };
+  // v662: moving someone who's busy here. A block from the calendar (a plan or the auto-schedule) can give them up;
+  // a Simpro booking, time off or a date set in Command Center can't (change those where they live).
+  const canPull = (b) => b && ["kept", "auto", "held"].includes(b.style) && !!byKey[b.key];
+  const titleOf = (n) => { const c = board.crewOf(n), k = nameOf(n); return (c && c.title && c.title[k]) || ""; };
+  const pullWarn = (key2, iso, names) => {
+    const it2 = byKey[key2], f2 = it2 && fc(it2); if (!f2) return { w: [], empty: false };
+    const left = dayNames(it2, f2, iso).filter(n => !names.includes(n)), w = [];
+    if (!left.length) w.push(`${label(it2)} would have nobody on ${SC.short(iso)}. Change ${label(it2)} first.`);
+    else if (left.length === 1) w.push(titleOf(left[0]) === "crew" ? `${SC.firstOf(left[0])} would be alone on ${label(it2)}, and crew don't go alone.` : `${label(it2)} would be down to ${SC.firstOf(left[0])} alone.`);
+    names.forEach(n => { const pt = board.partnerOf(n); if (pt && left.includes(nameOf(pt))) w.push(`This splits ${SC.firstOf(n)} from their pair, ${SC.firstOf(pt)}, who stays on ${label(it2)}.`); });
+    return { w, empty: !left.length };
+  };
+  // Take people off another block on given days ({ iso: [names] }), in one save.
+  const pullOff = (key2, byDay) => {
+    const it2 = byKey[key2], f2 = it2 && fc(it2); if (!f2) return;
+    const { times, ...rest } = f2; let p = { ...rest, staff: f2.staff || [] };
+    Object.entries(byDay).forEach(([iso, names]) => {
+      const d = slotOn(f2, iso); if (!d) return; const left = dayNames(it2, f2, iso).filter(n => !names.includes(n));
+      if (oneDay(it2, f2)) p = { ...p, s: iso, staff: left.map(name => ({ name })), crew: left.length, t: d.start, e: SC.hhmmOf(d.to), hours: (d.to - d.from) * left.length, pd: null };
+      else p = { ...p, pd: { ...(p.pd || {}), [iso]: { staff: left.map(name => ({ name })), t: d.start, e: SC.hhmmOf(d.to) } } };
+    });
+    commit(key2, p);
+  };
+  // "Noah is scheduled at #1393 Tuhaye Hollow, Mon 11/23 7:00 AM–9:30 AM." per person and job
+  const groupLines = (cl) => { const g = {};
+    cl.forEach(c => { const k = c.name + "|" + (c.b ? c.b.key : "off"); (g[k] = g[k] || { c, days: [] }).days.push(c.date); });
+    return Object.values(g).map(({ c, days }) => { const it2 = c.b && byKey[c.b.key], more = days.length > 1 ? ` (and ${days.length - 1} more day${days.length > 2 ? "s" : ""})` : "";
+      return !c.b ? c.why + "." : `${SC.firstOf(c.name)} is ${c.b.style === "booked" ? "booked in Simpro" : c.b.style === "cc" ? "set in Command Center" : "scheduled"} at ${it2 ? label(it2) : c.b.label}, ${SC.short(days[0])} ${c.b.time || "all day"}${more}.`; }); };
+  // Adding busy people to one day of a job: the box asks, Yes moves them here.
+  const askAdd = (it, iso, names, after) => {
+    const f = fc(it); if (!f) return; const d = slotOn(f, iso); if (!d) return;
+    const cl = names.map(n => { const k = nameOf(n);
+      if (offOn(iso).includes(k)) return { name: k, date: iso, why: `${SC.firstOf(k)} is off ${SC.short(iso)}` };
+      const b = ((busy[k] || {})[iso] || []).find(x => x.key !== it.key && d.from < x.to - 1e-6 && x.from < d.to - 1e-6); return b ? { name: k, date: iso, b } : null; }).filter(Boolean);
+    const mv = cl.filter(c => canPull(c.b)), bad = cl.filter(c => !canPull(c.b));
+    const byKey2 = {}; mv.forEach(c => { ((byKey2[c.b.key] = byKey2[c.b.key] || {})[iso] = byKey2[c.b.key][iso] || []).push(c.name); });
+    const pw = Object.entries(byKey2).map(([k2, m]) => pullWarn(k2, iso, m[iso])), empty = pw.some(x => x.empty);
+    const ok = !bad.length && !empty;
+    setSw({ lines: groupLines(cl), warns: [...pw.flatMap(x => x.w), ...bad.filter(c => c.b).map(c => `Change ${SC.firstOf(c.name)}'s ${c.b.style === "booked" ? "booking in Simpro" : "date on the job"} first.`)],
+      ask: ok ? `Move ${mv.map(c => SC.firstOf(c.name)).join(" and ")} to ${label(it)}, ${SC.short(iso)} ${d.label}?` : "",
+      yes: ok ? () => { Object.entries(byKey2).forEach(([k2, m]) => pullOff(k2, m)); const cur = dayNames(it, f, iso);
+        if (setDay(it, iso, { names: [...cur, ...names.map(nameOf)], ok: mv.map(c => c.name) })) { setSel(it.key); setSelDay(iso); say(`${mv.map(c => SC.firstOf(c.name)).join(" and ")} moved to ${label(it)} on ${SC.short(iso)}.`); if (after) after(); } } : null });
   };
   // Add someone to a job on the day they were dropped; their set pair comes too when they're open then.
   const openOn = (iso) => { const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); })); const off = new Set(offOn(iso)); return (n) => !on.has(n) && !off.has(n); };
@@ -52235,6 +52293,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const f = fc(it); if (!f) return; const d = slotOn(f, iso); if (!d) return;
     const cur = dayNames(it, f, iso);
     if (cur.includes(nameOf(name))) { toast.info(`${SC.firstOf(name)} is already on ${label(it)}.`); return; }
+    if (dayWhy(it.key, iso, name, d.from, d.to)) { askAdd(it, iso, [name]); return; }   // v662: busy elsewhere: ask to move them
     const pt = board.partnerOf(name), add = [name, ...(pt && !cur.includes(pt) && openOn(iso)(pt) && !dayWhy(it.key, iso, pt, d.from, d.to) ? [pt] : [])];
     if (setDay(it, iso, { names: [...cur, ...add] })) { setSel(it.key); setSelDay(iso); say(`${add.map(SC.firstOf).join(" and ")} added to ${label(it)} on ${SC.short(iso)}.`); }
   };
@@ -52264,12 +52323,17 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // booked (a plan or auto block, not held, with a job number), each with its people. Preview all, then book all; each
   // block books all of its days, as its own Book does. Nothing is written before the confirm.
   const [wb, setWb] = useState(null);                  // { rows: [{ key, staff:Set, on, preview, err, done }], busy, phase }
-  const bookable = (it) => { const f = fc(it); return !!(f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !(!it.plan && f.held)); };
+  // v662: a block (or a day) with nobody on it is never booked
+  const hasPeople = (it, f) => !f.empty && SC.slotsOf(f).some(d => (d.staff ? d.staff.length : ((f.staff || []).length || it.booked.length)) > 0);
+  const emptyDays = (it, f) => SC.slotsOf(f).filter(d => d.staff && !d.staff.length).map(d => d.date);
+  const bookable = (it) => { const f = fc(it); return !!(f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !(!it.plan && f.held) && hasPeople(it, f)); };
   const openWeekBook = () => {
     const wEnd = SC.addDays(weekStart, 3), rows = [];
-    V.items.forEach(it => { if (!bookable(it)) return; const f = fc(it); if (!SC.slotsOf(f).some(d => d.date >= weekStart && d.date <= wEnd)) return;
+    const skipped = [];
+    V.items.forEach(it => { const f = fc(it); if (!f || !SC.slotsOf(f).some(d => d.date >= weekStart && d.date <= wEnd)) return;
+      if (!bookable(it)) { if (it.no && it.kind !== "service" && it.kind !== "task" && !hasPeople(it, f)) skipped.push(label(it)); return; }
       rows.push({ key: it.key, staff: preStaff(it), on: true, preview: null, err: "", done: null }); });
-    setWb({ rows, busy: false, phase: "pick" }); setInsAt(null);
+    setWb({ rows, skipped, busy: false, phase: "pick" }); setInsAt(null);
   };
   const runWeekPreview = async () => {
     setWb(w => ({ ...w, busy: true }));
@@ -52299,7 +52363,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const idOfName = (n) => { const k = nameOf(n).toLowerCase(), s = staffList.find(x => String(x.name || "").toLowerCase() === k || String(x.name || "").toLowerCase() === String(n).toLowerCase()); return s ? Number(s.id) : null; };
   const bookArgs = (it, staff) => {
     const p = fc(it), all = new Set([...staff].map(Number));
-    const days = SC.slotsOf({ ...p, crew: staff.size }).map(d => {
+    const days = SC.slotsOf({ ...p, crew: staff.size }).filter(d => !(d.staff && !d.staff.length)).map(d => {
       const own = d.staff ? [...new Set(d.staff.map(x => x && (x.id ? Number(x.id) : idOfName(x.name))).filter(Boolean))] : null;
       if (own && own.length) own.forEach(id => all.add(id));
       return { date: d.date, hours: d.hours, start: d.start, ...(own && own.length ? { staffIds: own } : {}) };
@@ -52341,7 +52405,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const chipEl = (c, iso, compact) => {
     const it = c.it, movable = c.style !== "booked" && c.style !== "cc" && it.kind !== "service";
     return (
-      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${clashOnChip(c, iso) ? " clash" : ""}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
+      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${c.none ? " none" : ""}${clashOnChip(c, iso) ? " clash" : ""}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
         style={kv(it.kind)}
         draggable={movable} onDragStart={e => { if (!movable) return; setDrag(it.key); try { e.dataTransfer.setData("text/plain", it.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }}
         onDragEnd={() => { setDrag(""); setOver(""); }}
@@ -52380,8 +52444,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   }, [chips, board, V, crewF]);
   const ccEl = (iso) => { const k = crewCnt(iso); return k.all ? <span className="sc-cc" title={`${k.on} of ${k.all} crew scheduled`}>{k.on}/{k.all}</span> : null; };
   // "11 on · 6 open" under a day's date; the open number is bold, and a check shows when everyone's on something.
-  const countsEl = (iso) => { const k = crewCnt(iso); if (!k.all) return null; const o = k.all - k.on;
-    return <span className={"sc-cc2" + (o ? "" : " all")} title={`${k.on} of ${k.all} crew scheduled`}>{o ? <>{k.on} on · <b>{o} open</b></> : <>✓ All {k.on} on</>}</span>; };
+  const countsEl = (iso) => { const k = crewCnt(iso), red = (chips[iso] || []).filter(c => c.none).length; if (!k.all && !red) return null; const o = k.all - k.on;
+    return <>{k.all ? <span className={"sc-cc2" + (o ? "" : " all")} title={`${k.on} of ${k.all} crew scheduled`}>{o ? <>{k.on} on · <b>{o} open</b></> : <>✓ All {k.on} on</>}</span> : null}
+      {red ? <span className="sc-red" title="Jobs on this day with nobody on them">{red} unstaffed</span> : null}</>; };
   // The open people under a day's date, as chips to drag (or tap, then tap a job) onto that day's jobs. Off is gray.
   const openEl = (iso) => { const k = crewCnt(iso); if (!k.open.length && !k.out.length) return null;
     return (
@@ -52565,7 +52630,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!it) return <div className="sc-ins"><small>Tap a job to see its crew, days and hours. Drag it to another day to move it (press and hold on a phone, then tap a day).</small></div>;
     const f = fc(it), b = bk && bk.key === it.key ? bk : null;
     const held = f && !it.plan && f.held;
-    const canBook = f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !held;
+    const canBook = f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !held && hasPeople(it, f);
     const pool = (() => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead) || board.crewOf(it.who); return c ? c.people : []; })();
     const copyDays = []; for (let d = SC.workAfter(V.today), g = 0; d <= V.end && g < 25; d = SC.workAfter(d), g++) copyDays.push(d);
     const copied = new Set(Object.keys(plans).filter(k => k.startsWith((it.copyOf || it.key) + "~")).map(k => k.split("~")[1]));
@@ -52588,8 +52653,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
             return (<>
               <div className="sc-day1"><b>{SCAL_DOW[SC.dowOf(day)] || ""} {SC.short(day)}</b>{sl.length > 1 ? <small> · one of {sl.length} days, {SC.short(sl[0].date)} to {SC.short(sl[sl.length - 1].date)}</small> : null}</div>
               <span className="mt-lab">Who that day · {on.length}</span>
+              {!on.length ? <small className="sc-redt">Nobody on it. It shows red until someone is, and it isn't booked.</small> : null}
               <div className="sc-ppl">{people.map(n => { const has = on.includes(n), why = has ? "" : dayWhy(it.key, day, n, d.from, d.to);
-                return <label key={n} className={why ? "busy" : ""} title={why}><input type="checkbox" checked={has} disabled={!!why} onChange={() => setDay(it, day, { names: has ? on.filter(x => x !== n) : [...on, n] })}/>{n}{why ? <i> · {why.replace(SC.firstOf(n) + " ", "")}</i> : null}</label>; })}</div>
+                return <label key={n} className={why ? "busy" : ""} title={why}><input type="checkbox" checked={has} onChange={() => why ? askAdd(it, day, [n]) : setDay(it, day, { names: has ? on.filter(x => x !== n) : [...on, n] })}/>{n}{why ? <i> · {why.replace(SC.firstOf(n) + " ", "")}</i> : null}</label>; })}</div>
               {ext.length ? <select value="" onChange={e => e.target.value && setDay(it, day, { names: [...on, e.target.value] })} aria-label="Add someone from another crew">
                 <option value="">+ Someone from another crew</option>{ext.map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
               <span className="mt-lab">Time</span>
@@ -52632,6 +52698,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         {b && f ? (
           <div className="sc-book">
             <span className="mt-lab">Who to book ({b.staff.size} picked)</span>
+            {emptyDays(it, f).length ? <small className="sc-redt">Not booked, nobody on it: {emptyDays(it, f).map(SC.short).join(", ")}.</small> : null}
             {ctx && ctx.failed ? <small className="warn">Couldn't read Simpro's staff list. Try again in a minute.</small> : null}
             <input value={b.find} onChange={e => setBk(x => ({ ...x, find: e.target.value }))} placeholder="Find a person" aria-label="Find a person"/>
             <div className="sc-staff">{staffList.filter(s => !b.find || s.name.toLowerCase().includes(b.find.toLowerCase()) || b.staff.has(s.id)).map(s => (
@@ -52804,6 +52871,10 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-rm input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--cline);border-radius:8px;background:var(--card);color:var(--cink)}
         .sc2 .sc-wc{display:flex;gap:6px;align-items:center;font-size:13px;font-weight:700;color:var(--o-ink)}
         .sc2 .sc-wbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        .sc2 .sc-chip2.none{background:#C62828!important;border-color:#C62828!important;color:#fff!important}.sc2 .sc-chip2.none *{color:#fff!important}
+        .sc2 .sc-red{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;background:#C62828;color:#fff;font-size:11px;font-weight:700}.sc2 .sc-redt{color:#C62828;font-weight:600}
+        .sc2 .sc-mv{left:50%;top:18vh;transform:translateX(-50%);width:min(420px,calc(100vw - 16px));z-index:1020}
+        .sc2 .sc-swl{margin:0;font-size:14px;color:var(--cink)}.sc2 .sc-sww{margin:0;font-size:13px;color:var(--cdim)}.sc2 .sc-swq{margin:4px 0 0;font-size:14px;font-weight:700;color:var(--cink)}
         .sc2 .sc-wbk{left:50%;top:6vh;transform:translateX(-50%);width:min(620px,calc(100vw - 16px));max-height:86vh}
         .sc2 .sc-wrow{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--cline)}
         .sc2 .sc-wrh{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--cink)}
@@ -52908,12 +52979,25 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         </div>); })() : null}
       {pickP ? <div className="sc-pickbar">Adding {SC.firstOf(pickP.name)}{board.partnerOf(pickP.name) ? ` (and ${SC.firstOf(board.partnerOf(pickP.name))} if open)` : ""}: tap a job on {SC.short(pickP.iso)}.<button type="button" onClick={() => setPickP(null)}>Cancel</button></div> : null}
       {view === "week" || view === "crew" ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={openWeekBook}>Book this week in Simpro…</button><small className="sc-sub">Week of {SC.md(weekStart)}. You see every entry before anything goes in.</small></div> : null}
+      {sw ? <div className="sc-pop sc-mv" role="alertdialog" aria-label="Already scheduled">
+        <div className="sc-poph"><b>Already scheduled</b><span></span><button type="button" onClick={() => setSw(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
+        <div className="sc-popl">
+          {sw.lines.map((l, i) => <p key={i} className="sc-swl">{l}</p>)}
+          {sw.warns.map((l, i) => <p key={"w" + i} className="sc-sww">{l}</p>)}
+          {sw.ask ? <p className="sc-swq">{sw.ask}</p> : null}
+          <div className="sc-btns">
+            {sw.yes ? <button type="button" className="mt-btn" onClick={() => { const y = sw.yes; setSw(null); y(); }}>Yes, move</button> : null}
+            {sw.alt ? <button type="button" className="mt-btn ghost" onClick={() => { const a = sw.alt; setSw(null); a(); }}>{sw.altLabel}</button> : null}
+            <button type="button" className="mt-btn ghost" onClick={() => setSw(null)}>{sw.yes || sw.alt ? "No" : "OK"}</button>
+          </div>
+        </div></div> : null}
       {wb ? (() => { const on = wb.rows.filter(r => r.on); const pv = on.filter(r => r.preview), ent = pv.reduce((a, r) => a + r.preview.totals.entries, 0), hrs = pv.reduce((a, r) => a + r.preview.totals.hours, 0), ot = pv.reduce((a, r) => a + (r.preview.totals.ot || 0), 0);
         return (
           <div className="sc-pop sc-wbk" role="dialog" aria-label="Book this week in Simpro">
             <div className="sc-poph"><b>Book the week of {SC.md(weekStart)}</b><span>{on.length} of {wb.rows.length} jobs</span><button type="button" onClick={() => setWb(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
             <div className="sc-popl">
               {!wb.rows.length ? <small>Nothing to book this week: every block is booked already, held, or has no job number.</small> : null}
+              {wb.skipped && wb.skipped.length ? <small className="sc-redt">Not booked, nobody on them: {wb.skipped.join(", ")}.</small> : null}
               {wb.rows.map((r, i) => { const it = byKey[r.key]; if (!it) return null; const f = fc(it); const names = staffList.filter(x => r.staff.has(x.id)).map(x => SC.firstOf(x.name));
                 return (
                   <div key={r.key} className="sc-wrow">

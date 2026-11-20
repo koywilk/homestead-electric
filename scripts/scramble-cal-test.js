@@ -108,16 +108,16 @@ ok(cm3.auto && cm3.auto.src === "auto" && cm3.auto.s === "2026-11-23" && cm3.aut
 const tb3 = K3("j_a1407_f");
 ok(tb3.auto && tb3.auto.s === "2026-12-02" && tb3.auto.staff[0].name === "Louis Hoffman" && tb3.auto.held === "Finish starts with no material PO" && N3("j_a1407_f").held, "Tolbert (Louis, jr foreman) runs with Daegan's crew after Cougar Moon, Louis leading, held for no material PO");
 ok(K3("j_a1412_r").auto.src === undefined && K3("j_a1412_r").auto.s === "2026-11-23", "a Simpro tail stays as it was");
-ok(!K3("j_a1382_r").auto && N3("j_a1382_r").why === "Zane's crew is booked through 12/18", "Riverton: Zane's crew is on Battle Creek through the view, so it's held for you, not double-booked");
+ok(K3("j_a1382_r").auto && K3("j_a1382_r").auto.empty && !K3("j_a1382_r").auto.staff.length && N3("j_a1382_r").why === "Zane's crew is booked through 12/18", "Riverton: Zane's crew is on Battle Creek through the view, so it sits on its date with nobody on it (red), not double-booked");
 const t43 = K3("t_a1407_t4");
 ok(t43.auto && t43.auto.src === "auto" && /^No date or crew set in Command Center, so it's on the first open day/.test(t43.auto.held) && t43.auto.staff[0].name === "Louis Hoffman" && N3("t_a1407_t4").held && /Was set for 10\/28, not done/.test(N3("t_a959_t2").why), "a trip with no date or crew goes on the first open day for the job crew, held; a passed date goes to Needs you");
-ok(N3("t_a77_x1").why === "Joel is unassigned on the Crew Board" && !K3("t_a77_x1").auto, "a trip for an unassigned person is never scheduled");
+ok(N3("t_a77_x1").why === "Joel is unassigned on the Crew Board" && K3("t_a77_x1").auto && !K3("t_a77_x1").auto.staff.length && K3("t_a77_x1").auto.s === "2026-11-24", "a trip for an unassigned person is never scheduled: it sits on its date with nobody (red)");
 const x2 = K3("t_a77_x2");
 ok(x2.auto && x2.auto.s === "2026-11-30" && x2.auto.staff[0].name === "Jose Sanchez" && x2.auto.held === "No material listed on the trip", "a dated trip lands on its day for its person, held when no material is listed");
 ok(!V3.items.some(it => it.auto && it.auto.staff && it.auto.staff.some(p => /Joel|Bailey/.test(p.name))), "no unassigned or inactive person is ever on a block");
 ok(K3("j_a1382_r").inList === false && V3.list.every(x => !x.need), "Needs you items leave the Not on the calendar list");
 ok(SC.buildCalendar({ jobs: jobs3, schedules, phaseHours, today, weeks: 5 }).needs.length === 0, "with no Crew Board the auto-schedule stays off");
-const V4 = A({ "j_a1402_f": { s: "2026-11-23", hours: 140, crew: 2, by: "Koy Wilkinson" } });
+const V4 = A({ "j_a1402_f": { s: "2026-11-23", hours: 140, crew: 2, staff: [{ name: "Daegan Smith" }, { name: "Louis Hoffman" }], by: "Koy Wilkinson" } });
 const cm4 = V4.items.find(x => x.key === "j_a1402_f"), tb4 = V4.items.find(x => x.key === "j_a1407_f");
 ok(cm4.plan && !cm4.auto && tb4.auto.s === "2026-12-07", "a kept plan never moves, and its crew's days stay taken (Tolbert moves to after it)");
 // Koy: "keep the crews at least four on a job if we can. But if there are two jobs going at the same time for a
@@ -196,7 +196,7 @@ const VS = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, we
 const sa = VS.items.find(x => x.key === "t_s1_a"), sb = VS.items.find(x => x.key === "t_s1_b");
 ok(sa.auto && sa.auto.crew === 2 && sb.auto && sb.auto.s === "2026-11-24" && SC.slotsOf(sa.auto)[0].label === "7:00 AM–11:00 AM" && SC.slotsOf(sb.auto)[0].label === "11:00 AM–3:00 PM", "two 4-hour trips the same day on a 2-person crew: the pair does one, then the other");
 const VS2 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].returnTrips[0], assignedTo: "Callen Jakeman" }] }], schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "Daegan Smith" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
-ok(!VS2.items.find(x => x.key === "t_s1_a").auto && /can't go alone/.test(VS2.needs.find(n => n.key === "t_s1_a").why), "a crew member is never sent alone: no partner free means Needs you");
+ok(!VS2.items.find(x => x.key === "t_s1_a").auto.staff.length && /can't go alone/.test(VS2.needs.find(n => n.key === "t_s1_a").why), "a crew member is never sent alone: no partner free means nobody on it (red) and Needs you");
 const VS3 = SC.buildCalendar({ jobs: [{ ...jS[0], returnTrips: [{ ...jS[0].returnTrips[1] }] }], schedules: [{ Type: "job", Reference: "9-1", Date: "2026-11-24", Staff: { Name: "Callen Jakeman" }, Blocks: [{ Hrs: 10 }] }], phaseHours: {}, today, weeks: 5, users: usersS, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 const s3 = VS3.items.find(x => x.key === "t_s1_b").auto;
 ok(s3 && s3.crew === 1 && /Only Daegan free that day, no second person/.test(s3.held), "a foreman may go alone only when no second person is free, held");
@@ -239,7 +239,7 @@ SC.setHolidays(null);
 const VO = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, timeOff: [{ name: "Daegan Smith", start: "2026-11-24", end: "2026-11-24" }], effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 ok(VO.offByDay["2026-11-24"].includes("Daegan Smith"), "time off shows by day");
 const oa = VO.items.find(x => x.key === "t_s1_a"), ob = VO.items.find(x => x.key === "t_s1_b");
-ok(!(oa.auto && oa.auto.staff.some(p => p.name === "Daegan Smith")) && !(ob.auto && ob.auto.s === "2026-11-24"), "nobody is booked on a day they're off");
+ok(!(oa.auto && oa.auto.staff.some(p => p.name === "Daegan Smith")) && !(ob.auto && ob.auto.s === "2026-11-24" && ob.auto.staff.some(p => p.name === "Daegan Smith")), "nobody is booked on a day they're off");
 const VO2 = SC.buildCalendar({ jobs: jS, schedules: [], phaseHours: {}, today, weeks: 5, users: usersS, plans: { t_s1_b: { s: "2026-11-30", hours: 10, crew: 1, staff: [{ name: "Daegan Smith" }] } }, timeOff: [{ name: "Daegan", start: "11/30/2026" }], effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 ok(VO2.items.find(x => x.key === "t_s1_b").flags.some(f => /Daegan is off 11\/30/.test(f)), "a kept plan on someone's day off is flagged");
 
@@ -324,6 +324,12 @@ ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === 
   const v = { mode: "preview", jobNo: "1402", phase: "rough", staffIds: [1, 2] };
   ok(SB.validate({ ...v, days: [{ date: "2026-11-24", hours: 5, staffIds: [1] }] }, "2026-11-17") === "", "a day's own people pass when they're picked");
   ok(/isn't in the people picked/.test(SB.validate({ ...v, days: [{ date: "2026-11-24", hours: 5, staffIds: [3] }] }, "2026-11-17")), "a day can't book someone not picked");
+}
+
+// v662: nobody on it is allowed (red): a day with nobody shows but works no hours; the hours run on
+{
+  const sl = SC.slotsOf({ s: "2026-11-23", hours: 40, crew: 2, staff: [{ name: "A" }, { name: "B" }], pd: SC.pdOf([{ d: "2026-11-24", n: [], t: "07:00", e: "17:00" }]) });
+  ok(sl.length === 3 && sl[1].date === "2026-11-24" && sl[1].staff.length === 0 && sl[2].date === "2026-11-25" && sl[2].hours === 10, "Tue with nobody shows on its day, and its hours move to Wed");
 }
 
 // v662: the auto layout can't double-book anyone
