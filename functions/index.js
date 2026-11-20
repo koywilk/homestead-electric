@@ -7751,9 +7751,11 @@ exports.planDismissByHand  = _planIntake.planDismissByHand;
 const _poGmail = require("./materialPO/gmail.js")({ functions, db });
 const _duet = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage(),
   materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send },
-  officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById } });
+  officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById },
+  calendarDeps: { staff: () => sbActiveStaff(), tripWrite: (...x) => sbTripWrite(...x) } });
 exports.duetApi = _duet.duetApi;
 exports.duetRead = _duet.duetRead;   // v668: the crew calendar as data for Duet (read only)
+exports.duetBook = _duet.duetBook;   // after v668: Duet books through the calendar's Book rules (preview, then confirm)
 
 // ─── Claude tab on /dashboard (2026-11-04) ───────────────────────────────────
 // Koy: one page for him, one Josh and Brady can view, and no more separate

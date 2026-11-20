@@ -1712,7 +1712,7 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
   };
 }
 
-module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps, officeDeps }) {
+module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps, officeDeps, calendarDeps }) {
   const io = firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, storage, materialDeps, officeDeps });
   const duetApi = functions
     // invoker "public" like planRoutineApi: Google's door stays open so Vercel
@@ -1752,13 +1752,40 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
         res.status(502).json({ ok: false, error: `Couldn't read the crew calendar: ${(e && e.message) || "unknown"} Nothing was changed.` });
       }
     });
+  // After v668, functions only (Koy 2026-11-20, Duet's build spec, Build 1 "the booking door"): duetBook — Duet books people onto a job or a
+  // return trip through the calendar's own Book rules (functions/scrambleDoor.js), with the people rules checked here
+  // on the server. Same bearer token. Two actions: schedule.preview (writes nothing) and schedule.book (needs the
+  // preview's hash, rebuilds the entries, and writes only if they are the previewed ones). It only ever creates Simpro
+  // schedule entries and marks a booked return trip Scheduled; never a job's stage or status.
+  const SD = require("../scrambleDoor.js");
+  const duetBook = functions
+    .runWith({ timeoutSeconds: 300, memory: "512MB", secrets: [SECRET], invoker: "public" })
+    .https.onRequest(async (req, res) => {
+      if (!tokenOk(req)) { res.status(401).json({ ok: false, error: "unauthorized" }); return; }
+      if (req.method !== "POST") { res.status(405).json({ ok: false, error: "POST only" }); return; }
+      const b = req.body || {}, mode = b.action === "schedule.preview" ? "preview" : b.action === "schedule.book" ? "book" : "";
+      if (!mode) { res.status(400).json({ ok: false, refused: "Unknown action. Use schedule.preview or schedule.book." }); return; }
+      const cd = calendarDeps || {};
+      if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function" || typeof cd.staff !== "function" || typeof cd.tripWrite !== "function") { res.status(500).json({ ok: false, error: "Booking is not wired into duetBook." }); return; }
+      try {
+        const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+        const out = await SD.run({ simproReq: materialDeps.simproReqWithRetry, staff: cd.staff, getUsers, db, tripWrite: cd.tripWrite, today, log: (m) => functions.logger.warn("[duetBook] " + m) },
+          { ...(b.args || {}), mode, by: "Duet" });
+        functions.logger.info("duetBook", { action: b.action, jobNo: out.job && out.job.no, ok: out.ok, mode: out.mode, created: (out.created || []).length, refused: (out.refused || []).length });
+        res.status(200).json(out);
+      } catch (e) {
+        if (e && e.refused) { res.status(400).json({ ok: false, refused: e.message }); return; }
+        functions.logger.error("[duetBook] failed", { action: b.action, error: e && e.message });
+        res.status(500).json({ ok: false, error: mode === "book" ? "The booking didn't finish and may be partly written. Check Simpro's schedule for that job before asking again." : "Couldn't build the preview. Nothing was written." });
+      }
+    });
   // v633: Koy's own Yes on a dashboard flag runs each proposed change through this
   // same handle() in-process (claudeFlagAnswer in index.js): same checks, audit, undo.
   const runAsKoy = async (body) => {
     try { return await handle(body, io, { okBy: "Koy (dashboard)" }); }
     catch (e) { if (e instanceof Refusal) return { status: e.status, body: { ok: false, refused: e.message } }; throw e; }
   };
-  return { duetApi, duetRead, runAsKoy, io };
+  return { duetApi, duetRead, duetBook, runAsKoy, io };
 };
 module.exports.handle = handle;
 module.exports.tokenOk = tokenOk;
