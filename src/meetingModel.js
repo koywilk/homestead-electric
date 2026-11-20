@@ -518,7 +518,298 @@ function seedFor(kind, dateYmd) {
   if (kind === "lead" && dateYmd === "2026-11-11") return SEED_LEAD_2026_11_11;
   return null;
 }
+
+// ── Prefills for the Scramble, the Lead and the Foreman Meetings (SW v665, Koy 2026-11-20: "all the meetings
+// on the dashboard need pre fills") ─────────────────────────────────────────────────────────────────────
+// The same rows the page builds live, saved once on meetings/<kind>_<date>.prefill ({at, by, rows:{sec:[…]}})
+// the first time that week's meeting is opened, and again on "Prefill again". This week the live sections
+// stay live; the sections people used to type from scratch (Lead: Highlight, Lowlight, Training; Foreman:
+// Team check) start with suggestions from the app, kept as saved so they don't move mid-meeting. A past
+// week reads its saved rows, so it shows what the meeting saw. Hides, edits and adds on suggestions belong
+// to their week. Never writes a job, never touches Simpro.
+const PREFILL_SECS = { scramble: [], lead: ["highlight", "lowlight", "training"], foreman: ["team"] };
+const MAX_ROWS = 80;
+// The foreman a person reports to (a jr. foreman's or lead's crew sits with their foreman).
+function bossOf(users, name) {
+  const us = (users || []).filter(u => u && sameName(u.name, name));
+  const u = us.find(x => x.active !== false) || us[0];
+  if (!u) return String(name || "").trim();
+  if (u.title !== "foreman" && u.foremanId) { const b = (users || []).find(x => x && x.id === u.foremanId); if (b && b.name) return b.name; }
+  return u.name;
+}
+const stripHtml = (t) => String(t || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+const inWindow = (s, from, to) => { const d = anyDate(s); if (!d) return null; const k = ymd(d); return k >= from && k <= to ? d : null; };
+// Inspection attempts on a job in the window: [{phase:"rough"|"final", result, d, items:[text], first}]
+function inspAttemptsIn(j, from, to) {
+  const out = [];
+  [["rough", j.roughInspectionAttempts], ["final", j.finalInspectionAttempts]].forEach(([phase, list]) => {
+    (Array.isArray(list) ? list : []).forEach((a, i) => {
+      if (!a || !/^(pass|fail)$/.test(String(a.result || ""))) return;
+      const d = inWindow(a.date, from, to); if (!d) return;
+      out.push({ phase, result: a.result, d, i, items: (a.items || []).map(x => stripHtml(x && x.text)).filter(Boolean), first: i === 0 });
+    });
+  });
+  return out;
+}
+const INSP = { rough: "rough (4-way) inspection", final: "final inspection" };
+
+// Lead Meeting · Highlight, Lowlight, Training suggestions. The window is the last meeting to today.
+function leadSuggestions(input) {
+  const { jobs = [], costs = [], totals = {}, users = [], effFS, today = new Date(), meeting = "" } = input || {};
+  const mtg = meeting || meetingDate(today, "lead");
+  const from = prevMeetingDate(mtg), to = ymd(today) > mtg ? ymd(today) : mtg, todayYmd = ymd(today);
+  const S = { highlight: [], lowlight: [], training: [] };
+  const live = (jobs || []).filter(j => j && !j.archived && !j.tempPed && j.type !== "quote");
+  live.forEach(j => {
+    const no = jobNo(j), base = { jobId: j.id, no, title: j.name || "", days: [] };
+    inspAttemptsIn(j, from, to).forEach(a => {
+      const k = safeKey(j.id) + "_" + a.phase.charAt(0) + "_" + ymd(a.d).replace(/-/g, "") + "_" + a.i;
+      if (a.result === "pass") S.highlight.push({ ...base, key: "hi_" + k, tag: "Passed " + a.phase, when: a.d.getTime(),
+        detail: "Passed the " + INSP[a.phase] + (a.first ? " on the first try" : "") + ", " + shortDay(a.d) });
+      else S.lowlight.push({ ...base, key: "lo_" + k, tag: "Failed " + a.phase, bad: true, when: a.d.getTime(),
+        detail: "Failed the " + INSP[a.phase] + ", " + shortDay(a.d) + (a.items.length ? ": " + a.items.slice(0, 3).join("; ") : "") });
+    });
+    [["Rough-in", j.roughStatus, j.roughStatusDate], ["Finish", j.finishStatus, j.finishStatusDate]].forEach(([ph, st, sd]) => {
+      if (!["complete", "invoice"].includes(st)) return;
+      const d = inWindow(sd, from, to); if (!d) return;
+      S.highlight.push({ ...base, key: "hd_" + safeKey(j.id) + "_" + ph.charAt(0), tag: ph + " done", when: d.getTime(), detail: ph + " finished " + shortDay(d) });
+    });
+    (j.returnTrips || []).forEach((t, i) => {
+      if (!t) return;
+      const done = t.signedOff || t.rtStatus === "complete";
+      const scope = stripHtml(t.scope || t.task).slice(0, 120);
+      if (done) { const d = inWindow(t.signedOffDate || t.rtStatusDate, from, to); if (d) S.highlight.push({ ...base, key: "ht_" + safeKey(j.id + "_" + (t.id || i)), title: (j.name || "") + " · trip " + (i + 1), tag: "Trip done", when: d.getTime(), detail: "Return trip finished " + shortDay(d) + (scope ? ": " + scope : "") }); return; }
+      const d = anyDate(t.rtStatusDate || t.scheduledDate || t.date);
+      if (d && ymd(d) < todayYmd) S.lowlight.push({ ...base, key: "lt_" + safeKey(j.id + "_" + (t.id || i)), title: (j.name || "") + " · trip " + (i + 1), tag: "Trip past its date", bad: true, when: d.getTime(),
+        detail: "Was set for " + shortDay(d) + ", not finished" + (scope ? ": " + scope : "") });
+    });
+  });
+  // Margin: the shared job table. Strong jobs are wins; losing money or over the bid are lowlights. Percentages only.
+  const rows = marginRows({ jobs, costs, totals, users, effFS });
+  rows.filter(r => r.total != null && r.total >= 30).sort((a, b) => b.total - a.total).slice(0, 3).forEach(r =>
+    S.highlight.push({ key: "hm_" + safeKey(r.no), jobId: r.jobId, no: r.no, title: r.title, tag: "Strong margin", when: 0, detail: "Total margin " + r.total + "% in Simpro", days: [] }));
+  rows.filter(r => r.over || (r.total != null && r.total < 0)).forEach(r => {
+    const over = (r.flags || []).filter(f => f.over).map(f => f.text);
+    S.lowlight.push({ key: "lm_" + safeKey(r.no), jobId: r.jobId, no: r.no, title: r.title, tag: r.total != null && r.total < 0 ? "Losing money" : "Over bid", bad: true, when: 0,
+      detail: [r.total != null ? "Total margin " + r.total + "%" : "", over.join("; ")].filter(Boolean).join(" · "), days: [] });
+  });
+  S.highlight.sort((a, b) => (b.when || 0) - (a.when || 0));
+  S.lowlight.sort((a, b) => (a.when === 0 ? 1 : 0) - (b.when === 0 ? 1 : 0) || (b.when || 0) - (a.when || 0));
+  S.training = trainingIdeas({ jobs: live, meeting: mtg, today }).concat(appIdeas(input));
+  Object.keys(S).forEach(k => { S[k] = S[k].slice(0, MAX_ROWS).map(({ when, ...r }) => r); });
+  return S;
+}
+
+
+// Lead Meeting · Training ideas (Koy 2026-11-20: "yeah i want ideas for training pre filled"). Three to five
+// topics from the last two weeks, each with a one-line why and the job it came from: what failed
+// inspections called out, the same fix showing up on punch lists and return trips, what QC walks found,
+// work that reads like it should have been a change order, then this week's standard (one crew guide a
+// week, in turn). No names, no dollars.
+const FIX_BUCKETS = [
+  ["GFCI protection", /\bgf(c?i)s?\b|ground fault/i], ["Cover plates and trim", /\bcover ?plates?\b|\bplates?\b|trim rings?/i],
+  ["Smoke and CO detectors", /\bsmokes?\b|\bdetectors?\b/i], ["Dimmers and switches", /\bdimmers?\b|\bswitch(es)?\b|3-way|three way/i],
+  ["Recessed lights", /\bcans?\b|recessed|wafers?|downlights?/i], ["Outlets", /\boutlets?\b|receptacles?|\bplugs?\b/i],
+  ["Panel labels", /\blabel(s|ing)?\b|panel schedule|directory/i], ["Fans", /\bfans?\b/i],
+  ["Exterior lights", /exterior|outdoor|soffit|landscape/i], ["Under-cabinet and tape light", /under ?cabinet|tape ?light|led strip/i],
+  ["Low voltage", /cat ?6|coax|low voltage|\bdata\b|network/i], ["Bonding and grounding", /\bbond(ing)?\b|\bground(ing)?\b/i],
+];
+const bucketOf = (t) => { const b = FIX_BUCKETS.find(([, re]) => re.test(t)); return b ? b[0] : ""; };
+const CO_WORDS = /\b(add(ed|ing)?|extra|additional|new (outlet|light|circuit|switch)|customer (wants|asked|requested)|homeowner (wants|asked|requested)|owner (wants|asked)|relocat\w*|move[ds]? (the|a|an)?)\b/i;
+// The crew guides behind the app's "?" buttons, one a week in turn (public/sops/<file>.html).
+const STANDARDS = [
+  ["jobstart", "Starting a job"], ["jobprep", "Job prep"], ["rough", "Rough-in"], ["homeruns", "Home runs"], ["underground", "Underground"],
+  ["power", "Power and panels"], ["finish", "Finish"], ["lighting", "Lighting"], ["qc", "QC walks"], ["returntrips", "Return trips"],
+  ["changeorders", "Change orders"], ["materials", "Material and POs"], ["photos", "Job photos"], ["questions", "Questions to the office"],
+];
+// Every punch item on a punch tree, done or not: { text, at }.
+function punchItemsAll(punch) {
+  const out = []; if (!punch || typeof punch !== "object") return out;
+  const keys = ["upper", "main", "basement", ...((punch.extras || []).map(e => e && e.key).filter(Boolean))];
+  const take = (i) => { if (i && typeof i === "object" && !i.voided) out.push({ text: stripHtml(i.text), at: i.addedAt || String(i.addedAtTs || "").slice(0, 10) }); };
+  keys.forEach(k => { const fl = punch[k]; if (!fl || typeof fl !== "object") return;
+    (fl.general || []).forEach(take); (fl.hotcheck || []).forEach(take); (fl.rooms || []).forEach(r => ((r && r.items) || []).forEach(take)); });
+  return out;
+}
+function trainingIdeas(input) {
+  const { jobs = [], meeting = "", today = new Date() } = input || {};
+  const mtg = meeting || meetingDate(today, "lead");
+  const to = ymd(today) > mtg ? ymd(today) : mtg;
+  const from = (() => { const d = parseYmd(to); d.setDate(d.getDate() - 14); return ymd(d); })();
+  const label = (j) => ((j && j.simproNo) ? "#" + j.simproNo + " " : "") + ((j && j.name) || "");
+  const ideas = [];
+  const fails = [], fixes = [], qc = [], co = [];
+  (jobs || []).forEach(j => {
+    if (!j || j.archived) return;
+    inspAttemptsIn(j, from, to).filter(a => a.result === "fail").forEach(a => a.items.forEach(t => fails.push({ j, t, d: a.d, phase: a.phase })));
+    const items = [];
+    punchItemsAll(j.finishPunch).forEach(x => items.push({ ...x, src: "punch" }));
+    punchItemsAll(j.qcPunch).forEach(x => { items.push({ ...x, src: "qc" }); });
+    (j.returnTrips || []).forEach(t => { if (!t) return;
+      const at = String(t.date || t.created_at || t.createdAt || "").slice(0, 10);
+      const sc = stripHtml(t.scope || t.task); if (sc) items.push({ text: sc, at: anyDate(at) ? ymd(anyDate(at)) : "", src: "trip" });
+      (Array.isArray(t.punch) ? t.punch : []).forEach(x => { const tx = stripHtml(typeof x === "string" ? x : x && x.text); if (tx) items.push({ text: tx, at: (x && x.addedAt) || "", src: "trip" }); }); });
+    items.filter(x => x.text && x.at && x.at >= from && x.at <= to).forEach(x => {
+      const b = bucketOf(x.text);
+      if (b) fixes.push({ j, b, x });
+      if (x.src === "qc") qc.push({ j, b, x });
+      if (CO_WORDS.test(x.text)) co.push({ j, x });
+    });
+  });
+  // 1 · Failed inspections: one idea per kind of item, the two most common.
+  const fb = {};
+  fails.forEach(f => { const b = bucketOf(f.t) || f.t.slice(0, 60); (fb[b] = fb[b] || []).push(f); });
+  Object.entries(fb).sort((a, b) => b[1].length - a[1].length).slice(0, 2).forEach(([b, list]) => { const f = list[0];
+    ideas.push({ key: "ti_in_" + safeKey(b), jobId: f.j.id, no: jobNo(f.j), title: "Inspection: " + (bucketOf(f.t) ? b : f.t.slice(0, 100)), tag: "Idea",
+      detail: (list.length > 1 ? "Failed inspections called it out " + list.length + " times" : "A failed " + INSP[f.phase] + " called it out " + shortDay(f.d)) + ": “" + f.t.slice(0, 90) + "” · " + label(f.j) }); });
+  // 2 · The same fix again and again: a kind of fix on 3+ items across 2+ jobs.
+  const rb = {};
+  fixes.forEach(f => { (rb[f.b] = rb[f.b] || []).push(f); });
+  Object.entries(rb).map(([b, list]) => ({ b, list, jobsN: new Set(list.map(f => f.j.id)).size })).filter(g => g.list.length >= 3 && g.jobsN >= 2 && !fb[g.b])
+    .sort((a, b) => b.list.length - a.list.length).slice(0, 2).forEach(g => {
+      const by = {}; g.list.forEach(f => { by[f.j.id] = (by[f.j.id] || 0) + 1; });
+      const top = g.list.find(f => f.j.id === Object.keys(by).sort((a, b) => by[b] - by[a])[0]).j;
+      ideas.push({ key: "ti_rp_" + safeKey(g.b), jobId: top.id, no: jobNo(top), title: "Repeat fix: " + g.b, tag: "Idea",
+        detail: g.list.length + " punch and return-trip items on " + g.jobsN + " jobs in two weeks, most on " + label(top) }); });
+  // 3 · QC walks: the job whose walk found the most, and what kind.
+  if (qc.length) {
+    const by = {}; qc.forEach(f => { (by[f.j.id] = by[f.j.id] || []).push(f); });
+    const list = Object.values(by).sort((a, b) => b.length - a.length)[0], j = list[0].j;
+    const kinds = {}; list.forEach(f => { if (f.b) kinds[f.b] = (kinds[f.b] || 0) + 1; });
+    const kind = Object.keys(kinds).sort((a, b) => kinds[b] - kinds[a])[0];
+    ideas.push({ key: "ti_qc_" + safeKey(j.id), jobId: j.id, no: jobNo(j), title: "QC walk: " + (kind ? kind.toLowerCase() : "what it caught"), tag: "Idea",
+      detail: list.length + " QC item" + (list.length > 1 ? "s" : "") + " on " + label(j) + " in two weeks" + (kind ? ", most about " + kind.toLowerCase() : "") });
+  }
+  // 4 · Work that reads like added scope: catching a change order before it's done.
+  if (co.length) { const f = co[0];
+    ideas.push({ key: "ti_co", jobId: f.j.id, no: jobNo(f.j), title: "Catching change orders", tag: "Idea",
+      detail: co.length + " punch or trip item" + (co.length > 1 ? "s read" : " reads") + " like added work, e.g. “" + f.x.text.slice(0, 80) + "” · " + label(f.j) }); }
+  // 5 · This week's standard, always last.
+  const wk = Math.floor(parseYmd(mtg).getTime() / (7 * DAY)), st = STANDARDS[((wk % STANDARDS.length) + STANDARDS.length) % STANDARDS.length];
+  const out = ideas.slice(0, 4);
+  out.push({ key: "ti_st_" + st[0], no: "", title: "This week's standard: " + st[1], tag: "Standard", sop: st[0],
+    detail: "One crew guide a week, in turn. Go over the " + st[1].toLowerCase() + " guide together." });
+  return out.map(r => ({ ...r, days: [] }));
+}
+
+
+// Lead Meeting · App training ideas (Koy 2026-11-20: "app training ideas as well"). One to three topics on
+// using the Homestead app, tagged "App": what shipped for the field since the last meeting (the crew briefs,
+// newer than the app version saved on last week's prefill), then app habits that look weak in the last two
+// weeks (jobs in progress with no daily update, punch items open with nobody on them, open return trips with
+// no material or PO, My Day tasks past due). Counts and job numbers, no names.
+const OFFICE_HEAD = /office|owners|admins?\b|dashboard|crew calendar|meeting|scheduler/i;
+function appIdeas(input) {
+  const { jobs = [], needs = [], briefs = [], sinceVersion = 0, today = new Date() } = input || {};
+  const todayYmd = ymd(today);
+  const from = (() => { const d = parseYmd(todayYmd); d.setDate(d.getDate() - 14); return ymd(d); })();
+  const label = (j) => ((j && j.simproNo) ? "#" + j.simproNo + " " : "") + ((j && j.name) || "");
+  const ideas = [];
+  // 1 · New for the field since last week's meeting.
+  const fresh = (briefs || []).filter(b => b && b.v > (sinceVersion || 0)).slice(0, sinceVersion ? 20 : 3);
+  const heads = [];
+  fresh.forEach(b => (b.heads || []).forEach(h => { if (h && h.h && !OFFICE_HEAD.test(h.h) && h.first) heads.push({ ...h, v: b.v }); }));
+  const headTitle = (h) => { const t = h.h.replace(/^(NEW|FIXED|CHANGED|BETTER|REMOVED)\s*/i, "").replace(/\s*\((everyone|crew)\)\s*$/i, "").replace(/^(on|in|for|when)\s+/i, "").trim();
+    return t ? t.replace(/^./, c => c.toUpperCase()) : "What changed in v" + h.v; };
+  heads.slice(0, 2).forEach(h => ideas.push({ key: "ta_new_" + h.v + "_" + safeKey(h.h).slice(0, 30), no: "", title: "App: " + headTitle(h),
+    tag: "App", detail: "New in v" + h.v + ": " + h.first.slice(0, 140) }));
+  // 2 · Habits.
+  const live = (jobs || []).filter(j => j && !j.archived && !j.quickJob && !j.tempPed);
+  const weekAgo = (() => { const d = parseYmd(todayYmd); d.setDate(d.getDate() - 7); return ymd(d); })();
+  const noUpd = live.filter(j => [["roughStatus", "roughUpdates"], ["finishStatus", "finishUpdates"]].some(([st, up]) => {
+    if (j[st] !== "inprogress") return false;
+    const last = (j[up] || []).map(u => anyDate(u && u.date)).filter(Boolean).map(ymd).sort().pop() || "";
+    return !last || last < weekAgo;
+  }));
+  const openTrips = [];
+  live.forEach(j => (j.returnTrips || []).forEach((t, i) => { if (!t || t.signedOff || t.rtStatus === "complete") return;
+    if (!stripHtml(t.material) && !/\bP\.?O\.?\s*#?\s*\d{3,6}\b/i.test(String(t.scope || "") + " " + String(t.material || ""))) openTrips.push({ j, i }); }));
+  let unassigned = 0; const unByJob = {};
+  live.forEach(j => [j.finishPunch, j.qcPunch].forEach(p => {
+    const keys = p && typeof p === "object" ? ["upper", "main", "basement", ...((p.extras || []).map(e => e && e.key).filter(Boolean))] : [];
+    keys.forEach(k => { const fl = p[k]; if (!fl) return; const all = [...(fl.general || []), ...(fl.hotcheck || []), ...((fl.rooms || []).flatMap(r => (r && r.items) || []))];
+      all.forEach(it => { if (it && typeof it === "object" && !it.done && !it.voided && !String(it.assignedTo || "").trim() && (it.addedAt || "") && it.addedAt <= from) { unassigned++; unByJob[j.id] = (unByJob[j.id] || 0) + 1; } }); });
+  }));
+  const overdue = (needs || []).filter(n => n && n.status === "open" && n.dueDate && n.dueDate < todayYmd).length;
+  const habits = [];
+  if (noUpd.length) habits.push({ n: noUpd.length, row: { key: "ta_upd", jobId: noUpd[0].id, no: jobNo(noUpd[0]), title: "App: daily updates", tag: "App",
+    detail: noUpd.length + " job" + (noUpd.length > 1 ? "s" : "") + " in progress with no daily update in a week, like " + label(noUpd[0]) } });
+  if (unassigned) { const top = live.find(j => j.id === Object.keys(unByJob).sort((a, b) => unByJob[b] - unByJob[a])[0]);
+    habits.push({ n: unassigned, row: { key: "ta_punch", jobId: top.id, no: jobNo(top), title: "App: putting someone on punch items", tag: "App",
+      detail: unassigned + " punch item" + (unassigned > 1 ? "s" : "") + " open two weeks or more with nobody on them, most on " + label(top) } }); }
+  if (openTrips.length) habits.push({ n: openTrips.length, row: { key: "ta_trip", jobId: openTrips[0].j.id, no: jobNo(openTrips[0].j), title: "App: material and POs on return trips", tag: "App",
+    detail: openTrips.length + " open return trip" + (openTrips.length > 1 ? "s have" : " has") + " no material or PO written on it, like " + label(openTrips[0].j) + " trip " + (openTrips[0].i + 1) } });
+  if (overdue) habits.push({ n: overdue, row: { key: "ta_myday", no: "", title: "App: closing out My Day tasks", tag: "App", detail: overdue + " My Day task" + (overdue > 1 ? "s are" : " is") + " past due and still open" } });
+  habits.sort((a, b) => b.n - a.n).forEach(h => ideas.push(h.row));
+  return ideas.slice(0, 3).map(r => ({ ...r, days: [] }));
+}
+
+// Who is out in a date range (approved time off and requests still waiting), field crew only.
+function outIn(input, from, to) {
+  const { requests = [], pto = [] } = input || {};
+  const out = [];
+  const add = (name, a, b, asked) => { const s = anyDate(a), e = anyDate(b || a); if (!name || !s || !e) return; if (ymd(e) < from || ymd(s) > to) return;
+    out.push({ name: String(name).trim(), text: rangeText(ymd(s), ymd(e)) + (asked ? " (asked)" : "") }); };
+  (requests || []).forEach(r => { if (r && r.status === "pending") add(r.name, r.start, r.end, true); });
+  (pto || []).forEach(p => { if (p) add(p.name, p.start, p.end, false); });
+  return out;
+}
+
+// Foreman Meeting · Team check suggestions: a line per foreman's crew on what the app shows this week
+// (who is out, failed inspections since the last meeting, jobs over the bid or losing money), and a
+// time-off note under each guy. Percentages and counts only.
+function foremanSuggestions(input) {
+  const { jobs = [], users = [], today = new Date(), meeting = "" } = input || {};
+  const mtg = meeting || meetingDate(today, "foreman");
+  const from = prevMeetingDate(mtg), to = ymd(today) > mtg ? ymd(today) : mtg;
+  const wk = weekRange(mtg, 2);
+  const out = outIn(input, ymd(today) > wk.from ? ymd(today) : wk.from, wk.to);
+  const margin = marginRows(input);
+  const team = [];
+  MARGIN_FOREMEN.forEach(first => {
+    const f = (users || []).find(u => u && u.active !== false && u.title === "foreman" && firstOf(u.name).toLowerCase() === first);
+    if (!f) return;
+    const crew = (users || []).filter(u => u && u.active !== false && (u.id === f.id || u.foremanId === f.id) && u.access !== "contractor");
+    const away = out.filter(o => crew.some(u => sameName(u.name, o.name)));
+    const fails = [];
+    (jobs || []).forEach(j => { if (!j || j.archived || !j.foreman || !sameName(bossOf(users, j.foreman), f.name)) return;
+      inspAttemptsIn(j, from, to).filter(a => a.result === "fail").forEach(a => fails.push((j.simproNo ? "#" + j.simproNo + " " : "") + (j.name || "") + " " + a.phase)); });
+    const mine = margin.filter(r => sameName(r.group, f.name));
+    const over = mine.filter(r => r.over), losing = mine.filter(r => r.total != null && r.total < 0);
+    const bits = [];
+    if (away.length) bits.push("Out: " + away.map(o => firstOf(o.name) + " " + o.text).join(", "));
+    if (fails.length) bits.push(fails.length + " failed inspection" + (fails.length > 1 ? "s" : "") + " since last week (" + fails.slice(0, 3).join(", ") + ")");
+    if (losing.length) bits.push(losing.length + " losing money (" + losing.slice(0, 3).map(r => "#" + r.no + " " + r.title).join(", ") + ")");
+    if (over.length) bits.push(over.length + " over the bid (" + over.slice(0, 3).map(r => "#" + r.no + " " + r.title).join(", ") + ")");
+    if (!bits.length) return;
+    team.push({ key: "tc_" + safeKey(f.id), title: firstOf(f.name) + "'s crew", tag: fails.length || losing.length ? "Look at" : "", bad: !!(fails.length || losing.length), detail: bits.join(" · "), days: [] });
+  });
+  const guyNotes = {};
+  out.forEach(o => { const u = (users || []).find(x => x && sameName(x.name, o.name)); if (u) (guyNotes[safeKey(u.id)] = guyNotes[safeKey(u.id)] || []).push("Out " + o.text); });
+  return { team, guyNotes };
+}
+
+// The saved prefill: every section's rows for that week. Foreman Jobs is the Job Costs page itself
+// and stays live, so it isn't saved. Rows are trimmed to plain data (no undefined) for Firestore.
+function buildPrefill(kind, input) {
+  const plain = (rows) => JSON.parse(JSON.stringify((rows || []).slice(0, MAX_ROWS)));
+  const rows = {};
+  if (kind === "scramble") {
+    const S = buildSections(input);
+    ["schedule", "trips", "waiting", "upcoming", "watches", "material"].forEach(k => { rows[k] = plain(S[k]); });
+  } else if (kind === "lead") {
+    const S = buildLeadSections(input), L = leadSuggestions(input);
+    ["schedule", "upcoming", "hours", "crewout"].forEach(k => { rows[k] = plain(S[k]); });
+    PREFILL_SECS.lead.forEach(k => { rows[k] = plain(L[k]); });
+  } else if (kind === "foreman") {
+    const S = buildForemanSections(input), F = foremanSuggestions(input);
+    rows.team = plain(F.team);
+    rows.guys = plain(S.guys.map(g => (F.guyNotes[g.uid] ? { ...g, detail: [g.detail, ...F.guyNotes[g.uid]].filter(Boolean).join(" · ") } : g)));
+  }
+  return { rows };
+}
 module.exports = { SECS, ATTENDEES, WATCHES, ymd, parseYmd, anyDate, meetingDate, meetingId, prevMeetingDate, weekRange, safeKey, firstOf,
   bookingsByJob, buildSections, applyPrefs, carriedSteps, SEED_2026_11_10, needIdFor,
   CFG, LEAD_SECS, LEAD_OLD, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11, leadRange, secHasContent, phaseOf,
-  FOREMAN_SECS, marginRows, buildForemanSections, isMainGroup, STRATEGY_SECS, strategyNumbers, parkedRows, buildStrategySections };
+  FOREMAN_SECS, marginRows, buildForemanSections, isMainGroup, STRATEGY_SECS, strategyNumbers, parkedRows, buildStrategySections,
+  PREFILL_SECS, leadSuggestions, foremanSuggestions, buildPrefill, outIn, trainingIdeas, STANDARDS, appIdeas };

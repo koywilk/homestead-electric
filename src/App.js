@@ -19,6 +19,7 @@ import SchedMode from "./schedMode";   // v627: the scheduling pill reads Simpro
 import ReportMd from "./reportMd";   // v616: the Claude tab's reports, drawn as text (never HTML)
 import inspAtt from "./inspAttempts";
 import MeetingModel from "./meetingModel";   // v648: the Weekly Scramble on /dashboard › Meetings (Koy, 2026-11-17)
+import CrewBriefsIndex from "./crewBriefsIndex.json";   // v666: crew briefs (prebuild), for the Lead Meeting's app training ideas
 import ScrambleCal from "./scrambleCal";   // v651: the Scramble calendar (all crews, Simpro bookings, forecasts, not-yet-booked list)
 import JobsiteDay from "./jobsiteDay";   // v653: the My jobsite card on My Day (Louis Hoffman via Koy, 2026-11-19)
 import JobShape from "./jobShape";   // v608: blankJob / blankQuickJob + row factories, Projects one-liners, gcRunningToggle, jobSectionPatch — shared with duetApi (D9 ship 9)
@@ -53501,7 +53502,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   const thisWeek = M.meetingDate(new Date(), kind);
   const [week, setWeek] = useState(thisWeek);
   const setKind = (k) => { try { localStorage.setItem("he_mtg_kind", k); } catch (_) {} setKindRaw(k); setWeek(M.meetingDate(new Date(), k)); setOpen(new Set()); };
-  const [leadSrc, setLeadSrc] = useState({ costs: [], totals: {}, costsAt: "", totalsAt: "", requests: [], pto: [] });   // Lead Meeting: margins, time off
+  const [leadSrc, setLeadSrc] = useState({ costs: [], totals: {}, costsAt: "", totalsAt: "", requests: [], pto: [], loaded: false });   // Lead Meeting: margins, time off
   const [simNames, setSimNames] = useState({});        // v650: Simpro job names for booked jobs Command Center doesn't have
   const [weeks, setWeeks] = useState([]);              // saved meeting dates, newest first
   const [mdoc, setMdoc] = useState(undefined);         // this week's meeting doc (undefined = loading, null = none yet)
@@ -53539,6 +53540,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     .catch(e => say("Didn't save: " + ((e && e.message) || "check the connection")));
   const [prefillBusy, setPrefillBusy] = useState(false);
   const prefillNow = () => {
+    if (!strat) { savePrefill(false); return; }
     if (prefillBusy) return; setPrefillBusy(true); say("Prefilling this Friday's meeting. This takes a minute or two.");
     memberCallable("refreshStrategyMeeting", identity, { timeout: 540000 })({ _appKey: APP_CALL_KEY }).then(r => { setPrefillBusy(false); say(r && r.data && r.data.ok ? "Prefilled." : "Didn't prefill: " + ((r && r.data && r.data.error) || "try again")); },
       e => { setPrefillBusy(false); say("Didn't prefill: " + ((e && e.message) || "try again")); });
@@ -53551,7 +53553,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     Promise.all(["phaseCosts", "simproTotals", "timeOffRequests", "crewPTO"].map(k => getDoc(doc(db, "settings", k)).then(x => x.exists() ? (x.data() || {}) : {}, () => ({}))))
       .then(([c, t, r, p]) => { if (!dead) setLeadSrc({ costs: Array.isArray(c.rows) ? c.rows : [], costsAt: String(c.at || c.generated_at || ""),
         totals: (t && typeof t.byNo === "object" && t.byNo) || {}, totalsAt: String((t && t.at) || ""),
-        requests: Array.isArray(r.list) ? r.list : [], pto: Array.isArray(p.list) ? p.list : [] }); });
+        requests: Array.isArray(r.list) ? r.list : [], pto: Array.isArray(p.list) ? p.list : [], loaded: true }); });
     return () => { dead = true; };
   }, [kind]); // eslint-disable-line
   useEffect(() => {
@@ -53578,17 +53580,42 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     miss.forEach(no => fetchSimproJobBasics(no).then(b => { if (!dead && b && b.name) setSimNames(m => ({ ...m, [no]: String(b.name).trim() })); }, () => {}));
     return () => { dead = true; };
   }, [kind, sched, jobs, leadSrc.costs]); // eslint-disable-line
+  // v666 (Koy 2026-11-20: "all the meetings on the dashboard need pre fills"): what each meeting's rows are built from.
+  // The same input feeds the live rows and the saved prefill (meetings/<kind>_<date>.prefill).
+  const prefillInput = () => ({ jobs, needs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], costs: leadSrc.costs, totals: leadSrc.totals, names: simNames,
+    users, requests: leadSrc.requests, pto: leadSrc.pto, today: new Date(), meeting: week, effRS, effFS,
+    briefs: CrewBriefsIndex, sinceVersion: (prev && prev.prefill && +prev.prefill.appVersion) || 0 });
   const S = useMemo(() => kind === "strategy"
     ? M.buildStrategySections({ prefill: mdoc && mdoc.prefill, jobs, users, costs: leadSrc.costs, totals: leadSrc.totals, effFS, calPrefs })
-    : kind === "foreman"
-    ? M.buildForemanSections({ jobs, users, costs: leadSrc.costs, totals: leadSrc.totals, effFS })
-    : kind === "lead"
-    ? M.buildLeadSections({ jobs, needs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], costs: leadSrc.costs, totals: leadSrc.totals, names: simNames,
-        users, requests: leadSrc.requests, pto: leadSrc.pto, today: new Date(), meeting: week, effRS, effFS })
-    : M.buildSections({ jobs, upcoming, flags: (flags && flags.open) || [], schedules: sched || [], today: new Date(), effRS, effFS }),
-    [kind, jobs, needs, upcoming, flags, sched, leadSrc, simNames, users, week, mdoc, calPrefs]); // eslint-disable-line
+    : kind === "foreman" ? (() => {
+      // v666: Team check starts with what the app shows per crew; each guy gets his time off under his name.
+      const inp = prefillInput(), F = M.buildForemanSections(inp), sug = M.foremanSuggestions(inp);
+      return { ...F, team: sug.team, guys: F.guys.map(g => sug.guyNotes[g.uid] ? { ...g, detail: [g.detail, ...sug.guyNotes[g.uid]].filter(Boolean).join(" · ") } : g) };
+    })()
+    : kind === "lead" ? (() => { const inp = prefillInput(); return { ...M.buildLeadSections(inp), ...M.leadSuggestions(inp) }; })()
+    : M.buildSections(prefillInput()),
+    [kind, jobs, needs, upcoming, flags, sched, leadSrc, simNames, users, week, mdoc, calPrefs, prev]); // eslint-disable-line
   const nowIso = () => new Date().toISOString();
   const say = (t) => { setMsg(t); setTimeout(() => setMsg(""), 4000); };
+  // v666: the Scramble, Lead and Foreman Meetings prefill in the browser from the same rows the page shows,
+  // the first time this week's meeting opens (auto) and on Prefill again. It replaces only the prefill field
+  // (mergeFields), so notes, row notes, hides, edits, photos and action items are untouched.
+  const prefillReady = kind === "scramble" ? sched !== undefined : kind === "lead" ? sched !== undefined && leadSrc.loaded : kind === "foreman" ? leadSrc.loaded : false;
+  const autoPrefilled = useRef({});
+  const savePrefill = (auto) => {
+    if (strat || ro || !prefillReady) { if (!auto) say("Still reading the app's data. Try again in a moment."); return Promise.resolve(); }
+    const P = M.buildPrefill(kind, prefillInput());
+    const errors = [sched === null && kind !== "foreman" ? "Simpro bookings" : "", wed && !leadSrc.costs.length ? "Job Costs pull" : ""].filter(Boolean);
+    const t = nowIso();
+    return setDoc(doc(db, "meetings", mid), { type: kind, date: week, prefill: { at: t, by: auto ? "Auto prefill" : me, appVersion: APP_BUILD || 0, rows: P.rows, errors }, updated_at: t, saved_by: me },
+      { mergeFields: ["type", "date", "prefill", "updated_at", "saved_by"] })
+      .then(() => { if (!auto) say("Prefilled."); }, e => say("Didn't prefill: " + ((e && e.message) || "check the connection")));
+  };
+  useEffect(() => {
+    if (strat || ro || !prefillReady || mdoc === undefined || (mdoc && mdoc.prefill && mdoc.prefill.at) || autoPrefilled.current[mid]) return;
+    autoPrefilled.current[mid] = true;
+    savePrefill(true);
+  }, [mid, prefillReady, mdoc, ro, strat]); // eslint-disable-line
   const saveMtg = (patch) => setDoc(doc(db, "meetings", mid), { type: kind, date: week, ...patch, updated_at: nowIso(), saved_by: me }, { merge: true })
     .catch(e => say("Didn't save: " + ((e && e.message) || "check the connection")));
   const savePrefs = (patch) => setDoc(doc(db, "meetings", prefsId), { type: kind + "_prefs", ...patch, updated_at: nowIso(), saved_by: me }, { merge: true })
@@ -53610,8 +53637,13 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   };
   const delRowNote = (key, nid) => saveMtg({ rowNotes: { [key]: { [nid]: deleteField() } } });
   // v657: on the Friday Strategy a hide belongs to that week (each week is prefilled fresh); elsewhere it sticks.
-  const hideRow = (sec, r) => (strat ? saveMtg : savePrefs)({ hidden: { [sec]: { [r.key]: { by: me, at: nowIso(), title: r.title || "" } } } });
-  const unhideRow = (sec, key) => (strat ? saveMtg : savePrefs)({ hidden: { [sec]: { [key]: deleteField() } } });
+  // v666: on the Lead and Foreman Meetings' typed sections (Highlight, Lowlight, Training, Team check) the rows are
+  // that week's suggestions, so a hide belongs to that week too.
+  const weekSec = (sec) => strat || (wed && M.TYPED.includes(sec));
+  const hideRow = (sec, r) => (weekSec(sec) ? saveMtg : savePrefs)({ hidden: { [sec]: { [r.key]: { by: me, at: nowIso(), title: r.title || "" } } } });
+  const unhideRow = (sec, key) => { if (weekSec(sec) && !strat) savePrefs({ hidden: { [sec]: { [key]: deleteField() } } }); return (weekSec(sec) ? saveMtg : savePrefs)({ hidden: { [sec]: { [key]: deleteField() } } }); };
+  // v666: Keep on a suggestion marks it agreed for that week (meetings/<id>.kept.<row>); tap again to undo.
+  const keepRow = (key, on) => saveMtg({ kept: { [key]: on ? { by: me, at: nowIso() } : deleteField() } });
   // v657 (Koy: "make sure I can hide, edit, delete, or add in any of them"): Edit any row's words for this week.
   const [editFor, setEditFor] = useState(null);       // row key being edited
   const [editVals, setEditVals] = useState({ title: "", detail: "" });
@@ -53650,6 +53682,17 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     if (Object.keys(got).length) { await saveMtg({ rowPhotos: { [key]: got } }); say(Object.keys(got).length === 1 ? "Photo added." : `${Object.keys(got).length} photos added.`); }
   };
   const delRowPhoto = (key, pid) => saveMtg({ rowPhotos: { [key]: { [pid]: deleteField() } } });
+  // v666 (Koy: "i cant put pictures anywhere"): + Photo on every item of every meeting and on every section.
+  // One button takes a photo or picks one (the phone offers both); tap a thumbnail to see it big.
+  const [lightbox, setLightbox] = useState(null);      // { key, i }
+  useEffect(() => { if (!lightbox) return undefined; const k = (e) => { if (e.key === "Escape") setLightbox(null); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [lightbox]);
+  const photosOf = (key) => Object.entries((md.rowPhotos || {})[key] || {}).filter(([, ph]) => ph && odMtgPhotoUrl(ph.url)).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
+  const askDelPhoto = (key, pid) => { if (window.confirm("Delete this photo from the meeting?")) delRowPhoto(key, pid); };
+  const photoStrip = (key) => { const list = photosOf(key); if (!list.length) return null;
+    return <div className="mt-ph">{list.map(([pid, ph], i) => (
+      <span key={pid}><button type="button" className="mt-thumb" onClick={() => setLightbox({ key, i })} aria-label={`Open photo ${i + 1}`}><img src={odMtgPhotoUrl(ph.url)} alt={ph.name || "Photo"} loading="lazy"/></button>
+        {!ro ? <button type="button" className="mt-x" aria-label="Delete photo" onClick={() => askDelPhoto(key, pid)}>×</button> : null}</span>))}</div>; };
+  const photoBtn = (key, text) => ro ? null : <label className="mt-lnk mt-file">{photoBusy === key ? "Uploading…" : (text || "+ Photo")}<input type="file" accept="image/*" multiple disabled={photoBusy === key} onChange={e => { addRowPhotos(key, e.target.files); e.target.value = ""; }} aria-label="Take or pick a photo"/></label>;
   const addAction = (sec) => {
     const f = actFor[sec] || {}; const t = String(f.text || "").trim(); if (!t) return;
     saveMtg({ actions: { [id()]: { sec, text: t, who: f.who || "", due: f.due || "", by: me, at: nowIso() } } });
@@ -53687,20 +53730,26 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     : deleteField() } });
 
   const md = mdoc || {};
+  // v666: the saved prefill. A past week reads every section from it (what that meeting saw); this week only
+  // the suggestion sections do, so they hold still mid-meeting. Before the first prefill lands, live rows show.
+  const pre = !strat && md.prefill && md.prefill.rows ? md.prefill.rows : null;
+  const preSecs = M.PREFILL_SECS[kind] || [];
+  const rowsFor = (sec) => (pre && Array.isArray(pre[sec]) && (ro || preSecs.includes(sec))) ? pre[sec].filter(r => r && r.key).map(r => ({ ...r, days: r.days || [] })) : (S[sec] || []);
   // Who an action item can go to: the Scramble's four; for the Lead Meeting, Koy plus every active foreman, jr. foreman and lead.
   const people = strat ? Array.from(new Set(["Koy Wilkinson", "Josh Cloward", "Brady Nelson", ...M.ATTENDEES])) : wed
     ? Array.from(new Set(["Koy Wilkinson", ...(users || []).filter(u => u && u.active !== false && /^(foreman|jrforeman|lead)$/.test(String(u.title || "")) && u.access !== "contractor").map(u => u.name).filter(Boolean)]))
     : M.ATTENDEES;
   const fmtDue = (s) => { const d = M.parseYmd(s); return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" }) : ""; };
-  const pillCls = (tag) => /^Finish/.test(tag) ? "fin" : /^Rough/.test(tag) ? "rgh" : tag === "Booked" ? "ok" : /^Needs|^On hold|ordering|d past$/.test(tag) ? "bad" : "";
+  const pillCls = (tag) => tag === "App" ? "app" : tag === "Idea" || tag === "Standard" ? "idea" : /^Passed|done$|^Strong/.test(tag) ? "ok" : /^Finish/.test(tag) ? "fin" : /^Rough/.test(tag) ? "rgh" : tag === "Booked" ? "ok" : /^Needs|^On hold|ordering|d past$/.test(tag) ? "bad" : "";
 
   const rowView = (sec, r0) => {
     const ed = (md.edits || {})[r0.key];
     const r = ed ? { ...r0, title: ed.title || r0.title, detail: ed.detail != null ? ed.detail : r0.detail } : r0;
     const notes = Object.entries((md.rowNotes || {})[r.key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
     const job = r.jobId ? (jobs || []).find(j => j && j.id === r.jobId) : null;
+    const sugg = !strat && preSecs.includes(sec) && !r.addedId, kept = sugg && !!(md.kept || {})[r.key];   // v666: an app suggestion
     return (
-      <div className="mt-r" key={r.key}>
+      <div className={"mt-r" + (sugg && !kept ? " sugg" : "")} key={r.key}>
         <div className="mt-no">{r.no ? "#" + r.no : "—"}</div>
         <div className="mt-tt">
           {job ? <button type="button" className="mt-name" onClick={() => onOpenJob && onOpenJob(job)}>{r.title}</button> : <b>{r.title}</b>}
@@ -53708,8 +53757,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           {ed ? <small className="mt-dim">Edited by {M.firstOf(ed.by)}</small> : null}
           {sec === "hours" && r.pct != null ? <div className="mt-bar"><i style={{ width: Math.min(100, r.pct / 1.5) + "%", background: r.pct >= 100 ? OD_R : "var(--o)" }}/><b style={{ left: (100 / 1.5) + "%" }}/></div> : null}
           {r.days && r.days.length ? <div className="mt-days">{r.days.map(d => <span key={d.d}><b>{d.d}</b>: {d.who.join(", ")}</span>)}</div> : null}
-          {Object.values((md.rowPhotos || {})[r.key] || {}).some(ph => ph && odMtgPhotoUrl(ph.url)) ? <div className="mt-ph">{Object.entries(md.rowPhotos[r.key]).filter(([, ph]) => ph && odMtgPhotoUrl(ph.url)).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1).map(([pid, ph]) => (
-            <span key={pid}><a href={odMtgPhotoUrl(ph.url)} target="_blank" rel="noopener noreferrer" title={ph.name}><img src={odMtgPhotoUrl(ph.url)} alt={ph.name || "Photo"} loading="lazy"/></a>{!ro ? <button type="button" aria-label="Remove photo" onClick={() => delRowPhoto(r.key, pid)}>×</button> : null}</span>))}</div> : null}
+          {r.sop ? <a className="mt-lnk mt-sop" href={`/sops/${r.sop}.html`} target="_blank" rel="noopener noreferrer">Open the guide ›</a> : null}
+          {photoStrip(r.key)}
           {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(r.key, nid)}>Remove</button> : null}</li>)}</ul> : null}
           {!ro && editFor === r.key ? (
             <div className="mt-edit">
@@ -53732,13 +53781,15 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
             <div className="mt-rowacts">
               <button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
               <button type="button" className="mt-lnk" onClick={() => startEdit(r0, ed)}>Edit</button>
-              {kind === "lead" && (sec === "highlight" || sec === "lowlight") ? <label className="mt-lnk mt-file">{photoBusy === r.key ? "Uploading…" : "+ Photo"}<input type="file" accept="image/*" multiple disabled={photoBusy === r.key} onChange={e => { addRowPhotos(r.key, e.target.files); e.target.value = ""; }}/></label> : null}
+              {photoBtn(r.key)}
+              {sugg ? <button type="button" className="mt-lnk" aria-pressed={kept} onClick={() => keepRow(r.key, !kept)}>{kept ? "Kept ✓" : "Keep"}</button> : null}
               {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId, sec)}>Remove from section</button>
                 : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}
             </div>
           )) : null}
         </div>
         <div className="mt-rt">
+          {kept ? <span className="mt-pill kept">Kept</span> : null}
           {r.tag ? <span className={"mt-pill " + (r.bad ? "bad" : pillCls(r.tag))}>{r.tag}</span> : null}
           {sec === "schedule" && r.pct != null ? <span className="mt-big">{r.pct}%</span> : null}
           {sec === "hours" && r.pct != null ? <span className="mt-big" style={{ color: r.pct >= 100 ? OD_R : undefined }}>{r.pct}%<small>of bid</small></span> : null}
@@ -53776,7 +53827,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
                     <button type="button" className="mt-btn" onClick={() => addRowNote(r.key)}>Save</button>
                   </div>
                 ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
+                  {photoBtn(r.key)}
                   {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId, sec)}>Remove</button> : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}</div>) : null}
+                {photoStrip(r.key)}
               </td>
               <td>{r.status || (r.rough ? "" : r.tag || "")}</td>
               <td>{r.rough ? phaseCell(r.rough) : null}</td>
@@ -53820,7 +53873,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
                   </div>
                 ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(r.key); setNoteText(""); }}>+ Note</button>
                   <button type="button" className="mt-lnk" onClick={() => startEdit(r0, ed)}>Edit</button>
+                  {photoBtn(r.key)}
                   {r.addedId ? <button type="button" className="mt-lnk dim" onClick={() => removeAdded(r.addedId, sec)}>Remove</button> : <button type="button" className="mt-lnk dim" onClick={() => hideRow(sec, r)}>Hide</button>}</div>) : null}
+                {photoStrip(r.key)}
               </td>
               <td>{r.status || (r.rough ? "" : r.tag || "")}</td>
               <td>{mo ? stratMoney(mo.total) : null}{r.totalEst ? <small>Simpro estimate</small> : null}</td>
@@ -53851,7 +53906,9 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
           <button type="button" className="mt-btn" onClick={() => addRowNote(key)}>Save</button>
         </div>
       ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(key); setNoteText(""); }}>+ Note</button>
+        {photoBtn(key)}
         <button type="button" className="mt-lnk dim" onClick={() => hideRow("jobs", { key, title })}>Hide</button></div>) : null}
+      {photoStrip(key)}
     </>);
   };
   const jobsView = () => <OdJobCosts jobs={jobs} users={users} identity={identity} onOpenJob={onOpenJob} embed={{ hidden: costHidden, rowExtra: costExtra }}/>;
@@ -53869,7 +53926,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       const val = drafts["guy_" + r.uid] != null ? drafts["guy_" + r.uid] : saved;
       return [head, (
         <div className="mt-guy" key={r.key}>
-          <div><b>{r.title}</b>{r.detail ? <small>{r.detail}</small> : null}</div>
+          <div><b>{r.title}</b>{r.detail ? <small>{r.detail}</small> : null}{photoStrip(r.key)}{photoBtn(r.key)}</div>
           {ro ? <div className="mt-guyv">{saved || <span className="mt-dim">Nothing written</span>}</div>
             : <input id={"mt-guy-" + r.uid} value={val} onChange={e => typeGuy(r.uid, e.target.value)} placeholder={`How is ${M.firstOf(r.title)} doing?`} aria-label={`How ${r.title} is doing`}/>}
         </div>)];
@@ -53919,10 +53976,12 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   const secList = kind === "lead" ? cfg.secs.concat(M.LEAD_OLD.filter(([k]) => M.secHasContent(md, k))) : cfg.secs;
   const sections = secList.map(([sec, label], i) => {
     const typed = wed && M.TYPED.includes(sec);
-    const base = sec === "nextsteps" ? [] : (S[sec] || []);
-    // v657: the Friday Strategy keeps its hides and adds on the week's own record.
-    const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, strat ? { hidden: md.hidden || {}, added: md.added || {} } : typed ? { hidden: (prefs && prefs.hidden) || {}, added: md.added || {} } : prefs);
-    const hid = ((strat ? md.hidden : prefs && prefs.hidden) || {})[sec] || {};
+    const base = sec === "nextsteps" ? [] : rowsFor(sec);
+    // v657: the Friday Strategy keeps its hides and adds on the week's own record. v666: so do the typed sections' suggestions.
+    const prefHid = (prefs && prefs.hidden) || {};
+    const typedHid = typed ? { ...prefHid, [sec]: { ...(prefHid[sec] || {}), ...((md.hidden || {})[sec] || {}) } } : prefHid;
+    const { rows, hiddenCount } = sec === "nextsteps" ? { rows: [], hiddenCount: 0 } : M.applyPrefs(base, sec, strat ? { hidden: md.hidden || {}, added: md.added || {} } : typed ? { hidden: typedHid, added: md.added || {} } : prefs);
+    const hid = ((strat ? md.hidden : typedHid) || {})[sec] || {};
     const hiddenRows = Object.entries(hid).filter(([, h]) => h).map(([k, h]) => ({ key: k, title: (base.find(r => r.key === k) || {}).title || (h && h.title) || k }));
     const costsSec = kind === "foreman" && sec === "jobs";   // v652: the Job Costs page, not a row list
     const n = costsSec ? null : sec === "nextsteps" ? carried.length : kind === "lead" && sec === "schedule" ? new Set(rows.filter(r => !r.empty).map(r => r.no || r.key)).size : rows.length;
@@ -53995,7 +54054,7 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
                 </div>
               )) : <div className="mt-empty">Nothing carried from {prevDate.slice(5).replace("-", "/")}.</div>
             ) : costsSec ? jobsView() : (rows.length ? (kind === "foreman" && sec === "guys" ? guysView(rows) : kind === "lead" && sec === "hours" ? hoursView(sec, rows) : strat && sec === "numbers" ? numbersView(sec, rows) : (kind === "lead" || strat) && (sec === "schedule" || sec === "oncal") ? scheduleView(sec, rows) : rows.map(r => rowView(sec, r)))
-              : <div className="mt-empty">{typed ? "Nothing yet. Add an item or type in the notes below." : (sec === "hours" || sec === "numbers") && wed && !leadSrc.costs.length ? "Reading the Job Costs pull…" : strat && !(md.prefill && md.prefill.rows) ? "Not prefilled yet for this Friday." : "Nothing here this week."}</div>)}
+              : <div className="mt-empty">{typed ? (preSecs.includes(sec) ? "Nothing from the app this week. Add an item or type in the notes below." : "Nothing yet. Add an item or type in the notes below.") : (sec === "hours" || sec === "numbers") && wed && !leadSrc.costs.length ? "Reading the Job Costs pull…" : strat && !(md.prefill && md.prefill.rows) ? "Not prefilled yet for this Friday." : "Nothing here this week."}</div>)}
             {sec !== "nextsteps" && hiddenRows.length ? (
               <div className="mt-hid">
                 <button type="button" className="mt-lnk dim" onClick={() => setShowHidden(h => ({ ...h, [sec]: !h[sec] }))}>{hiddenRows.length} hidden · {showHidden[sec] ? "close" : "show"}</button>
@@ -54012,6 +54071,8 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
             <div className="mt-box">
               <span className="mt-lab">Section notes</span>
               <textarea value={noteVal} disabled={ro} onChange={e => typeNotes(sec, e.target.value)} onBlur={() => flushNotes(sec)} placeholder={ro ? "" : "Type notes for this section…"} aria-label={`${label} notes`}/>
+              {photoStrip("sec_" + sec)}
+              {photoBtn("sec_" + sec, "+ Add a photo to this section")}
               {actionsView(sec)}
             </div>
           </div>
@@ -54051,7 +54112,19 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         .od-mtg .mt-file{position:relative;overflow:hidden;cursor:pointer}.od-mtg .mt-file input{position:absolute;inset:0;opacity:0;cursor:pointer}
         .od-mtg .mt-ph{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.od-mtg .mt-ph span{position:relative}
         .od-mtg .mt-ph img{width:88px;height:66px;object-fit:cover;border-radius:8px;border:1px solid var(--cline);display:block}
-        .od-mtg .mt-ph button{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:999px;border:0;background:${B.ink};color:#fff;font-size:13px;line-height:20px;cursor:pointer;padding:0}
+        .od-mtg .mt-ph .mt-thumb{border:0;padding:0;background:none;cursor:zoom-in;display:block}
+        .od-mtg .mt-ph .mt-x{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:999px;border:0;background:${B.ink};color:#fff;font-size:13px;line-height:20px;cursor:pointer;padding:0}
+        .od-mtg .mt-lb{position:fixed;inset:0;z-index:2000;background:rgba(16,20,28,.88);display:flex;align-items:center;justify-content:center;padding:16px}
+        .od-mtg .mt-lbin{max-width:min(1100px,100%);max-height:100%;display:flex;flex-direction:column;gap:10px}
+        .od-mtg .mt-lbin img{max-width:100%;max-height:calc(100vh - 110px);object-fit:contain;border-radius:10px;background:#000}
+        .od-mtg .mt-lbbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:#fff;font-size:13px}
+        .od-mtg .mt-lbbar span{margin-right:auto;opacity:.85}
+        .od-mtg .mt-lbbar button,.od-mtg .mt-lbbar a{border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;border-radius:999px;padding:7px 14px;font-weight:700;font-size:13px;cursor:pointer;text-decoration:none}
+        .od-mtg .mt-lbbar .mt-lbx{background:#fff;color:${B.ink};border-color:#fff}
+        .od-mtg .mt-r.sugg{background:linear-gradient(90deg,rgba(37,99,201,.05),transparent 60%)}
+        .od-mtg .mt-pill.app{background:rgba(37,99,201,.12);color:${OD_B}}.od-mtg .mt-pill.idea{background:rgba(106,123,170,.15);color:#4A5A86}
+        .od-mtg .mt-pill.kept{background:${OD_B};color:#fff}
+        .od-mtg .mt-sop{display:inline-block;padding:4px 0 0}
         .od-mtg .mt-pick button{border:1px solid var(--cline);background:var(--card);border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:700;color:var(--cdim);cursor:pointer}
         .od-mtg .mt-pick button[aria-pressed="true"]{background:var(--o);border-color:var(--o);color:#fff}
         .od-mtg .mt-bar{position:relative;height:8px;border-radius:999px;background:var(--inset);margin-top:6px;max-width:360px}
@@ -54134,6 +54207,12 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         {!ro ? <button type="button" className="mt-btn ghost" disabled={prefillBusy} onClick={prefillNow}>{prefillBusy ? "Prefilling…" : md.prefill ? "Prefill again" : "Prefill now"}</button> : null}
         {md.prefill && Array.isArray(md.prefill.errors) && md.prefill.errors.length ? <small>Did not load: {md.prefill.errors.join("; ")}</small> : null}
       </div> : null}
+      {!strat && mdoc !== undefined ? <div className="mt-pre">
+        {md.prefill && md.prefill.at ? <span><b>Prefilled {odMtgAt(md.prefill.at)}</b>{md.prefill.by && md.prefill.by !== "Auto prefill" ? " by " + M.firstOf(md.prefill.by) : ""}. {ro ? "This is what the meeting saw." : kind === "lead" ? "Highlight, Lowlight and Training start with ideas from the app. The rest stays live." : kind === "foreman" ? "Team check and each guy's time off come from the app. Jobs stays live." : "Every section stays live this week. The saved copy is what this week shows later."}</span>
+          : <span><b>Not prefilled{ro ? "" : " yet"}.</b> {ro ? "This week was before prefills; the rows are today's." : "It fills itself the first time this week's meeting opens."}</span>}
+        {!ro ? <button type="button" className="mt-btn ghost" onClick={prefillNow}>{md.prefill ? "Prefill again" : "Prefill now"}</button> : null}
+        {md.prefill && Array.isArray(md.prefill.errors) && md.prefill.errors.length ? <small>Did not load: {md.prefill.errors.join("; ")}</small> : null}
+      </div> : null}
       {kind === "scramble" ? <section className="od-fold od-white mt-sec">
         <button type="button" className="od-foldh" aria-expanded={calOpen} onClick={() => setCalOpen(o => !o)}>
           <span className="mt-num">0</span>Calendar · all crews<small>Simpro bookings, forecasts and what isn't on the calendar yet</small>
@@ -54143,6 +54222,22 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
       </section> : null}
       <datalist id="mt-joblist">{(jobs || []).filter(j => j && !j.archived && j.name).slice(0, 400).map(j => <option key={j.id} value={j.simproNo ? `#${j.simproNo} ${j.name}` : j.name}/>)}</datalist>
       {sections}
+      {lightbox ? (() => { const list = photosOf(lightbox.key); if (!list.length) return null;
+        const i = Math.min(lightbox.i, list.length - 1), [pid, ph] = list[i], url = odMtgPhotoUrl(ph.url);
+        return (
+          <div className="mt-lb" role="dialog" aria-modal="true" aria-label="Photo" onClick={() => setLightbox(null)}>
+            <div className="mt-lbin" onClick={e => e.stopPropagation()}>
+              <img src={url} alt={ph.name || "Photo"}/>
+              <div className="mt-lbbar">
+                <span>{i + 1} of {list.length}{ph.by ? " · " + M.firstOf(ph.by) : ""}</span>
+                {list.length > 1 ? <><button type="button" onClick={() => setLightbox({ key: lightbox.key, i: (i + list.length - 1) % list.length })}>‹ Back</button>
+                  <button type="button" onClick={() => setLightbox({ key: lightbox.key, i: (i + 1) % list.length })}>Next ›</button></> : null}
+                <a href={url} target="_blank" rel="noopener noreferrer">Full size</a>
+                {!ro ? <button type="button" onClick={() => { if (!window.confirm("Delete this photo from the meeting?")) return; delRowPhoto(lightbox.key, pid); setLightbox(list.length > 1 ? { key: lightbox.key, i: Math.max(0, i - (i === list.length - 1 ? 1 : 0)) } : null); }}>Delete</button> : null}
+                <button type="button" className="mt-lbx" onClick={() => setLightbox(null)}>Close</button>
+              </div>
+            </div>
+          </div>); })() : null}
     </div>
   );
 }

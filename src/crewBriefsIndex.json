@@ -1,0 +1,214 @@
+[
+ {
+  "v": 666,
+  "heads": [
+   {
+    "h": "NEW on the dashboard meetings (office and leads)",
+    "first": "The Scramble, Lead and Foreman Meetings fill themselves from the app the first time each week's meeting opens. Prefill again at the top makes a fresh one."
+   },
+   {
+    "h": "NEW photos on every meeting",
+    "first": "+ Photo under any item, and + Add a photo to this section under the notes. On a phone you can take one or pick one."
+   }
+  ]
+ },
+ {
+  "v": 664,
+  "heads": [
+   {
+    "h": "FIXED on the crew calendar (office)",
+    "first": "The box that opens when you tap a job now always fits on the screen. Before, on a job low on the page, the Time buttons, Move, Book and Remove were cut off at the bottom. If the box is taller than the"
+   }
+  ]
+ },
+ {
+  "v": 663,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "Untick everybody on a job and it stays on its day in red, \"Nobody on it\". Tap it to add people."
+   },
+   {
+    "h": "FIXED",
+    "first": "Two half days on two jobs no longer show as double-booked."
+   }
+  ]
+ },
+ {
+  "v": 662,
+  "heads": [
+   {
+    "h": "FIXED on the crew calendar",
+    "first": "The auto-schedule can no longer put someone on a job when they're already booked somewhere else that day. Two rare cases could still do it: a job that started late after a return trip and ran into an "
+   }
+  ]
+ },
+ {
+  "v": 661,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar",
+    "first": "Nobody can be double-booked anymore. If someone is already on a job at that time, or off, they're grayed out and can't be added, and Simpro booking refuses it too."
+   }
+  ]
+ },
+ {
+  "v": 660,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar",
+    "first": "Every job on the calendar shows its time, like 7:00 AM–9:00 AM."
+   }
+  ]
+ },
+ {
+  "v": 659,
+  "heads": [
+   {
+    "h": "FIXED for the office: pairs on the Crew Board",
+    "first": "Anyone can be paired with anyone now: a foreman with an apprentice, two leads, or people on different crews."
+   },
+   {
+    "h": "NEW on the crew calendar",
+    "first": "Approved time off shows on each day (\"Off: names\"). Nobody gets scheduled on a day they're off."
+   }
+  ]
+ },
+ {
+  "v": 658,
+  "heads": [
+   {
+    "h": "NEW for the office: pairs on the Crew Board",
+    "first": "Settings › Crew Board: tap someone, then Paired with, to set who they go out with. A foreman, jr foreman or lead pairs with an apprentice or crew member on the same crew."
+   },
+   {
+    "h": "NEW on the crew calendar",
+    "first": "Tap + more on a busy day and that day's jobs open right over the calendar. Esc or a tap outside closes it."
+   }
+  ]
+ },
+ {
+  "v": 657,
+  "heads": [
+   {
+    "h": "NEW for the owners: Friday Strategy on the dashboard",
+    "first": "Dashboard › Meetings has a fourth button, Friday Strategy · Fri 8:00. Only admins see it (owners and the office)."
+   },
+   {
+    "h": "NEW on every meeting",
+    "first": "Edit under any row changes its words for that week's meeting. The job itself doesn't change."
+   }
+  ]
+ },
+ {
+  "v": 656,
+  "heads": [
+   {
+    "h": "NEW for the office: the crew calendar",
+    "first": "Dashboard › Meetings and Forecast › Calendar now show a real calendar: a week view with each day's jobs, a Month view, and a 4 months view to see how far out work is scheduled."
+   }
+  ]
+ },
+ {
+  "v": 655,
+  "heads": [
+   {
+    "h": "NEW on My Day (everyone)",
+    "first": "Team phone list: a new card on My Day. It starts closed. Tap Open."
+   },
+   {
+    "h": "NEW when you send a PO (Send to CED, New order from the bid)",
+    "first": "Under the CC box, tap Pick from team. Search a name and tick who to copy, up to 5. Tap Done picking."
+   }
+  ]
+ },
+ {
+  "v": 654,
+  "heads": [
+   {
+    "h": "NEW on My Day (crew, leads, jr. foremen and foremen)",
+    "first": "Team rating and goals: a new card at the top of My Day, above My role. It starts closed. Tap Open."
+   }
+  ]
+ },
+ {
+  "v": 653,
+  "heads": [
+   {
+    "h": "NEW (My Day: My jobsite)",
+    "first": "Leads, jr. foremen and foremen: if you lead a job and someone is booked on it in Simpro today or tomorrow, a My jobsite card shows at the top of My Day."
+   }
+  ]
+ },
+ {
+  "v": 652,
+  "heads": [
+   {
+    "h": "NEW (Dashboard › Meetings: the Foreman Meeting)",
+    "first": "Open /dashboard › Meetings and tap Foreman Meeting · Wed 7:00 at the top. One page for Koy and all three foremen."
+   }
+  ]
+ },
+ {
+  "v": 651,
+  "heads": [
+   {
+    "h": "NEW (Dashboard: Meetings tab, the Scramble calendar)",
+    "first": "Open /dashboard, tap Meetings. The Calendar · all crews fold is at the top of the Weekly Scramble."
+   }
+  ]
+ },
+ {
+  "v": 650,
+  "heads": [
+   {
+    "h": "CHANGED (Dashboard › Meetings › Lead Meeting, now laid out like the old Doc)",
+    "first": "Order is the Doc's: Notes, Highlight, Lowlight, Training, Schedule, Upcoming, Hours and margin, Crew out, Action items."
+   },
+   {
+    "h": "REMOVED from the Lead Meeting: Open items from the watches, Needs, Hiring, When it comes up. (A week that already had notes typed in one of them still shows it at the bottom.)",
+    "first": ""
+   }
+  ]
+ },
+ {
+  "v": 649,
+  "heads": [
+   {
+    "h": "NEW (Dashboard › Meetings: the Lead Meeting)",
+    "first": "Open /dashboard › Meetings and tap Lead Meeting · Wed 6:30 at the top. The page remembers which meeting you picked."
+   }
+  ]
+ },
+ {
+  "v": 648,
+  "heads": [
+   {
+    "h": "NEW (Dashboard: Meetings tab, the Weekly Scramble)",
+    "first": "Open /dashboard and tap Meetings (between People and Automations)."
+   }
+  ]
+ },
+ {
+  "v": 647,
+  "heads": [
+   {
+    "h": "NEW (Dashboard: the four weekly meeting pages)",
+    "first": "Open /dashboard. The closed row at the top of the Overview, Meeting and planning artifacts, now has 10 links instead of 6. Tap it to open the list."
+   },
+   {
+    "h": "FIXED (Return trips)",
+    "first": "Signing off a return trip now also clears its \"needs scheduling\" mark, so finished trips stop showing up as needing a date. Trips signed off before today keep the old mark until someone touches them."
+   }
+  ]
+ },
+ {
+  "v": 644,
+  "heads": [
+   {
+    "h": "NEW (Quick jobs: Bid items and Material orders)",
+    "first": "Open any quick job. Under Material there are now two new folded sections: Bid items and Material orders."
+   }
+  ]
+ }
+]

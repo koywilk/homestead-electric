@@ -159,5 +159,45 @@ const gd = F.guys.map(r => r.group.split(" ")[0] + ":" + r.title).join("|");
 ok(gd === "Keegan:Gage Lund|Daegan:Louis Hoffman|Daegan:Callen Jakeman|Daegan:James Livingston", "Guys: each of the three foremen's active crew, jr. foremen first; other crews and former crew left out");
 ok(F.guys.every(r => /^g_/.test(r.key) && r.uid), "each guy has a stable key for this week's line");
 ok(F.team.length === 0, "Team check starts empty");
+
+// ── v666: prefills for the Scramble, Lead and Foreman Meetings; training ideas, field and app ──
+{
+  const T = new Date(2026, 10, 20, 9);   // Friday 11/20; the Lead Meeting was Wed 11/18, last one 11/11
+  const pj = [
+    { id: "a", simproNo: "1291", name: "Ashcraft", foreman: "Keegan Wilkinson", roughStatus: "complete", roughStatusDate: "2026-11-16", finishStatus: "inprogress", finishUpdates: [{ date: "2026-11-05", text: "x" }],
+      roughInspectionAttempts: [{ date: "11/18/2026", result: "fail", items: [{ text: "Missing <b>GFCI</b> in garage" }] }, { date: "11/19/2026", result: "pass" }],
+      qcPunch: { main: { general: [{ text: "Plate missing kitchen", addedAt: "2026-11-17" }, { text: "Customer wants an added outlet", addedAt: "2026-11-17" }] } },
+      finishPunch: { upper: { rooms: [{ items: [{ text: "cover plate crooked", addedAt: "2026-11-16" }, { text: "old one", addedAt: "2026-11-01" }] }] } },
+      returnTrips: [{ id: "t1", date: "2026-11-12", scope: "Swap plate on island", signedOff: true, signedOffDate: "2026-11-17" }, { id: "t2", date: "2026-11-10", scope: "Fan not working" }] },
+    { id: "b", simproNo: "1277", name: "Pierce", finishPunch: { main: { general: [{ text: "Plate cracked", addedAt: "2026-11-15" }] } } },
+  ];
+  const L = M.leadSuggestions({ jobs: pj, today: T, meeting: "2026-11-18", briefs: [], users: [] });
+  ok(L.highlight.some(r => r.tag === "Passed rough" && r.no === "1291") && L.highlight.some(r => r.tag === "Rough-in done") && L.highlight.some(r => r.tag === "Trip done"), "Highlight: passed inspection, phase done, trip done since last meeting");
+  ok(L.lowlight.some(r => r.tag === "Failed rough" && /GFCI in garage/.test(r.detail) && !/<b>/.test(r.detail)), "Lowlight: a failed inspection with its items, HTML stripped");
+  ok(L.lowlight.some(r => r.tag === "Trip past its date" && /trip 2/.test(r.title)), "Lowlight: a return trip past its date, not finished");
+  const tr = L.training;
+  ok(tr.some(r => r.title === "Inspection: GFCI protection" && /#1291 Ashcraft/.test(r.detail)), "Training: what a failed inspection called out, with the job number and name");
+  ok(tr.some(r => r.title === "Repeat fix: Cover plates and trim" && /2 jobs/.test(r.detail)), "Training: the same fix on 3+ items across 2+ jobs");
+  ok(tr.some(r => /^QC walk/.test(r.title)) && tr.some(r => r.title === "Catching change orders"), "Training: QC walk issues and work that reads like a change order");
+  ok(tr.filter(r => r.tag === "Standard").length === 1 && tr.find(r => r.tag === "Standard").sop, "Training: this week's standard, one crew guide, always there");
+  ok(tr.filter(r => r.tag !== "App").length <= 5 && tr.every(r => r.key && !/\$/.test(r.detail || "")), "Training: five field ideas at most, keyed, no dollars");
+  const A = M.appIdeas({ jobs: pj, needs: [{ status: "open", dueDate: "2026-11-10" }, { status: "done", dueDate: "2026-11-10" }],
+    briefs: [{ v: 660, heads: [{ h: "NEW on the crew calendar", first: "x" }, { h: "NEW on My Day (everyone)", first: "Team phone list" }] }, { v: 650, heads: [{ h: "NEW on Rough", first: "old" }] }], sinceVersion: 655, today: T });
+  ok(A.length <= 3 && A.every(r => r.tag === "App" && /^App: /.test(r.title)), "App ideas: three at most, marked App");
+  ok(A[0].title === "App: My Day" && /v660/.test(A[0].detail), "App ideas: what shipped for the field since last week's version, office-only sections left out");
+  ok(!A.some(r => /old/.test(r.detail)), "App ideas: briefs at or before last week's version are left out");
+  ok(A.some(r => r.key === "ta_upd" && /#1291 Ashcraft/.test(r.detail)), "App ideas: a job in progress with no daily update in a week");
+  ok(M.appIdeas({ jobs: [], briefs: [{ v: 1, heads: [{ h: "FIXED", first: "y" }] }], today: T })[0].title === "App: What changed in v1", "App ideas: a bare FIXED heading still reads");
+  const Pf = M.buildPrefill("lead", { jobs: pj, today: T, meeting: "2026-11-18", users: [], schedules: [], upcoming: [] });
+  ok(["schedule", "upcoming", "hours", "crewout", "highlight", "lowlight", "training"].every(k => Array.isArray(Pf.rows[k])), "Lead prefill saves every section's rows");
+  ok(JSON.stringify(Pf).indexOf("undefined") < 0 && Pf.rows.training.length >= 1, "prefill rows are plain data for Firestore");
+  ok(M.PREFILL_SECS.lead.join() === "highlight,lowlight,training" && M.PREFILL_SECS.foreman.join() === "team", "suggestion sections: Lead Highlight / Lowlight / Training, Foreman Team check");
+  const Sp = M.buildPrefill("scramble", { jobs: pj, today: T, schedules: [], upcoming: [] });
+  ok(["schedule", "trips", "waiting", "upcoming", "watches", "material"].every(k => Array.isArray(Sp.rows[k])), "Scramble prefill saves its sections");
+  const fu = [{ id: "keegan", name: "Keegan Wilkinson", title: "foreman", active: true }, { id: "gage", name: "Gage Lund", title: "lead", foremanId: "keegan", active: true }];
+  const Fs = M.foremanSuggestions({ jobs: pj, users: fu, today: T, meeting: "2026-11-18", pto: [{ name: "Gage Lund", start: "11/23/2026", end: "11/24/2026" }], requests: [], costs: [], totals: {} });
+  ok(Fs.team.length === 1 && /Out: Gage Nov 23–Nov 24/.test(Fs.team[0].detail) && /1 failed inspection/.test(Fs.team[0].detail), "Team check: a line per crew, who's out and failed inspections");
+  ok((Fs.guyNotes.gage || [])[0] === "Out Nov 23–Nov 24", "Guys: time off under the guy's name");
+}
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("meeting-model-test: all passed");
