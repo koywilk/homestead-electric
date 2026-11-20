@@ -893,5 +893,30 @@ function viewOf(V, users, opts) {
     notOnCalendar: (V.list || []).slice(0, 300).map(it => ({ key: it.key, jobNo: String(it.no || ""), job: String(it.name || ""), what: String(it.tag || ""), ...(it.off ? { removed: true, ...(it.off.why ? { waitingOn: it.off.why } : {}) } : {}), ...((it.flags || []).length ? { flags: it.flags } : {}) })) };
 }
 
-module.exports = { chipsOf, winsOf, busyOf, dayCounts, whyOf, viewOf, fcOf, isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
+// ── What a block was, in a few words of data (v673, the learning loop) ───────
+// One row per day: the day, who, and the clock time. Used to record what Duet suggested next to what a person ended up
+// with, and what a block was before and after a hand edit. Small on purpose (14 days, names only).
+function planSummary(plan) {
+  if (!plan) return null;
+  if (plan.off) return { off: true, ...(plan.why ? { why: String(plan.why).slice(0, 60) } : {}) };
+  const names = (plan.staff || []).map(x => x && x.name).filter(Boolean);
+  return slotsOf(plan).slice(0, 14).map(d => ({ d: d.date, n: (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names).slice(0, 12), t: d.start, e: hhmmOf(d.to), ...(d.none ? { none: true } : {}) }));
+}
+// What changed between two summaries, in words, so a reader (Duet, or a person) sees the point at once.
+function planDiff(was, now) {
+  const A = Array.isArray(was) ? was : [], B = Array.isArray(now) ? now : [], out = [];
+  if (now && now.off) return ["taken off the calendar" + (now.why ? ` (${now.why})` : "")];
+  if (now && now.backToAuto) return ["handed back to the auto-schedule"];
+  const da = A.map(x => x.d), db = B.map(x => x.d);
+  if (da.join() !== db.join()) out.push(`days ${da.length ? da.join(", ") : "none"} → ${db.length ? db.join(", ") : "none"}`);
+  const ppl = (l) => [...new Set(l.flatMap(x => x.n || []))].sort(), pa = ppl(A), pb = ppl(B);
+  const gone = pa.filter(n => !pb.includes(n)), came = pb.filter(n => !pa.includes(n));
+  if (gone.length) out.push(`took off ${gone.map(firstOf).join(", ")}`);
+  if (came.length) out.push(`put on ${came.map(firstOf).join(", ")}`);
+  const ta = A[0] ? `${A[0].t}-${A[0].e}` : "", tb = B[0] ? `${B[0].t}-${B[0].e}` : "";
+  if (ta && tb && ta !== tb) out.push(`time ${ta} → ${tb}`);
+  return out.length ? out : ["no change to who, when or how long"];
+}
+
+module.exports = { planSummary, planDiff, chipsOf, winsOf, busyOf, dayCounts, whyOf, viewOf, fcOf, isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
   DAY0, winOf, pdOf, hhmmOf, md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };

@@ -29,7 +29,7 @@ function world(over) {
     db: { collection: (n) => n === "jobs" ? { get: async () => ({ docs: w.jobs.map(d => ({ id: d.id, data: () => d.data })) }) }
       : n === "settings" ? { doc: (id) => ({ get: async () => docOf(id === "crewPTO" ? { list: w.pto } : id === "phaseHours" ? { jobs: { "900": { f: [20, 100] }, "901": { f: [20, 100] } } } : id === "upcoming_jobs" ? { items: [] } : {}) }) }
       : { doc: (id) => ({ get: async () => docOf(w.prefs), set: async (patch, opt) => { w.sets.push({ id, patch, opt });
-          ["cal", "duet"].forEach(k => { if (patch[k]) { w.prefs[k] = { ...(w.prefs[k] || {}) }; Object.keys(patch[k]).forEach(x => { if (patch[k][x] === "__DELETE__") delete w.prefs[k][x]; else w.prefs[k][x] = patch[k][x]; }); } }); } }) } } };
+          ["cal", "duet", "lessons"].forEach(k => { if (patch[k]) { w.prefs[k] = { ...(w.prefs[k] || {}) }; Object.keys(patch[k]).forEach(x => { if (patch[k][x] === "__DELETE__") delete w.prefs[k][x]; else w.prefs[k][x] = patch[k][x]; }); } }); } }) } } };
   return w;
 }
 const E = (person, date, start, end) => ({ person, date, start, end });
@@ -124,9 +124,37 @@ const viewOf = async (w, from, to) => R.assemble({ ...(await R.gather(w.deps)), 
   v = await viewOf(w, "2026-11-23", "2026-11-27");
   ok(v.duetOutcomes.length === 2 && v.duetOutcomes[0].proposalId === "dpB" && v.duetOutcomes[0].outcome === "removed" && v.duetOutcomes[1].outcome === "kept", "kept / changed / removed is handed back to Duet, newest first");
 
+  // ── the learning loop: what was suggested vs. kept, hand edits, and rules ──
+  {
+    const SC = require("../src/scrambleCal.js");
+    const was = SC.planSummary({ s: "2026-11-24", hours: 20, crew: 2, staff: [{ name: "Trever Worley" }, { name: "Callen Jakeman" }] }), now = SC.planSummary({ s: "2026-11-25", hours: 10, crew: 2, staff: [{ name: "Louis Hoffman" }, { name: "James Livingston" }], t: "07:00", e: "12:00" });
+    ok(was.length === 1 && was[0].d === "2026-11-24" && was[0].n.join() === "Trever Worley,Callen Jakeman" && was[0].t === "07:00" && was[0].e === "17:00", "a block is summed up as its days, people and clock time");
+    const df = SC.planDiff(was, now).join(" | ");
+    ok(/days 2026-11-24 → 2026-11-25/.test(df) && /took off Callen, Trever/.test(df) && /put on James, Louis/.test(df) && /time 07:00-17:00 → 07:00-12:00/.test(df), "the difference is said in words: days, who came off, who went on, the time");
+    ok(SC.planDiff(was, { off: true, why: "Waiting on material" })[0] === "taken off the calendar (Waiting on material)" && SC.planDiff(was, { backToAuto: true })[0] === "handed back to the auto-schedule" && SC.planDiff(was, was)[0] === "no change to who, when or how long", "removed, handed back and unchanged each read plainly");
+    w = world({ prefs: {
+      duetDone: { dpA: { key: "j_J1_f", job: "#900 Suggest test", what: "Finish", outcome: "changed", by: "Koy Wilkinson", at: "2026-11-23T16:00:00Z", reason: "They were open.", why: "Wrong crew", was, now, changed: SC.planDiff(was, now) } },
+      calLog: { "j_J2_f_20261123": { key: "j_J2_f", job: "#901 Other job", what: "Finish", src: "auto", by: "Koy Wilkinson", at: "2026-11-23T18:00:00Z", was, now, changed: SC.planDiff(was, now) }, old: { key: "x", at: "2026-11-01T00:00:00Z", src: "plan", now: { backToAuto: true } } },
+      lessons: { a: { text: "Keep Louis and James together on finishes", from: "Duet", status: "approved", by: "Koy Wilkinson", at: "2026-11-20T00:00:00Z" }, b: { text: "Don't put Colby's crew on Kamas jobs", evidence: "Changed 3 of 3 times", from: "Duet", status: "proposed", at: "2026-11-21T00:00:00Z" } } } });
+    v = await viewOf(w, "2026-11-23", "2026-11-27");
+    const o = v.duetOutcomes[0];
+    ok(o.outcome === "changed" && o.personsReason === "Wrong crew" && o.duetsReason === "They were open." && o.suggested[0].n[0] === "Trever Worley" && o.endedUpWith[0].n[0] === "Louis Hoffman" && o.whatChanged.length === 4, "Duet gets back what it suggested, what the person ended up with, what changed and why");
+    ok(v.handEdits.length === 2 && v.handEdits[0].job === "#901 Other job" && v.handEdits[0].before === "the auto-schedule's guess" && v.handEdits[0].whatChanged.length === 4 && v.handEdits[1].before === "a plan a person placed", "a person's own edits come back too, newest first, with what the block was before");
+    ok(v.schedulingRules.length === 1 && v.schedulingRules[0].rule.startsWith("Keep Louis") && v.rulesWaitingOnKoy.length === 1 && v.rulesWaitingOnKoy[0].evidence === "Changed 3 of 3 times", "approved rules are handed back as rules; a proposed one is listed apart as waiting");
+    w = world();
+    let ls = await S.lesson({ ...w.deps, id: () => "lsTEST" }, { rule: "Keep Trever and Callen on Daegan's finishes", evidence: "Kept 4 of 4 suggestions with that pair; changed 2 of 2 without." });
+    ok(ls.saved && ls.status === "proposed" && w.sets.length === 1 && w.sets[0].patch.lessons.lsTEST.status === "proposed" && w.sets[0].patch.lessons.lsTEST.from === "Duet" && Object.keys(w.sets[0].patch).sort().join() === "lessons,saved_by,updated_at", "a rule Duet proposes is saved as proposed, and nothing else is touched");
+    w.prefs.lessons = { lsTEST: w.sets[0].patch.lessons.lsTEST };
+    ok((await S.lesson(w.deps, { rule: "keep trever and callen on daegan's finishes", evidence: "Seen it again this week, three more times." })).noop && w.sets.length === 1, "the same rule twice is a no-op");
+    for (const [args, re] of [[{ rule: "short", evidence: "plenty of evidence here" }, /one full line/], [{ rule: "A perfectly good rule to follow", evidence: "no" }, /what you saw/]]) {
+      threw = ""; try { await S.lesson(world().deps, args); } catch (e) { threw = e.message; }
+      ok(re.test(threw), "a rule is refused: " + re.source);
+    }
+  }
+
   // ── never a booking, a job write, a stage or a status ──
   const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleSuggest.js"), "utf8").replace(/\/\/[^\n]*/g, "");
-  ok(!/"POST"|"PATCH"|"DELETE"|collection\("jobs"\)\.doc|Status\s*:|Stage\s*:/.test(src) && (src.match(/\.set\(/g) || []).length === 3 && !/\.update\(|\)\.add\(|runTransaction|batch\(/.test(src), "the suggest door writes only the calendar's plans doc: no Simpro write, no job write, no stage or status");
+  ok(!/"POST"|"PATCH"|"DELETE"|collection\("jobs"\)\.doc|Status\s*:|Stage\s*:/.test(src) && (src.match(/\.set\(/g) || []).length === 4 && !/\.update\(|\)\.add\(|runTransaction|batch\(/.test(src), "the suggest door writes only the calendar's plans doc: no Simpro write, no job write, no stage or status");
 
   if (fails) { console.error(fails + " failed"); process.exit(1); }
   console.log("scramble-suggest-test: all passed");

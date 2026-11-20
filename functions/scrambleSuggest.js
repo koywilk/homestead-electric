@@ -119,4 +119,22 @@ async function wait(deps, args) {
     message: "It is under Waiting on the crew calendar and the auto-schedule leaves it alone. The job's status was not changed. A person ticks Wait cleared to put it back." };
 }
 
-module.exports = { MAX_PROPOSALS, WAIT_WHY, findItem, planFromRows, propose, withdraw, wait, Refused };
+// A rule Duet proposes about how Koy schedules, from what it saw in duetOutcomes and handEdits. It is saved as
+// "proposed" and does nothing until a person approves it on the calendar; only approved rules are handed back as rules.
+// deps: { db, id?() }. args: { rule, evidence }.
+const MAX_LESSONS = 60;
+async function lesson(deps, args) {
+  const a = args || {}, text = String(a.rule || "").replace(/\s+/g, " ").trim(), evidence = String(a.evidence || "").replace(/\s+/g, " ").trim();
+  if (text.length < 12) throw new Refused("Write the rule as one full line, e.g. \"Keep Louis and James together on finishes\".");
+  if (text.length > 240) throw new Refused("Keep the rule to one line (240 characters).");
+  if (evidence.length < 12) throw new Refused("Say what you saw that makes you think so (which changes, how many times).");
+  const ref = deps.db.collection("meetings").doc("scramble__prefs"), snap = await ref.get(), cur = (snap.exists && (snap.data() || {}).lessons) || {};
+  const same = Object.keys(cur).find(k => String((cur[k] || {}).text || "").toLowerCase() === text.toLowerCase());
+  if (same) return { ok: true, noop: true, id: same, status: cur[same].status || "proposed", message: cur[same].status === "approved" ? "That rule is already approved." : "That rule is already waiting on a person." };
+  if (Object.keys(cur).length >= MAX_LESSONS) throw new Refused(`There are already ${MAX_LESSONS} rules. Ask Koy to clear some first.`);
+  const id = deps.id ? deps.id() : "ls" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), at = new Date().toISOString();
+  await ref.set({ lessons: { [id]: { text, evidence: evidence.slice(0, 300), from: "Duet", at, status: "proposed" } }, updated_at: at, saved_by: "Duet (rule)" }, { merge: true });
+  return { ok: true, saved: true, id, status: "proposed", rule: text, message: "Saved as a proposed rule. It does nothing until a person approves it on the crew calendar, under How you schedule." };
+}
+
+module.exports = { MAX_PROPOSALS, MAX_LESSONS, WAIT_WHY, findItem, planFromRows, propose, withdraw, wait, lesson, Refused };

@@ -1,5 +1,14 @@
 [
  {
+  "v": 673,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "\"How you schedule\": a fold on the left with the rules Duet follows when it suggests blocks. Duet can propose a rule when it sees a pattern. Nothing counts until an admin taps Approve. Admins can also "
+   }
+  ]
+ },
+ {
   "v": 672,
   "heads": [
    {
@@ -198,15 +207,6 @@
    {
     "h": "NEW on My Day (crew, leads, jr. foremen and foremen)",
     "first": "Team rating and goals: a new card at the top of My Day, above My role. It starts closed. Tap Open."
-   }
-  ]
- },
- {
-  "v": 653,
-  "heads": [
-   {
-    "h": "NEW (My Day: My jobsite)",
-    "first": "Leads, jr. foremen and foremen: if you lead a job and someone is booked on it in Simpro today or tomorrow, a My jobsite card shows at the top of My Day."
    }
   ]
  }

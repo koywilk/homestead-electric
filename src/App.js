@@ -52090,6 +52090,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const [sel, setSel] = useState("");                  // item key tapped
   const [picked, setPicked] = useState("");            // item key being moved (press and hold, Move…, or a list card)
   const [q, setQ] = useState("");
+  const [lessOpen, setLessOpen] = useState(false), [ruleTxt, setRuleTxt] = useState("");   // v673: the "How you schedule" fold
+  const [whyAsk, setWhyAsk] = useState(null);          // v673: { id, job, outcome } — one skippable "why?" after changing or removing Duet's suggestion
   const [friEdit, setFriEdit] = useState("");          // v671: the Friday whose "who said yes" list is open
   const [swap, setSwap] = useState(null);              // v663: { key, day, n, mv } asking "move them here instead?"
   const [bk, setBk] = useState(null);                  // booking: { key, staff:Set, preview, busy, err, done }
@@ -52250,10 +52252,28 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // Saving: every move, copy or change is a plan everyone sees right away.
   // v670: what a person did with a block Duet proposed (kept / changed / removed), so Duet can see it in its calendar
   // read. Any change a person makes to that job settles the proposal; it never lingers under a plan.
-  const settleDuet = (key, outcome) => { const dz = duetP[key]; if (!dz) return; const it = byKey[key], id = String(dz.id || key).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 60) || "p";
-    savePrefs({ duet: { [key]: deleteField() }, duetDone: { [id]: { key, job: it ? label(it) : "", outcome, by: me, at: nowIso(), reason: String(dz.why || "").slice(0, 200) } } }); };
+  // v673 (Koy 2026-11-20: "Will Duet learn from the changes that I make ... and I wanted to learn from what I edit
+  // myself, also"): the record now holds what Duet suggested next to what the person ended up with (who, which days,
+  // what hours) and the difference in words, and asks once, skippably, why.
+  const settleDuet = (key, outcome, p) => { const dz = duetP[key]; if (!dz) return; const it = byKey[key], id = String(dz.id || key).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 60) || "p";
+    const was = SC.planSummary(it && it.auto && it.auto.src === "duet" ? it.auto : null), now = outcome === "removed" && !p ? null : SC.planSummary(p);
+    savePrefs({ duet: { [key]: deleteField() }, duetDone: { [id]: { key, job: it ? label(it) : "", what: it ? it.tag : "", outcome, by: me, at: nowIso(), reason: String(dz.why || "").slice(0, 200),
+      ...(was ? { was } : {}), ...(now ? { now } : {}), ...(outcome === "changed" && was && now ? { changed: SC.planDiff(was, now).slice(0, 6) } : {}) } } });
+    if (outcome !== "kept") setWhyAsk({ id, job: it ? label(it) : "", outcome }); };
+  // Every hand edit of a block, kept as a short log Duet can read (prefs.calLog): what it was (the auto-schedule's guess,
+  // Duet's suggestion, or an earlier plan) and what the person made it. One entry per block per day: the first "was" of
+  // the day is kept and "now" follows the latest change, so ticking five people is one line, not five.
+  const logEdit = (key, p) => { const it = byKey[key]; if (!it) return; const f0 = fc(it);
+    const id = (String(key).replace(/[^A-Za-z0-9_-]/g, "_") + "_" + String(V.today).replace(/-/g, "")).slice(0, 90), all = (prefs && prefs.calLog) || {}, prev = all[id] || null;
+    const src = prev ? prev.src : !f0 ? "list" : it.plan ? "plan" : f0.src === "duet" ? "duet" : "auto";
+    const was = prev ? prev.was || null : SC.planSummary(f0), now = p ? SC.planSummary(p) : { backToAuto: true };
+    const entry = { key, job: label(it), what: it.tag, src, by: me, at: nowIso(), ...(was ? { was } : {}), now, changed: SC.planDiff(was, now).slice(0, 6) };
+    const patch = { [id]: entry }, ids = Object.keys(all);
+    if (ids.length > 160) ids.sort((a, b) => String((all[a] || {}).at || "") < String((all[b] || {}).at || "") ? -1 : 1).slice(0, ids.length - 140).forEach(x => { if (x !== id) patch[x] = deleteField(); });
+    savePrefs({ calLog: patch }); };
   const commit = (key, p, outcome) => {
-    if (p) settleDuet(key, outcome || (p.off ? "removed" : "changed"));
+    if (p) settleDuet(key, outcome || (p.off ? "removed" : "changed"), p);
+    logEdit(key, p);
     setDrafts(d => ({ ...d, [key]: p }));
     if (p && p.off) savePrefs({ cal: { [key]: { off: true, ...(p.why ? { why: String(p.why).slice(0, 60), note: String(p.note || "").slice(0, 200) } : {}), by: me, at: nowIso() } } });
     else if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), ...(SC.hoursOf(p.t) != null ? { t: p.t } : {}), ...(SC.hoursOf(p.t) != null && SC.hoursOf(p.e) != null ? { e: p.e } : {}), pdl: Object.entries(p.pd || {}).slice(0, 60).map(([d, o]) => ({ d, ...(o && o.staff ? { n: o.staff.map(x => x && x.name).filter(Boolean) } : {}), ...(o && o.t && o.e ? { t: o.t, e: o.e } : {}), ...(o && o.skip ? { x: 1 } : {}), ...(o && o.none && !(o.staff && o.staff.length) ? { z: 1 } : {}) })), by: me, at: nowIso() } } });
@@ -52315,7 +52335,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // Keep what Duet proposed: it becomes a plan, as it is. Remove: the proposal goes and the auto-schedule lays its own guess.
   const keepDuet = (it) => { const f = it.auto; if (!f || f.src !== "duet") return; const p = { s: f.s, hours: f.hours, crew: f.crew, staff: f.staff || [], ...(f.pd ? { pd: f.pd } : {}) };
     if (!okOrSay(it.key, p)) return; commit(it.key, p, "kept"); say(`${label(it)} kept as Duet suggested. It's a plan now and can be booked.`); };
-  const dropDuet = (it) => { settleDuet(it.key, "removed"); say(`Duet's suggestion for ${label(it)} is removed.`); };
+  const dropDuet = (it) => { settleDuet(it.key, "removed", null); say(`Duet's suggestion for ${label(it)} is removed.`); };
   const backToAuto = (it) => { commit(it.key, null); setBk(null); setCopyOpen(false); if (it.copyOf) setSel(""); };
   // Remove: off the calendar and left open on the list (Koy: "if I don't want a job scheduled, I just delete it off
   // there"); the auto-schedule leaves it alone until Restore or it's placed again. Simpro is never touched.
@@ -52894,6 +52914,46 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     );
   };
 
+  // v673: what Duet has learned about how Koy schedules. Duet proposes a rule from what it saw; an admin approves or
+  // removes it; Duet reads the approved ones before it suggests anything. An admin can add a rule of their own, which is
+  // approved as it is typed. Starts folded, with the number waiting on the header.
+  const lessons = Object.entries((prefs && prefs.lessons) || {}).map(([id, l]) => ({ id, ...(l || {}) })).filter(l => l.text).sort((a, b) => String(a.at || "") < String(b.at || "") ? 1 : -1);
+  const lessWait = lessons.filter(l => l.status !== "approved"), lessOk = lessons.filter(l => l.status === "approved");
+  const setLesson = (id, patch) => savePrefs({ lessons: { [id]: patch } });
+  const addRule = () => { const t = ruleTxt.replace(/\s+/g, " ").trim(); if (t.length < 8) { toast.error("Write the rule out in a full line."); return; }
+    setLesson("r" + Date.now().toString(36), { text: t.slice(0, 240), from: me, at: nowIso(), status: "approved", by: me }); setRuleTxt(""); say("Rule added. Duet reads it before it suggests anything."); };
+  const lessonsBox = lessons.length || isAdm ? (
+    <div className="sc-box">
+      <button type="button" className="sc-fold" onClick={() => setLessOpen(o => !o)} aria-expanded={lessOpen}><span className="mt-lab">How you schedule · {lessOk.length} rule{lessOk.length === 1 ? "" : "s"}{lessWait.length ? ` · ${lessWait.length} to review` : ""}</span><span>{lessOpen ? "Hide" : "Show"}</span></button>
+      {lessOpen ? (<>
+        <small className="sc-sub">Rules Duet follows when it suggests blocks. Duet proposes one when it sees a pattern in what you keep, change and remove; nothing counts until it's approved here.</small>
+        {lessWait.map(l => (
+          <div key={l.id} className="sc-card flag">
+            <b>{l.text}</b>
+            {l.evidence ? <small>Why Duet thinks so: {l.evidence}</small> : null}
+            <small>Proposed by {l.from || "Duet"}{SC.anyIso(String(l.at || "").slice(0, 10)) ? " · " + SC.md(SC.anyIso(String(l.at).slice(0, 10))) : ""}</small>
+            {isAdm ? <div className="sc-btns"><button type="button" className="mt-btn" onClick={() => { setLesson(l.id, { status: "approved", by: me, approvedAt: nowIso() }); say("Approved. Duet follows it from its next run."); }}>Approve</button>
+              <button type="button" className="mt-btn ghost" onClick={() => { savePrefs({ lessons: { [l.id]: deleteField() } }); say("Removed."); }}>Not right, remove</button></div> : null}
+          </div>))}
+        {lessOk.map(l => (
+          <div key={l.id} className="sc-card">
+            <b>{l.text}</b>
+            <small>{l.from && l.from !== l.by ? `From ${l.from}, approved by ${SC.firstOf(l.by || "")}` : `Added by ${SC.firstOf(l.by || l.from || "")}`}</small>
+            {isAdm ? <div className="sc-btns"><button type="button" className="mt-btn ghost" onClick={() => { savePrefs({ lessons: { [l.id]: deleteField() } }); say("Rule removed."); }}>Remove</button></div> : null}
+          </div>))}
+        {!lessons.length ? <small>No rules yet.</small> : null}
+        {isAdm ? <div className="sc-btns"><input type="text" value={ruleTxt} onChange={e => setRuleTxt(e.target.value)} onKeyDown={e => { if (e.key === "Enter") addRule(); }} placeholder="Add a rule, e.g. Keep Louis and James together on finishes" aria-label="Add a scheduling rule" style={{ flex: "1 1 180px", minWidth: 0 }}/>
+          <button type="button" className="mt-btn ghost" onClick={addRule}>Add rule</button></div> : null}
+      </>) : null}
+    </div>) : null;
+  // One skippable question after changing or removing something Duet suggested: why? Saved on that suggestion's record.
+  const WHY_DUET = ["Wrong crew", "Wrong day", "Job not ready", "Hours wrong", "Needed them elsewhere"];
+  const sayWhy = (w) => { if (whyAsk && w) savePrefs({ duetDone: { [whyAsk.id]: { why: String(w).slice(0, 80) } } }); setWhyAsk(null); if (w) say("Thanks. Duet sees that next time."); };
+  const whyBar = whyAsk ? (
+    <div className="sc-swap" role="group" aria-label="Why did you change Duet's suggestion?" style={{ margin: "6px 0" }}>
+      <span><b>You {whyAsk.outcome === "removed" ? "removed" : "changed"} Duet's suggestion{whyAsk.job ? ` for ${whyAsk.job}` : ""}.</b> Why? One tap helps it suggest better. Or skip.</span>
+      <div className="sc-btns">{WHY_DUET.map(w => <button type="button" key={w} className="mt-btn ghost" onClick={() => sayWhy(w)}>{w}</button>)}<button type="button" className="mt-lnk" onClick={() => sayWhy("")}>Skip</button></div>
+    </div>) : null;
   const needsBox = V.needs.length ? (
     <div className="sc-box">
       <span className="mt-lab">Needs you · {V.needs.length}</span>
@@ -53135,6 +53195,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         <span className="sc-seg" role="group" aria-label="Show"><button type="button" aria-pressed={!simOnly} onClick={() => setSimOnly(false)}>Everything</button><button type="button" aria-pressed={simOnly} onClick={() => setSimOnly(true)}>Simpro only</button></span>
         <button type="button" className="mt-btn ghost sc-fullbtn" onClick={() => setFull(f => !f)} aria-pressed={full}>{full ? "Exit full screen" : "Full screen"}</button>
       </div>
+      {whyBar}
       <div className="sc-key">
         <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Booked in Simpro</span>
         <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Auto-scheduled</span>
@@ -53188,7 +53249,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
           what needs scheduling on the left (drag onto a day), the days in the middle with every job and the open
           people under each date, the day checklist and holidays on the right. */}
       <div className={"sc-main" + (view === "week" || view === "crew" ? " board" : "")}>
-        {view === "week" || view === "crew" ? <div className="sc-left">{needsBox}{listBox}</div> : null}
+        {view === "week" || view === "crew" ? <div className="sc-left">{needsBox}{lessonsBox}{listBox}</div> : null}
         <div className="sc-cal">{view === "months" ? monthsView() : view === "month" ? monthView() : view === "crew" ? crewWeekView() : weekView()}</div>
         <div className="sc-side">
           {dayBox()}
@@ -65504,9 +65565,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-20 · App SW version: v672
+**Last manifest update:** 2026-11-20 · App SW version: v673
 ---
 
+- **Crew calendar learning loop: what Duet suggested vs. what you kept, your own edits, a one-tap why, and rules you approve** · 'in-flight 2026-11-20' · 'SW v673' · 'SC.planSummary' · 'SC.planDiff' · 'logEdit' · 'prefs.calLog' · 'prefs.lessons' · 'whyBar' · 'lessonsBox' · 'scrambleSuggest.lesson' · Koy: *"Will Duet learn from the changes that I make from what it suggests on the schedule, and will it learn and start to do it more like I change things too?"* then *"yes build it all and I wanted to learn from what I edit myself, also."* Before this, a changed suggestion was recorded only as "changed". **(1) Suggested vs. kept:** each suggestion's record ('prefs.duetDone[id]') now holds what Duet suggested and what the person ended up with, as days, people and clock time ('SC.planSummary'), plus the difference in words ('SC.planDiff': days moved, who came off, who went on, the time). **(2) One-tap why:** after changing or removing a suggestion a bar asks why once: Wrong crew, Wrong day, Job not ready, Hours wrong, Needed them elsewhere, or Skip. Saved on that record. **(3) Your own edits:** every hand edit of any block is logged ('prefs.calLog'): what the block was (the auto-schedule's guess, Duet's suggestion, an earlier plan, or on the list) and what you made it, with the difference in words. One entry per block per day (the first "was" is kept, "now" follows the last change), capped at about 150, oldest dropped. **(4) Rules:** a fold on the calendar, **How you schedule**, lists the rules Duet follows. Duet proposes one with its evidence ('schedule.lesson', saved as proposed); it does nothing until an admin taps **Approve**; **Not right, remove** drops it. An admin can add a rule of their own in the box; it is approved as typed. **Duet's read** returns all of it: 'schedulingRules' (approved only), 'rulesWaitingOnKoy', 'duetOutcomes' (suggested, endedUpWith, whatChanged, personsReason) and 'handEdits'. Connector tool 'cc_propose_rule' (v0.28.0). Tests in 'scripts/scramble-suggest-test.js'. Guide 'dashboard.html'. **Deploy:** hosting and functions ('Deploy-functions: scrambleBook, duetBook, duetApi, duetRead, onJobUpdate'). **Why it won't lose data:** three new maps on the calendar's plans doc that older builds ignore; the edit log is capped; nothing about a plan, a job or Simpro is written differently.
 - **The crew calendar replaces the Crew Planner; a phase at 100% with nothing open stops holding people** · 'in-flight 2026-11-20' · 'SW v672' · 'done100' · 'openPunch' · 'scalOpenPunch' · 'SchedulingForecast viewMode' · Koy's answers on 2026-11-20. **Crew Planner** (Koy: *"This is going to totally replace the crew planner, I think. The crew planner is not used at all today, so you can probably just replace it with this"*): in Residential the Forecast tab now opens on the **Calendar** (the crew calendar) instead of the Crew Planner, and the **Crew** button is gone. A small **Old Crew Planner** link at the end of the view buttons still opens the old board, which carries a note that the crew calendar replaced it. Nothing was deleted, and Commercial keeps its own board exactly as it was. Not changed: screens that read the old planner's week record ("crew on site today"); with the planner unused those read nothing new, and switching them to the crew calendar is its own job. **100% jobs** (Koy on Vista Meadows: *"it is done"*; his pick: stop holding people): a rough-in or finish still marked In Progress at 100% with nothing left open (no open punch, no failed-inspection items not done; for finish also QC punch) gets **no crew and no hours** forecast, so those people show as open. It stays visible: under **Needs you** and red on its day with *is at 100% with nothing left open. Mark it Complete on the job*. A plan a person placed and any Simpro booking are untouched. The count is passed in ('openPunch(job, phase)') by the screen ('scalOpenPunch', from 'punchListStage') and by Duet's read ('functions/punchListStage.js', the same file), so both lay it out alike; without it the rule is off. **Kept as is, by Koy's pick:** pairs (anyone alone is still held for his call). Connector: Duet's proposals may land without a yes each time (his pick; they book nothing), booking and waiting marks still ask. Guide 'dashboard.html'. **Deploy:** hosting and functions ('Deploy-functions: scrambleBook, duetBook, duetApi, duetRead, onJobUpdate'). **Why it won't lose data:** the auto layout and which view opens first; no job, plan or Simpro write changes, and the old planner's data and screen are still there.
 - **Crew calendar round-up: Book checks people on the server, drag a busy name and it asks, Fridays said-yes list, Upcoming confirmed starts placed, material and who placed it on each block, a trip's block vs. its crew, Crew Planner banner** · 'in-flight 2026-11-20' · 'SW v671' · 'D.humanCheck' · 'friEl' · 'prefs.fri' · 'isCand' · 'upcomingHours' · Koy: *"i would like it all built so go"* (the list left after the Duet doors). **Book, on the server:** the calendar's own Book button now runs the people rules on the server ('scrambleDoor.humanCheck' inside 'scrambleBook'), the same ones Duet's booking door uses: someone not on a Crew Board crew, off that day, on a company holiday or on a Saturday or Sunday is refused. A split set pair or someone alone is a person's call, so those show on the preview as **Check:** lines instead of refusing. **Drag a busy name:** dropping (or tap-then-tap) a name that's busy then opens the job box with the same question the tick box asks (use their free hours, or move them here) instead of a refusal. **Fridays:** each Friday column has **Said yes · N**; *Add who said yes* opens a checklist, the names show as chips to drag onto a job that day, and it is kept with the calendar ('prefs.fri[date]'). It records and shows only; Fridays are still by hand. Booking someone not on that list is allowed and noted on the preview. Duet's read returns it ('saidYesToFriday'). **Upcoming jobs:** an Upcoming row with a **confirmed** start is now a candidate for the auto-schedule: with a foreman and bid hours it is placed with that crew; without, it goes to Needs you and sits red on its day. Estimated ones stay on the list. Duet's read asks Simpro for those rows' bid hours like the screen does ('upcomingHours'). **On every block:** *Why it's here* now ends with where the material stands (ordered, card not ordered yet, no material card); a trip says who it is assigned to and whether it has material; a plan says who placed it and the date. **A trip's own crew:** a trip block whose people are neither the person the trip names nor on that person's crew is flagged (rule 5). **Crew Planner:** a banner says booking happens on the crew calendar now and that the board doesn't read Simpro. It is NOT read-only: 'crew on site today' and other screens read it. Guide 'dashboard.html'. **Deploy:** hosting and functions ('Deploy-functions: scrambleBook, duetBook, duetApi, duetRead, onJobUpdate'). **Why it won't lose data:** Book only gains refusals and notes before anything is written; the Friday list is a new map on the plans doc; everything else is display or the auto layout. No loader, rules, stage or status change.
 - **Crew calendar: Duet suggests a block, you keep, change or remove it; a waiting mark; and Duet sees what you did** · 'in-flight 2026-11-20' · 'SW v670' · 'functions/scrambleSuggest.js' · 'prefs.duet' · 'prefs.duetDone' · 'keepDuet' · 'dropDuet' · 'settleDuet' · Builds 3 and 4 of Duet's crew-calendar spec (the suggest door and the feedback record). **A proposal** is named people on a job's rough-in or finish, or a return trip, on named days and times, with a one-line reason. It is saved beside the saved plans ('meetings/scramble__prefs.duet[key]'), never in them, and the calendar draws it as its own block: dotted green outline, *Duet suggests*, with the reason on it and in the job box. It takes the place of the auto-schedule's guess for that job, and the auto-schedule lays its other guesses around it ('buildCalendar' takes 'proposals'; 'autoPlan' holds a proposal's people). It is a forecast: its people show *free to pick*, and a plan a person placed, taking the job off, a Simpro booking and time off all win. **In the job box:** **Keep it** makes it a plan as it is; **Remove suggestion** drops it and the auto-schedule's guess returns; changing the day, time or who makes it your plan. Nothing books until Book. **The server checks a proposal like a booking** before saving ('scrambleDoor.js' rules: Crew Board, time off, holiday, weekend, set pairs, nobody alone, Simpro's bookings) plus: not on a plan a person placed then, not on a Friday (by hand only), not a day Simpro already has that job, and never a job a person already placed or removed. Anything refused saves nothing. **Waiting:** Duet can put a job or trip under Waiting with a reason (the calendar's own Remove… with a reason, 'by: Duet'); the job's status is never touched, and it is refused on a block a person placed or one Simpro has booked ahead. **Feedback:** what a person did with each proposal (kept / changed / removed, who, when) is recorded under 'prefs.duetDone' and handed back to Duet in its calendar read ('duetOutcomes'). Endpoint: 'duetBook' actions 'schedule.propose', 'schedule.withdraw', 'schedule.wait'. Connector tools 'cc_propose_block', 'cc_withdraw_proposal', 'cc_calendar_wait' (v0.27.0); each asks Koy first, by the connector's standing rule that every writer asks. Tests: 'scripts/scramble-suggest-test.js' (34, start to finish with stand-ins, in prebuild). Guide 'dashboard.html'. **Deploy:** hosting and functions ('Deploy-functions: duetBook, duetApi, duetRead'). **Why it won't lose data:** a proposal is a new key in a new map on the plans doc and is ignored by older builds; the suggest door writes only that doc (its test scans the source: no Simpro write, no job write, no stage or status); a person's plan is never overwritten, by the server check and by where a proposal is stored.

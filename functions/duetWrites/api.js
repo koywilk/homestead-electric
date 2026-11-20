@@ -1769,7 +1769,7 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
       const b = req.body || {}, mode = b.action === "schedule.preview" ? "preview" : b.action === "schedule.book" ? "book" : "";
       // v670, the suggest door (functions/scrambleSuggest.js): Duet proposes a block, takes one back, or marks a job as
       // waiting. These write only the calendar's own plans doc; they book nothing and touch no job.
-      const SUGGEST = { "schedule.propose": "propose", "schedule.withdraw": "withdraw", "schedule.wait": "wait" };
+      const SUGGEST = { "schedule.propose": "propose", "schedule.withdraw": "withdraw", "schedule.wait": "wait", "schedule.lesson": "lesson" };
       if (SUGGEST[b.action]) {
         if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function" || typeof (calendarDeps || {}).clearField !== "function") { res.status(500).json({ ok: false, error: "The crew calendar is not wired into duetBook." }); return; }
         try {
@@ -1784,7 +1784,7 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
         }
         return;
       }
-      if (!mode) { res.status(400).json({ ok: false, refused: "Unknown action. Use schedule.preview, schedule.book, schedule.propose, schedule.withdraw or schedule.wait." }); return; }
+      if (!mode) { res.status(400).json({ ok: false, refused: "Unknown action. Use schedule.preview, schedule.book, schedule.propose, schedule.withdraw, schedule.wait or schedule.lesson." }); return; }
       const cd = calendarDeps || {};
       if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function" || typeof cd.staff !== "function" || typeof cd.tripWrite !== "function") { res.status(500).json({ ok: false, error: "Booking is not wired into duetBook." }); return; }
       try {

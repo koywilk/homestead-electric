@@ -50,14 +50,33 @@ function calendarOf(inp, opts) {
 function outcomesOf(prefs) {
   const d = (prefs && prefs.duetDone) || {};
   return Object.keys(d).map(id => ({ proposalId: id, ...(d[id] || {}) })).filter(x => x.at).sort((a, b) => a.at < b.at ? 1 : -1).slice(0, 100)
-    .map(x => ({ proposalId: x.proposalId, key: String(x.key || ""), job: String(x.job || ""), outcome: String(x.outcome || ""), by: String(x.by || ""), at: String(x.at || ""), ...(x.reason ? { reasonGiven: String(x.reason) } : {}) }));
+    .map(x => ({ proposalId: x.proposalId, key: String(x.key || ""), job: String(x.job || ""), ...(x.what ? { what: String(x.what) } : {}), outcome: String(x.outcome || ""), by: String(x.by || ""), at: String(x.at || ""),
+      ...(x.reason ? { duetsReason: String(x.reason) } : {}), ...(x.why ? { personsReason: String(x.why) } : {}), ...(Array.isArray(x.changed) ? { whatChanged: x.changed } : {}),
+      ...(x.was ? { suggested: x.was } : {}), ...(x.now ? { endedUpWith: x.now } : {}) }));
+}
+// v673: every hand edit a person made to a block (the screen's prefs.calLog), newest first: what the block was (the
+// auto-schedule's guess, Duet's suggestion, an earlier plan, or just on the list) and what they made it.
+function handEditsOf(prefs) {
+  const d = (prefs && prefs.calLog) || {};
+  return Object.keys(d).map(id => d[id] || {}).filter(x => x.at).sort((a, b) => a.at < b.at ? 1 : -1).slice(0, 60)
+    .map(x => ({ key: String(x.key || ""), job: String(x.job || ""), what: String(x.what || ""), by: String(x.by || ""), at: String(x.at || ""),
+      before: x.src === "auto" ? "the auto-schedule's guess" : x.src === "duet" ? "Duet's suggestion" : x.src === "plan" ? "a plan a person placed" : "on the list, not placed",
+      ...(Array.isArray(x.changed) ? { whatChanged: x.changed } : {}), ...(x.was ? { was: x.was } : {}), ...(x.now ? { now: x.now } : {}) }));
+}
+// The scheduling rules: approved ones Duet follows; ones it proposed that still wait on a person.
+function lessonsOf(prefs) {
+  const d = (prefs && prefs.lessons) || {};
+  const all = Object.keys(d).map(id => ({ id, ...(d[id] || {}) })).filter(x => x.text).sort((a, b) => String(a.at || "") < String(b.at || "") ? -1 : 1);
+  return { rules: all.filter(x => x.status === "approved").map(x => ({ id: x.id, rule: String(x.text), from: String(x.from || ""), approvedBy: String(x.by || "") })),
+    waiting: all.filter(x => x.status !== "approved").map(x => ({ id: x.id, rule: String(x.text), ...(x.evidence ? { evidence: String(x.evidence) } : {}), at: String(x.at || "") })) };
 }
 function assemble(inp) {
   const i = inp || {};
   const view = SC.viewOf(calendarOf(i), i.users || [], { from: isIso(i.from) ? i.from : "", to: isIso(i.to) ? i.to : "" });
   const fri = (i.prefs && i.prefs.fri) || {};   // who said yes to each Friday (kept with the calendar)
   view.days.forEach(d => { if (d.friday && Array.isArray(fri[d.date])) d.saidYesToFriday = fri[d.date].filter(Boolean); });
-  return { ...view, duetOutcomes: outcomesOf(i.prefs) };
+  const les = lessonsOf(i.prefs);
+  return { ...view, schedulingRules: les.rules, rulesWaitingOnKoy: les.waiting, duetOutcomes: outcomesOf(i.prefs), handEdits: handEditsOf(i.prefs) };
 }
 
 // The Simpro schedule for the calendar's 17 weeks, in six-week reads like the screen. Throws if Simpro can't be read:
@@ -110,8 +129,8 @@ async function readCalendar(deps, args) {
   if (to < from) throw Object.assign(new Error("to is before from"), { bad: true });
   const view = assemble({ ...(await gather({ ...deps, now })), from, to });
   return { ok: true, asOf: new Date().toISOString(), source: "Command Center crew calendar (same rules as the screen), Simpro schedule read live",
-    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date; duet-proposal = a block Duet proposed, with its reason, that a person can keep, change or remove. duetOutcomes lists what people did with earlier proposals. Upcoming jobs with only an estimated start are listed without hours.",
+    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date; duet-proposal = a block Duet proposed, with its reason, that a person can keep, change or remove. schedulingRules are the rules to follow when proposing (approved by a person); rulesWaitingOnKoy are ones Duet proposed that are not approved yet, so do not rely on them. duetOutcomes lists what people did with earlier proposals: what was suggested, what they ended up with, what changed and why. handEdits lists every block a person changed by hand, with what it was before and after: learn how Koy schedules from both. Upcoming jobs with only an estimated start are listed without hours.",
     ...view };
 }
 
-module.exports = { WEEKS, effRS, effFS, wallNow, jobsOf, calendarOf, outcomesOf, assemble, gather, readSchedules, readCalendar };
+module.exports = { handEditsOf, lessonsOf, WEEKS, effRS, effFS, wallNow, jobsOf, calendarOf, outcomesOf, assemble, gather, readSchedules, readCalendar };
