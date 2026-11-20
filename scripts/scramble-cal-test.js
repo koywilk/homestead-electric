@@ -132,7 +132,7 @@ const users6 = users5.concat([{ id: "k", name: "Keegan Wilkinson", title: "forem
 const V5 = SC.buildCalendar({ jobs: jobs5, schedules: [], phaseHours: { "500": { r: [0, 120] }, "501": { r: [0, 300] }, "502": { r: [0, 200] } }, today, weeks: 5, users: users6, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 const X = V5.items.find(i => i.key === "j_x_r").auto, Y = V5.items.find(i => i.key === "j_y_r").auto, Z = V5.items.find(i => i.key === "j_z_r").auto;
 ok(X.staff.map(p => p.name).join() === "Daegan Smith,Trever Worley,Callen Jakeman" && !X.held, "two jobs at once on a 5-person crew: the foreman's job keeps the bigger group (3), not flagged");
-ok(Y.staff[0].name === "Louis Hoffman" && Y.crew === 2 && SC.planDays(Y).some(d => d.date === X.s) && /Only 2 of Daegan's crew free \(want 4\)/.test(Y.held), "the jr foreman takes the other job the same days with the rest, flagged short");
+ok(Y.staff[0].name === "Louis Hoffman" && Y.crew === 2 && SC.planDays(Y).some(d => d.date === X.s) && !Y.held, "the jr foreman takes the other job the same days with the rest; 2 on a job is fine, not held (Koy: \"We want 4 but sometimes it's just 2. That's fine\")");
 ok(Z.crew === 4 && Z.staff[0].name === "Keegan Wilkinson" && !Z.held && !Z.staff.some(p => p.name === "Gage Lund"), "one job on a 5-person crew: 4 on it, the foreman leading, the jr foreman kept free");
 const V6 = A({ "j_a1402_f~2026-12-03": { s: "2026-12-03", hours: 20, crew: 2, staff: [{ name: "Callen Jakeman" }, { name: "Louis Hoffman" }] } });
 const cp = V6.items.find(x => x.key === "j_a1402_f~2026-12-03");
@@ -264,6 +264,29 @@ ok(kF && !kF.auto && !kF.booked.length && kF.inList && VK.items.find(x => x.key 
 const jU = [{ id: "un", simproNo: "90", name: "Est only", roughStatus: "waiting_date", roughProjectedStart: "11/30/2026", foreman: "Daegan Smith", roughMaterials: [{ ordered: true }] }];
 const VU = SC.buildCalendar({ jobs: jU, schedules: [], phaseHours: { "90": { r: [0, 80] } }, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
 ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "j_un_r").inList, "an estimated (not confirmed) start isn't auto-scheduled; it waits on the list");
+
+// v660: other work that needs a date (Koy 2026-11-20: "Would be really awesome if QC's that need to be scheduled show up here too")
+{
+  const t2 = SC.addDays(SC.ymd(today), 7);
+  const jT = [
+    { id: "qa", simproNo: "501", name: "QC Job", qcStatus: "needs", finishQcStatus: "scheduled", finishQcStatusDate: t2, roughStatus: "complete", finishStatus: "" },
+    { id: "qb", simproNo: "502", name: "Quick One", quickJob: true, quickJobType: "service", quickJobStatus: "new" },
+    { id: "qc", simproNo: "", name: "Ped Lot 3", tempPed: true, tempPedStatus: "ready" },
+    { id: "qd", simproNo: "503", name: "CO Job", roughStatus: "complete", finishStatus: "", changeOrders: [{ id: "c1", coStatus: "approved", time: "3 hrs" }, { id: "c2", coStatus: "approved" }], returnTrips: [{ id: "t9", fromCOId: "c2", rtStatus: "needs" }],
+      fourWayTargetDate: t2 },
+  ];
+  const VT = SC.buildCalendar({ jobs: jT, schedules: [], phaseHours: {}, today, weeks: 5, users, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+  const k = (key) => VT.items.find(x => x.key === key);
+  ok(k("x_rqc_qa") && k("x_rqc_qa").inList && SC.groupOf(k("x_rqc_qa")) === "qcwalk" && !k("x_rqc_qa").auto, "a rough QC walk that needs a date is on the list under QC walks, never auto-placed");
+  ok(k("x_fqc_qa") && !k("x_fqc_qa").inList && (k("x_fqc_qa").ccDays || [])[0] === t2, "a QC walk scheduled in Command Center shows on its day, not on the list");
+  ok(k("x_qj_qb") && k("x_qj_qb").inList && k("x_qj_qb").tag === "Service call" && SC.groupOf(k("x_qj_qb")) === "quick", "a new quick job needs a date, under Quick jobs");
+  ok(k("x_tp_qc") && k("x_tp_qc").inList && k("x_tp_qc").tag === "Temp ped install", "a temp ped ready to schedule is on the list");
+  ok(k("x_co_qd_c1") && k("x_co_qd_c1").tripH === 3 && !k("x_co_qd_c2"), "an approved change order not made into a trip is on the list with its time; a converted one isn't twice");
+  ok(k("x_rin_qd") && (k("x_rin_qd").ccDays || [])[0] === t2, "a rough inspection with a target date is a marker on its day");
+  const VW = SC.buildCalendar({ jobs: jT, schedules: [], phaseHours: {}, today, weeks: 5, users, plans: { x_rqc_qa: { off: true, why: "Waiting on material", note: "panel", at: "2026-11-20T00:00:00Z" } }, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" });
+  const w = VW.items.find(x => x.key === "x_rqc_qa");
+  ok(w.off && w.off.why === "Waiting on material" && w.inList && SC.groupOf(w) === "wait" && SC.GROUPS[0][0] === "wait", "removed with a reason: Waiting, first on the list, with its reason");
+}
 
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

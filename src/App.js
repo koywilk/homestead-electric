@@ -51952,10 +51952,15 @@ function odCostsCoHours(goalsDoc) {
 // months in the future, how far shit gets scheduled out". The auto-schedule and Simpro's read cover 17 weeks; the
 // Month grid shows five of them at a time and the 4 months view shows them all, one row per job under its crew.
 const SCAL_WEEKS = 17, SCAL_MONTH_WEEKS = 5;
-// v660 (Koy 2026-11-19: "the red and green is terrible christmas vibes and the slashing red is so hard to look at"):
-// one accent (the dashboard copper) and neutrals. Rough-in copper, finish slate, return trips charcoal.
-const SCAL_KIND = { rough: OD_A, finish: OD_SLATE, trip: "#3A3631", service: OD_GREY };
-const SCAL_SOFT = { rough: "rgba(142,99,54,.12)", finish: "rgba(91,107,132,.13)", trip: "rgba(58,54,49,.08)", service: "rgba(107,116,135,.1)" };
+// v660 (Koy 2026-11-19: "the red and green is terrible christmas vibes and the slashing red is so hard to look at",
+// then "I hate the brown"): one blue family and grays. Rough-in dark navy, finish medium blue, return trips white
+// with a blue outline; held is a gray dashed outline. KIND is the outline, SOFT the fill, ON the booked fill and its text.
+// task = QC walks, quick jobs, temp peds, scans, inspections and open change orders (gray outline; gray fill when set in CC).
+const SCAL_KIND = { rough: "#1F3A68", finish: "#3B6FB6", trip: "#5B8BCB", service: OD_GREY, task: "#7D8794" };
+const SCAL_SOFT = { rough: "#E4EAF4", finish: "#E8F0FA", trip: "#FFFFFF", service: "#F0F2F5", task: "#F6F7F9" };
+const SCAL_ON = { rough: ["#1F3A68", "#fff"], finish: ["#3B6FB6", "#fff"], trip: ["#D3E2F5", "#14233A"], service: [OD_GREY, "#fff"], task: ["#E6E9EE", "#1B1F24"] };
+const SCAL_HELD = "#8A919C";
+const SCAL_WAIT = ["Waiting on GC or homeowner", "Waiting on material", "Waiting on inspection", "On hold", "Other"];
 const SCAL_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs, onOpenJob, say, startWk = 0 }) {
   const SC = ScrambleCal;
@@ -51977,15 +51982,38 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const [copyOpen, setCopyOpen] = useState(false);
   const [drag, setDrag] = useState("");                // key being dragged
   const [over, setOver] = useState("");                // day under the drag
-  const [listOpen, setListOpen] = useState(false);
+  const [listOpen, setListOpen] = useState(true);
   // Koy 2026-11-19: "+1 more ... can it just drop down with the calendar view still up and not open up the day
   // view?" A day's full list opens over the calendar; Esc or a tap outside closes it.
   const [pop, setPop] = useState(null);                // { iso, left, top }
   // Koy 2026-11-19: "when I click on a day, it tells me a checklist of who's scheduled and who isn't scheduled yet"
   const [dayOpen, setDayOpen] = useState("");          // iso of the day whose checklist shows
   const [pto, setPto] = useState([]);                  // settings/crewPTO.list (read only)
+  // Koy 2026-11-20: "I need all to be easily visible, clickable, and movable". A person under a day's date can be
+  // dragged (or tapped, then a job tapped) onto a job that day; their set pair comes along when they're open too.
+  const [pickP, setPickP] = useState(null);            // { name, iso } tapped person waiting for a job
+  const [dragP, setDragP] = useState(null);            // { name, iso } person being dragged
+  const [dropOn, setDropOn] = useState("");            // job chip under a person drag
+  // A tapped job's box opens beside it, over the calendar (Koy: "when I click on a job that's held ... it doesn't
+  // give me an option to clear the hold or do anything").
+  const [insAt, setInsAt] = useState(null);            // { left, top }
+  const [rm, setRm] = useState(null);                  // { key, why, note } the Remove reason being picked
+  const insRef = useRef(null);
   useEffect(() => onSnapshot(doc(db, "settings", "crewPTO"), x => setPto((x.exists() && Array.isArray((x.data() || {}).list)) ? x.data().list : []), () => setPto([])), []);
   const popRef = useRef(null);
+  useEffect(() => {
+    if (!insAt) return undefined;
+    const key = e => { if (e.key === "Escape") setInsAt(null); };
+    const down = e => { if (insRef.current && !insRef.current.contains(e.target) && !(e.target.closest && e.target.closest(".sc-chip2,.sc-need,.sc-card,.sc-cwj"))) setInsAt(null); };
+    document.addEventListener("keydown", key); document.addEventListener("pointerdown", down, true);
+    return () => { document.removeEventListener("keydown", key); document.removeEventListener("pointerdown", down, true); };
+  }, [insAt]);
+  const openIns = (e) => {
+    const r = e && e.currentTarget ? e.currentTarget.getBoundingClientRect() : null, w = Math.min(340, window.innerWidth - 16);
+    if (!r || window.innerWidth < 700) { setInsAt({ sheet: true }); return; }
+    const left = r.right + 8 + w < window.innerWidth ? r.right + 8 : Math.max(8, r.left - w - 8);
+    setInsAt({ left, top: Math.max(8, Math.min(window.innerHeight - 420, r.top - 10)), w });
+  };
   useEffect(() => {
     if (!pop) return undefined;
     const key = e => { if (e.key === "Escape") setPop(null); };
@@ -52053,13 +52081,14 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const push = (iso, c) => { (out[iso] = out[iso] || []).push(c); };
     V.items.forEach(it => {
       it.booked.forEach(b => push(b.iso, { it, style: "booked", n: b.who.length, who: b.who, names: b.names || [], fm: fmOf(b.names || []), hrs: b.hrs }));
-      const f = fc(it); if (!f) return;
+      const f = fc(it);
+      if (!f) { (it.ccDays || []).forEach(iso => { if (iso <= V.end) push(iso, { it, style: "cc", n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0 }); }); return; }
       const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
       const nm = names.length ? names : ((it.booked[it.booked.length - 1] || {}).names || []);
       const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
       SC.slotsOf(f).forEach(d => { if (d.date <= V.end) push(d.date, { it, style, n: f.crew, who: nm.map(SC.firstOf), names: nm, fm: fmOf(nm), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from }); });
     });
-    const ord = { booked: 0, kept: 1, auto: 2, held: 3 }, kord = { rough: 0, finish: 1, trip: 2, service: 3 };
+    const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
     Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
     return out;
   }, [V, board]); // eslint-disable-line
@@ -52070,7 +52099,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // Saving: every move, copy or change is a plan everyone sees right away.
   const commit = (key, p) => {
     setDrafts(d => ({ ...d, [key]: p }));
-    if (p && p.off) savePrefs({ cal: { [key]: { off: true, by: me, at: nowIso() } } });
+    if (p && p.off) savePrefs({ cal: { [key]: { off: true, ...(p.why ? { why: String(p.why).slice(0, 60), note: String(p.note || "").slice(0, 200) } : {}), by: me, at: nowIso() } } });
     else if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), ...(SC.hoursOf(p.t) != null ? { t: p.t } : {}), by: me, at: nowIso() } } });
     else savePrefs({ cal: { [key]: deleteField() } });
   };
@@ -52087,8 +52116,12 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const backToAuto = (it) => { commit(it.key, null); setBk(null); setCopyOpen(false); if (it.copyOf) setSel(""); };
   // Remove: off the calendar and left open on the list (Koy: "if I don't want a job scheduled, I just delete it off
   // there"); the auto-schedule leaves it alone until Restore or it's placed again. Simpro is never touched.
-  const removeIt = (it) => { if (it.copyOf) { commit(it.key, null); setSel(""); } else commit(it.key, { off: true }); setBk(null); setCopyOpen(false); setPicked("");
-    say(`${it.no ? "#" + it.no + " " : ""}${it.tag} taken off the calendar. It stays on the list as needing scheduling.`); };
+  // Remove can carry a reason (Koy 2026-11-20: "put a reason why I'm removing it off of the schedule, like we're waiting
+  // on something ... Then I can check a box ... 'wait cleared' ... and then go back on"). With a reason it goes to
+  // Waiting at the top of the list and stays off the auto-schedule until Wait cleared.
+  const removeIt = (it, why = "", note = "") => { if (it.copyOf) { commit(it.key, null); setSel(""); } else commit(it.key, { off: true, why, note }); setBk(null); setCopyOpen(false); setPicked(""); setRm(null); setInsAt(null);
+    say(`${it.no ? "#" + it.no + " " : ""}${it.tag} taken off the calendar.${why ? ` Waiting: ${why}.` : " It stays on the list as needing scheduling."}`); };
+  const waitCleared = (x) => { commit(x.key, null); say(`${label(x)}: wait cleared. Back on the schedule.`); };
   const copyTo = (it, iso) => {
     const f = fc(it); if (!f) return;
     const key = (it.copyOf || it.key) + "~" + iso;
@@ -52100,6 +52133,25 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const f = fc(it); if (!f || !names.length) return;
     commit(it.key, { ...f, staff: names.map(name => ({ name })), crew: names.length });
   };
+  // Add someone to a job on one of its days; their set pair comes too when they're open that day.
+  const openOn = (iso) => { const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); })); const off = new Set(offOn(iso)); return (n) => !on.has(n) && !off.has(n); };
+  const addPerson = (c, name, iso) => {
+    const it = c.it;
+    if (c.style === "booked" || it.kind === "service") { toast.info(`${label(it)} is booked in Simpro that day. Change who's on it in Simpro, or book ${SC.firstOf(name)} there.`); return; }
+    const f = fc(it); if (!f) return;
+    const cur = ((f.staff || []).map(x => x && x.name).filter(Boolean));
+    const base = cur.length ? cur : (c.names || []).map(n => { const u = board.find(n); return u ? u.name : n; });
+    if (base.includes(name)) { toast.info(`${SC.firstOf(name)} is already on ${label(it)}.`); return; }
+    const isOpen = openOn(iso), pt = board.partnerOf(name), add = [name, ...(pt && !base.includes(pt) && isOpen(pt) ? [pt] : [])];
+    const names = [...base, ...add];
+    const each = f.hours / Math.max(1, f.crew);
+    const next = { ...f, staff: names.map(n => ({ name: n })), crew: names.length, hours: it.kind === "trip" ? each * names.length : f.hours };
+    const r = dropOff(next); commit(it.key, r.p); setSel(it.key);
+    const days = SC.slotsOf(r.p).map(d => d.date);
+    say(`${add.map(SC.firstOf).join(" and ")} added to ${label(it)}${days.length > 1 ? `, ${SC.short(days[0])} to ${SC.short(days[days.length - 1])}` : ""}.${r.gone.length ? ` ${r.gone.join(", ")} off part of it.` : ""}`);
+  };
+  // Clear a hold: keep the block as it is, as a plan (it then books like any plan).
+  const clearHold = (it) => { const f = fc(it); if (!f) return; const { held, ...rest } = f; commit(it.key, { ...rest, staff: f.staff || [] }); say(`${label(it)} kept as it is. It can be booked now.`); };
   const setDays = (it, days) => { const f = fc(it); if (!f || days < 0.5) return; commit(it.key, { ...f, hours: days * f.crew * SC.HPD }); };
 
   // Press and hold a chip (phones) to pick it up; then tap a day.
@@ -52113,13 +52165,49 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
 
   // Booking in Simpro: preview, then confirm (unchanged from v651).
   const staffList = (ctx && ctx.staff) || [];
-  const openBook = (it) => {
+  const preStaff = (it) => {
     const p = fc(it); const pre = new Set();
     ((p && p.staff) || []).forEach(s => s && s.id && pre.add(Number(s.id)));
     if (!pre.size) { const names = new Set(((p && p.staff) || []).map(s => s && s.name).filter(Boolean)); staffList.forEach(s => names.has(s.name) && pre.add(s.id)); }
     if (!pre.size) { const names = new Set(it.booked.flatMap(b => b.names || [])); staffList.forEach(s => names.has(s.name) && pre.add(s.id)); }
     if (!pre.size && it.kind === "trip" && it.who) { const s = staffList.find(x => x.name.toLowerCase() === it.who.toLowerCase()); if (s) pre.add(s.id); }
-    setBk({ key: it.key, staff: pre, preview: null, busy: false, err: "", done: null, find: "" });
+    return pre;
+  };
+  const openBook = (it) => setBk({ key: it.key, staff: preStaff(it), preview: null, busy: false, err: "", done: null, find: "" });
+  // Book the week (Koy 2026-11-20: "where is the button to book the simpro"): every block on the week shown that can be
+  // booked (a plan or auto block, not held, with a job number), each with its people. Preview all, then book all; each
+  // block books all of its days, as its own Book does. Nothing is written before the confirm.
+  const [wb, setWb] = useState(null);                  // { rows: [{ key, staff:Set, on, preview, err, done }], busy, phase }
+  const bookable = (it) => { const f = fc(it); return !!(f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !(!it.plan && f.held)); };
+  const openWeekBook = () => {
+    const wEnd = SC.addDays(weekStart, 3), rows = [];
+    V.items.forEach(it => { if (!bookable(it)) return; const f = fc(it); if (!SC.slotsOf(f).some(d => d.date >= weekStart && d.date <= wEnd)) return;
+      rows.push({ key: it.key, staff: preStaff(it), on: true, preview: null, err: "", done: null }); });
+    setWb({ rows, busy: false, phase: "pick" }); setInsAt(null);
+  };
+  const runWeekPreview = async () => {
+    setWb(w => ({ ...w, busy: true }));
+    const rows = [];
+    for (const r of wb.rows) {
+      const it = byKey[r.key];
+      if (!r.on || !it || !r.staff.size) { rows.push({ ...r, preview: null, err: r.on && !r.staff.size ? "No one picked." : "" }); continue; }
+      try { const x = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, r.staff) }); rows.push({ ...r, preview: x.data, err: "" }); }
+      catch (e) { rows.push({ ...r, preview: null, err: (e && e.message) || "Couldn't build the preview." }); }
+    }
+    setWb(w => ({ ...w, rows, busy: false, phase: "preview" }));
+  };
+  const runWeekBook = async () => {
+    setWb(w => ({ ...w, busy: true }));
+    const rows = [];
+    for (const r of wb.rows) {
+      const it = byKey[r.key];
+      if (!r.on || !r.preview || !it) { rows.push(r); continue; }
+      try { const x = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, r.staff), hash: r.preview.hash }); const d = x.data || {};
+        if (d.ok && (kept[it.key] || drafts[it.key])) commit(it.key, null); rows.push({ ...r, done: d }); }
+      catch (e) { rows.push({ ...r, done: { ok: false, err: (e && e.message) || "Nothing was written for this one." } }); }
+    }
+    const n = rows.reduce((a, r) => a + (r.done && r.done.created ? r.done.created.length : 0), 0);
+    setWb(w => ({ ...w, rows, busy: false, phase: "done" })); setReload(x => x + 1); say(`Booked ${n} entries in Simpro.`);
   };
   const bookArgs = (it, staff) => { const p = fc(it); return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, staffIds: [...staff], days: SC.slotsOf({ ...p, crew: staff.size }).map(d => ({ date: d.date, hours: d.hours, start: d.start })) }; };
   const runPreview = async (it) => {
@@ -52142,34 +52230,39 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (it.copyOf) return "Copied day";
     if (it.off) return "Left open: taken off the calendar";
     if (it.hold) return "On hold";
+    if (it.kind === "task") return (it.ccDays || []).length ? `Set for ${SC.short(it.ccDays[0])} in Command Center` : "";
     const s = it.start; if (!s) return it.kind === "trip" ? "" : "No start date";
     if (s.started) return "In progress";
     if (!s.iso) return "";
     return it.kind === "trip" ? `${s.by ? "Schedule by" : "Set for"} ${SC.md(s.iso)}` : `Start ${SC.md(s.iso)} ${s.conf ? "confirmed" : "est."}`;
   };
-  const hoursTxt = (it) => it.copyOf ? "" : it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
-  const Pill = ({ it }) => <span className="sc-pill" style={{ background: SCAL_SOFT[it.kind], color: SCAL_KIND[it.kind] }}>{it.tag}</span>;
+  const hoursTxt = (it) => it.copyOf ? "" : it.kind === "task" ? (it.tripH ? `Est. ${it.tripH} h` : "") : it.over ? "Over bid" : it.left != null ? `${it.left} h left${it.wholeJob ? " (whole job)" : ""}` : it.kind === "trip" ? "Hours not set" : "No hours in Job Costs";
+  const Pill = ({ it }) => <span className="sc-pill" style={{ background: SCAL_SOFT[it.kind], color: SCAL_KIND[it.kind], border: `1px solid ${SCAL_KIND[it.kind]}` }}>{it.tag}</span>;
+  const kv = (k) => ({ "--c": SCAL_KIND[k], "--s": SCAL_SOFT[k], "--b": SCAL_ON[k][0], "--bt": SCAL_ON[k][1] });
   const label = (it) => `${it.no ? "#" + it.no + " " : ""}${it.name}`;
 
   const chipEl = (c, iso, compact) => {
-    const it = c.it, movable = c.style !== "booked" && it.kind !== "service";
+    const it = c.it, movable = c.style !== "booked" && c.style !== "cc" && it.kind !== "service";
     return (
-      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}`}
-        style={{ "--c": SCAL_KIND[it.kind], "--s": SCAL_SOFT[it.kind] }}
+      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
+        style={kv(it.kind)}
         draggable={movable} onDragStart={e => { if (!movable) return; setDrag(it.key); try { e.dataTransfer.setData("text/plain", it.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }}
         onDragEnd={() => { setDrag(""); setOver(""); }}
         onPointerDown={e => movable && e.pointerType !== "mouse" && holdStart(e, c)} onPointerUp={holdEnd} onPointerLeave={holdEnd} onPointerCancel={holdEnd}
-        onClick={e => { e.stopPropagation(); if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setBk(null); setCopyOpen(false); }}
+        onDragOver={e => { if (!dragP || dragP.iso !== iso) return; e.preventDefault(); e.stopPropagation(); if (dropOn !== it.key + iso) setDropOn(it.key + iso); }}
+        onDragLeave={() => { if (dropOn === it.key + iso) setDropOn(""); }}
+        onDrop={e => { if (!dragP) return; e.preventDefault(); e.stopPropagation(); addPerson(c, dragP.name, iso); setDragP(null); setDropOn(""); }}
+        onClick={e => { e.stopPropagation(); if (pickP && pickP.iso === iso) { addPerson(c, pickP.name, iso); setPickP(null); return; } if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setBk(null); setCopyOpen(false); openIns(e); }}
         title={`${label(it)} · ${it.tag}`}>
         <span className="t">{compact && c.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{label(it)}</span>
-        {compact ? null : <span className="m"><i>{c.style === "held" ? <><span className="sc-bang" aria-hidden="true">!</span>Held · </> : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{crewText(c)}</span>}
+        {compact ? null : <span className="m"><i>{c.style === "held" ? <><span className="sc-bang" aria-hidden="true">!</span>Held · </> : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{c.style === "cc" ? "Set in Command Center" : crewText(c)}</span>}
         {compact || !c.time ? null : <span className="m">{c.time}</span>}
       </button>);
   };
   const dayProps = (iso) => ({
     onDragOver: e => { if (!drag) return; e.preventDefault(); if (over !== iso) setOver(iso); },
     onDragLeave: () => { if (over === iso) setOver(""); },
-    onDrop: e => { e.preventDefault(); const k = drag || (() => { try { return e.dataTransfer.getData("text/plain"); } catch (_) { return ""; } })(); if (k) moveTo(k, iso); },
+    onDrop: e => { e.preventDefault(); if (dragP) { setDragP(null); return; } const k = drag || (() => { try { return e.dataTransfer.getData("text/plain"); } catch (_) { return ""; } })(); if (k && !k.startsWith("p:")) moveTo(k, iso); },
     onClick: () => tapDay(iso),
   });
   const weekStart = SC.addDays(start, wk * 7);
@@ -52181,13 +52274,29 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       if (memo[iso]) return memo[iso];
       const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); }));
       const off = new Set((V.offByDay && V.offByDay[iso]) || []);
-      let all = 0, n = 0;
-      Object.values(board.crews).forEach(c => { if (crewF !== "All" && SC.firstOf(c.foreman) !== crewF) return;
-        c.people.forEach(p => { if (off.has(p)) return; all++; if (on.has(p)) n++; }); });
-      return (memo[iso] = { on: n, all });
+      let all = 0, n = 0; const open = [], out = [];
+      Object.values(board.crews).sort((a, b) => a.foreman.localeCompare(b.foreman)).forEach(c => { if (crewF !== "All" && SC.firstOf(c.foreman) !== crewF) return;
+        c.people.forEach(p => { if (off.has(p)) { out.push(p); return; } all++; if (on.has(p)) n++; else open.push(p); }); });
+      return (memo[iso] = { on: n, all, open, out });
     };
   }, [chips, board, V, crewF]);
   const ccEl = (iso) => { const k = crewCnt(iso); return k.all ? <span className="sc-cc" title={`${k.on} of ${k.all} crew scheduled`}>{k.on}/{k.all}</span> : null; };
+  // "11 on · 6 open" under a day's date; the open number is bold, and a check shows when everyone's on something.
+  const countsEl = (iso) => { const k = crewCnt(iso); if (!k.all) return null; const o = k.all - k.on;
+    return <span className={"sc-cc2" + (o ? "" : " all")} title={`${k.on} of ${k.all} crew scheduled`}>{o ? <>{k.on} on · <b>{o} open</b></> : <>✓ All {k.on} on</>}</span>; };
+  // The open people under a day's date, as chips to drag (or tap, then tap a job) onto that day's jobs. Off is gray.
+  const openEl = (iso) => { const k = crewCnt(iso); if (!k.open.length && !k.out.length) return null;
+    return (
+      <div className="sc-open" onClick={e => e.stopPropagation()}>
+        {k.open.length ? <span className="sc-ol">Open</span> : null}
+        {k.open.map(n => (
+          <button type="button" key={n} className={"sc-pp" + (pickP && pickP.iso === iso && pickP.name === n ? " on" : "")} draggable
+            title={`${n}${board.partnerOf(n) ? " · pair: " + board.partnerOf(n) : ""}. Drag onto a job that day, or tap then tap the job.`}
+            onDragStart={e => { setDragP({ name: n, iso }); try { e.dataTransfer.setData("text/plain", "p:" + n); e.dataTransfer.effectAllowed = "copy"; } catch (_) {} }}
+            onDragEnd={() => { setDragP(null); setDropOn(""); }}
+            onClick={() => setPickP(p => p && p.name === n && p.iso === iso ? null : { name: n, iso })}>{SC.firstOf(n)}</button>))}
+        {k.out.length ? <span className="sc-po">Off: {k.out.map(SC.firstOf).join(", ")}</span> : null}
+      </div>); };
   const shortT = (t) => {
     const m = /^(\d+):(\d\d) (AM|PM)–(\d+):(\d\d) (AM|PM)$/.exec(String(t || "")); if (!m) return String(t || "");
     const a = m[1] + (m[2] !== "00" ? ":" + m[2] : ""), b = m[4] + (m[5] !== "00" ? ":" + m[5] : "");
@@ -52215,7 +52324,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
                 return (
                   <div key={iso} className={"sc-cwc" + (i === 4 ? " fri" : "") + (off || hol ? " off" : l.length ? " on" : " free") + (picked ? " drop" : "")} onClick={() => tapDay(iso)}>
                     {off ? "Off" : hol ? ((V.holidays && V.holidays[iso]) || "Holiday") : l.length ? l.map(x => (
-                      <button type="button" key={x.it.key} className={"sc-cwj " + x.style + (sel === x.it.key ? " on" : "")} style={{ "--c": SCAL_KIND[x.it.kind], "--s": SCAL_SOFT[x.it.kind] }}
+                      <button type="button" key={x.it.key} className={"sc-cwj " + x.style + (sel === x.it.key ? " on" : "")} style={kv(x.it.kind)}
                         title={`${label(x.it)} · ${x.it.tag}${x.time ? " · " + x.time : ""}`} onClick={e => { e.stopPropagation(); setSel(x.it.key); setBk(null); setCopyOpen(false); }}>
                         {x.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{x.it.no ? "#" + x.it.no : x.it.name}{x.time ? <i>{shortT(x.time)}</i> : null}</button>)) : i === 4 ? "" : "Open"}
                   </div>);
@@ -52232,8 +52341,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         const ppl = new Set(); list.forEach(c => c.who.forEach(n => ppl.add(n)));
         return (
           <div key={iso} className={"sc-day" + (fri ? " fri" : "") + (hol ? " hol" : "") + (iso === V.today ? " now" : "") + (over === iso || (picked && !fri && !hol) ? " drop" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
-            <div className="sc-dh"><span>{SCAL_DOW[i]}</span><b>{SC.parseYmd(iso).getDate()}</b>{!fri && !hol ? (() => { const k = crewCnt(iso); return <em title={`${k.on} of ${k.all} crew scheduled`}><b>{k.on}/{k.all}</b> crew{list.length ? ` · ${list.length} job${list.length > 1 ? "s" : ""}` : ""}</em>; })() : list.length ? <em>{list.length} job{list.length > 1 ? "s" : ""} · {ppl.size} ppl</em> : null}</div>
-            {offOn(iso).length ? <div className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</div> : null}
+            <div className="sc-dh"><span>{SCAL_DOW[i]}</span><b>{SC.parseYmd(iso).getDate()}</b>{!fri && !hol ? <em>{countsEl(iso)}{list.length ? <small>{list.length} job{list.length > 1 ? "s" : ""}</small> : null}</em> : list.length ? <em>{list.length} job{list.length > 1 ? "s" : ""} · {ppl.size} ppl</em> : null}</div>
+            {!fri && !hol ? openEl(iso) : offOn(iso).length ? <div className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</div> : null}
             <div className="sc-dl">
               {hol ? <span className="sc-hol">{(V.holidays && V.holidays[iso]) || "Holiday"} · no work</span> : null}
               {list.map(c => chipEl(c, iso, false))}
@@ -52249,7 +52358,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         const w = mw + Math.floor(n / 5), i = n % 5, iso = SC.addDays(start, w * 7 + i), list = dayChips(iso), max = 4;
         return (
           <div key={iso} className={"sc-mc" + (i === 4 ? " fri" : "") + (V.holidays && V.holidays[iso] ? " hol" : "") + (iso === V.today ? " now" : "") + (iso < V.today ? " past" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
-            <span className="sc-dn">{SC.md(iso)}{i < 4 && SC.isWork(iso) && iso >= V.today ? ccEl(iso) : null}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}</span>
+            <span className="sc-dn">{SC.md(iso)}{i < 4 && SC.isWork(iso) && iso >= V.today ? countsEl(iso) : null}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}</span>
             {offOn(iso).length ? <span className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</span> : null}
             {list.slice(0, max).map(c => chipEl(c, iso, true))}
             {list.length > max ? <button type="button" className="sc-more" aria-haspopup="dialog" aria-expanded={!!pop && pop.iso === iso} onClick={e => openPop(e, iso)}>+{list.length - max} more</button> : null}
@@ -52286,7 +52395,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
                 const list = dayChips(iso), max = 3;
                 return (
                   <div key={iso} className={"sc-mc" + (i === 4 ? " fri" : "") + (V.holidays && V.holidays[iso] ? " hol" : "") + (iso === V.today ? " now" : "") + (iso < V.today ? " past" : "") + (iso === booked ? " bend" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
-                    <span className="sc-dn">{SC.parseYmd(iso).getDate()}{i < 4 && SC.isWork(iso) && iso >= V.today ? ccEl(iso) : null}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}{iso === booked ? <em>Simpro booked through here</em> : null}</span>
+                    <span className="sc-dn">{SC.parseYmd(iso).getDate()}{i < 4 && SC.isWork(iso) && iso >= V.today ? countsEl(iso) : null}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}{iso === booked ? <em>Simpro booked through here</em> : null}</span>
                     {offOn(iso).length ? <span className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</span> : null}
                     {list.slice(0, max).map(c => chipEl(c, iso, true))}
                     {list.length > max ? <button type="button" className="sc-more" aria-haspopup="dialog" aria-expanded={!!pop && pop.iso === iso} onClick={e => openPop(e, iso)}>+{list.length - max} more</button> : null}
@@ -52358,7 +52467,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!it) return <div className="sc-ins"><small>Tap a job to see its crew, days and hours. Drag it to another day to move it (press and hold on a phone, then tap a day).</small></div>;
     const f = fc(it), b = bk && bk.key === it.key ? bk : null;
     const held = f && !it.plan && f.held;
-    const canBook = f && it.no && !it.upcoming && it.kind !== "service" && !held;
+    const canBook = f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !held;
     const pool = (() => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead) || board.crewOf(it.who); return c ? c.people : []; })();
     const cur = ((f && f.staff) || []).map(x => x && x.name).filter(Boolean);
     const others = Object.values(board.crews).flatMap(c => c.people).filter(n => !pool.includes(n) && !cur.includes(n));
@@ -52372,7 +52481,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         {it.scope ? <small>{it.scope}{it.who ? ` · ${it.who}` : ""}</small> : null}
         {it.flags.map(x => <span key={x} className="sc-flag">{x}</span>)}
         {it.need ? <span className="sc-flag">Needs you: {it.need}</span> : null}
-        {held ? <span className="sc-flag">Held: {f.held}. Move or change it once that's sorted; it then books like any plan.</span> : null}
+        {held ? <span className="sc-flag">Held: {f.held}.</span> : null}
+        {held ? <div className="sc-btns"><button type="button" className="mt-btn" onClick={() => clearHold(it)}>Clear hold</button><small className="sc-sub">Keeps it as it is. Or change the day, time or who below.</small></div> : null}
         {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change booked days in Simpro.</small> : null}
         {f ? (<>
           <small>{SC.slotsOf(f).slice(0, 4).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}{SC.slotsOf(f).length > 4 ? " · …" : ""}{f.crew > 1 ? ` · ${Math.round(SC.slotsOf(f).reduce((a, d) => a + d.hours, 0) * 4) / 4} h each` : ""}</small>
@@ -52393,18 +52503,26 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
                 <option value="">+ Someone from another crew</option>{others.map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
             </div>) : null}
           <div className="sc-btns">
-            {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => { setPicked(it.key); setBk(null); }}>Move…</button> : null}
+            {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => { setPicked(it.key); setBk(null); setInsAt(null); }}>Move…</button> : null}
             {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => setCopyOpen(o => !o)}>{copyOpen ? "Done copying" : "Copy to other days"}</button> : null}
             {canBook ? <button type="button" className="mt-btn" onClick={() => b ? setBk(null) : openBook(it)}>{b ? "Close booking" : "Book in Simpro…"}</button> : null}
             {it.plan && !it.copyOf ? <button type="button" className="mt-lnk dim" onClick={() => backToAuto(it)}>{it.booked.length ? "Back to Simpro's days" : "Back to auto"}</button> : null}
-            {it.kind !== "service" ? <button type="button" className="mt-btn ghost sc-del" onClick={() => removeIt(it)}>{it.copyOf ? "Remove this copy" : "Remove"}</button> : null}
+            {it.kind !== "service" ? <button type="button" className="mt-btn ghost sc-del" onClick={() => it.copyOf ? removeIt(it) : setRm(r => r && r.key === it.key ? null : { key: it.key, why: "", note: "" })}>{it.copyOf ? "Remove this copy" : "Remove…"}</button> : null}
           </div>
+          {rm && rm.key === it.key ? (
+            <div className="sc-rm">
+              <span className="mt-lab">Why is it coming off?</span>
+              <div className="sc-copy"><div>{SCAL_WAIT.map(w => <button type="button" key={w} aria-pressed={rm.why === w} onClick={() => setRm(r => ({ ...r, why: r.why === w ? "" : w }))}>{w}</button>)}</div></div>
+              <input type="text" value={rm.note} maxLength={200} onChange={e => setRm(r => ({ ...r, note: e.target.value }))} placeholder="Note (optional)" aria-label="Note"/>
+              <div className="sc-btns"><button type="button" className="mt-btn" onClick={() => removeIt(it, rm.why, rm.note)}>{rm.why ? "Remove, waiting" : "Remove, no reason"}</button><button type="button" className="mt-lnk dim" onClick={() => setRm(null)}>Cancel</button></div>
+            </div>) : null}
           {it.kind !== "service" && !it.copyOf ? <small>Remove takes it off the calendar and keeps it on the list as needing scheduling; the auto-schedule won't put it back.{it.booked.length ? " Days already booked in Simpro stay booked; change those in Simpro." : " Nothing in Simpro changes."}</small> : null}
           {copyOpen ? (
             <div className="sc-copy"><small>Tap the days to copy it to ({f.crew} {f.crew === 1 ? "person" : "people"}, one day each). Tap again to remove.</small>
               <div>{copyDays.map(d => <button type="button" key={d} aria-pressed={copied.has(d)} onClick={() => copied.has(d) ? commit((it.copyOf || it.key) + "~" + d, null) : copyTo(it, d)}>{SC.short(d)}</button>)}</div></div>) : null}
+          {it.kind === "task" ? <small className="sc-sub">This places it on the calendar for planning. Set its date on the job and book it in Simpro as you do now.</small> : null}
           {!canBook && it.upcoming ? <small>{it.no ? `#${it.no} isn't a Simpro job yet` : "Not a Simpro job yet"}, so it can be planned but not booked.</small> : null}
-        </>) : it.kind !== "service" ? (<div className="sc-btns"><button type="button" className="mt-btn ghost" onClick={() => setPicked(it.key)}>Place on a day…</button>
+        </>) : it.kind !== "service" ? (<div className="sc-btns"><button type="button" className="mt-btn ghost" onClick={() => { setPicked(it.key); setInsAt(null); }}>Place on a day…</button>
           {it.off ? <button type="button" className="mt-btn ghost" onClick={() => { commit(it.key, null); say("Back on the auto-schedule."); }}>Restore</button>
             : it.need ? <button type="button" className="mt-btn ghost sc-del" onClick={() => removeIt(it)}>Remove from Needs you</button> : null}</div>) : null}
         {b && f ? (
@@ -52438,8 +52556,10 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       <div className="sc-scroll">{SC.groupBy(V.needs.filter(n => byKey[n.key]), n => byKey[n.key]).map(g => (<Fragment key={g.k}>
         <div className="sc-grp">{g.label} · {g.items.length}</div>
         {[...g.items].sort((a, b) => (b.held ? 1 : 0) - (a.held ? 1 : 0)).map(n => { const x = byKey[n.key]; return (
-        <button type="button" key={n.key} className={"sc-need" + (sel === n.key ? " on" : "")} onClick={() => {
-          setSel(n.key); setPicked(""); setBk(null);
+        <button type="button" key={n.key} className={"sc-need" + (sel === n.key ? " on" : "")} draggable={x.kind !== "service"}
+          onDragStart={e => { setDrag(n.key); try { e.dataTransfer.setData("text/plain", n.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }} onDragEnd={() => { setDrag(""); setOver(""); }}
+          onClick={e => {
+          setSel(n.key); setPicked(""); setBk(null); openIns(e);
           const f = fc(x); if (f) { const w = Math.floor((SC.parseYmd(f.s) - SC.parseYmd(start)) / (7 * 86400000)); if (w >= 0 && w < SCAL_WEEKS) setWk(w); }
         }}>
           <b>{label(x)}</b><small><Pill it={x}/>{n.held ? "Placed, held" : "Not placed"}</small><span className="sc-flag">{n.why}</span>
@@ -52457,14 +52577,17 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
           {g.items.map(x => {
           const s = x.start && x.start.iso && x.start.iso >= V.today && x.start.iso <= V.end ? x.start.iso : "";
           return (
-            <div key={x.key} className={"sc-card" + (picked === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")}>
+            <div key={x.key} className={"sc-card" + (picked === x.key ? " pick" : "") + (x.flags.length ? " flag" : "")} draggable
+              onDragStart={e => { setDrag(x.key); try { e.dataTransfer.setData("text/plain", x.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }} onDragEnd={() => { setDrag(""); setOver(""); }}>
               <b>{label(x)}</b>
               <small><Pill it={x}/>{hoursTxt(x)}</small>
+              {x.off && x.off.why ? <small className="sc-state">{x.off.why}{x.off.note ? `: ${x.off.note}` : ""}{x.off.at ? ` · since ${SC.short(SC.anyIso(String(x.off.at).slice(0, 10)) || V.today)}` : ""}</small> : null}
+              {x.off && x.off.why ? <label className="sc-wc"><input type="checkbox" checked={false} onChange={() => waitCleared(x)}/>Wait cleared</label> : null}
               {startTxt(x) ? <small>{startTxt(x)}{x.who && x.kind === "trip" ? ` · ${x.who}` : ""}</small> : null}
               {x.flags.map(f => <span key={f} className="sc-flag">{f}</span>)}
               <div className="sc-btns">
-                <button type="button" className="mt-btn ghost" onClick={() => { setPicked(x.key); setSel(x.key); }}>Place on a day…</button>
-                {x.off ? <button type="button" className="mt-btn ghost" onClick={() => { commit(x.key, null); say("Back on the auto-schedule."); }}>Restore</button> : null}
+                <button type="button" className="mt-btn ghost" onClick={() => { setPicked(x.key); setSel(x.key); setInsAt(null); }}>Place on a day…</button>
+                {x.off && !x.off.why ? <button type="button" className="mt-btn ghost" onClick={() => { commit(x.key, null); say("Back on the auto-schedule."); }}>Restore</button> : null}
                 {s ? <button type="button" className="mt-btn ghost" onClick={() => moveTo(x.key, s)}>Place on {SC.short(s)}</button> : null}
               </div>
             </div>);
@@ -52476,7 +52599,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   return (
     <div className="sc2">
       <style>{`
-        .sc2{display:flex;flex-direction:column;gap:10px}
+        .sc2{display:flex;flex-direction:column;gap:10px;--o:#2F5EA8;--o-ink:#24508F;--cline:#E1E4E9;--inset:#F2F4F7;--cdim:#5E6670;--cink:#1B1F24}
         .sc2 .sc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
         .sc2 .sc-seg{display:inline-flex;border:1px solid var(--cline);border-radius:999px;overflow:hidden;background:var(--card)}
         .sc2 .sc-seg button{all:unset;cursor:pointer;padding:6px 12px;font-size:12.5px;font-weight:700;color:var(--cdim)}
@@ -52493,9 +52616,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-week{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,.55fr)}
         .sc2 .sc-day{border-right:1px solid var(--cline);min-width:0;display:flex;flex-direction:column;min-height:280px}
         .sc2 .sc-day:last-child{border-right:0}
-        .sc2 .sc-day.fri{background:rgba(41,33,25,.025)}.sc2 .sc-day.hol{background:var(--inset)}
-        .sc2 .sc-day.now .sc-dh{background:rgba(180,83,26,.09)}
-        .sc2 .sc-day.drop{cursor:pointer}.sc2 .sc-day.over,.sc2 .sc-mc.over{box-shadow:inset 0 0 0 2px var(--o);background:rgba(142,99,54,.06)}
+        .sc2 .sc-day.fri{background:#FAFBFC}.sc2 .sc-day.hol{background:#F0F1F3}
+        .sc2 .sc-day.now .sc-dh{background:rgba(47,94,168,.08)}
+        .sc2 .sc-day.drop{cursor:pointer}.sc2 .sc-day.over,.sc2 .sc-mc.over{box-shadow:inset 0 0 0 2px var(--o);background:rgba(47,94,168,.06)}
         .sc2 .sc-dh{display:flex;align-items:baseline;gap:6px;padding:9px 10px 7px;border-bottom:1px solid var(--cline)}
         .sc2 .sc-dh span{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim)}
         .sc2 .sc-dh b{font-size:19px;color:var(--cink)}
@@ -52506,12 +52629,13 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-chip2 .t{font-weight:700;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .sc2 .sc-chip2 .m{font-size:11.5px;color:var(--cdim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .sc2 .sc-chip2 .m i{font-style:normal;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;margin-right:5px;color:var(--c)}
-        .sc2 .sc-chip2.booked{background:var(--c);color:#fff}.sc2 .sc-chip2.booked .m,.sc2 .sc-chip2.booked .m i{color:rgba(255,255,255,.9)}
+        .sc2 .sc-chip2.booked{background:var(--b);color:var(--bt)}.sc2 .sc-chip2.booked .m,.sc2 .sc-chip2.booked .m i{color:var(--bt);opacity:.92}
         .sc2 .sc-chip2.auto{background:var(--s);border-style:dashed;border-left-style:solid;cursor:grab}
-        .sc2 .sc-chip2.kept{background:var(--s);cursor:grab}
-        .sc2 .sc-chip2.held{background:var(--card);border-color:var(--cink);border-left-color:var(--c);cursor:grab}
-        .sc2 .sc-chip2.held .m i{color:var(--cink)}
-        .sc2 .sc-bang{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:var(--cink);color:var(--card);font-size:11px;font-weight:800;margin-right:4px;vertical-align:1px;line-height:1}
+        .sc2 .sc-chip2.kept{background:var(--s);cursor:grab}.sc2 .sc-chip2.cc{background:var(--b);color:var(--bt)}
+        .sc2 .sc-chip2.held{background:var(--card);border-color:${SCAL_HELD};border-style:dashed;border-left-style:solid;border-left-color:var(--c);cursor:grab}
+        .sc2 .sc-chip2.held .m i{color:#5E6670}
+        .sc2 .sc-chip2.drop{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o)}
+        .sc2 .sc-bang{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:${SCAL_HELD};color:var(--card);font-size:11px;font-weight:800;margin-right:4px;vertical-align:1px;line-height:1}
         .sc2 .sc-chip2.on{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o)}
         .sc2 .sc-chip2.pick{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o);opacity:.7}
         .sc2 .fri .sc-chip2 .t{font-size:11.5px}
@@ -52525,7 +52649,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-dcount b{font-size:15px;color:var(--cink)}
         .sc2 .sc-dp{display:grid;grid-template-columns:22px minmax(0,1fr);gap:2px 6px;align-items:start;padding:5px 2px;border-bottom:1px solid var(--cline);font-size:13px}
         .sc2 .sc-ck{grid-row:span 2;width:18px;height:18px;border-radius:5px;border:1.5px solid var(--cline);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
-        .sc2 .sc-dp.yes .sc-ck{background:var(--o);border-color:var(--o);color:#fff}
+        .sc2 .sc-dp.yes .sc-ck{background:var(--o);border-color:var(--o);color:#fff}.sc2 .sc-dp.no .sc-dn2{color:var(--o-ink)}
         .sc2 .sc-dp.no .sc-ck{border-color:var(--cink)}.sc2 .sc-dp.no .sc-dj{color:var(--cink);font-weight:700}
         .sc2 .sc-dp.off{opacity:.6}
         .sc2 .sc-dn2{font-weight:700;color:var(--cink)}.sc2 .sc-dn2 i{font-style:normal;font-weight:500;color:var(--cdim)}
@@ -52533,7 +52657,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-off{display:block;font-size:11px;font-weight:700;color:var(--cdim);padding:2px 10px 0}
         .sc2 .sc-mc .sc-off{padding:0 2px}
         .sc2 .sc-hol{display:block;font-size:12px;font-weight:800;color:var(--cink);padding:4px 2px}
-        .sc2 .sc-mc.hol{background:var(--inset)}
+        .sc2 .sc-mc.hol{background:#F0F1F3}
         .sc2 .sc-mc .sc-dn em.h{color:var(--cink)}
         .sc2 .sc-holrow{display:flex;gap:8px;align-items:baseline;font-size:13px;padding:4px 0;border-bottom:1px solid var(--cline)}.sc2 .sc-holrow span{flex:1;color:var(--cdim)}
         .sc2 .sc-holadd{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.sc2 .sc-holadd input{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--cline);border-radius:8px;background:var(--card);color:var(--cink);min-width:0;flex:1 1 120px}
@@ -52549,22 +52673,45 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-mh{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);padding:7px 8px;border-bottom:1px solid var(--cline)}
         .sc2 .sc-mc{border-right:1px solid var(--cline);border-bottom:1px solid var(--cline);min-height:112px;padding:5px;display:flex;flex-direction:column;gap:3px;min-width:0}
         .sc2 .sc-mc:nth-child(5n){border-right:0}
-        .sc2 .sc-mc.fri{background:rgba(41,33,25,.025)}
-        .sc2 .sc-mc.now{background:rgba(180,83,26,.07)}.sc2 .sc-mc.past{opacity:.6}
+        .sc2 .sc-mc.fri{background:#FAFBFC}
+        .sc2 .sc-mc.now{background:rgba(47,94,168,.07)}.sc2 .sc-mc.past{opacity:.6}
         .sc2 .sc-dn{font-size:11.5px;font-weight:800;color:var(--cdim);display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}.sc2 .sc-dn .sc-cc{margin-left:auto;font-size:11px}
         .sc2 .sc-mc .sc-chip2{padding:2px 6px;border-left-width:4px;border-radius:6px}.sc2 .sc-mc .sc-chip2 .t{font-size:11px}
         .sc2 .sc-more{all:unset;cursor:pointer;font-size:11.5px;font-weight:700;color:var(--o-ink)}
+        .sc2 .sc-main.board{grid-template-columns:260px minmax(0,1fr) 270px}
+        @media (max-width:1350px){.sc2 .sc-main.board{grid-template-columns:240px minmax(0,1fr)}.sc2 .sc-main.board .sc-side{grid-column:1 / -1;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}}
+        @media (max-width:1000px){.sc2 .sc-main.board{grid-template-columns:minmax(0,1fr)}.sc2 .sc-main.board .sc-left{position:static;max-height:none}}
+        .sc2 .sc-left{position:sticky;top:8px;max-height:calc(100vh - 24px);overflow:auto;display:flex;flex-direction:column;gap:10px;min-width:0}
+        .sc2 .sc-dl{max-height:68vh;overflow-y:auto}
+        .sc2 .sc-dh em{display:flex;flex-direction:column;align-items:flex-end;gap:1px}.sc2 .sc-dh em small{font-size:11px;color:var(--cdim)}
+        .sc2 .sc-cc2{font-size:11.5px;font-weight:600;color:var(--cdim);white-space:nowrap}.sc2 .sc-cc2 b{color:var(--o-ink);font-weight:800}.sc2 .sc-cc2.all{color:var(--o-ink);font-weight:800}
+        .sc2 .sc-dn .sc-cc2{margin-left:auto;font-size:11px}
+        .sc2 .sc-open{display:flex;flex-wrap:wrap;gap:3px 4px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--cline);background:#F7F9FC}
+        .sc2 .sc-ol{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--cdim);margin-right:2px}
+        .sc2 .sc-pp{all:unset;cursor:grab;font-size:11.5px;font-weight:700;color:var(--o-ink);background:#fff;border:1px solid #BFD0EA;border-radius:999px;padding:1px 8px;touch-action:manipulation}
+        .sc2 .sc-pp.on{background:var(--o);border-color:var(--o);color:#fff}.sc2 .sc-pp:focus-visible{outline:2px solid var(--o);outline-offset:1px}
+        .sc2 .sc-po{flex-basis:100%;font-size:11px;font-weight:600;color:#9AA1AB}
+        .sc2 .sc-insp{width:340px;max-height:80vh}.sc2 .sc-insp .sc-ins{border:0;padding:0;border-radius:0}
+        .sc2 .sc-insp.sheet{left:8px;right:8px;bottom:8px;top:auto;width:auto;max-height:75vh}
+        .sc2 .sc-rm{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--cline);padding-top:8px}
+        .sc2 .sc-rm input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--cline);border-radius:8px;background:var(--card);color:var(--cink)}
+        .sc2 .sc-wc{display:flex;gap:6px;align-items:center;font-size:13px;font-weight:700;color:var(--o-ink)}
+        .sc2 .sc-wbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        .sc2 .sc-wbk{left:50%;top:6vh;transform:translateX(-50%);width:min(620px,calc(100vw - 16px));max-height:86vh}
+        .sc2 .sc-wrow{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--cline)}
+        .sc2 .sc-wrh{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--cink)}
+        .sc2 .sc-wrow small{font-size:12px;color:var(--cdim)}
         .sc2 .sc-cw{overflow-x:auto}
         .sc2 .sc-cwr{display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(4,minmax(96px,1fr)) minmax(70px,.6fr);min-width:620px}
         .sc2 .sc-cwr>b{font-size:12.5px;color:var(--cink);padding:6px 8px;border-top:1px solid var(--cline);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .sc2 .sc-cwh span{display:flex;gap:6px;align-items:baseline;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--cdim);padding:8px;border-left:1px solid var(--cline)}
-        .sc2 .sc-cwh span:first-child{border-left:0}.sc2 .sc-cwh span.now{background:rgba(142,99,54,.08)}.sc2 .sc-cwh .sc-cc{margin-left:auto;text-transform:none;letter-spacing:0}
-        .sc2 .sc-cwg{min-width:620px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim);padding:10px 8px 4px;border-top:1px solid var(--cline);background:var(--inset)}
+        .sc2 .sc-cwh span:first-child{border-left:0}.sc2 .sc-cwh span.now{background:rgba(47,94,168,.08)}.sc2 .sc-cwh .sc-cc{margin-left:auto;text-transform:none;letter-spacing:0}
+        .sc2 .sc-cwg{min-width:620px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim);padding:10px 8px 4px;border-top:1px solid var(--cline);background:#F4F6F8}
         .sc2 .sc-cwc{border-top:1px solid var(--cline);border-left:1px solid var(--cline);padding:4px 5px;min-height:34px;display:flex;flex-wrap:wrap;gap:3px;align-items:center;font-size:11.5px;cursor:pointer;min-width:0}
-        .sc2 .sc-cwc.free{color:var(--cdim)}.sc2 .sc-cwc.off{background:var(--inset);color:var(--cdim);font-weight:700}.sc2 .sc-cwc.fri{background:rgba(41,33,25,.025)}
+        .sc2 .sc-cwc.free{color:var(--o-ink);font-weight:700}.sc2 .sc-cwc.off{background:#F0F1F3;color:var(--cdim);font-weight:700}.sc2 .sc-cwc.fri{background:#FAFBFC}
         .sc2 .sc-cwj{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:baseline;gap:4px;border-radius:6px;padding:1px 6px;font-size:11.5px;font-weight:800;color:var(--cink);background:var(--s);border:1.5px solid var(--c);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
         .sc2 .sc-cwj i{font-style:normal;font-weight:500}
-        .sc2 .sc-cwj.booked{background:var(--c);color:#fff}.sc2 .sc-cwj.auto{border-style:dashed}.sc2 .sc-cwj.held{background:var(--card);border-color:var(--cink)}
+        .sc2 .sc-cwj.booked{background:var(--b);color:var(--bt)}.sc2 .sc-cwj.auto{border-style:dashed}.sc2 .sc-cwj.held{background:var(--card);border-color:${SCAL_HELD};border-style:dashed}
         .sc2 .sc-cwj.on,.sc2 .sc-cwj:focus-visible{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o)}
         @media (max-width:700px){
           .sc2 .sc-week{grid-template-columns:minmax(0,1fr)}
@@ -52633,7 +52780,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Booked in Simpro</span>
         <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Auto-scheduled</span>
         <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px solid ${SCAL_KIND.rough}` }}/>Plan (placed or moved)</span>
-        <span><span className="sc-sw" style={{ background: "var(--card)", border: "1.5px solid var(--cink)" }}/><span className="sc-bang" aria-hidden="true">!</span>Held for you</span>
+        <span><span className="sc-sw" style={{ background: "var(--card)", border: `1.5px dashed ${SCAL_HELD}` }}/>Held for you</span>
+        <span><span className="sc-sw" style={{ background: SCAL_ON.task[0], border: `1.5px solid ${SCAL_KIND.task}` }}/>QC walk, inspection, quick job set in Command Center</span>
         <span><span className="sc-pill" style={{ background: SCAL_SOFT.rough, color: SCAL_KIND.rough }}>Rough-in</span><span className="sc-pill" style={{ background: SCAL_SOFT.finish, color: SCAL_KIND.finish }}>Finish</span><span className="sc-pill" style={{ background: SCAL_SOFT.trip, color: SCAL_KIND.trip }}>Return trip</span></span>
         {sched === undefined ? <span>Reading Simpro's schedule…</span> : sched === null ? <span style={{ color: "var(--o-ink)", fontWeight: 700 }}>Couldn't read Simpro's schedule; only plans show.</span> : null}
       </div>
@@ -52644,16 +52792,54 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
             <button type="button" onClick={() => setPop(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
           <div className="sc-popl">{list.map(c => chipEl(c, pop.iso, false))}</div>
         </div>); })() : null}
-      <div className="sc-main">
+      {pickP ? <div className="sc-pickbar">Adding {SC.firstOf(pickP.name)}{board.partnerOf(pickP.name) ? ` (and ${SC.firstOf(board.partnerOf(pickP.name))} if open)` : ""}: tap a job on {SC.short(pickP.iso)}.<button type="button" onClick={() => setPickP(null)}>Cancel</button></div> : null}
+      {view === "week" || view === "crew" ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={openWeekBook}>Book this week in Simpro…</button><small className="sc-sub">Week of {SC.md(weekStart)}. You see every entry before anything goes in.</small></div> : null}
+      {wb ? (() => { const on = wb.rows.filter(r => r.on); const pv = on.filter(r => r.preview), ent = pv.reduce((a, r) => a + r.preview.totals.entries, 0), hrs = pv.reduce((a, r) => a + r.preview.totals.hours, 0), ot = pv.reduce((a, r) => a + (r.preview.totals.ot || 0), 0);
+        return (
+          <div className="sc-pop sc-wbk" role="dialog" aria-label="Book this week in Simpro">
+            <div className="sc-poph"><b>Book the week of {SC.md(weekStart)}</b><span>{on.length} of {wb.rows.length} jobs</span><button type="button" onClick={() => setWb(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
+            <div className="sc-popl">
+              {!wb.rows.length ? <small>Nothing to book this week: every block is booked already, held, or has no job number.</small> : null}
+              {wb.rows.map((r, i) => { const it = byKey[r.key]; if (!it) return null; const f = fc(it); const names = staffList.filter(x => r.staff.has(x.id)).map(x => SC.firstOf(x.name));
+                return (
+                  <div key={r.key} className="sc-wrow">
+                    <label className="sc-wrh"><input type="checkbox" checked={r.on} disabled={wb.phase !== "pick"} onChange={() => setWb(w => ({ ...w, rows: w.rows.map((x, j) => j === i ? { ...x, on: !x.on } : x) }))}/>
+                      <b>{label(it)}</b><Pill it={it}/></label>
+                    <small>{SC.slotsOf(f).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}</small>
+                    <small>{names.length ? names.join(", ") : "No one matched in Simpro's staff list. Open the job and use its Book."}</small>
+                    {r.err ? <small className="warn">{r.err}</small> : null}
+                    {r.preview ? <div className="sc-tbl"><table><thead><tr><th>Day</th><th>Person</th><th>Time</th><th>Normal</th><th>OT 1.5x</th></tr></thead>
+                      <tbody>{r.preview.entries.map(e => <tr key={e.date + e.staffId}><td>{SC.short(e.date)}</td><td>{e.name}</td><td>{e.blocks.map(x => x.StartTime + "–" + x.EndTime).join(", ")}</td><td>{e.normal}</td><td className={e.ot ? "ot" : ""}>{e.ot || "–"}</td></tr>)}</tbody></table></div> : null}
+                    {r.done ? <small className={r.done.ok ? "ok" : "warn"}>{r.done.ok ? `Booked ${r.done.created.length} entries.` : r.done.err || `Booked ${(r.done.created || []).length} of ${r.done.planned}, then Simpro refused ${r.done.failed && r.done.failed.name}. Check Simpro.`}</small> : null}
+                  </div>); })}
+              {wb.phase === "pick" && wb.rows.length ? <button type="button" className="mt-btn ghost" disabled={wb.busy || !on.length} onClick={runWeekPreview}>{wb.busy ? "Building the preview…" : `Show what it would book (${on.length})`}</button> : null}
+              {wb.phase === "preview" ? (<>
+                <small>{ent} entries · {Math.round(hrs * 4) / 4} h{ot ? ` · ${ot} h at 1.5x` : ""}. Each block books all of its days. Hours over 40 in a person's week go in at 1.5x. It only adds schedule entries; no job stage or status changes.</small>
+                <div className="sc-btns"><button type="button" className="mt-btn" disabled={wb.busy || !ent} onClick={runWeekBook}>{wb.busy ? "Booking…" : `Book these ${ent} entries in Simpro`}</button>
+                  <button type="button" className="mt-lnk dim" onClick={() => setWb(w => ({ ...w, phase: "pick", rows: w.rows.map(x => ({ ...x, preview: null, err: "" })) }))}>Back</button></div>
+              </>) : null}
+              {wb.phase === "done" ? <button type="button" className="mt-btn ghost" onClick={() => setWb(null)}>Done</button> : null}
+            </div>
+          </div>); })() : null}
+      {/* Koy 2026-11-20: "I need all to be easily visible, clickable, and movable". Week and Crew week are one board:
+          what needs scheduling on the left (drag onto a day), the days in the middle with every job and the open
+          people under each date, the day checklist and holidays on the right. */}
+      <div className={"sc-main" + (view === "week" || view === "crew" ? " board" : "")}>
+        {view === "week" || view === "crew" ? <div className="sc-left">{needsBox}{listBox}</div> : null}
         <div className="sc-cal">{view === "months" ? monthsView() : view === "month" ? monthView() : view === "crew" ? crewWeekView() : weekView()}</div>
         <div className="sc-side">
           {dayBox()}
-          {inspector()}
-          {needsBox}
-          {listBox}
+          {view === "week" || view === "crew" ? null : needsBox}
+          {view === "week" || view === "crew" ? null : listBox}
           {holBox()}
         </div>
       </div>
+      {it && insAt ? (
+        <div ref={insRef} className={"sc-pop sc-insp" + (insAt.sheet ? " sheet" : "")} role="dialog" aria-label={label(it)} style={insAt.sheet ? undefined : { left: insAt.left, top: insAt.top, width: insAt.w }}>
+          <div className="sc-poph"><b>{it.kind === "trip" ? "Return trip" : it.tag}</b><span/>
+            <button type="button" onClick={() => setInsAt(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
+          <div className="sc-popl">{inspector()}</div>
+        </div>) : null}
     </div>
   );
 }
@@ -64854,7 +65040,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 **Last manifest update:** 2026-11-19 · App SW version: v660
 ---
 
-- **Crew calendar blocks get times; a short trip and a job fit the same day; only confirmed starts are auto-scheduled** · 'in-flight 2026-11-19' · 'SW v660' · 'slotsOf' · 'tripHours' · 'autoPlan' · 'functions/scrambleBook.js blocksFor' · Koy: *"noticing none of them have time assignents. tuhaye hollow RT monday wont take all day"*, then *"an why is kweller finish there? it has no confirmed start date or anything"*. **Times:** each block shows its clock time per day (*7:00 AM–9:00 AM*), and a day's chips sort by start time. A return trip takes its **est. time** (the trip's 'time', carried from a change order: "3 hrs", "half day", "45 min", "1 day") per person, else **4 hours** each (the details say so). The auto-schedule now counts hours per person per day instead of whole days: a 2-hour trip for a pair is 7:00–9:00 and the same pair can go on to a job 9:00–5:00 that day (a job can start a person's day after up to half a day of other work; a late start ends at 5:00 and the hours roll to the next day); a Simpro booking holds only its hours. **Time** in a block's details sets the first day's start (quarter hours, 5:00 AM–5:00 PM), saved with the plan ('t'). **Book in Simpro** books each day from its start time (new optional 'days[].start' on 'scrambleBook', checked 5:00–17:00 on the quarter hour; without it, 7:00 as before). **Why Kweller showed:** its return trip #6 was booked in Simpro today and signed off, so it wasn't an open trip; today's booking fell to the finish, and a finish with a booking got a forecast of its Job Costs hours left. Now a done trip keeps its own Simpro day, a forecast after a booking runs only for a phase in progress or with a confirmed start, and the auto-schedule places only phases in progress or with a **confirmed** start; an estimated start stays on Not on the calendar yet (with Place on its date). Guide 'dashboard.html'. **Deploy:** functions 'scrambleBook' (the start time); without it the app's bookings still start at 7:00. **Why it won't lose data:** display and the same plan write (one more field, 't', on the plan's map key, by merge); the booking still writes only after its preview and confirm, with the same hash check (the start time is part of what's hashed); no loader or rules change.
+- **Crew calendar blocks get times; a short trip and a job fit the same day; only confirmed starts are auto-scheduled** · 'in-flight 2026-11-19' · 'SW v660' · 'slotsOf' · 'tripHours' · 'autoPlan' · 'functions/scrambleBook.js blocksFor' · Koy: *"noticing none of them have time assignents. tuhaye hollow RT monday wont take all day"*, then *"an why is kweller finish there? it has no confirmed start date or anything"*. **Times:** each block shows its clock time per day (*7:00 AM–9:00 AM*), and a day's chips sort by start time. A return trip takes its **est. time** (the trip's 'time', carried from a change order: "3 hrs", "half day", "45 min", "1 day") per person, else **4 hours** each (the details say so). The auto-schedule now counts hours per person per day instead of whole days: a 2-hour trip for a pair is 7:00–9:00 and the same pair can go on to a job 9:00–5:00 that day (a job can start a person's day after up to half a day of other work; a late start ends at 5:00 and the hours roll to the next day); a Simpro booking holds only its hours. **Time** in a block's details sets the first day's start (quarter hours, 5:00 AM–5:00 PM), saved with the plan ('t'). **Book in Simpro** books each day from its start time (new optional 'days[].start' on 'scrambleBook', checked 5:00–17:00 on the quarter hour; without it, 7:00 as before). **Why Kweller showed:** its return trip #6 was booked in Simpro today and signed off, so it wasn't an open trip; today's booking fell to the finish, and a finish with a booking got a forecast of its Job Costs hours left. Now a done trip keeps its own Simpro day, a forecast after a booking runs only for a phase in progress or with a confirmed start, and the auto-schedule places only phases in progress or with a **confirmed** start; an estimated start stays on Not on the calendar yet (with Place on its date). Guide 'dashboard.html'. **Deploy:** functions 'scrambleBook' (the start time); without it the app's bookings still start at 7:00. **New look** (Koy: *"the red and green is terrible christmas vibes and the slashing red is so hard to look at"*): one accent and neutrals, no stripes. Rough-in copper, finish slate, return trips charcoal ('SCAL_KIND'); held = dark outline with a ! mark; holidays and time off plain gray; the day checklist and warnings in copper and ink. **Crew count** on every workday (week header *9/17 crew*, month and 4-month cells *9/17*): people on a crew who aren't off, and how many are on something; the crew buttons narrow it. **Crew week** view (Nov 19 strategy meeting: "a week view with all crew listed as available or booked"): one row per Crew Board person by crew, Mon to Fri, each day their jobs with times, Open or Off ('crewWeekView'). Quote-stage jobs untouched (Koy: already in the app). **Then** (Koy: *"I hate the brown"*, *"I need all to be easily visible, clickable, and movable"*): one blue family (rough navy, finish medium blue, trips white with a blue outline, held gray dashed; 'SCAL_KIND/SCAL_SOFT/SCAL_ON'); under each date *"9 on · 8 open"* and the open people as chips ('countsEl', 'openEl'), drag or tap a person onto a job that day, their set pair comes along when open ('addPerson'); Week and Crew week are one board (to-schedule list left and draggable, days middle, checklist right); the job box opens beside the job ('insAt') with **Clear hold** ('clearHold'); **Book this week in Simpro** (preview of every block, then book each; 'openWeekBook'). Scheduler: 4 is the goal, not a minimum; 2 or 3 isn't held (Koy: *"We want 4 but sometimes it's just 2. That's fine"*). **Remove…** asks a reason + note ('SCAL_WAIT'); with one the plan is '{off, why, note}' and the job is under **Waiting** first on the list until **Wait cleared**. **Other work on the list** ('kind: "task"', never auto-placed, not bookable here): QC walks rough/final ('qcStatus'/'finishQcStatus' needs or scheduled), quick jobs ('quickJobStatus' new or scheduled, no longer skipped), temp ped installs ('tempPedStatus'), Matterport scans, approved COs not converted, and inspections with a target date as day markers. Set-in-CC dates show on their day ('ccDays'); placing one here is a calendar plan only. Left out: redline walks (own collection, not passed to the calendar), inspections to call in, GC walkthroughs, meter sets, low voltage, punch visits (not tracked). **Why it won't lose data:** display and the same plan write (one more field, 't', on the plan's map key, by merge); the booking still writes only after its preview and confirm, with the same hash check (the start time is part of what's hashed); no loader or rules change.
 - **Pair anybody with anybody on the Crew Board; time off and company holidays on the crew calendar** · 'in-flight 2026-11-19' · 'SW v659' · 'CrewBoard' · 'pairId' · 'crewBoard().partnerOf' · 'setHolidays' · 'DEFAULT_HOLIDAYS' · 'offByDay' · Koy: *"I need to be able to pair anybody with anybody, so a foreman with an apprentice. I can't do that right now with Colby. I'm trying to pair him with Treycen but his name doesn't even show up"*. **Why Treycen was missing:** v658 only offered the other side (a leader paired only with a crew member, on the same crew); Colby (foreman) and Treycen (lead) are both leaders, so he was filtered out. **Now:** **Paired with** lists everyone on the board (admins left off), the person's own crew first, with role and crew on each name, *(with X)* when they're already paired, and *(not scheduled)* for Unassigned; a search box finds anyone. A pair stays when someone changes role or crew. Same-crew pairs still show as one linked card; a pair across crews shows a *with X (Colby's crew)* line under the person. **Crew calendar:** a pair counts when both point at each other, any role, any crew; a trip takes its person's pair even from another crew, and a job's head brings their pair from another crew when that person is free on every day; someone Unassigned is never scheduled, pair or not. **Time off and holidays** (Koy: *"we need to make sure that time off is shown in this view, the scheduler view, so that we don't book people that are off. We also need to make sure that holidays don't get booked on Thanksgiving, Christmas, New Year's Eve, and Memorial Day. I think there's a couple more that I don't remember"*): approved time off ('settings/crewPTO', read only) shows as *Off: names* on each day in Week, Month and 4 months and in the day checklist; the auto-schedule never books anyone on a day off; a move or copy takes anyone who's off those days off the block and says so; a kept plan, a Simpro booking or a forecast tail with someone off that day is flagged (*Braden is off 12/21*), never moved. **Company holidays** are a list in the calendar's side panel, **Company holidays · N** (everyone sees it; admins add a date and name or Remove one), saved for everyone in 'meetings/scramble__prefs.holidays'. Default list: Thanksgiving 11/26/2026, Christmas 12/25/2026, New Year's Eve 12/31/2026, New Year's Day 1/1/2027, Memorial Day 5/31/2027, Independence Day (observed) 7/5/2027, Labor Day 9/6/2027 (the last three were already off in v656). Nobody is booked on one, a block running into one picks up the next workday, the day is shaded with its name, and a Simpro booking on one is flagged. Guides 'settings.html', 'dashboard.html'. **Why it won't lose data:** same single field ('pairId') through the same guarded save; the holiday list is one more field in the same meeting prefs doc by merge (no rules change); time off is only read; no loader or function change.
 - **Set pairs on the Crew Board, the crew calendar sends pairs together, + more opens over the calendar, and a day checklist of who's scheduled** · 'in-flight 2026-11-19' · 'SW v658' · 'CrewBoard' · 'pairId' · 'crewBoard().partnerOf' · 'autoPlan' · 'OdScrambleCal' · 'scripts/scramble-cal-test.js' · Koy, 2026-11-19: *"we need to know which junior foreman is with which apprentice, which lead is with which apprentice, and which foreman is which. We just need the pairs, right, so that we can schedule by that instead of guessing at who the pairs are"*, then *"when I book, right-click the "+1 more," etc., on the calendar: can it just drop down with the calendar view still up and not open up the day view?"* **Crew Board (Settings):** tap a person, **PAIRED WITH** lists the people on the same crew on the other side (a leader, meaning foreman, jr. foreman or lead, pairs with a crew member, and the other way round), with who they're already with; tap one to pair, tap again or **No pair** to undo. Each pair shows in its crew's column as one linked card (PAIR), then everyone without one. Saved as 'pairId' on both people through the same guarded 'saveUsers' (pending list says *Louis: paired with James*); moving either to another crew, or across leader / crew, drops the pair. Nothing is guessed: pairs start empty. **Crew calendar:** a pair counts only when both point at each other on the same crew. A return trip takes its person's pair first; a job's crew is its head plus their pair, then whole pairs, then people with no pair; when the crew splits, the jr foreman's pair stays back with them. A pair is split only when one of the two is booked, or to make up the 4. With no pairs set, v656's rules are unchanged. **+ more** (Month and 4 months) opens that day's full list over the calendar (tap a job for its details, drag one to another day); Esc or a tap outside closes it. **Day checklist** (Koy: *"it'd be very cool if I could select a day and when I click on a day, it tells me a checklist of who's scheduled and who isn't scheduled yet"*): tap a day's date or empty space (not a job or + more) and a panel beside the calendar lists everyone on the Crew Board (Unassigned left off) by crew: **N of M scheduled** on top, then per crew the people not scheduled yet first (red, unticked), those on a job ticked with the job number and name (any block that day: booked, plan or auto), and anyone off that day (settings/crewPTO, read only) marked Off and not counted. Guides 'settings.html', 'dashboard.html'. **Why it won't lose data:** one new field ('pairId') on team rows, written only by the Crew Board through the existing guarded save that spreads every other field through; the calendar reads it and the time-off list; no loader, rules or function change; nothing goes to Simpro.
 - **Friday Strategy on the Meetings tab: the owners meeting, prefilled Thursday night, with next week on the crew calendar** · 'in-flight 2026-11-19' · 'SW v657' · 'OdMeetings' · 'buildStrategySections' · 'strategyNumbers' · 'functions/strategyMeeting.js' · 'strategyMeetingPrefill' · 'refreshStrategyMeeting' · 'gatherStrategyInputs' · 'scripts/strategy-meeting-test.js' · Koy, 2026-11-19 (spec approved in weekly-meetings, from his 11/13 template Doc): *"Yeah this will use the new auto-scheduler calendar as well but these other sections look good. Just make sure I can hide, edit, delete, or add in any of them, just like the other ones"*. Preview first on real data. **Where:** /dashboard › Meetings, fourth button **Friday Strategy · Fri 8:00**, shown only to admins (access admin: Koy, Josh, Brady and any other admin) and never in Foreman view, because it carries dollars. **Sections:** 1 Top of the meeting (five or six items, worst first: jobs losing money in Simpro, starts at risk, jobs in progress with nothing booked, finals next week, trips past their date, customer deadlines, approved COs not on a trip) · 2 Schedule next week (the v656 crew calendar itself, opened on next week, same shared plans as the Scramble; under it every job booked next week by day and who, then every job in progress with nobody booked: phase %, last update, punch, questions, waiting on by type, crew or NO CREW, then on hold) · 3 Starts (next week's rough / finish starts and overdue ones; AT RISK when nobody booked, no lead, Job Prep not 5/5 or no material PO on the phase card) · 4 Return trips needed (every open CC trip: what for, material, PO numbers written on it, booked day and person or not; approved COs not converted) · 5 Needs a date (trips past their date not finished, Simpro Job - Scheduled with nothing booked next week, crew-calendar items Removed and left open) · 6 Dates that moved since last Friday (and dates passed with nothing logged) · 7 On the calendar (inspections, QC walks, scans, booked trips, walks / meetings on Koy's calendar that name a live job) · 8 Job numbers (every active job, worst total margin first: Simpro status, job total, rough and finish net % with profit $ on sell and hours, total margin straight from Simpro, material $ used of bid, flags at 90%+ and over; actual, never projected; live from settings/phaseCosts + settings/simproTotals) · 9 People out next week (approved, still asked, booking conflicts) · 10 Notes (empty each week) · 11 Action items (who, due, Send to My Day; last week's come back for Done / Not done). **Hide, edit, delete, add:** every row has + Note, **Edit** (title and details for that week, "Back to original"), Hide (that week) or Remove (an added one), and every section has Add a job or item and Section notes. On this meeting all of it belongs to its week (meetings/strategy_<Friday>: notes, rowNotes, edits, hidden, added, actions). Edit is on every meeting's rows now (meetings/<kind>_<week>.edits). **Prefill:** new scheduled function **strategyMeetingPrefill** (Thu 9:00 PM MT) runs the Friday prep's reads (now one shared 'gatherStrategyInputs', also used by strategyPrep) and its pure model, then 'functions/strategyMeeting.js' turns it into the rows and writes ONLY prefill / prefill_at / type / date / updated_at on meetings/strategy_<Friday> (mergeFields). It never advances settings/strategyPrep (the Friday 6 AM doc still owns it, so "moved since last Friday" compares to last Friday's doc run). **Prefill now / again** on the page calls the new **refreshStrategyMeeting** callable (live PIN, admin only). **Rules:** /meetings allows type strategy / strategy_prefs. Never changes a job's stage, never writes Simpro. Guide 'dashboard.html' (Meetings). Test 'scripts/strategy-meeting-test.js' (prebuild); 'scripts/strategyprep-test.js' source checks now read the shared reader. **Why it won't lose data:** the page writes only its own meeting doc by merge, one field at a time, like the other meetings; the calendar writes the same scramble__prefs plans as v656; the function writes only the prefill fields of one meeting doc and reads everything else; the Friday doc run is unchanged apart from its reads moving into a shared function (same calls, same order, same errors).

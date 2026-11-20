@@ -389,10 +389,12 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
       }
     }
     if (!at) return need(it, `${label(c)} is booked through ${md(end)}`);
-    // the foreman's own job keeps the bigger group when the crew splits; the short one is flagged
-    const short = names.length < want && !(split && tt[names[0]] === "foreman") ? `Only ${names.length} of ${label(c)} free (want ${want})` : "";
+    // 4 is the goal, not a minimum (Koy 2026-11-19: "sometimes, if not most times, it's going to be 2 people on a
+    // job. We want 4 but sometimes it's just 2. That's fine"): a job with 2 or 3 is placed, not held. It's held only
+    // when not even a pair can go, which the loop above never places.
+    void split;
     const po = it.start.started ? "" : it.po === "none" ? `${it.tag} starts with no material PO` : it.po === "notOrdered" ? `${it.tag} material card not ordered yet` : "";
-    place(it, names, at, it.left, [po, short].filter(Boolean).join(". "), label(c));
+    place(it, names, at, it.left, po, label(c));
   };
   // A confirmed start date is a promise to the builder, so those go first, on their date; then work already under
   // way; then the rest, rough-in first (rough-in ahead of finish on the same day throughout).
@@ -424,11 +426,54 @@ function buildCalendar(input) {
     items.push(it); return it;
   };
 
+  // v660 (Koy 2026-11-20: "Would be really awesome if QC's that need to be scheduled show up here too ... Any scheduling
+  // things would be awesome to show here"): other field work that needs a date, as list items of their own ("task").
+  // One that needs a date is on Not on the calendar yet under its type, to drag onto a day (a calendar plan; the
+  // job's own field is not written). One already set in Command Center shows on its day ("cc"), and isn't moved here.
+  // The auto-schedule never places these.
+  const task = (j, no, sub, o) => mk(Object.assign({ key: "x_" + sub + "_" + safeKey(j.id) + (o.id ? "_" + safeKey(o.id) : ""), kind: "task", sub, no, name: j.name || "", jobId: j.id,
+    foreman: String(j.foreman || "").trim(), jlead: String(j.lead || "").trim() }, o));
+  const ccSpan = (a, b) => { const out = []; for (let d = nextWork(a), g = 0; d <= (b && b > a ? b : a) && g < 30; d = workAfter(d), g++) out.push(d); return out.length ? out : [a]; };
+  const tasksOf = (j, no, jb) => {
+    // QC walks (rough and final): "needs" = needs a date; "scheduled" with its date = set in Command Center.
+    [["qcStatus", "qcStatusDate", "Rough QC walk", "rqc"], ["finishQcStatus", "finishQcStatusDate", "Final QC walk", "fqc"]].forEach(([k, kd, tag, sub]) => {
+      const st = j[k], d = anyIso(j[kd]);
+      if (st === "needs") task(j, no, sub, { tag, group: "qcwalk", defCrew: 1, defHours: 2, ...(d ? { flags: ["Needed by " + md(d)] } : {}) });
+      else if (st === "scheduled" && d && d >= todayIso) task(j, no, sub, { tag, group: "qcwalk", ccDays: [d] });
+    });
+    // Inspections with a target date ahead and no pass yet (a failed one booked again counts): a marker on the day (the inspector comes; no crew).
+    [["fourWayTargetDate", "roughInspectionResult", "Rough inspection", "rin"], ["finalInspectionTargetDate", "finalInspectionResult", "Final inspection", "fin"]].forEach(([kd, kr, tag, sub]) => {
+      const d = anyIso(j[kd]); if (d && d >= todayIso && j[kr] !== "pass") task(j, no, sub, { tag, group: "insp", ccDays: [d] });
+    });
+    // Matterport scan: needs (with its needs-by date), or scheduled.
+    const ms = j.matterportStatus, msd = anyIso(j.matterportStatusDate), hasScan = !!(j.matterportLink || (Array.isArray(j.matterportLinks) && j.matterportLinks.length));
+    if (!j.matterportDismissed && !hasScan) {
+      if (ms === "needs") task(j, no, "mp", { tag: "Matterport scan", group: "scan", defCrew: 1, defHours: 2, ...(msd ? { flags: ["Needed by " + md(msd)] } : {}) });
+      else if (ms === "scheduled" && msd && msd >= todayIso) task(j, no, "mp", { tag: "Matterport scan", group: "scan", ccDays: [msd] });
+    }
+    // Approved change orders not made into a return trip yet (a converted one is already a trip on the calendar).
+    const conv = new Set((j.returnTrips || []).map(t => t && t.fromCOId).filter(Boolean));
+    (Array.isArray(j.changeOrders) ? j.changeOrders : []).forEach((co, i) => {
+      if (!co || conv.has(co.id) || co.convertedToTrip || co.tripId) return;
+      const id = co.id || "co" + i, h = tripHours(co.time), d = anyIso(co.coStatusDate);
+      const tag = "Change order" + (co.number ? " #" + co.number : ""), scope = plain(co.task || co.description || co.title).slice(0, 140);
+      if (co.coStatus === "approved") task(j, no, "co", { id, tag, group: "co", scope, defCrew: 2, tripH: h, defHours: 2 * (h || TRIP_DEFAULT_H) });
+      else if (co.coStatus === "scheduled" && d && d >= todayIso && !jb[d]) task(j, no, "co", { id, tag, group: "co", scope, ccDays: [d] });
+    });
+  };
+
   jobs.forEach(j => {
-    if (!j || j.archived || j.tempPed) return;
+    if (!j || j.archived) return;
     const no = String(j.simproNo || "").trim();
-    if (no) byNoJob[no] = j;
     const jb = (no && book[no]) || {};
+    // Temp ped installs are their own job documents: "" or ready = needs a date; scheduled with its date.
+    if (j.tempPed) {
+      const st = j.tempPedStatus || "", d = anyIso(j.tempPedScheduledDate);
+      if (st === "" || st === "ready") task(j, no, "tp", { tag: "Temp ped install", group: "quick", defCrew: 2, defHours: 4 });
+      else if (st === "scheduled" && d && d >= todayIso && !jb[d]) task(j, no, "tp", { tag: "Temp ped install", group: "quick", ccDays: [d] });
+      return;
+    }
+    if (no) byNoJob[no] = j;
     // Return trips: their own items. A scheduled trip takes the Simpro booking on its date.
     (j.returnTrips || []).forEach((t, i) => {
       const iso = tripIso(t), n = Number(t.number) || i + 1;
@@ -447,7 +492,17 @@ function buildCalendar(input) {
           : (t.fromQCFail || /^QC (Fail|Items)/.test(String(t.scope || ""))) ? "qc" : /warrant/i.test(String(t.scope || "") + " " + String(t.task || "")) ? "warranty" : "" });
       if (iso && t.rtStatus === "scheduled" && jb[iso]) { it.booked.push({ iso, ...jb[iso] }); (usedDays[no] = usedDays[no] || new Set()).add(iso); }
     });
-    if (j.quickJob) return;
+    if (!j.quickJob) tasksOf(j, no, jb);
+    // Quick jobs (service call, panel upgrade, temp ped pickup): new = needs a date; scheduled or in progress shows on
+    // its days unless Simpro already has it booked (then it's the "Quick job" booking).
+    if (j.quickJob) {
+      const st = j.quickJobStatus || "new", d = anyIso(j.quickJobDate), e = anyIso(j.quickJobEndDate);
+      if (DONE.includes(st) || j.signedOff) return;
+      const QT = { service: "Service call", panel: "Panel upgrade", tempped: "Temp ped pickup" }, tag = QT[j.quickJobType] || "Quick job";
+      if (st === "new") task(j, no, "qj", { tag, group: "quick", defCrew: 2, defHours: 8 });
+      else if (d && !Object.keys(jb).length) { const ds = ccSpan(d, e).filter(x => x >= todayIso); if (ds.length) task(j, no, "qj", { tag, group: "quick", ccDays: ds }); }
+      return;
+    }
     const rs = effRS ? effRS(j) : j.roughStatus || "", fs = effFS ? effFS(j) : j.finishStatus || "";
     if (DONE.includes(fs)) return;
     const ph = (LIVE.includes(fs) || DONE.includes(rs)) ? "finish" : "rough";
@@ -512,7 +567,7 @@ function buildCalendar(input) {
     const p = plans && plans[it.key];
     // v656: { off: true } = taken off the calendar by hand (Koy: "if I don't want a job scheduled, I just delete it
     // off there"): no block, the auto-schedule leaves it alone, it stays on the list as needing scheduling.
-    if (p && p.off) it.off = { by: p.by || "", at: p.at || "" };
+    if (p && p.off) it.off = { by: p.by || "", at: p.at || "", why: String(p.why || "").slice(0, 60), note: String(p.note || "").slice(0, 200) };
     else if (p && p.s && Number(p.hours) > 0) it.plan = { s: nextWork(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "", ...(hoursOf(p.t) != null ? { t: p.t } : {}) };
     if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
       it.auto = { s: workAfter(it.booked[it.booked.length - 1].iso), hours: it.left, crew: Math.max(1, it.crewBooked) };
@@ -537,6 +592,7 @@ function buildCalendar(input) {
     }
     it.onCal = it.booked.length > 0 || !!it.plan;
     // On the right-hand list: anything with nothing booked from today on and no kept plan.
+    if (it.kind === "task" && it.ccDays && !it.plan) { it.onCal = true; it.inList = false; delete it._ph; return; }
     it.inList = !it.done && !it.plan && !it.copyOf && (it.off ? !it.bookedAhead : !it.bookedAhead && (it.kind === "trip" || it.upcoming || it.left == null || it.left > 0 || it.over || it.flags.length > 0)
       && !(it.kind === "service"));
     delete it._ph;
@@ -573,9 +629,12 @@ function buildCalendar(input) {
 
 // Koy 2026-11-19: "if that could be separated into what they are (rough ends, finishes, return trips, failed
 // finals, etc.)". Every list item gets one of these; lists show them in this order, each with a count, empty ones hidden.
-const GROUPS = [["rough", "Rough-ins"], ["finish", "Finishes"], ["final", "Failed finals"], ["roughfail", "Failed rough inspections"],
-  ["co", "Change orders"], ["qc", "QC walk fixes"], ["warranty", "Warranty"], ["trip", "Return trips"], ["other", "Other"]];
-const groupOf = (it) => !it ? "other" : it.kind === "trip" ? (it.cause || "trip") : it.kind === "rough" || it.kind === "finish" ? it.kind : "other";
+// v660: "Waiting" first (Koy 2026-11-20: "if I remove a job maybe I could be able to put a reason why ... Then just keep
+// track of it like that as waiting on something"), then QC walks, quick jobs and scans that need a date.
+const GROUPS = [["wait", "Waiting"], ["rough", "Rough-ins"], ["finish", "Finishes"], ["final", "Failed finals"], ["roughfail", "Failed rough inspections"],
+  ["co", "Change orders"], ["qc", "QC walk fixes"], ["warranty", "Warranty"], ["trip", "Return trips"], ["qcwalk", "QC walks"], ["quick", "Quick jobs and temp peds"],
+  ["scan", "Matterport scans"], ["insp", "Inspections"], ["other", "Other"]];
+const groupOf = (it) => !it ? "other" : it.off && it.off.why ? "wait" : it.kind === "task" ? (it.group || "other") : it.kind === "trip" ? (it.cause || "trip") : it.kind === "rough" || it.kind === "finish" ? it.kind : "other";
 function groupBy(list, itemOf) {
   const by = {}; (list || []).forEach(x => { const g = groupOf(itemOf ? itemOf(x) : x); (by[g] = by[g] || []).push(x); });
   return GROUPS.map(([k, label]) => ({ k, label, items: by[k] || [] })).filter(g => g.items.length);
