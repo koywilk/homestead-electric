@@ -51952,8 +51952,10 @@ function odCostsCoHours(goalsDoc) {
 // months in the future, how far shit gets scheduled out". The auto-schedule and Simpro's read cover 17 weeks; the
 // Month grid shows five of them at a time and the 4 months view shows them all, one row per job under its crew.
 const SCAL_WEEKS = 17, SCAL_MONTH_WEEKS = 5;
-const SCAL_KIND = { rough: OD_B, finish: OD_G, trip: OD_P, service: C.slate };
-const SCAL_SOFT = { rough: "rgba(37,99,201,.12)", finish: "rgba(24,128,74,.12)", trip: "rgba(106,79,200,.13)", service: "rgba(92,107,122,.13)" };
+// v660 (Koy 2026-11-19: "the red and green is terrible christmas vibes and the slashing red is so hard to look at"):
+// one accent (the dashboard copper) and neutrals. Rough-in copper, finish slate, return trips charcoal.
+const SCAL_KIND = { rough: OD_A, finish: OD_SLATE, trip: "#3A3631", service: OD_GREY };
+const SCAL_SOFT = { rough: "rgba(142,99,54,.12)", finish: "rgba(91,107,132,.13)", trip: "rgba(58,54,49,.08)", service: "rgba(107,116,135,.1)" };
 const SCAL_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs, onOpenJob, say, startWk = 0 }) {
   const SC = ScrambleCal;
@@ -51968,7 +51970,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const [bk, setBk] = useState(null);                  // booking: { key, staff:Set, preview, busy, err, done }
   const [reload, setReload] = useState(0);
   const [simOnly, setSimOnly] = useState(false);
-  const [view, setView] = useState(() => { try { const v = localStorage.getItem("he_scal_view"); return v === "month" || v === "months" ? v : "week"; } catch (_) { return "week"; } });
+  const [view, setView] = useState(() => { try { const v = localStorage.getItem("he_scal_view"); return v === "month" || v === "months" || v === "crew" ? v : "week"; } catch (_) { return "week"; } });
   const [wk, setWk] = useState(startWk);               // which week the week view shows (v657: Friday Strategy opens on next week)
   const [mw, setMw] = useState(0);                     // the first of the five weeks the month view shows
   const [crewF, setCrewF] = useState("All");
@@ -52159,8 +52161,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         onPointerDown={e => movable && e.pointerType !== "mouse" && holdStart(e, c)} onPointerUp={holdEnd} onPointerLeave={holdEnd} onPointerCancel={holdEnd}
         onClick={e => { e.stopPropagation(); if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setBk(null); setCopyOpen(false); }}
         title={`${label(it)} · ${it.tag}`}>
-        <span className="t">{label(it)}</span>
-        {compact ? null : <span className="m"><i>{c.style === "held" ? "Held · " : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{crewText(c)}</span>}
+        <span className="t">{compact && c.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{label(it)}</span>
+        {compact ? null : <span className="m"><i>{c.style === "held" ? <><span className="sc-bang" aria-hidden="true">!</span>Held · </> : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{crewText(c)}</span>}
         {compact || !c.time ? null : <span className="m">{c.time}</span>}
       </button>);
   };
@@ -52171,14 +52173,66 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     onClick: () => tapDay(iso),
   });
   const weekStart = SC.addDays(start, wk * 7);
+  // Crew count per day (Nov 19 strategy meeting: "want the number visible at the top of each day"): everyone on a
+  // crew who isn't off, and how many of them are on something that day. The crew buttons narrow it to that crew.
+  const crewCnt = useMemo(() => {
+    const memo = {};
+    return (iso) => {
+      if (memo[iso]) return memo[iso];
+      const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); }));
+      const off = new Set((V.offByDay && V.offByDay[iso]) || []);
+      let all = 0, n = 0;
+      Object.values(board.crews).forEach(c => { if (crewF !== "All" && SC.firstOf(c.foreman) !== crewF) return;
+        c.people.forEach(p => { if (off.has(p)) return; all++; if (on.has(p)) n++; }); });
+      return (memo[iso] = { on: n, all });
+    };
+  }, [chips, board, V, crewF]);
+  const ccEl = (iso) => { const k = crewCnt(iso); return k.all ? <span className="sc-cc" title={`${k.on} of ${k.all} crew scheduled`}>{k.on}/{k.all}</span> : null; };
+  const shortT = (t) => {
+    const m = /^(\d+):(\d\d) (AM|PM)–(\d+):(\d\d) (AM|PM)$/.exec(String(t || "")); if (!m) return String(t || "");
+    const a = m[1] + (m[2] !== "00" ? ":" + m[2] : ""), b = m[4] + (m[5] !== "00" ? ":" + m[5] : "");
+    if (a === "7" && m[3] === "AM" && b === "5" && m[6] === "PM") return "all day";
+    return m[3] === m[6] ? `${a}–${b} ${m[6]}` : `${a} ${m[3]}–${b} ${m[6]}`;
+  };
+  // Crew week (same meeting: "a week view with all crew listed as available or booked at a glance"): one row per
+  // person on the Crew Board, grouped by crew, Monday to Friday. Each day shows their jobs and times, Open, or Off.
+  const crewWeekView = () => {
+    const days = [0, 1, 2, 3, 4].map(i => SC.addDays(weekStart, i));
+    const onDay = {};
+    days.forEach(iso => { const m = {}; (chips[iso] || []).filter(c => !simOnly || c.style === "booked").forEach(c => (c.names || []).forEach(n => {
+      const u = board.find(n), k = u ? u.name : n; m[k] = m[k] || []; if (!m[k].some(x => x.it.key === c.it.key)) m[k].push(c); })); onDay[iso] = m; });
+    const crews = Object.values(board.crews).filter(c => crewF === "All" || SC.firstOf(c.foreman) === crewF).sort((a, b) => a.foreman.localeCompare(b.foreman));
+    return (
+      <div className="sc-cw">
+        <div className="sc-cwr sc-cwh"><span>Crew</span>{days.map((iso, i) => <span key={iso} className={iso === V.today ? "now" : ""}>{SCAL_DOW[i]} {SC.md(iso)}{i < 4 && SC.isWork(iso) ? ccEl(iso) : null}</span>)}</div>
+        {crews.map(c => (<Fragment key={c.id}>
+          <div className="sc-cwg">{SC.firstOf(c.foreman)}'s crew</div>
+          {c.people.map(n => (
+            <div key={n} className="sc-cwr">
+              <b title={n}>{n}</b>
+              {days.map((iso, i) => {
+                const off = offOn(iso).includes(n), hol = i < 4 && !SC.isWork(iso), l = onDay[iso][n] || [];
+                return (
+                  <div key={iso} className={"sc-cwc" + (i === 4 ? " fri" : "") + (off || hol ? " off" : l.length ? " on" : " free") + (picked ? " drop" : "")} onClick={() => tapDay(iso)}>
+                    {off ? "Off" : hol ? ((V.holidays && V.holidays[iso]) || "Holiday") : l.length ? l.map(x => (
+                      <button type="button" key={x.it.key} className={"sc-cwj " + x.style + (sel === x.it.key ? " on" : "")} style={{ "--c": SCAL_KIND[x.it.kind], "--s": SCAL_SOFT[x.it.kind] }}
+                        title={`${label(x.it)} · ${x.it.tag}${x.time ? " · " + x.time : ""}`} onClick={e => { e.stopPropagation(); setSel(x.it.key); setBk(null); setCopyOpen(false); }}>
+                        {x.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{x.it.no ? "#" + x.it.no : x.it.name}{x.time ? <i>{shortT(x.time)}</i> : null}</button>)) : i === 4 ? "" : "Open"}
+                  </div>);
+              })}
+            </div>))}
+        </Fragment>))}
+        {!crews.length ? <div className="sc-mt" style={{ padding: 12 }}>No crews on the Crew Board yet.</div> : null}
+      </div>);
+  };
   const weekView = () => (
     <div className="sc-week">
       {[0, 1, 2, 3, 4].map(i => {
         const iso = SC.addDays(weekStart, i), list = dayChips(iso), fri = i === 4, hol = !fri && !SC.isWork(iso);
         const ppl = new Set(); list.forEach(c => c.who.forEach(n => ppl.add(n)));
         return (
-          <div key={iso} className={"sc-day" + (fri ? " fri" : "") + (iso === V.today ? " now" : "") + (over === iso || (picked && !fri && !hol) ? " drop" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
-            <div className="sc-dh"><span>{SCAL_DOW[i]}</span><b>{SC.parseYmd(iso).getDate()}</b>{list.length ? <em>{list.length} job{list.length > 1 ? "s" : ""} · {ppl.size} ppl</em> : null}</div>
+          <div key={iso} className={"sc-day" + (fri ? " fri" : "") + (hol ? " hol" : "") + (iso === V.today ? " now" : "") + (over === iso || (picked && !fri && !hol) ? " drop" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
+            <div className="sc-dh"><span>{SCAL_DOW[i]}</span><b>{SC.parseYmd(iso).getDate()}</b>{!fri && !hol ? (() => { const k = crewCnt(iso); return <em title={`${k.on} of ${k.all} crew scheduled`}><b>{k.on}/{k.all}</b> crew{list.length ? ` · ${list.length} job${list.length > 1 ? "s" : ""}` : ""}</em>; })() : list.length ? <em>{list.length} job{list.length > 1 ? "s" : ""} · {ppl.size} ppl</em> : null}</div>
             {offOn(iso).length ? <div className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</div> : null}
             <div className="sc-dl">
               {hol ? <span className="sc-hol">{(V.holidays && V.holidays[iso]) || "Holiday"} · no work</span> : null}
@@ -52195,7 +52249,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         const w = mw + Math.floor(n / 5), i = n % 5, iso = SC.addDays(start, w * 7 + i), list = dayChips(iso), max = 4;
         return (
           <div key={iso} className={"sc-mc" + (i === 4 ? " fri" : "") + (V.holidays && V.holidays[iso] ? " hol" : "") + (iso === V.today ? " now" : "") + (iso < V.today ? " past" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
-            <span className="sc-dn">{SC.md(iso)}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}</span>
+            <span className="sc-dn">{SC.md(iso)}{i < 4 && SC.isWork(iso) && iso >= V.today ? ccEl(iso) : null}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}</span>
             {offOn(iso).length ? <span className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</span> : null}
             {list.slice(0, max).map(c => chipEl(c, iso, true))}
             {list.length > max ? <button type="button" className="sc-more" aria-haspopup="dialog" aria-expanded={!!pop && pop.iso === iso} onClick={e => openPop(e, iso)}>+{list.length - max} more</button> : null}
@@ -52232,7 +52286,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
                 const list = dayChips(iso), max = 3;
                 return (
                   <div key={iso} className={"sc-mc" + (i === 4 ? " fri" : "") + (V.holidays && V.holidays[iso] ? " hol" : "") + (iso === V.today ? " now" : "") + (iso < V.today ? " past" : "") + (iso === booked ? " bend" : "") + (over === iso ? " over" : "")} {...dayProps(iso)}>
-                    <span className="sc-dn">{SC.parseYmd(iso).getDate()}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}{iso === booked ? <em>Simpro booked through here</em> : null}</span>
+                    <span className="sc-dn">{SC.parseYmd(iso).getDate()}{i < 4 && SC.isWork(iso) && iso >= V.today ? ccEl(iso) : null}{V.holidays && V.holidays[iso] ? <em className="h">{V.holidays[iso]}</em> : null}{iso === booked ? <em>Simpro booked through here</em> : null}</span>
                     {offOn(iso).length ? <span className="sc-off">Off: {offOn(iso).map(SC.firstOf).join(", ")}</span> : null}
                     {list.slice(0, max).map(c => chipEl(c, iso, true))}
                     {list.length > max ? <button type="button" className="sc-more" aria-haspopup="dialog" aria-expanded={!!pop && pop.iso === iso} onClick={e => openPop(e, iso)}>+{list.length - max} more</button> : null}
@@ -52439,13 +52493,13 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-week{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,.55fr)}
         .sc2 .sc-day{border-right:1px solid var(--cline);min-width:0;display:flex;flex-direction:column;min-height:280px}
         .sc2 .sc-day:last-child{border-right:0}
-        .sc2 .sc-day.fri{background:repeating-linear-gradient(135deg,var(--inset) 0 4px,transparent 4px 9px)}
+        .sc2 .sc-day.fri{background:rgba(41,33,25,.025)}.sc2 .sc-day.hol{background:var(--inset)}
         .sc2 .sc-day.now .sc-dh{background:rgba(180,83,26,.09)}
         .sc2 .sc-day.drop{cursor:pointer}.sc2 .sc-day.over,.sc2 .sc-mc.over{box-shadow:inset 0 0 0 2px var(--o);background:rgba(142,99,54,.06)}
         .sc2 .sc-dh{display:flex;align-items:baseline;gap:6px;padding:9px 10px 7px;border-bottom:1px solid var(--cline)}
         .sc2 .sc-dh span{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim)}
         .sc2 .sc-dh b{font-size:19px;color:var(--cink)}
-        .sc2 .sc-dh em{margin-left:auto;font-style:normal;font-size:11px;color:var(--cdim)}
+        .sc2 .sc-dh em{margin-left:auto;font-style:normal;font-size:11px;color:var(--cdim);text-align:right}.sc2 .sc-dh em b,.sc2 .sc-cc{font-size:12px;font-weight:800;color:var(--cink)}
         .sc2 .sc-dl{display:flex;flex-direction:column;gap:6px;padding:8px;flex:1}
         .sc2 .sc-mt{font-size:12px;color:var(--cdim);padding:2px}
         .sc2 .sc-chip2{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:1px;min-width:0;border-radius:9px;padding:6px 8px 6px 9px;border:1.5px solid var(--c);border-left-width:5px;color:var(--cink);touch-action:manipulation;-webkit-user-select:none;user-select:none}
@@ -52455,8 +52509,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-chip2.booked{background:var(--c);color:#fff}.sc2 .sc-chip2.booked .m,.sc2 .sc-chip2.booked .m i{color:rgba(255,255,255,.9)}
         .sc2 .sc-chip2.auto{background:var(--s);border-style:dashed;border-left-style:solid;cursor:grab}
         .sc2 .sc-chip2.kept{background:var(--s);cursor:grab}
-        .sc2 .sc-chip2.held{background:repeating-linear-gradient(135deg,rgba(196,59,59,.14) 0 5px,var(--card) 5px 10px);border-color:${OD_R};border-left-color:var(--c);cursor:grab}
-        .sc2 .sc-chip2.held .m i{color:${OD_R}}
+        .sc2 .sc-chip2.held{background:var(--card);border-color:var(--cink);border-left-color:var(--c);cursor:grab}
+        .sc2 .sc-chip2.held .m i{color:var(--cink)}
+        .sc2 .sc-bang{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:var(--cink);color:var(--card);font-size:11px;font-weight:800;margin-right:4px;vertical-align:1px;line-height:1}
         .sc2 .sc-chip2.on{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o)}
         .sc2 .sc-chip2.pick{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o);opacity:.7}
         .sc2 .fri .sc-chip2 .t{font-size:11.5px}
@@ -52470,16 +52525,16 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-dcount b{font-size:15px;color:var(--cink)}
         .sc2 .sc-dp{display:grid;grid-template-columns:22px minmax(0,1fr);gap:2px 6px;align-items:start;padding:5px 2px;border-bottom:1px solid var(--cline);font-size:13px}
         .sc2 .sc-ck{grid-row:span 2;width:18px;height:18px;border-radius:5px;border:1.5px solid var(--cline);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
-        .sc2 .sc-dp.yes .sc-ck{background:${OD_G};border-color:${OD_G};color:#fff}
-        .sc2 .sc-dp.no .sc-ck{border-color:${OD_R}}.sc2 .sc-dp.no .sc-dj{color:${OD_R};font-weight:700}
+        .sc2 .sc-dp.yes .sc-ck{background:var(--o);border-color:var(--o);color:#fff}
+        .sc2 .sc-dp.no .sc-ck{border-color:var(--cink)}.sc2 .sc-dp.no .sc-dj{color:var(--cink);font-weight:700}
         .sc2 .sc-dp.off{opacity:.6}
         .sc2 .sc-dn2{font-weight:700;color:var(--cink)}.sc2 .sc-dn2 i{font-style:normal;font-weight:500;color:var(--cdim)}
         .sc2 .sc-dj{font-size:12px;color:var(--cdim);display:flex;flex-wrap:wrap;gap:2px 8px}
         .sc2 .sc-off{display:block;font-size:11px;font-weight:700;color:var(--cdim);padding:2px 10px 0}
         .sc2 .sc-mc .sc-off{padding:0 2px}
-        .sc2 .sc-hol{display:block;font-size:12px;font-weight:800;color:${OD_R};padding:4px 2px}
-        .sc2 .sc-mc.hol{background:repeating-linear-gradient(135deg,rgba(196,59,59,.08) 0 5px,transparent 5px 10px)}
-        .sc2 .sc-mc .sc-dn em.h{display:block;font-style:normal;font-size:11px;font-weight:800;color:${OD_R}}
+        .sc2 .sc-hol{display:block;font-size:12px;font-weight:800;color:var(--cink);padding:4px 2px}
+        .sc2 .sc-mc.hol{background:var(--inset)}
+        .sc2 .sc-mc .sc-dn em.h{color:var(--cink)}
         .sc2 .sc-holrow{display:flex;gap:8px;align-items:baseline;font-size:13px;padding:4px 0;border-bottom:1px solid var(--cline)}.sc2 .sc-holrow span{flex:1;color:var(--cdim)}
         .sc2 .sc-holadd{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.sc2 .sc-holadd input{font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--cline);border-radius:8px;background:var(--card);color:var(--cink);min-width:0;flex:1 1 120px}
         .sc2 .sc-mos{display:flex;flex-direction:column;gap:14px;padding:10px}
@@ -52489,16 +52544,28 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-moh{font-size:16px;font-weight:800;color:var(--cink);padding:9px 10px;border-bottom:1px solid var(--cline);background:var(--inset)}
         .sc2 .sc-mc.out{background:var(--inset);min-height:0}
         .sc2 .sc-mc.bend{box-shadow:inset 0 -3px 0 var(--o)}
-        .sc2 .sc-mc .sc-dn em{display:block;font-style:normal;font-size:11px;font-weight:800;color:var(--o)}
+        .sc2 .sc-mc .sc-dn em{flex-basis:100%;order:2;font-style:normal;font-size:11px;font-weight:800;color:var(--o-ink)}
         .sc2 .sc-month{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,.5fr)}
         .sc2 .sc-mh{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--cdim);padding:7px 8px;border-bottom:1px solid var(--cline)}
         .sc2 .sc-mc{border-right:1px solid var(--cline);border-bottom:1px solid var(--cline);min-height:112px;padding:5px;display:flex;flex-direction:column;gap:3px;min-width:0}
         .sc2 .sc-mc:nth-child(5n){border-right:0}
-        .sc2 .sc-mc.fri{background:repeating-linear-gradient(135deg,var(--inset) 0 4px,transparent 4px 9px)}
+        .sc2 .sc-mc.fri{background:rgba(41,33,25,.025)}
         .sc2 .sc-mc.now{background:rgba(180,83,26,.07)}.sc2 .sc-mc.past{opacity:.6}
-        .sc2 .sc-dn{font-size:11.5px;font-weight:800;color:var(--cdim)}
+        .sc2 .sc-dn{font-size:11.5px;font-weight:800;color:var(--cdim);display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px}.sc2 .sc-dn .sc-cc{margin-left:auto;font-size:11px}
         .sc2 .sc-mc .sc-chip2{padding:2px 6px;border-left-width:4px;border-radius:6px}.sc2 .sc-mc .sc-chip2 .t{font-size:11px}
         .sc2 .sc-more{all:unset;cursor:pointer;font-size:11.5px;font-weight:700;color:var(--o-ink)}
+        .sc2 .sc-cw{overflow-x:auto}
+        .sc2 .sc-cwr{display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(4,minmax(96px,1fr)) minmax(70px,.6fr);min-width:620px}
+        .sc2 .sc-cwr>b{font-size:12.5px;color:var(--cink);padding:6px 8px;border-top:1px solid var(--cline);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sc2 .sc-cwh span{display:flex;gap:6px;align-items:baseline;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--cdim);padding:8px;border-left:1px solid var(--cline)}
+        .sc2 .sc-cwh span:first-child{border-left:0}.sc2 .sc-cwh span.now{background:rgba(142,99,54,.08)}.sc2 .sc-cwh .sc-cc{margin-left:auto;text-transform:none;letter-spacing:0}
+        .sc2 .sc-cwg{min-width:620px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--cdim);padding:10px 8px 4px;border-top:1px solid var(--cline);background:var(--inset)}
+        .sc2 .sc-cwc{border-top:1px solid var(--cline);border-left:1px solid var(--cline);padding:4px 5px;min-height:34px;display:flex;flex-wrap:wrap;gap:3px;align-items:center;font-size:11.5px;cursor:pointer;min-width:0}
+        .sc2 .sc-cwc.free{color:var(--cdim)}.sc2 .sc-cwc.off{background:var(--inset);color:var(--cdim);font-weight:700}.sc2 .sc-cwc.fri{background:rgba(41,33,25,.025)}
+        .sc2 .sc-cwj{all:unset;box-sizing:border-box;cursor:pointer;display:inline-flex;align-items:baseline;gap:4px;border-radius:6px;padding:1px 6px;font-size:11.5px;font-weight:800;color:var(--cink);background:var(--s);border:1.5px solid var(--c);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sc2 .sc-cwj i{font-style:normal;font-weight:500}
+        .sc2 .sc-cwj.booked{background:var(--c);color:#fff}.sc2 .sc-cwj.auto{border-style:dashed}.sc2 .sc-cwj.held{background:var(--card);border-color:var(--cink)}
+        .sc2 .sc-cwj.on,.sc2 .sc-cwj:focus-visible{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--o)}
         @media (max-width:700px){
           .sc2 .sc-week{grid-template-columns:minmax(0,1fr)}
           .sc2 .sc-day{border-right:0;border-bottom:1px solid var(--cline);min-height:0}
@@ -52507,10 +52574,10 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         }
         .sc2 .sc-side{display:flex;flex-direction:column;gap:10px;min-width:0}
         .sc2 .sc-ins,.sc2 .sc-box{border:1px solid var(--cline);border-radius:14px;background:var(--card);padding:10px 12px;display:flex;flex-direction:column;gap:7px;min-width:0}
-        .sc2 .sc-ins small{font-size:12.5px;color:var(--cdim)}.sc2 small.warn{color:${OD_R};font-weight:700}.sc2 small.ok{color:${OD_G};font-weight:700}
+        .sc2 .sc-ins small{font-size:12.5px;color:var(--cdim)}.sc2 small.warn{color:var(--o-ink);font-weight:700}.sc2 small.ok{color:var(--cink);font-weight:700}
         .sc2 .sc-state{color:var(--cink)!important;font-weight:600}
         .sc2 .sc-ih{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-        .sc2 .sc-flag{color:${OD_R};font-size:12.5px;font-weight:700}
+        .sc2 .sc-flag{color:var(--o-ink);font-size:12.5px;font-weight:700}
         .sc2 .sc-ctl{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
         .sc2 .sc-ctl label{display:flex;flex-direction:column;font-size:11px;font-weight:800;color:var(--cdim);text-transform:uppercase;gap:2px}
         .sc2 .sc-ctl input{width:84px}.sc2 .sc-ctl input[type=date]{width:142px}
@@ -52520,7 +52587,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-who{display:flex;flex-direction:column;gap:5px}
         .sc2 .sc-ppl{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:13px;color:var(--cink)}.sc2 .sc-ppl label{display:flex;gap:5px;align-items:center}
         .sc2 .sc-btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-        .sc2 .sc-del{color:${OD_R}!important}
+        .sc2 .sc-del{color:var(--cink)!important;text-decoration:underline}
         .sc2 .sc-copy{display:flex;flex-direction:column;gap:6px}.sc2 .sc-copy div{display:flex;flex-wrap:wrap;gap:5px}
         .sc2 .sc-copy button{all:unset;cursor:pointer;border:1px solid var(--cline);border-radius:999px;padding:3px 9px;font-size:12px;font-weight:700;color:var(--cdim)}
         .sc2 .sc-copy button[aria-pressed=true]{background:var(--o);border-color:var(--o);color:#fff}
@@ -52530,20 +52597,21 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-tbl{overflow:auto;max-height:240px;border:1px solid var(--cline);border-radius:10px}
         .sc2 .sc-tbl table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
         .sc2 .sc-tbl th,.sc2 .sc-tbl td{padding:4px 7px;border-top:1px solid var(--cline);text-align:left;white-space:nowrap}
-        .sc2 .sc-tbl th{color:var(--cdim);font-weight:700;border-top:0}.sc2 .sc-tbl td.ot{color:${OD_R};font-weight:800}
+        .sc2 .sc-tbl th{color:var(--cdim);font-weight:700;border-top:0}.sc2 .sc-tbl td.ot{color:var(--o-ink);font-weight:800}
         .sc2 .sc-sub{font-size:12px;color:var(--cdim)}
         .sc2 .sc-scroll{display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow:auto}
-        .sc2 .sc-need{all:unset;box-sizing:border-box;cursor:pointer;border:1px solid var(--cline);border-left:3px solid ${OD_R};border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;background:var(--card)}
+        .sc2 .sc-need{all:unset;box-sizing:border-box;cursor:pointer;border:1px solid var(--cline);border-left:3px solid var(--o);border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;background:var(--card)}
         .sc2 .sc-need.on{box-shadow:0 0 0 2px var(--o)}.sc2 .sc-need b,.sc2 .sc-card b{font-size:13px;color:var(--cink)}.sc2 .sc-need small,.sc2 .sc-card small{font-size:12px;color:var(--cdim)}
         .sc2 .sc-fold{all:unset;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--o-ink)}
         .sc2 .sc-card{border:1px solid var(--cline);border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:3px}
-        .sc2 .sc-card.flag{border-left:3px solid ${OD_R}}.sc2 .sc-card.pick{box-shadow:0 0 0 2px var(--o)}
+        .sc2 .sc-card.flag{border-left:3px solid var(--o)}.sc2 .sc-card.pick{box-shadow:0 0 0 2px var(--o)}
         .sc2 .sc-pickbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;border-radius:12px;background:var(--o);color:#fff;font-size:13px;font-weight:700}
         .sc2 .sc-pickbar button{all:unset;cursor:pointer;text-decoration:underline}
       `}</style>
       <div className="sc-bar">
         <span className="sc-seg" role="group" aria-label="View">
           <button type="button" aria-pressed={view === "week"} onClick={() => setV("week")}>Week</button>
+          <button type="button" aria-pressed={view === "crew"} onClick={() => setV("crew")}>Crew week</button>
           <button type="button" aria-pressed={view === "month"} onClick={() => setV("month")}>Month</button>
           <button type="button" aria-pressed={view === "months"} onClick={() => setV("months")}>4 months</button>
         </span>
@@ -52552,7 +52620,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
           <button type="button" aria-pressed={true}>{SC.md(SC.addDays(start, mw * 7))} to {SC.md(SC.addDays(start, (mw + SCAL_MONTH_WEEKS) * 7 - 3))}</button>
           <button type="button" disabled={mw >= SCAL_WEEKS - SCAL_MONTH_WEEKS} onClick={() => setMw(w => Math.min(SCAL_WEEKS - SCAL_MONTH_WEEKS, w + 4))} aria-label="Later weeks">›</button>
         </span> : null}
-        {view === "week" ? <span className="sc-seg" role="group" aria-label="Week">
+        {view === "week" || view === "crew" ? <span className="sc-seg" role="group" aria-label="Week">
           <button type="button" disabled={wk === 0} onClick={() => setWk(w => Math.max(0, w - 1))} aria-label="Week before">‹</button>
           {[0, 1].map(w => <button type="button" key={w} aria-pressed={wk === w} onClick={() => setWk(w)}>{w === 0 ? "This week" : "Next week"}</button>)}
           {wk > 1 ? <button type="button" aria-pressed={true}>Week of {SC.md(weekStart)}</button> : null}
@@ -52565,9 +52633,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Booked in Simpro</span>
         <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Auto-scheduled</span>
         <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px solid ${SCAL_KIND.rough}` }}/>Plan (placed or moved)</span>
-        <span><span className="sc-sw" style={{ background: "repeating-linear-gradient(135deg,rgba(196,59,59,.18) 0 3px,transparent 3px 6px)", border: `1.5px solid ${OD_R}` }}/>Held for you</span>
+        <span><span className="sc-sw" style={{ background: "var(--card)", border: "1.5px solid var(--cink)" }}/><span className="sc-bang" aria-hidden="true">!</span>Held for you</span>
         <span><span className="sc-pill" style={{ background: SCAL_SOFT.rough, color: SCAL_KIND.rough }}>Rough-in</span><span className="sc-pill" style={{ background: SCAL_SOFT.finish, color: SCAL_KIND.finish }}>Finish</span><span className="sc-pill" style={{ background: SCAL_SOFT.trip, color: SCAL_KIND.trip }}>Return trip</span></span>
-        {sched === undefined ? <span>Reading Simpro's schedule…</span> : sched === null ? <span style={{ color: OD_R, fontWeight: 700 }}>Couldn't read Simpro's schedule; only plans show.</span> : null}
+        {sched === undefined ? <span>Reading Simpro's schedule…</span> : sched === null ? <span style={{ color: "var(--o-ink)", fontWeight: 700 }}>Couldn't read Simpro's schedule; only plans show.</span> : null}
       </div>
       {picked && byKey[picked] ? <div className="sc-pickbar">Moving {label(byKey[picked])}: tap a day.<button type="button" onClick={() => setPicked("")}>Cancel</button></div> : null}
       {pop ? (() => { const list = dayChips(pop.iso); const d = SC.parseYmd(pop.iso); return (
@@ -52577,7 +52645,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
           <div className="sc-popl">{list.map(c => chipEl(c, pop.iso, false))}</div>
         </div>); })() : null}
       <div className="sc-main">
-        <div className="sc-cal">{view === "months" ? monthsView() : view === "month" ? monthView() : weekView()}</div>
+        <div className="sc-cal">{view === "months" ? monthsView() : view === "month" ? monthView() : view === "crew" ? crewWeekView() : weekView()}</div>
         <div className="sc-side">
           {dayBox()}
           {inspector()}
