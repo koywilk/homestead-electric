@@ -13,6 +13,19 @@
   ]
  },
  {
+  "v": 665,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "Tick someone who is busy for only part of a job's time and you now get their free hours as a choice. Example: Jacob is on another job 10 to 12, this job is 7 to 11. You can add Jacob and make this job"
+   },
+   {
+    "h": "FIXED",
+    "first": "A job or trip that's already booked in Simpro for a day no longer also shows its old plan for that day."
+   }
+  ]
+ },
+ {
   "v": 664,
   "heads": [
    {
@@ -199,15 +212,6 @@
    {
     "h": "FIXED (Return trips)",
     "first": "Signing off a return trip now also clears its \"needs scheduling\" mark, so finished trips stop showing up as needing a date. Trips signed off before today keep the old mark until someone touches them."
-   }
-  ]
- },
- {
-  "v": 644,
-  "heads": [
-   {
-    "h": "NEW (Quick jobs: Bid items and Material orders)",
-    "first": "Open any quick job. Under Material there are now two new folded sections: Bid items and Material orders."
    }
   ]
  }
