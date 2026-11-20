@@ -708,8 +708,11 @@ function appIdeas(input) {
   // 1 · New for the field since last week's meeting.
   const fresh = (briefs || []).filter(b => b && b.v > (sinceVersion || 0)).slice(0, sinceVersion ? 20 : 3);
   const heads = [];
-  fresh.forEach(b => (b.heads || []).forEach(h => { if (h && h.h && !OFFICE_HEAD.test(h.h) && h.first) heads.push({ ...h, v: b.v }); }));
-  const headTitle = (h) => { const t = h.h.replace(/^(NEW|FIXED|CHANGED|BETTER|REMOVED)\s*/i, "").replace(/\s*\((everyone|crew)\)\s*$/i, "").replace(/^(on|in|for|when)\s+/i, "").trim();
+  // A bare "FIXED" heading belongs to whoever the brief's heading before it was for.
+  fresh.forEach(b => { let office = false; (b.heads || []).forEach(h => { if (!h || !h.h) return;
+    const bare = /^(NEW|FIXED|CHANGED|BETTER|REMOVED)\s*$/i.test(h.h.trim()); office = bare ? office : OFFICE_HEAD.test(h.h);
+    if (!office && h.first) heads.push({ ...h, v: b.v }); }); });
+  const headTitle = (h) => { const t = h.h.replace(/^(NEW|FIXED|CHANGED|BETTER|REMOVED)\s*/i, "").replace(/\s*\([^)]*\)\s*$/, "").replace(/^(on|in|for)\s+/i, "").trim();
     return t ? t.replace(/^./, c => c.toUpperCase()) : "What changed in v" + h.v; };
   heads.slice(0, 2).forEach(h => ideas.push({ key: "ta_new_" + h.v + "_" + safeKey(h.h).slice(0, 30), no: "", title: "App: " + headTitle(h),
     tag: "App", detail: "New in v" + h.v + ": " + h.first.slice(0, 140) }));
