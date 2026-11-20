@@ -61,13 +61,13 @@ async function readSchedules(simproReq, startIso) {
 
 // deps: { db, getUsers, simproReq, tz }. args: { from, to } (YYYY-MM-DD, optional; default the next two weeks).
 async function readCalendar(deps, args) {
-  const now = wallNow(deps.tz), today = SC.ymd(now), a = args || {};
+  const now = deps.now || wallNow(deps.tz), today = SC.ymd(now), a = args || {};
   const from = isIso(a.from) ? a.from : today, to = isIso(a.to) ? a.to : SC.addDays(from, 13);
   if (to < from) throw Object.assign(new Error("to is before from"), { bad: true });
   const settings = (id) => deps.db.collection("settings").doc(id).get().then(s => (s.exists ? s.data() : {}) || {});
   const [jobSnap, up, pto, ph, prefSnap, users, schedules] = await Promise.all([
     deps.db.collection("jobs").get(), settings("upcoming_jobs"), settings("crewPTO"), settings("phaseHours"),
-    deps.db.collection("meetings").doc("scramble__prefs").get(), deps.getUsers(), readSchedules(deps.simproReq, SC.mondayOf(today)) ]);
+    deps.db.collection("meetings").doc("scramble__prefs").get(), deps.getUsers(), readSchedules(deps.simproReq, SC.mondayOf(now)) ]);   // mondayOf takes the Date, not the day string
   const view = assemble({ jobDocs: jobSnap.docs.map(d => ({ id: d.id, data: d.data() })), upcoming: up.items, users, pto: pto.list,
     prefs: prefSnap.exists ? prefSnap.data() : {}, phaseHours: ph.jobs, schedules, now, from, to });
   return { ok: true, asOf: new Date().toISOString(), source: "Command Center crew calendar (same rules as the screen), Simpro schedule read live",

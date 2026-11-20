@@ -44,5 +44,28 @@ ok(w.getFullYear() === 2026 && w.getMonth() === 10 && w.getDate() === 23 && w.ge
 const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleRead.js"), "utf8");
 ok(!/\.(set|update|add|delete|create)\(|runTransaction|batch\(|"POST"|"PATCH"|"DELETE"/.test(src), "the read module has no write of any kind (Firestore or Simpro)");
 
-if (fails) { console.error(fails + " failed"); process.exit(1); }
-console.log("scramble-read-test: all passed");
+// The whole read, start to finish, against stand-ins for Firestore and Simpro (v668 hotfix: the first live call died
+// with "d.getFullYear is not a function" because only the pure half was tested).
+(async () => {
+  const settings = { upcoming_jobs: { items: [] }, crewPTO: { list: inp.pto }, phaseHours: { jobs: inp.phaseHours } };
+  const docOf = (data) => ({ get: async () => ({ exists: data != null, data: () => data }) });
+  const asked = [];
+  const db = { collection: (name) => name === "jobs" ? { get: async () => ({ docs: jobDocs.map(d => ({ id: d.id, data: () => d.data })) }) }
+    : name === "settings" ? { doc: (id) => docOf(settings[id]) } : { doc: () => docOf(null) } };
+  const simproReq = async (method, path) => { asked.push(method + " " + path); const m = /between\((\d{4}-\d\d-\d\d),(\d{4}-\d\d-\d\d)\)/.exec(path);
+    return { ok: true, data: schedules.filter(x => x.Date >= m[1] && x.Date <= m[2]) }; };
+  const out = await R.readCalendar({ db, getUsers: async () => users, simproReq, tz: "America/Denver", now: inp.now }, { from: "2026-11-23", to: "2026-11-27" });
+  ok(out.ok === true && out.days.length === 5 && JSON.stringify(out.days) === JSON.stringify(v.days), "the whole read (stand-in Firestore and Simpro) gives the same days as the pure half");
+  ok(asked.length === 3 && asked.every(x => x.startsWith("GET /schedules/")) && /between\(2026-11-23,2027-01-03\)/.test(asked[0]), "Simpro is read from the Monday of this week, in six-week pieces, with GET only");
+  const dflt = await R.readCalendar({ db, getUsers: async () => users, simproReq, tz: "America/Denver", now: inp.now }, {});
+  ok(dflt.from === "2026-11-23" && dflt.to === "2026-12-06", "with no dates it reads today and the next 13 days");
+  let threw = ""; try { await R.readCalendar({ db, getUsers: async () => users, simproReq: async () => ({ ok: false }), tz: "America/Denver", now: inp.now }, {}); } catch (e) { threw = e.message; }
+  ok(/Simpro/.test(threw), "if Simpro can't be read it fails outright, never a calendar without Simpro's bookings");
+  let bad = false; try { await R.readCalendar({ db, getUsers: async () => users, simproReq, tz: "America/Denver", now: inp.now }, { from: "2026-11-27", to: "2026-11-23" }); } catch (e) { bad = !!e.bad; }
+  ok(bad, "a backwards range is refused");
+  // and once with the real clock, the way the function runs it
+  const live = await R.readCalendar({ db, getUsers: async () => users, simproReq, tz: "America/Denver" }, {});
+  ok(live.ok === true && Array.isArray(live.days), "it runs on the real clock too");
+  if (fails) { console.error(fails + " failed"); process.exit(1); }
+  console.log("scramble-read-test: all passed");
+})().catch(e => { console.error("FAIL the whole read threw: " + (e && e.stack || e)); process.exit(1); });
