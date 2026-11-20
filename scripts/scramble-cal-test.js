@@ -309,5 +309,22 @@ ok(!VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === 
   ok(SB.overlaps(rows, SB.buildEntries([{ date: "2026-11-23", hours: 3, start: "07:00" }], [{ id: 77, name: "Jacob Spackman" }], {})).length === 1, "Book refuses an overlap with another job already booked");
 }
 
+// v661: the job box sets one day's people and time; other days keep the job's own
+{
+  const base = { s: "2026-11-23", hours: 80, crew: 2, staff: [{ name: "A" }, { name: "B" }] };
+  const pd = SC.pdOf([{ d: "2026-11-24", n: ["A"], t: "07:00", e: "12:00" }]);
+  const sl = SC.slotsOf({ ...base, pd });
+  ok(sl[0].date === "2026-11-23" && sl[0].hours === 10 && !sl[0].staff, "day 1 keeps both people for a full day");
+  ok(sl[1].date === "2026-11-24" && sl[1].hours === 5 && sl[1].start === "07:00" && sl[1].staff.length === 1 && sl[1].crew === 1, "day 2 is just A, 7 to 12");
+  ok(Math.abs(sl.reduce((a, d) => a + d.hours * (d.crew || 2), 0) - 80) < 0.01, "the job's hours still all get placed (" + sl.map(d => d.date.slice(8) + ":" + d.hours).join(" ") + ")");
+  const half = SC.slotsOf({ s: "2026-11-23", hours: 10, crew: 2, staff: base.staff, t: "07:00", e: "12:00" });
+  ok(half.length === 1 && half[0].label === "7–12" || (half.length === 1 && half[0].hours === 5), "a half-day trip for two is one day, 7 to 12");
+  const e = SB.buildEntries([{ date: "2026-11-23", hours: 10 }, { date: "2026-11-24", hours: 5, start: "07:00", staffIds: [1] }], [{ id: 1, name: "A" }, { id: 2, name: "B" }], {});
+  ok(e.length === 3 && e.filter(x => x.date === "2026-11-24").length === 1, "Book writes day 2 for A only");
+  const v = { mode: "preview", jobNo: "1402", phase: "rough", staffIds: [1, 2] };
+  ok(SB.validate({ ...v, days: [{ date: "2026-11-24", hours: 5, staffIds: [1] }] }, "2026-11-17") === "", "a day's own people pass when they're picked");
+  ok(/isn't in the people picked/.test(SB.validate({ ...v, days: [{ date: "2026-11-24", hours: 5, staffIds: [3] }] }, "2026-11-17")), "a day can't book someone not picked");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

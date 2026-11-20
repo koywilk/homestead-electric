@@ -51997,6 +51997,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // A tapped job's box opens beside it, over the calendar (Koy: "when I click on a job that's held ... it doesn't
   // give me an option to clear the hold or do anything").
   const [insAt, setInsAt] = useState(null);            // { left, top }
+  const [selDay, setSelDay] = useState("");            // the day of the job tapped (its box is about that day)
+  const [custom, setCustom] = useState(false);         // Custom time pickers showing
   const [rm, setRm] = useState(null);                  // { key, why, note } the Remove reason being picked
   // v661 (Koy 2026-11-20: "What about an option to pop this thing up to full screen so that I can see more?"): the
   // calendar covers the whole screen (over the app's sidebar and header), and the browser's own full screen too where
@@ -52109,8 +52111,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
       // a forecast after a Simpro booking runs on with that day's people, less anyone off that day (v661)
       SC.slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
-        const nmD = names.length ? nm : nm.filter(n => { const u = board.find(n); return !offD.includes(u ? u.name : n); });
-        push(d.date, { it, style, n: f.crew, who: nmD.map(SC.firstOf), names: nmD, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
+        const nmD = d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names.length ? nm : nm.filter(n => { const u = board.find(n); return !offD.includes(u ? u.name : n); });
+        push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(SC.firstOf), names: nmD, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
     });
     const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
     Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
@@ -52124,7 +52126,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const commit = (key, p) => {
     setDrafts(d => ({ ...d, [key]: p }));
     if (p && p.off) savePrefs({ cal: { [key]: { off: true, ...(p.why ? { why: String(p.why).slice(0, 60), note: String(p.note || "").slice(0, 200) } : {}), by: me, at: nowIso() } } });
-    else if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), ...(SC.hoursOf(p.t) != null ? { t: p.t } : {}), ...(SC.hoursOf(p.t) != null && SC.hoursOf(p.e) != null ? { e: p.e } : {}), by: me, at: nowIso() } } });
+    else if (p) savePrefs({ cal: { [key]: { s: p.s, hours: Math.round(p.hours * 4) / 4, crew: p.crew, staff: (p.staff || []).filter(Boolean).map(x => ({ ...(x.id ? { id: x.id } : {}), name: x.name || "" })), ...(SC.hoursOf(p.t) != null ? { t: p.t } : {}), ...(SC.hoursOf(p.t) != null && SC.hoursOf(p.e) != null ? { e: p.e } : {}), pdl: Object.entries(p.pd || {}).slice(0, 60).map(([d, o]) => ({ d, ...(o && o.staff ? { n: o.staff.map(x => x && x.name).filter(Boolean) } : {}), ...(o && o.t && o.e ? { t: o.t, e: o.e } : {}) })), by: me, at: nowIso() } } });
     else savePrefs({ cal: { [key]: deleteField() } });
   };
   // v661 (Koy 2026-11-20: "it just let me double-book Noah and Jacob ... That needs to not be able to even happen at
@@ -52143,7 +52145,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const clashesOf = (key, p) => {
     const out = [];
     const names = (p.staff || []).map(x => x && x.name).filter(Boolean).map(nameOf);
-    SC.slotsOf(p).forEach(d => names.forEach(n => {
+    SC.slotsOf(p).forEach(d => (d.staff ? d.staff.map(x => x && x.name).filter(Boolean).map(nameOf) : names).forEach(n => {
       if (offOn(d.date).includes(n)) { out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is off ${SC.short(d.date)}` }); return; }
       ((busy[n] || {})[d.date] || []).forEach(b => {
         if (b.key !== key && d.from < b.to - 1e-6 && b.from < d.to - 1e-6) out.push({ name: n, date: d.date, why: `${SC.firstOf(n)} is on ${b.label} ${SC.short(d.date)}` }); });
@@ -52198,46 +52200,46 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     commit(key, { ...r.p, hours: Math.max(1, r.p.crew) * SC.HPD });
     say(`Copied to ${SC.short(iso)}.${r.gone.length ? ` ${r.gone.join(", ")} ${r.gone.length > 1 ? "are" : "is"} off that day, so left off the copy.` : ""}`);
   };
-  const setStaff = (it, names) => {
-    const f = fc(it); if (!f || !names.length) return;
-    const each = f.hours / Math.max(1, f.crew);
-    const next = { ...f, staff: names.map(name => ({ name })), crew: names.length, ...(it.kind === "trip" || it.kind === "task" ? { hours: each * names.length } : {}) };
-    if (!okOrSay(it.key, next)) return;
-    commit(it.key, next);
+  // v661 (Koy 2026-11-20: "When I click a job on the calendar, I don't need it to show every day that it's scheduled. I need
+  // it to show who's scheduled there that day that I clicked it and then let me have a time: full day, half day, or I can
+  // set custom times"): one day's people and time. A one-day job (a trip, a quick job, or a block of one day) takes them as
+  // its own, with its hours from the time; a longer job keeps them for that day only (pd) and its hours run on.
+  const slotOn = (f, iso) => SC.slotsOf(f).find(d => d.date === iso);
+  const dayNames = (it, f, iso) => {
+    const d = slotOn(f, iso); const st = (d && d.staff) || f.staff || [];
+    const n = st.map(x => x && x.name).filter(Boolean).map(nameOf); if (n.length) return n;
+    const c = (chips[iso] || []).find(x => x.it.key === it.key && x.style !== "booked"); return c ? (c.names || []).map(nameOf) : [];
   };
-  // Add someone to a job on one of its days; their set pair comes too when they're open that day.
+  const dayWhy = (key, iso, n, from, to) => { const k = nameOf(n); if (offOn(iso).includes(k)) return `${SC.firstOf(k)} is off ${SC.short(iso)}`;
+    const b = ((busy[k] || {})[iso] || []).find(x => x.key !== key && from < x.to - 1e-6 && x.from < to - 1e-6); return b ? `${SC.firstOf(k)} is on ${b.label}` : ""; };
+  const oneDay = (it, f) => it.kind === "trip" || it.kind === "task" || SC.slotsOf(f).length <= 1;
+  const setDay = (it, iso, patch) => {
+    const f = fc(it); if (!f) return false; const d = slotOn(f, iso); if (!d) return false;
+    const cur = dayNames(it, f, iso), names = (patch.names || cur).map(nameOf).filter((x, i, a) => a.indexOf(x) === i);
+    if (!names.length) { toast.error("Someone has to be on it. Use Remove to take it off."); return false; }
+    const t = patch.t || d.start || "07:00", e = patch.e || SC.hhmmOf(d.to || 17), from = SC.hoursOf(t), to = SC.hoursOf(e);
+    if (from == null || to == null || !(to - from >= 0.25)) { toast.error("Finish has to be after Start."); return false; }
+    const before = new Set(cur.map(n => dayWhy(it.key, iso, n, d.from, d.to)).filter(Boolean));
+    const bad = names.map(n => dayWhy(it.key, iso, n, from, to)).filter(w => w && !before.has(w))[0];
+    if (bad) { toast.error(`${bad}. Nothing changed.`); return false; }
+    const { times, ...rest } = f;
+    if (oneDay(it, f)) commit(it.key, { ...rest, s: iso, staff: names.map(name => ({ name })), crew: names.length, t, e, hours: (to - from) * names.length, pd: null });
+    else commit(it.key, { ...rest, pd: { ...(f.pd || {}), [iso]: { staff: names.map(name => ({ name })), t, e } } });
+    return true;
+  };
+  // Add someone to a job on the day they were dropped; their set pair comes too when they're open then.
   const openOn = (iso) => { const on = new Set(); (chips[iso] || []).forEach(c => (c.names || []).forEach(n => { const u = board.find(n); on.add(u ? u.name : n); })); const off = new Set(offOn(iso)); return (n) => !on.has(n) && !off.has(n); };
   const addPerson = (c, name, iso) => {
     const it = c.it;
     if (c.style === "booked" || it.kind === "service") { toast.info(`${label(it)} is booked in Simpro that day. Change who's on it in Simpro, or book ${SC.firstOf(name)} there.`); return; }
-    const f = fc(it); if (!f) return;
-    const cur = ((f.staff || []).map(x => x && x.name).filter(Boolean));
-    const base = cur.length ? cur : (c.names || []).map(n => { const u = board.find(n); return u ? u.name : n; });
-    if (base.includes(name)) { toast.info(`${SC.firstOf(name)} is already on ${label(it)}.`); return; }
-    const isOpen = openOn(iso), pt = board.partnerOf(name), add = [name, ...(pt && !base.includes(pt) && isOpen(pt) && !clashesOf(it.key, { ...f, staff: [{ name: pt }], crew: 1 }).length ? [pt] : [])];
-    const names = [...base, ...add];
-    const each = f.hours / Math.max(1, f.crew);
-    const next = { ...f, staff: names.map(n => ({ name: n })), crew: names.length, hours: it.kind === "trip" ? each * names.length : f.hours };
-    if (!okOrSay(it.key, next)) return;
-    const r = dropOff(next); commit(it.key, r.p); setSel(it.key);
-    const days = SC.slotsOf(r.p).map(d => d.date);
-    say(`${add.map(SC.firstOf).join(" and ")} added to ${label(it)}${days.length > 1 ? `, ${SC.short(days[0])} to ${SC.short(days[days.length - 1])}` : ""}.${r.gone.length ? ` ${r.gone.join(", ")} off part of it.` : ""}`);
+    const f = fc(it); if (!f) return; const d = slotOn(f, iso); if (!d) return;
+    const cur = dayNames(it, f, iso);
+    if (cur.includes(nameOf(name))) { toast.info(`${SC.firstOf(name)} is already on ${label(it)}.`); return; }
+    const pt = board.partnerOf(name), add = [name, ...(pt && !cur.includes(pt) && openOn(iso)(pt) && !dayWhy(it.key, iso, pt, d.from, d.to) ? [pt] : [])];
+    if (setDay(it, iso, { names: [...cur, ...add] })) { setSel(it.key); setSelDay(iso); say(`${add.map(SC.firstOf).join(" and ")} added to ${label(it)} on ${SC.short(iso)}.`); }
   };
   // Clear a hold: keep the block as it is, as a plan (it then books like any plan).
   const clearHold = (it) => { const f = fc(it); if (!f) return; const { held, ...rest } = f; if (!okOrSay(it.key, { ...rest, staff: f.staff || [] })) return; commit(it.key, { ...rest, staff: f.staff || [] }); say(`${label(it)} kept as it is. It can be booked now.`); };
-  // Start / Finish in the job box: the window runs every day. A trip, quick job or other one-day item takes its hours from
-  // the window (times its people); a rough-in or finish keeps its hours left and its days follow.
-  const setWin = (it, t, e) => {
-    const f = fc(it); if (!f) return; const sl = SC.slotsOf(f)[0] || {};
-    const tt = t || sl.start || "07:00", ee = e || SC.hhmmOf(sl.to || 17);
-    if (!/^\d{2}:\d{2}$/.test(tt) || !/^\d{2}:\d{2}$/.test(ee)) return;
-    const per = SC.hoursOf(ee) - SC.hoursOf(tt); if (!(per >= 0.25)) { toast.error("Finish has to be after Start."); return; }
-    const { times, ...rest } = f;
-    const next = { ...rest, t: tt, e: ee, ...(it.kind === "trip" || it.kind === "task" ? { hours: per * Math.max(1, f.crew) } : {}) };
-    if (!okOrSay(it.key, next)) return;
-    commit(it.key, next);
-  };
-
   // Press and hold a chip (phones) to pick it up; then tap a day.
   const holdStart = (e, c) => {
     if (c.style === "booked") return;
@@ -52293,7 +52295,18 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const n = rows.reduce((a, r) => a + (r.done && r.done.created ? r.done.created.length : 0), 0);
     setWb(w => ({ ...w, rows, busy: false, phase: "done" })); setReload(x => x + 1); say(`Booked ${n} entries in Simpro.`);
   };
-  const bookArgs = (it, staff) => { const p = fc(it); return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, staffIds: [...staff], days: SC.slotsOf({ ...p, crew: staff.size }).map(d => ({ date: d.date, hours: d.hours, start: d.start })) }; };
+  // v661: a day with its own people (set in the job box) books those people that day; the rest book who's picked here.
+  const idOfName = (n) => { const k = nameOf(n).toLowerCase(), s = staffList.find(x => String(x.name || "").toLowerCase() === k || String(x.name || "").toLowerCase() === String(n).toLowerCase()); return s ? Number(s.id) : null; };
+  const bookArgs = (it, staff) => {
+    const p = fc(it), all = new Set([...staff].map(Number));
+    const days = SC.slotsOf({ ...p, crew: staff.size }).map(d => {
+      const own = d.staff ? [...new Set(d.staff.map(x => x && (x.id ? Number(x.id) : idOfName(x.name))).filter(Boolean))] : null;
+      if (own && own.length) own.forEach(id => all.add(id));
+      return { date: d.date, hours: d.hours, start: d.start, ...(own && own.length ? { staffIds: own } : {}) };
+    });
+    const ids = [...all], anyAll = days.some(d => !d.staffIds);
+    return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, staffIds: ids, days: days.map(d => d.staffIds || !anyAll || ids.length === staff.size ? d : { ...d, staffIds: [...staff].map(Number) }) };
+  };
   const runPreview = async (it) => {
     setBk(b => ({ ...b, busy: true, err: "", preview: null }));
     try { const r = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, bk.staff) }); setBk(b => ({ ...b, busy: false, preview: r.data })); }
@@ -52336,7 +52349,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         onDragOver={e => { if (!dragP || dragP.iso !== iso) return; e.preventDefault(); e.stopPropagation(); if (dropOn !== it.key + iso) setDropOn(it.key + iso); }}
         onDragLeave={() => { if (dropOn === it.key + iso) setDropOn(""); }}
         onDrop={e => { if (!dragP) return; e.preventDefault(); e.stopPropagation(); addPerson(c, dragP.name, iso); setDragP(null); setDropOn(""); }}
-        onClick={e => { e.stopPropagation(); if (pickP && pickP.iso === iso) { addPerson(c, pickP.name, iso); setPickP(null); return; } if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setBk(null); setCopyOpen(false); openIns(e); }}
+        onClick={e => { e.stopPropagation(); if (pickP && pickP.iso === iso) { addPerson(c, pickP.name, iso); setPickP(null); return; } if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setSelDay(iso); setCustom(false); setBk(null); setCopyOpen(false); openIns(e); }}
         title={`${label(it)} · ${it.tag}`}>
         <span className="t">{compact && c.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{label(it)}</span>
         {compact ? null : <span className="m"><i>{c.style === "held" ? <><span className="sc-bang" aria-hidden="true">!</span>Held · </> : c.style === "kept" ? "Plan · " : ""}{it.tag}</i>{c.style === "cc" ? "Set in Command Center" : crewText(c)}</span>}
@@ -52554,9 +52567,6 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const held = f && !it.plan && f.held;
     const canBook = f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !held;
     const pool = (() => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead) || board.crewOf(it.who); return c ? c.people : []; })();
-    const cur = ((f && f.staff) || []).map(x => x && x.name).filter(Boolean);
-    const others = Object.values(board.crews).flatMap(c => c.people).filter(n => !pool.includes(n) && !cur.includes(n));
-    const sl0 = f ? (SC.slotsOf(f)[0] || {}) : {};
     const copyDays = []; for (let d = SC.workAfter(V.today), g = 0; d <= V.end && g < 25; d = SC.workAfter(d), g++) copyDays.push(d);
     const copied = new Set(Object.keys(plans).filter(k => k.startsWith((it.copyOf || it.key) + "~")).map(k => k.split("~")[1]));
     return (
@@ -52570,25 +52580,32 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         {held ? <div className="sc-btns"><button type="button" className="mt-btn" onClick={() => clearHold(it)}>Clear hold</button><small className="sc-sub">Keeps it as it is. Or change the day, time or who below.</small></div> : null}
         {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change booked days in Simpro.</small> : null}
         {f ? (<>
-          <small>{SC.slotsOf(f).slice(0, 4).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}{SC.slotsOf(f).length > 4 ? " · …" : ""}{f.crew > 1 ? ` · ${Math.round(SC.slotsOf(f).reduce((a, d) => a + d.hours, 0) * 4) / 4} h each` : ""}</small>
-          {it.kind === "trip" && !it.tripH && !it.plan ? <small className="sc-sub">No est. time on the trip, so {SC.TRIP_DEFAULT_H} hours each. Set Start and Finish to fit the day.</small> : null}
-          <small className="sc-state">{it.plan ? `Plan${it.plan.by ? " by " + SC.firstOf(it.plan.by) : ""}: the auto-schedule won't move it.` : f.src === "auto" ? `Auto-scheduled for ${f.team}. Move or change it to keep it.` : "Forecast from Simpro's crew."}</small>
-          <div className="sc-ctl">
-            {/* v661 (Koy: "just let me select a start time and a finish time. Get rid of all other bullshit"): the day, then
-                Start and Finish. The hours for booking and overtime come from them; a job's days follow from its hours left. */}
-            <label>Day<input type="date" value={f.s} onChange={e => e.target.value && moveTo(it.key, e.target.value)}/></label>
-            <label>Start<input type="time" step="900" min="05:00" max="17:00" value={sl0.start || "07:00"} onChange={e => setWin(it, e.target.value, null)}/></label>
-            <label>Finish<input type="time" step="900" min="05:15" max="19:00" value={SC.hhmmOf(sl0.to || 17)} onChange={e => setWin(it, null, e.target.value)}/></label>
-          </div>
-          {pool.length || cur.length ? (
-            <div className="sc-who">
-              <span className="mt-lab">Who · {cur.length || f.crew}</span>
-              <div className="sc-ppl">{[...new Set([...cur, ...pool])].map(n => (
-                (() => { const why = cur.includes(n) ? "" : (clashesOf(it.key, { ...f, staff: [{ name: n }], crew: 1 })[0] || {}).why || "";
-                  return <label key={n} className={why ? "busy" : ""} title={why}><input type="checkbox" checked={cur.includes(n)} disabled={!!why} onChange={() => setStaff(it, cur.includes(n) ? cur.filter(x => x !== n) : [...cur, n])}/>{n}{why ? <i> · {why.replace(SC.firstOf(n) + " ", "")}</i> : null}</label>; })()))}</div>
-              {others.length ? <select value="" onChange={e => e.target.value && setStaff(it, [...cur, e.target.value])} aria-label="Add someone from another crew">
-                <option value="">+ Someone from another crew</option>{others.filter(n => !clashesOf(it.key, { ...f, staff: [{ name: n }], crew: 1 }).length).map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
-            </div>) : null}
+          {(() => {
+            const sl = SC.slotsOf(f), day = (sl.find(x => x.date === selDay) || sl[0] || {}).date; if (!day) return null;
+            const d = slotOn(f, day), on = dayNames(it, f, day), people = [...new Set([...on, ...pool])];
+            const mode = custom ? "custom" : d.start === "07:00" && Math.abs(d.to - 17) < 1e-6 ? "full" : d.start === "07:00" && Math.abs(d.to - 12) < 1e-6 ? "half" : "custom";
+            const ext = Object.values(board.crews).flatMap(c => c.people).filter(n => !people.includes(n) && !dayWhy(it.key, day, n, d.from, d.to));
+            return (<>
+              <div className="sc-day1"><b>{SCAL_DOW[SC.dowOf(day)] || ""} {SC.short(day)}</b>{sl.length > 1 ? <small> · one of {sl.length} days, {SC.short(sl[0].date)} to {SC.short(sl[sl.length - 1].date)}</small> : null}</div>
+              <span className="mt-lab">Who that day · {on.length}</span>
+              <div className="sc-ppl">{people.map(n => { const has = on.includes(n), why = has ? "" : dayWhy(it.key, day, n, d.from, d.to);
+                return <label key={n} className={why ? "busy" : ""} title={why}><input type="checkbox" checked={has} disabled={!!why} onChange={() => setDay(it, day, { names: has ? on.filter(x => x !== n) : [...on, n] })}/>{n}{why ? <i> · {why.replace(SC.firstOf(n) + " ", "")}</i> : null}</label>; })}</div>
+              {ext.length ? <select value="" onChange={e => e.target.value && setDay(it, day, { names: [...on, e.target.value] })} aria-label="Add someone from another crew">
+                <option value="">+ Someone from another crew</option>{ext.map(n => <option key={n} value={n}>{n}</option>)}</select> : null}
+              <span className="mt-lab">Time</span>
+              <span className="sc-seg sc-tseg" role="group" aria-label="Time">
+                <button type="button" aria-pressed={mode === "full"} onClick={() => { setCustom(false); setDay(it, day, { t: "07:00", e: "17:00" }); }}>Full day</button>
+                <button type="button" aria-pressed={mode === "half"} onClick={() => { setCustom(false); setDay(it, day, { t: "07:00", e: "12:00" }); }}>Half day</button>
+                <button type="button" aria-pressed={mode === "custom"} onClick={() => setCustom(true)}>Custom</button>
+              </span>
+              {mode === "custom" ? <div className="sc-ctl">
+                <label>Start<input type="time" step="900" min="05:00" max="17:00" value={d.start || "07:00"} onChange={e => /^\d{2}:\d{2}$/.test(e.target.value) && setDay(it, day, { t: e.target.value })}/></label>
+                <label>Finish<input type="time" step="900" min="05:15" max="19:00" value={SC.hhmmOf(d.to || 17)} onChange={e => /^\d{2}:\d{2}$/.test(e.target.value) && setDay(it, day, { e: e.target.value })}/></label>
+              </div> : <small className="sc-sub">{d.label}</small>}
+              {it.kind === "trip" && !it.tripH && !it.plan ? <small className="sc-sub">No est. time on the trip, so {SC.TRIP_DEFAULT_H} hours each until you pick a time.</small> : null}
+            </>);
+          })()}
+          <small className="sc-state">{it.plan ? `Plan${it.plan.by ? " by " + SC.firstOf(it.plan.by) : ""}: the auto-schedule won't move it.` : f.src === "auto" ? `Auto-scheduled for ${f.team}. Change it to keep it.` : "Forecast from Simpro's crew."}</small>
           <div className="sc-btns">
             {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => { setPicked(it.key); setBk(null); setInsAt(null); }}>Move…</button> : null}
             {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => setCopyOpen(o => !o)}>{copyOpen ? "Done copying" : "Copy to other days"}</button> : null}
@@ -52646,7 +52663,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         <button type="button" key={n.key} className={"sc-need" + (sel === n.key ? " on" : "")} draggable={x.kind !== "service"}
           onDragStart={e => { setDrag(n.key); try { e.dataTransfer.setData("text/plain", n.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }} onDragEnd={() => { setDrag(""); setOver(""); }}
           onClick={e => {
-          setSel(n.key); setPicked(""); setBk(null); openIns(e);
+          setSel(n.key); setSelDay(""); setCustom(false); setPicked(""); setBk(null); openIns(e);
           const f = fc(x); if (f) { const w = Math.floor((SC.parseYmd(f.s) - SC.parseYmd(start)) / (7 * 86400000)); if (w >= 0 && w < SCAL_WEEKS) setWk(w); }
         }}>
           <b>{label(x)}</b><small><Pill it={x}/>{n.held ? "Placed, held" : "Not placed"}</small><span className="sc-flag">{n.why}</span>
@@ -52795,6 +52812,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-grpb.open{color:var(--cink)}.sc2 .sc-grpb:focus-visible{outline:2px solid var(--o);outline-offset:1px}
         .sc2 .sc-chip2.clash{border-color:#1B1F24;border-style:solid;border-width:2px;border-left-width:5px}.sc2 .sc-clash{color:#1B1F24!important;font-weight:800}
         .sc2 .sc-ppl label.busy{opacity:.45}
+        .sc2 .sc-day1 b{font-size:14px;color:var(--cink)}.sc2 .sc-day1 small{font-size:12px;color:var(--cdim)}
+        .sc2 .sc-tseg{align-self:flex-start}.sc2 .sc-ppl label i{font-style:normal;font-size:12px;color:var(--cdim)}
         .sc2 .sc-cw{overflow-x:auto}
         .sc2 .sc-cwr{display:grid;grid-template-columns:minmax(120px,1.1fr) repeat(4,minmax(96px,1fr)) minmax(70px,.6fr);min-width:620px}
         .sc2 .sc-cwr>b{font-size:12.5px;color:var(--cink);padding:6px 8px;border-top:1px solid var(--cline);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

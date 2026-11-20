@@ -71,7 +71,8 @@ function buildEntries(days, staff, existing) {
   const run = {};
   const out = [];
   (days || []).slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0).forEach(d => {
-    (staff || []).forEach(p => {
+    // v661: a day can name its own people (d.staffIds, a subset of the booking's); others book everyone picked.
+    (Array.isArray(d.staffIds) && d.staffIds.length ? (staff || []).filter(p => d.staffIds.map(Number).includes(Number(p.id))) : (staff || [])).forEach(p => {
       const wk = mondayOf(d.date), k = p.id + "|" + wk;
       if (run[k] == null) run[k] = Number(((existing || {})[p.id] || {})[wk]) || 0;
       const before = run[k];
@@ -118,7 +119,13 @@ function validate(data, today) {
   if (new Set(staff.map(Number)).size !== staff.length) return "The same person is picked twice.";
   const days = Array.isArray(d.days) ? d.days : [];
   if (!days.length) return "No days to book.";
-  if (days.length * staff.length > MAX_ENTRIES) return `That's more than ${MAX_ENTRIES} entries; book it in smaller pieces.`;
+  const pick = new Set(staff.map(Number));
+  for (const x of days) if (x && x.staffIds != null) {
+    if (!Array.isArray(x.staffIds) || !x.staffIds.length) return `Pick who works ${x && x.date}.`;
+    if (x.staffIds.some(id => !pick.has(Number(id)))) return `Someone on ${x.date} isn't in the people picked.`;
+    if (new Set(x.staffIds.map(Number)).size !== x.staffIds.length) return `The same person is picked twice on ${x.date}.`;
+  }
+  if (days.reduce((a, x) => a + (x && Array.isArray(x.staffIds) && x.staffIds.length ? x.staffIds.length : staff.length), 0) > MAX_ENTRIES) return `That's more than ${MAX_ENTRIES} entries; book it in smaller pieces.`;
   const last = addDays(today, 120), seen = new Set();
   for (const x of days) {
     if (!x || !isIso(x.date)) return "Each day needs a date.";

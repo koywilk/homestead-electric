@@ -8489,7 +8489,7 @@ exports.scrambleBook = functions
     const bad = SB.validate(data, today);
     if (bad) throw new functions.https.HttpsError("invalid-argument", bad);
     const no = String(data.jobNo), phase = data.phase;
-    const days = data.days.map(d => ({ date: d.date, hours: Number(d.hours), ...(d.start ? { start: String(d.start) } : {}) }));
+    const days = data.days.map(d => ({ date: d.date, hours: Number(d.hours), ...(d.start ? { start: String(d.start) } : {}), ...(Array.isArray(d.staffIds) && d.staffIds.length ? { staffIds: d.staffIds.map(Number) } : {}) }));
     const ids = data.staffIds.map(Number);
     // The job and the cost center it books on.
     const jr = await simproReqWithRetry("GET", `/jobs/${no}?columns=ID,Name,Stage`);
