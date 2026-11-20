@@ -1767,7 +1767,24 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
       if (!tokenOk(req)) { res.status(401).json({ ok: false, error: "unauthorized" }); return; }
       if (req.method !== "POST") { res.status(405).json({ ok: false, error: "POST only" }); return; }
       const b = req.body || {}, mode = b.action === "schedule.preview" ? "preview" : b.action === "schedule.book" ? "book" : "";
-      if (!mode) { res.status(400).json({ ok: false, refused: "Unknown action. Use schedule.preview or schedule.book." }); return; }
+      // v670, the suggest door (functions/scrambleSuggest.js): Duet proposes a block, takes one back, or marks a job as
+      // waiting. These write only the calendar's own plans doc; they book nothing and touch no job.
+      const SUGGEST = { "schedule.propose": "propose", "schedule.withdraw": "withdraw", "schedule.wait": "wait" };
+      if (SUGGEST[b.action]) {
+        if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function" || typeof (calendarDeps || {}).clearField !== "function") { res.status(500).json({ ok: false, error: "The crew calendar is not wired into duetBook." }); return; }
+        try {
+          const SS = require("../scrambleSuggest.js");
+          const out = await SS[SUGGEST[b.action]]({ db, getUsers, simproReq: materialDeps.simproReqWithRetry, tz: TZ, del: (calendarDeps || {}).clearField }, b.args || {});
+          functions.logger.info("duetBook", { action: b.action, ok: out.ok, key: out.key, refused: (out.refused || []).length });
+          res.status(200).json(out);
+        } catch (e) {
+          if (e && e.refused) { res.status(400).json({ ok: false, refused: e.message }); return; }
+          functions.logger.error("[duetBook] failed", { action: b.action, error: e && e.message });
+          res.status(500).json({ ok: false, error: "Couldn't do that on the crew calendar. Nothing is known to have been saved." });
+        }
+        return;
+      }
+      if (!mode) { res.status(400).json({ ok: false, refused: "Unknown action. Use schedule.preview, schedule.book, schedule.propose, schedule.withdraw or schedule.wait." }); return; }
       const cd = calendarDeps || {};
       if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function" || typeof cd.staff !== "function" || typeof cd.tripWrite !== "function") { res.status(500).json({ ok: false, error: "Booking is not wired into duetBook." }); return; }
       try {

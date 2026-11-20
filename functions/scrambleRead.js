@@ -34,12 +34,24 @@ function jobsOf(docs) {
 
 // Pure: everything already read → the view. inputs: { jobDocs: [{ id, data }], upcoming, users, pto, prefs, phaseHours,
 // schedules, now (wall-clock Date), from, to }.
-function assemble(inp) {
+// The calendar itself (what SC.buildCalendar gives the screen), from inputs already read. opts.proposals: false leaves
+// Duet's own proposals out (used when checking a new proposal, so it is judged against everything but itself).
+function calendarOf(inp, opts) {
   const i = inp || {}, prefs = i.prefs || {};
-  const V = SC.buildCalendar({ jobs: jobsOf(i.jobDocs), upcoming: Array.isArray(i.upcoming) ? i.upcoming : [], schedules: Array.isArray(i.schedules) ? i.schedules : [],
-    phaseHours: i.phaseHours || {}, upHours: {}, plans: prefs.cal || {}, today: i.now, weeks: WEEKS, effRS, effFS, users: Array.isArray(i.users) ? i.users : [],
-    holidays: Array.isArray(prefs.holidays) ? prefs.holidays : SC.DEFAULT_HOLIDAYS, timeOff: Array.isArray(i.pto) ? i.pto : [] });
-  return SC.viewOf(V, i.users || [], { from: isIso(i.from) ? i.from : "", to: isIso(i.to) ? i.to : "" });
+  return SC.buildCalendar({ jobs: jobsOf(i.jobDocs), upcoming: Array.isArray(i.upcoming) ? i.upcoming : [], schedules: Array.isArray(i.schedules) ? i.schedules : [],
+    phaseHours: i.phaseHours || {}, upHours: {}, plans: prefs.cal || {}, proposals: opts && opts.proposals === false ? {} : prefs.duet || {}, today: i.now, weeks: WEEKS, effRS, effFS,
+    users: Array.isArray(i.users) ? i.users : [], holidays: Array.isArray(prefs.holidays) ? prefs.holidays : SC.DEFAULT_HOLIDAYS, timeOff: Array.isArray(i.pto) ? i.pto : [] });
+}
+// What became of Duet's proposals (the screen records one line when a person keeps, changes or removes one), newest first.
+function outcomesOf(prefs) {
+  const d = (prefs && prefs.duetDone) || {};
+  return Object.keys(d).map(id => ({ proposalId: id, ...(d[id] || {}) })).filter(x => x.at).sort((a, b) => a.at < b.at ? 1 : -1).slice(0, 100)
+    .map(x => ({ proposalId: x.proposalId, key: String(x.key || ""), job: String(x.job || ""), outcome: String(x.outcome || ""), by: String(x.by || ""), at: String(x.at || ""), ...(x.reason ? { reasonGiven: String(x.reason) } : {}) }));
+}
+function assemble(inp) {
+  const i = inp || {};
+  const view = SC.viewOf(calendarOf(i), i.users || [], { from: isIso(i.from) ? i.from : "", to: isIso(i.to) ? i.to : "" });
+  return { ...view, duetOutcomes: outcomesOf(i.prefs) };
 }
 
 // The Simpro schedule for the calendar's 17 weeks, in six-week reads like the screen. Throws if Simpro can't be read:
@@ -59,20 +71,25 @@ async function readSchedules(simproReq, startIso) {
   return rows;
 }
 
+// Everything the calendar is built from, read once. deps: { db, getUsers, simproReq, tz, now? }.
+async function gather(deps) {
+  const now = deps.now || wallNow(deps.tz);
+  const settings = (id) => deps.db.collection("settings").doc(id).get().then(s => (s.exists ? s.data() : {}) || {});
+  const [jobSnap, up, pto, ph, prefSnap, users, schedules] = await Promise.all([
+    deps.db.collection("jobs").get(), settings("upcoming_jobs"), settings("crewPTO"), settings("phaseHours"),
+    deps.db.collection("meetings").doc("scramble__prefs").get(), deps.getUsers(), readSchedules(deps.simproReq, SC.mondayOf(now)) ]);   // mondayOf takes the Date, not the day string
+  return { jobDocs: jobSnap.docs.map(d => ({ id: d.id, data: d.data() })), upcoming: up.items, users, pto: pto.list,
+    prefs: prefSnap.exists ? prefSnap.data() || {} : {}, phaseHours: ph.jobs, schedules, now };
+}
 // deps: { db, getUsers, simproReq, tz }. args: { from, to } (YYYY-MM-DD, optional; default the next two weeks).
 async function readCalendar(deps, args) {
   const now = deps.now || wallNow(deps.tz), today = SC.ymd(now), a = args || {};
   const from = isIso(a.from) ? a.from : today, to = isIso(a.to) ? a.to : SC.addDays(from, 13);
   if (to < from) throw Object.assign(new Error("to is before from"), { bad: true });
-  const settings = (id) => deps.db.collection("settings").doc(id).get().then(s => (s.exists ? s.data() : {}) || {});
-  const [jobSnap, up, pto, ph, prefSnap, users, schedules] = await Promise.all([
-    deps.db.collection("jobs").get(), settings("upcoming_jobs"), settings("crewPTO"), settings("phaseHours"),
-    deps.db.collection("meetings").doc("scramble__prefs").get(), deps.getUsers(), readSchedules(deps.simproReq, SC.mondayOf(now)) ]);   // mondayOf takes the Date, not the day string
-  const view = assemble({ jobDocs: jobSnap.docs.map(d => ({ id: d.id, data: d.data() })), upcoming: up.items, users, pto: pto.list,
-    prefs: prefSnap.exists ? prefSnap.data() : {}, phaseHours: ph.jobs, schedules, now, from, to });
+  const view = assemble({ ...(await gather({ ...deps, now })), from, to });
   return { ok: true, asOf: new Date().toISOString(), source: "Command Center crew calendar (same rules as the screen), Simpro schedule read live",
-    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date. Hours for Upcoming jobs that are only in Simpro are not included.",
+    note: "Read only. kind: simpro = booked in Simpro; plan = placed by a person; forecast = the auto-schedule's guess; forecast-held = a guess held for a call; nobody-on-it = on its day with no one on it; command-center-date = a QC walk, inspection or quick job date; duet-proposal = a block Duet proposed, with its reason, that a person can keep, change or remove. duetOutcomes lists what people did with earlier proposals. Hours for Upcoming jobs that are only in Simpro are not included.",
     ...view };
 }
 
-module.exports = { WEEKS, effRS, effFS, wallNow, jobsOf, assemble, readSchedules, readCalendar };
+module.exports = { WEEKS, effRS, effFS, wallNow, jobsOf, calendarOf, outcomesOf, assemble, gather, readSchedules, readCalendar };

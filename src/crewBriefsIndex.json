@@ -1,5 +1,14 @@
 [
  {
+  "v": 670,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "Duet (Koy's assistant) can now suggest a block on the calendar. It shows with a dotted green outline and says \"Duet suggests\", with the reason."
+   }
+  ]
+ },
+ {
   "v": 669,
   "heads": [
    {
@@ -194,19 +203,6 @@
    {
     "h": "NEW (Dashboard: Meetings tab, the Scramble calendar)",
     "first": "Open /dashboard, tap Meetings. The Calendar · all crews fold is at the top of the Weekly Scramble."
-   }
-  ]
- },
- {
-  "v": 650,
-  "heads": [
-   {
-    "h": "CHANGED (Dashboard › Meetings › Lead Meeting, now laid out like the old Doc)",
-    "first": "Order is the Doc's: Notes, Highlight, Lowlight, Training, Schedule, Upcoming, Hours and margin, Crew out, Action items."
-   },
-   {
-    "h": "REMOVED from the Lead Meeting: Open items from the watches, Needs, Hiring, When it comes up. (A week that already had notes typed in one of them still shows it at the bottom.)",
-    "first": ""
    }
   ]
  }

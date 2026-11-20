@@ -7753,7 +7753,8 @@ const _poGmail = require("./materialPO/gmail.js")({ functions, db });
 const _duet = require("./duetWrites/api.js")({ functions, db, FieldValue: admin.firestore.FieldValue, FieldPath: admin.firestore.FieldPath, getUsers, TZ, storage: admin.storage(),
   materialDeps: { simproReqWithRetry, accessOf: gcAdminAccessOf, loadMailConfig: gcLoadMailConfig, gmailSend: _poGmail.send },
   officeDeps: { sendBroadcastAs, isBroadcaster: ND.isBroadcaster, planDecide: _planIntake.decideById },
-  calendarDeps: { staff: () => sbActiveStaff(), tripWrite: (...x) => sbTripWrite(...x) } });
+  calendarDeps: { staff: () => sbActiveStaff(), tripWrite: (...x) => sbTripWrite(...x),
+    clearField: () => admin.firestore.FieldValue.delete() } });   // clears ONE key in the calendar's plans map (a proposal Duet takes back); never a document
 exports.duetApi = _duet.duetApi;
 exports.duetRead = _duet.duetRead;   // v668: the crew calendar as data for Duet (read only)
 exports.duetBook = _duet.duetBook;   // after v668: Duet books through the calendar's Book rules (preview, then confirm)

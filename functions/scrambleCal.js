@@ -275,7 +275,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   const hold = (it, f, who) => {
     // a block set to start after 7:00 holds the person's whole day, so nothing auto lands under it (v661: no double booking)
     const late = (hoursOf(f.t) || DAY0) > DAY0 + 1e-6;
-    slotsOf(f).forEach(d => { if (d.date <= end) (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : who).forEach(n => mark(n, d.date, late || d.from > DAY0 + 1e-6 && it.plan ? HPD : d.hours)); });
+    slotsOf(f).forEach(d => { if (d.date <= end) (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : who).forEach(n => mark(n, d.date, late || d.from > DAY0 + 1e-6 && (it.plan || f.src === "duet") ? HPD : d.hours)); });
   };
   items.forEach(it => { if (!it.plan) return; const names = (it.plan.staff || []).map(x => x && x.name).filter(Boolean); hold(it, it.plan, names); });   // v663: a plan with no names has nobody on it (shown red), so it holds nobody
   // v662: the forecast tail after Simpro's last booked day (its people are the last booked day's crew) is checked day
@@ -283,7 +283,9 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   // even happen"): someone off, or with over half the day already taken, comes off that day; a day starts after what its
   // people already have; a day with nobody left (or one crew member alone) is skipped and the hours run on.
   const titleOf = (n) => { const c = board.crewOf(n); const u = board.find(n); return (c && u && c.title && c.title[u.name]) || ""; };
-  items.filter(it => it.auto && !it.plan).sort((a, b) => a.auto.s < b.auto.s ? -1 : a.auto.s > b.auto.s ? 1 : 0).forEach(it => {
+  // v670: a block Duet proposed holds its people too, so the auto-schedule lays its own guesses around it
+  items.forEach(it => { if (it.plan || !it.auto || it.auto.src !== "duet") return; hold(it, it.auto, (it.auto.staff || []).map(x => x && x.name).filter(Boolean)); it.onCal = true; it.inList = false; });
+  items.filter(it => it.auto && !it.plan && it.auto.src !== "duet").sort((a, b) => a.auto.s < b.auto.s ? -1 : a.auto.s > b.auto.s ? 1 : 0).forEach(it => {
     const f = it.auto, names = (f.staff || []).map(x => x && x.name).filter(Boolean);
     const lastDay = it.booked.length ? it.booked[it.booked.length - 1] : null;
     const who0 = names.length ? names : ((lastDay && lastDay.names) || []);
@@ -513,7 +515,7 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
 //   input: { jobs, upcoming, schedules, phaseHours ({ no: { r: [used, est], f: [...] } }),
 //            upHours ({ no: { est, used } }), plans ({ key: plan }), today (Date), weeks, effRS, effFS }
 function buildCalendar(input) {
-  const { jobs = [], upcoming = [], schedules = [], phaseHours = {}, upHours = {}, plans = {}, today = new Date(), weeks = 5, effRS, effFS, users = null, timeOff = [] } = input || {};
+  const { jobs = [], upcoming = [], schedules = [], phaseHours = {}, upHours = {}, plans = {}, proposals = {}, today = new Date(), weeks = 5, effRS, effFS, users = null, timeOff = [] } = input || {};
   setHolidays(input && "holidays" in input ? input.holidays : null);
   const todayIso = ymd(today), start = mondayOf(today);
   const days = viewDays(start, weeks), end = days[days.length - 1].iso;
@@ -684,7 +686,17 @@ function buildCalendar(input) {
     // off there"): no block, the auto-schedule leaves it alone, it stays on the list as needing scheduling.
     if (p && p.off) it.off = { by: p.by || "", at: p.at || "", why: String(p.why || "").slice(0, 60), note: String(p.note || "").slice(0, 200) };
     else if (p && p.s && Number(p.hours) > 0) it.plan = { s: startOf(p.s), hours: Number(p.hours), crew: Math.max(1, Number(p.crew) || 1), staff: Array.isArray(p.staff) ? p.staff : [], by: p.by || "", at: p.at || "", ...(hoursOf(p.t) != null ? { t: p.t } : {}), ...(hoursOf(p.t) != null && hoursOf(p.e) != null ? { e: p.e } : {}), ...(pdOf(p.pdl) ? { pd: pdOf(p.pdl) } : {}) };
-    if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
+    // v670 (Duet's suggest door, Koy 2026-11-20): a block Duet proposed (meetings/scramble__prefs.duet[key], checked by
+    // the server before it was saved) takes the place of the auto-schedule's own guess for this job or trip. It sits at
+    // the forecast level: a plan a person placed, or taking the job off the calendar, always wins, and it is ignored
+    // once all its days are past.
+    const dp = !it.plan && !it.off && proposals && proposals[it.key];
+    if (dp && dp.s && Number(dp.hours) > 0 && pdOf(dp.pdl)) {
+      const f = { s: startOf(dp.s), hours: Number(dp.hours), crew: Math.max(1, Number(dp.crew) || 1), staff: Array.isArray(dp.staff) ? dp.staff : [], pd: pdOf(dp.pdl), src: "duet", why: String(dp.why || "").slice(0, 200), id: String(dp.id || ""), at: dp.at || "" };
+      if (planDays(f).some(d => d.date >= todayIso)) it.auto = f;
+    }
+    if (it.auto && it.auto.src === "duet") { /* Duet's proposal stands in for the forecast */ }
+    else if (!it.plan && !it.off && it.bookedAhead && it.left > 0 && it.kind !== "trip" && (it.kind === "service" || (it.start && (it.start.started || it.start.conf)))) {
       it.auto = { s: workAfter(it.booked[it.booked.length - 1].iso), hours: it.left, crew: Math.max(1, it.crewBooked) };
     }
     const bookedFrom = (iso) => it.booked.some(b => b.iso >= iso);
@@ -786,7 +798,7 @@ function chipsOf(V, board) {
     const names = (f.staff || []).map(s => s && s.name).filter(Boolean);
     // v663: only an auto forecast borrows the last booked day's people; a saved plan shows exactly who is on it
     const nm = names.length ? names : it.plan ? [] : ((it.booked[it.booked.length - 1] || {}).names || []);
-    const style = it.plan ? "kept" : f.src === "auto" && f.held ? "held" : "auto";
+    const style = it.plan ? "kept" : f.src === "duet" ? "duet" : f.src === "auto" && f.held ? "held" : "auto";
     slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
       if (it.booked.some(b => b.iso === d.date)) return;   // Simpro already has this job or trip that day: its booking is the block
       const inSim = (n) => ((sim[canon(n)] || {})[d.date] || []).some(([a, z]) => d.from < z - 1e-6 && a < d.to - 1e-6);
@@ -796,7 +808,7 @@ function chipsOf(V, board) {
       if (d.none || (it.plan && !nmD.length)) { push(d.date, { it, style: "open", none: true, offLeft, simLeft, n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0, time: d.label, from: d.from, to: d.to }); return; }
       push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(firstOf), names: nmD, offLeft, simLeft, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
   });
-  const ord = { booked: 0, cc: 1, kept: 2, auto: 3, held: 4, open: 5 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
+  const ord = { booked: 0, cc: 1, kept: 2, duet: 3, auto: 3, held: 4, open: 5 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
   Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
   return out;
 }
@@ -808,7 +820,7 @@ function busyOf(chips, board) {
   const out = {};
   Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
     if (c.from == null || c.to == null) return;
-    (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` })); });
+    (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held" || c.style === "duet", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` })); });
   }));
   return out;
 }
@@ -838,7 +850,7 @@ function whyOf(it) {
 // The calendar as plain data for a date range (v668, the read door for Duet): per workday the blocks, the open people,
 // the people under 10 hours and who is off; the Needs you list; and one line per job on why it is there. Built from the
 // same chipsOf / busyOf / dayCounts the screen uses, so it says what the screen says. No money, no contact details.
-const KIND_WORDS = { booked: "simpro", kept: "plan", auto: "forecast", held: "forecast-held", open: "nobody-on-it", cc: "command-center-date" };
+const KIND_WORDS = { booked: "simpro", kept: "plan", duet: "duet-proposal", auto: "forecast", held: "forecast-held", open: "nobody-on-it", cc: "command-center-date" };
 function viewOf(V, users, opts) {
   const o = opts || {}, board = crewBoard(users || []), chips = chipsOf(V, board), busy = busyOf(chips, board);
   const from = o.from && o.from > V.today ? o.from : V.today, to = o.to && o.to < V.end ? o.to : V.end;
@@ -850,7 +862,7 @@ function viewOf(V, users, opts) {
       blocks: (chips[d] || []).map(c => { seen.add(c.it.key); const f = fcOf(c.it);
         return { kind: KIND_WORDS[c.style] || c.style, key: c.it.key, jobNo: String(c.it.no || ""), job: String(c.it.name || ""), what: String(c.it.tag || ""), people: c.names || [],
           ...(c.time ? { time: c.time } : {}), ...(c.from != null && c.to != null ? { from: hhmmOf(c.from), to: hhmmOf(c.to) } : {}), ...(c.hrs ? { crewHours: c.hrs } : {}),
-          ...(c.team ? { team: c.team } : {}), ...(c.style === "held" && f && f.held ? { heldBecause: f.held } : {}), ...(c.style === "kept" && c.it.plan && c.it.plan.by ? { placedBy: c.it.plan.by } : {}),
+          ...(c.team ? { team: c.team } : {}), ...(c.style === "held" && f && f.held ? { heldBecause: f.held } : {}), ...(c.style === "duet" && f ? { reason: f.why || "", proposalId: f.id || "" } : {}), ...(c.style === "kept" && c.it.plan && c.it.plan.by ? { placedBy: c.it.plan.by } : {}),
           ...(c.offLeft && c.offLeft.length ? { leftOffBecauseOff: c.offLeft } : {}), ...(c.simLeft && c.simLeft.length ? { leftOffBecauseInSimpro: c.simLeft } : {}) }; }) });
   }
   const line = (it) => ({ key: it.key, jobNo: String(it.no || ""), job: String(it.name || ""), what: String(it.tag || ""), ...(whyOf(it) ? { why: whyOf(it) } : {}),
