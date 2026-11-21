@@ -559,5 +559,53 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(!done.needs.some(n => n.key === "t_ch_h4"), "and a finished trip is never listed under Needs you");
 }
 
+// ── v678: each person on a block has their own start and finish (Koy 2026-11-21: "People should be able to be on the
+// same job without having to be there all day ... why they can't be on the same block with different times") ──
+{
+  const opt = { today: new Date(2026, 10, 23, 9), weeks: 2, users: users6, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const jobsR = [{ id: "rose", simproNo: "889", name: "Rose", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50", foreman: "Keegan Wilkinson" },
+    { id: "webb", simproNo: "1304", name: "Webb", roughStatus: "complete", finishStatus: "inprogress", finishStage: "50", foreman: "Keegan Wilkinson" }];
+  const webb = ["Gage Lund", "Payton Bolda"].map(n => ({ Type: "job", Reference: "1304-1", Date: "2026-11-24", Staff: { ID: n.length, Name: n }, Blocks: [{ StartTime: "10:00", EndTime: "11:00", Hrs: 1 }] }));
+  const roseDay = { d: "2026-11-24", n: ["Keegan Wilkinson", "Austin Schut", "Gage Lund", "Payton Bolda"], t: "07:00", e: "17:00", w: [{ n: "Keegan Wilkinson", t: "07:00", e: "17:00" }, { n: "Austin Schut", t: "07:00", e: "17:00" }, { n: "Gage Lund", t: "11:30", e: "17:00" }, { n: "Payton Bolda", t: "11:30", e: "17:00" }] };
+  const plansR = { "j_rose_f": { s: "2026-11-24", hours: 31, crew: 4, staff: roseDay.n.map(name => ({ name })), t: "07:00", e: "17:00", pdl: [roseDay], by: "Koy Wilkinson" } };
+  const VR = SC.buildCalendar({ jobs: jobsR, schedules: webb, phaseHours: { "889": { f: [100, 400] }, "1304": { f: [100, 400] } }, plans: plansR, ...opt });
+  const bR = SC.crewBoard(users6), cR = SC.chipsOf(VR, bR), busyR = SC.busyOf(cR, bR, VR), it = VR.items.find(x => x.key === "j_rose_f");
+  const sl = SC.slotsOf(it.plan).find(d => d.date === "2026-11-24");
+  ok(sl && sl.from === 7 && sl.to === 17 && sl.pw["Gage Lund"][0] === 11.5 && sl.crewH === 31, "a saved day with people on their own times reads back: the span 7-5 and Gage 11:30 on, 31 crew hours");
+  const ch = (cR["2026-11-24"] || []).find(c => c.it.key === "j_rose_f");
+  ok(ch && ch.style === "kept" && ch.names.length === 4 && ch.hrs === 31 && SC.winsOf(ch, "Gage Lund")[0][0] === 11.5 && SC.winsOf(ch, "Keegan Wilkinson")[0][0] === 7, "the job box chip has all four, each on their own times");
+  ok(!(ch.simLeft || []).length, "Gage and Payton at Webb 10-11 in Simpro aren't taken off Rose, since their Rose time starts 11:30");
+  const gb = (busyR["Gage Lund"] || {})["2026-11-24"] || [];
+  ok(gb.some(b => b.key === "j_rose_f" && b.from === 11.5 && b.to === 17) && !gb.some(b => b.key === "j_rose_f" && b.from === 7), "Gage is busy on Rose 11:30-5 only");
+  const k = SC.dayCounts("2026-11-24", cR, busyR, bR, VR, "All");
+  ok(k.short.some(x => x.n === "Gage Lund" && x.h === 6.5) && !k.short.some(x => x.n === "Keegan Wilkinson"), "the 10-hour count adds each person's own hours (Gage 1 h Webb + 5.5 h Rose)");
+  ok(!VR.needs.some(n => n.key === "j_rose_f"), "four people with someone there all day is nobody alone");
+  // the auto-schedule leaves Gage's morning to itself, not on Rose
+  ok(!VR.items.some(x => x.auto && x.auto.src === "auto" && SC.slotsOf(x.auto).some(d => d.date === "2026-11-24" && (d.staff || x.auto.staff).some(p => p.name === "Keegan Wilkinson"))), "Keegan, on Rose all day, isn't forecast anywhere else that day");
+  // alone for part of the day goes under Needs you
+  const lone = { "j_rose_f": { ...plansR["j_rose_f"], hours: 15, crew: 2, staff: [{ name: "Austin Schut" }, { name: "Payton Bolda" }], pdl: [{ d: "2026-11-24", n: ["Austin Schut", "Payton Bolda"], t: "07:00", e: "17:00", w: [{ n: "Austin Schut", t: "07:00", e: "12:00" }, { n: "Payton Bolda", t: "07:00", e: "17:00" }] }] } };
+  const VL = SC.buildCalendar({ jobs: jobsR, schedules: [], phaseHours: { "889": { f: [100, 400] } }, plans: lone, ...opt });
+  const nL = VL.needs.find(n => n.key === "j_rose_f");
+  ok(nL && /Payton is alone on it 11\/24 12:00 PM–5:00 PM, and a crew member or apprentice never goes alone/.test(nL.why), "a crew member left alone for the afternoon goes under Needs you, with the time");
+  // what was and what is now, in words
+  const was = [{ d: "2026-11-24", n: ["Keegan Wilkinson", "Austin Schut"], t: "07:00", e: "17:00" }], now = SC.planSummary(it.plan);
+  ok(SC.planDiff(was, now).join(" | ") === "put on Gage 11:30-17:00, Payton 11:30-17:00", "the change reads: put on Gage and Payton for the afternoon, nobody else's time changed");
+  // an old saved day (no w) still reads as everyone on the day's time
+  const VO = SC.buildCalendar({ jobs: jobsR, schedules: [], phaseHours: { "889": { f: [100, 400] } }, plans: { "j_rose_f": { ...plansR["j_rose_f"], hours: 40, pdl: [{ ...roseDay, w: undefined }] } }, ...opt });
+  const so = SC.slotsOf(VO.items.find(x => x.key === "j_rose_f").plan).find(d => d.date === "2026-11-24");
+  ok(so && !so.pw && so.from === 7 && so.to === 17, "a block saved before this reads exactly as it did: everyone on the block's times");
+  // a w entry for someone not on that day is ignored
+  ok(!SC.pdOf([{ d: "2026-11-24", n: ["Austin Schut"], t: "07:00", e: "17:00", w: [{ n: "Gage Lund", t: "11:30", e: "17:00" }] }])["2026-11-24"].pw, "an own time for someone who isn't on that day is dropped");
+  ok(JSON.stringify(SC.dayWindows([{ name: "A", t: "07:00", e: "12:00" }, { name: "B", t: "13:00", e: "17:00" }])) === JSON.stringify({ t: "07:00", e: "17:00", pw: { A: { t: "07:00", e: "12:00" }, B: { t: "13:00", e: "17:00" } } }) && SC.dayWindows([{ name: "A", t: "07:00", e: "17:00" }, { name: "B", t: "07:00", e: "17:00" }]).pw === null, "one day's own times normalise to the span plus each person's own, or none when they all match");
+  ok(JSON.stringify(SC.aloneGap([7, 17], [[7, 12], [12.5, 17]])) === "[12,12.5]" && SC.aloneGap([7, 17], [[7, 12], [12, 17]]) === null && SC.aloneGap([11.5, 17], [[7, 17]]) === null, "alone time is any quarter hour or more with nobody else there");
+  // Book: each person at their own times, and the 40-hour line counts their own hours
+  const ent = SB.buildEntries([{ date: "2026-11-24", hours: 10, start: "07:00", people: [{ staffId: 3, start: "11:30", hours: 5.5 }] }], [{ id: 1, name: "Keegan Wilkinson" }, { id: 3, name: "Gage Lund" }], { 3: { "2026-11-23": 38 } });
+  const eg = ent.find(e => e.staffId === 3), ek = ent.find(e => e.staffId === 1);
+  ok(ek.blocks[0].StartTime === "07:00" && ek.hours === 10 && eg.blocks[0].StartTime === "11:30" && eg.hours === 5.5 && eg.normal === 2 && eg.ot === 3.5 && eg.blocks[1].StartTime === "13:30" && eg.blocks[1].EndTime === "17:00", "Book puts each person in at their own times; Gage's hours past 40 go in at 1.5x");
+  const okV = (days) => SB.validate({ mode: "preview", jobNo: "889", phase: "finish", staffIds: [1, 3], days }, "2026-11-23");
+  ok(okV([{ date: "2026-11-24", hours: 10, start: "07:00", people: [{ staffId: 3, start: "11:30", hours: 5.5 }] }]) === "" && /isn't booked that day/.test(okV([{ date: "2026-11-24", hours: 10, start: "07:00", staffIds: [1], people: [{ staffId: 3, start: "11:30", hours: 5.5 }] }]))
+    && /quarter hour/.test(okV([{ date: "2026-11-24", hours: 10, start: "07:00", people: [{ staffId: 3, start: "11:20", hours: 5.5 }] }])), "Book checks each person's own time: on that day, on the quarter hour");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

@@ -26,6 +26,7 @@ const lc = (s) => String(s || "").trim().toLowerCase();
 const first = (n) => String(n || "").trim().split(/\s+/)[0] || "";
 const clockOf = (hhmm) => { const m = toMin(hhmm); return m == null ? String(hhmm) : SC.clock(m / 60); };
 const overlap = (a0, a1, b0, b1) => a0 < b1 && b0 < a1;
+const hhmmMin = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 
 // The request, checked before anything is read. Returns an error string or "".
 function checkRequest(a, today) {
@@ -121,20 +122,25 @@ function guard({ rows, board, isOff, holidays, schedules, staffAll, jobNo, alone
     // on the person they were meant to be with. The first refusal is the thing to fix.
     const mine = byDate[date].filter(r => !refusals.some(x => x.person === r.person && x.date === date));
     mine.forEach(r => {
-      const withMe = byDate[date].some(x => x !== r && overlap(x.from, x.to, r.from, r.to)) || (unplaced || []).includes(date);
-      const already = (schedules || []).some(s => String(s.Type || "") === "job" && String(s.Reference || "").split("-")[0] === String(jobNo) && String(s.Date || "").slice(0, 10) === date
-        && Number(s.Staff && s.Staff.ID) !== r.staffId && (s.Blocks || []).some(b => { const a = toMin(String(b.StartTime || "").slice(0, 5)), z = toMin(String(b.EndTime || "").slice(0, 5)); return a != null && z != null && overlap(a, z, r.from, r.to); }));
-      if (withMe || already) return;
+      // v678 (Koy 2026-11-21): people on one block can have their own times, so "with someone" means someone is there
+      // the WHOLE of this person's time: the others in this request plus anyone Simpro already has on this job then.
+      // A stretch of a quarter hour or more with nobody else is alone, the same as a whole day.
+      if ((unplaced || []).includes(date)) return;
+      const simOn = (schedules || []).filter(s => String(s.Type || "") === "job" && String(s.Reference || "").split("-")[0] === String(jobNo) && String(s.Date || "").slice(0, 10) === date && Number(s.Staff && s.Staff.ID) !== r.staffId)
+        .flatMap(s => (s.Blocks || []).map(b => [toMin(String(b.StartTime || "").slice(0, 5)), toMin(String(b.EndTime || "").slice(0, 5))])).filter(x => x[0] != null && x[1] != null);
+      const gap = SC.aloneGap([r.from, r.to], [...byDate[date].filter(x => x !== r).map(x => [x.from, x.to]), ...simOn], 15);
+      if (!gap) return;
+      const part = gap[0] > r.from || gap[1] < r.to, at = part ? ` ${clockOf(hhmmMin(gap[0]))}–${clockOf(hhmmMin(gap[1]))}` : "";
       // v674 (Koy 2026-11-20: "Sometimes people are going to be alone because their help is out of town"): a lead, jr
       // foreman or foreman whose set pair is off that day may go alone. It is noted, not refused.
       const mate = board.partnerOf(r.person), mateOff = mate && board.crewOf(mate) && isOff(mate, date);
       // Only a foreman, jr foreman or lead can ever be alone. Everyone else (crew, apprentice, any other title) never is
       // (Koy 2026-11-20: "an apprentice or a crew level should never be alone").
       const leader = ["foreman", "jrforeman", "lead"].includes(r.title);
-      if (leader && mateOff) { notes.push(`${first(r.person)} goes alone ${date}: their set pair ${first(mate)} is off.`); return; }
-      if (!leader) refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}. A crew member or apprentice never goes alone; add someone.` });
-      else if (!aloneOk) refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}. Add someone, or have Koy say it's OK for them to go alone.` });
-      else notes.push(`${first(r.person)} goes alone ${date} (Koy said it's OK).`);
+      if (leader && mateOff) { notes.push(`${first(r.person)} goes alone ${date}${at}: their set pair ${first(mate)} is off.`); return; }
+      if (!leader) refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}${at}. A crew member or apprentice never goes alone, at any time of the day; add someone${part ? " for that time, or change their time" : ""}.` });
+      else if (!aloneOk) refusals.push({ person: r.person, date, rule: "alone", why: `${first(r.person)} would be alone on the job ${date}${at}. Add someone, or have Koy say it's OK for them to go alone.` });
+      else notes.push(`${first(r.person)} goes alone ${date}${at} (Koy said it's OK).`);
     });
     if (SC.dowOf(date) === 4) notes.push(`${date} is a Friday: overtime day, booked by hand.`);
   });
@@ -183,7 +189,7 @@ function humanCheck({ entries, users, pto, holidays, schedules, jobNo }) {
   const g = guard({ rows, board, isOff: offDays(pto, board), holidays: holidayMap(holidays), schedules, staffAll, jobNo: String(jobNo), aloneOk: true, splitPairs: true, unplaced: refused.map(x => x.date) });
   const soft = g.refusals.filter(x => x.rule === "alone" || x.rule === "pair");
   refused.push(...g.refusals.filter(x => x.rule !== "alone" && x.rule !== "pair"));
-  const notes = [...g.notes.map(n => n.replace(/ \(Koy said[^)]*\)/, "")), ...soft.map(x => x.why.replace(/ Add someone.*$/, "").replace(/ A crew member never goes alone; add someone\./, " A crew member shouldn't go alone."))];
+  const notes = [...g.notes.map(n => n.replace(/ \(Koy said[^)]*\)/, "")), ...soft.map(x => x.why.replace(/ Add someone.*$/, "").replace(/ A crew member (or apprentice )?never goes alone.*$/, " A crew member or apprentice shouldn't go alone."))];
   return { refused, notes: [...new Set(notes)] };
 }
 

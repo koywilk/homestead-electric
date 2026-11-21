@@ -1,5 +1,18 @@
 [
  {
+  "v": 678,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "**Each person on a job can have their own time.** People can now be on the same job for part of the day. Say two guys finish a short visit somewhere and join a crew at 11:30: they go on the job 11:30 "
+   },
+   {
+    "h": "CHANGED",
+    "first": "Full day, Half day and Custom in the job box now set everyone on that day at once."
+   }
+  ]
+ },
+ {
   "v": 677,
   "heads": [
    {
@@ -194,19 +207,6 @@
    {
     "h": "NEW on the crew calendar",
     "first": "Approved time off shows on each day (\"Off: names\"). Nobody gets scheduled on a day they're off."
-   }
-  ]
- },
- {
-  "v": 658,
-  "heads": [
-   {
-    "h": "NEW for the office: pairs on the Crew Board",
-    "first": "Settings › Crew Board: tap someone, then Paired with, to set who they go out with. A foreman, jr foreman or lead pairs with an apprentice or crew member on the same crew."
-   },
-   {
-    "h": "NEW on the crew calendar",
-    "first": "Tap + more on a busy day and that day's jobs open right over the calendar. Esc or a tap outside closes it."
    }
   ]
  }

@@ -36,10 +36,11 @@ function planFromRows(rows) {
   const byDate = {}; rows.forEach(r => { (byDate[r.date] = byDate[r.date] || []).push(r); });
   const dates = Object.keys(byDate).sort(), pdl = []; let hours = 0, crew = 1;
   for (const d of dates) {
-    const l = byDate[d], t = l[0].start, e = l[0].end;
-    if (l.some(r => r.start !== t || r.end !== e)) return { why: `Everyone on a block shares one start and finish each day. ${d} has more than one. Split it into two proposals or use one time.` };
+    // v678 (Koy 2026-11-21: "why they can't be on the same block with different times"): each person keeps their own
+    // start and finish. The day's t / e is the span; w holds everyone's own times when they differ.
+    const l = byDate[d], dw = SC.dayWindows(l.map(r => ({ name: r.person, t: r.start, e: r.end })));
     hours += l.reduce((x, r) => x + r.hours, 0); crew = Math.max(crew, l.length);
-    pdl.push({ d, n: l.map(r => r.person), t, e });
+    pdl.push({ d, n: l.map(r => r.person), t: dw.t, e: dw.e, ...(dw.pw ? { w: SC.wOf(dw.pw) } : {}) });
   }
   // the workdays between the first and last day that weren't named: nobody, and no hours spent
   for (let d = SC.workAfter(dates[0]), g = 0; d < dates[dates.length - 1] && g < 200; d = SC.workAfter(d), g++) if (!byDate[d]) pdl.push({ d, x: 1 });

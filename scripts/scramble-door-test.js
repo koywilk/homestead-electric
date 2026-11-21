@@ -194,6 +194,28 @@ const rules = (r) => (r.refused || []).map(x => x.rule + ":" + x.person.split(" 
   const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleDoor.js"), "utf8").replace(/\/\/[^\n]*/g, "");
   ok(!/Stage\s*:|Status\s*:|roughStatus\s*[:=][^=]|finishStatus\s*[:=][^=]|"PATCH"|"DELETE"|"PUT"/.test(src), "the door never writes a stage or status, and only ever creates schedule entries (no edit, no delete)");
 
+  // ── v678: people on one booking with their own times (Koy 2026-11-21) ──
+  {
+    // Louis and James are on job 501 10-11 in Simpro, then join Daegan and Trever 11:30-5
+    const w2 = world({ schedules: [sched(2, "2026-11-24", "10:00", "11:00", "501-1"), sched(3, "2026-11-24", "10:00", "11:00", "501-1")] });
+    const rose = [E("Daegan", "2026-11-24", "07:00", "17:00"), E("Trever", "2026-11-24", "07:00", "17:00"), E("Louis", "2026-11-24", "11:30", "17:00"), E("James Livingston", "2026-11-24", "11:30", "17:00")];
+    const pv = await D.run(w2.deps, base(rose));
+    const lt = pv.entries && pv.entries.find(e => e.person === "Louis Hoffman");
+    ok(pv.ok && pv.canBook && pv.entries.length === 4 && lt && /11:30 AM–5:00 PM/.test(lt.time) && lt.hours === 5.5 && pv.totals.hours === 31, "each person books at their own times, around what Simpro already has them on");
+    const bk = await D.run(w2.deps, { ...base(rose), mode: "book", hash: pv.hash });
+    const lp = w2.posts.find(x => x.body.Staff === 2);
+    ok(bk.ok && w2.posts.length === 4 && lp && lp.body.Blocks[0].StartTime === "11:30" && lp.body.Blocks[0].EndTime === "17:00", "and Simpro gets each person's own start and finish");
+    let r = await D.run(world().deps, base([E("Trever", "2026-11-24", "07:00", "17:00"), E("Callen", "2026-11-24", "07:00", "12:00")]));
+    ok(!r.ok && r.refused.length === 1 && r.refused[0].rule === "alone" && r.refused[0].person === "Trever Worley" && /12:00 PM–5:00 PM/.test(r.refused[0].why), "a lead left alone for the afternoon is refused, naming the time");
+    r = await D.run(world().deps, base([E("Trever", "2026-11-24", "07:00", "12:00"), E("Callen", "2026-11-24", "07:00", "17:00")], { aloneOk: true }));
+    ok(!r.ok && r.refused[0].person === "Callen Jakeman" && r.refused[0].rule === "alone", "a crew member alone for part of the day is refused even with aloneOk");
+    // overtime counts each person's own hours: Louis already has 34 h this week, so 6 of his 9 are normal and 3 at 1.5x
+    const w3 = world({ schedules: ["2026-11-23", "2026-11-25", "2026-11-26"].map(d => sched(2, d, "07:00", "18:00", "501-1")).concat([sched(2, "2026-11-24", "07:00", "08:00", "501-1")]) });
+    const pv3 = await D.run(w3.deps, base([E("Daegan", "2026-11-24", "08:00", "17:00"), E("Louis", "2026-11-24", "08:00", "17:00"), E("James Livingston", "2026-11-24", "08:00", "17:00")]));
+    const l3 = pv3.entries && pv3.entries.find(e => e.person === "Louis Hoffman");
+    ok(pv3.ok && l3 && l3.weekHoursBefore === 34 && l3.overtimeHours === 3, "the 40-hour line counts each person's own hours (34 before, 9 more, 3 at 1.5x)");
+  }
+
   if (fails) { console.error(fails + " failed"); process.exit(1); }
   console.log("scramble-door-test: all passed");
 })().catch(e => { console.error("FAIL the door test threw: " + (e && e.stack || e)); process.exit(1); });

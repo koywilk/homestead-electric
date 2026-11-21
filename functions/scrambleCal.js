@@ -93,7 +93,8 @@ function slotsOf(plan) {
   return planDays(plan).map((d, i) => {
     const ow = winOf(pd[d.date]);
     const from = ow ? ow[0] : win ? win[0] : i === 0 && t0 != null ? t0 : DAY0 + ((plan.times && plan.times[d.date]) || 0);
-    return { date: d.date, hours: d.hours, from, to: from + d.hours, start: hhmmOf(from), label: `${clock(from)}–${clock(from + d.hours)}`, ...(d.staff ? { staff: d.staff, crew: d.crew } : {}), ...(d.none ? { none: true } : {}) };
+    return { date: d.date, hours: d.hours, from, to: from + d.hours, start: hhmmOf(from), label: `${clock(from)}–${clock(from + d.hours)}`, ...(d.staff ? { staff: d.staff, crew: d.crew } : {}), ...(d.none ? { none: true } : {}),
+      ...(d.pw ? { pw: d.pw, crewH: d.crewH } : {}) };
   });
 }
 
@@ -122,10 +123,42 @@ function workdaysBetween(startIso, endIso) { let n = 0, d = nextWork(startIso); 
 // v661 (Koy 2026-11-20: "just let me select a start time and a finish time"): a plan with both `t` and `e` ("HH:MM")
 // runs that window every day; its days follow from the hours (a trip's hours are the window times its people).
 // Saved as a list (pdl: [{ d, n: [names], t, e }]) so a save replaces it whole.
+// v678 (Koy 2026-11-21: "People should be able to be on the same job without having to be there all day ... why they
+// can't be on the same block with different times"): a day can give each person their own start and finish. Saved as
+// w: [{ n, t, e }] beside the day's people; the day's own t / e is then the span (earliest start to latest finish), so a
+// build that doesn't know w reads everyone on for the whole span, which only ever blocks more, never less. In memory
+// it is pd[day].pw = { name: { t, e } } (only people on that day, only valid windows).
+const pwOf = (w, names) => { if (!Array.isArray(w) || !w.length) return null; const on = names ? new Set(names) : null, o = {};
+  w.slice(0, 12).forEach(x => { const n = String((x && x.n) || "").slice(0, 60), a = hoursOf(x && x.t), b = hoursOf(x && x.e);
+    if (n && a != null && b != null && b - a >= 0.25 && (!on || on.has(n))) o[n] = { t: x.t, e: x.e }; });
+  return Object.keys(o).length ? o : null; };
 const pdOf = (l) => { if (!Array.isArray(l) || !l.length) return null; const o = {};
   l.slice(0, 60).forEach(x => { const d = anyIso(x && x.d); if (!d) return; const e = {}; if (Array.isArray(x.n) && x.n.length) e.staff = x.n.slice(0, 12).map(n => ({ name: String(n || "").slice(0, 60) })).filter(y => y.name);
-    if (hoursOf(x.t) != null && hoursOf(x.e) != null) { e.t = x.t; e.e = x.e; } if (x.x) e.skip = true; if (x.z) e.none = true; if (e.staff || e.t || e.skip || e.none) o[d] = e; });
+    if (hoursOf(x.t) != null && hoursOf(x.e) != null) { e.t = x.t; e.e = x.e; } if (x.x) e.skip = true; if (x.z) e.none = true;
+    const pw = e.staff && pwOf(x.w, e.staff.map(y => y.name)); if (pw) e.pw = pw;
+    if (e.staff || e.t || e.skip || e.none) o[d] = e; });
   return Object.keys(o).length ? o : null; };
+// One day's people with their own windows, normalised: { t, e, pw } where t / e is the span and pw is null when everyone
+// shares one time. people: [{ name, t, e }].
+function dayWindows(people) {
+  const l = (people || []).filter(p => p && p.name && hoursOf(p.t) != null && hoursOf(p.e) != null);
+  if (!l.length) return null;
+  const a = Math.min(...l.map(p => hoursOf(p.t))), b = Math.max(...l.map(p => hoursOf(p.e)));
+  const same = l.every(p => p.t === l[0].t && p.e === l[0].e);
+  return { t: hhmmOf(a), e: hhmmOf(b), pw: same ? null : Object.fromEntries(l.map(p => [p.name, { t: p.t, e: p.e }])) };
+}
+// pd[day].pw as the saved list (w), for the screen's save and the server's.
+const wOf = (pw) => pw ? Object.entries(pw).slice(0, 12).map(([n, x]) => ({ n, t: x.t, e: x.e })) : null;
+// v678: the first stretch of `me` ([from, to]) that none of `others` covers, at least 15 minutes, or null when someone is
+// always there. Any unit (hours or minutes); `min` is the shortest gap that counts (default a quarter hour).
+function aloneGap(me, others, min) {
+  const m = min == null ? 0.25 : min, iv = (others || []).filter(x => x && x[1] > me[0] && x[0] < me[1]).map(x => [Math.max(me[0], x[0]), Math.min(me[1], x[1])]).sort((a, b) => a[0] - b[0]);
+  let at = me[0];
+  for (const [a, z] of iv) { if (a - at >= m - 1e-6) return [at, a]; at = Math.max(at, z); if (at >= me[1]) return null; }
+  return me[1] - at >= m - 1e-6 ? [at, me[1]] : null;
+}
+// A person's own clock window on a slot: [from, to] in hours.
+const ownWin = (d, name) => (d && d.pw && d.pw[name]) || (d ? [d.from, d.to] : null);
 const winOf = (plan) => { const a = hoursOf(plan && plan.t), b = hoursOf(plan && plan.e); return a != null && b != null && b - a >= 0.25 ? [a, b] : null; };
 // v661 (Koy 2026-11-20: "I need it to show who's scheduled there that day that I clicked it and then let me have a time:
 // full day, half day, or ... custom times"): `pd` is one day's own people and/or window ({ iso: { staff, t, e } });
@@ -140,6 +173,12 @@ function planDays(plan) {
       if (pd[d] && pd[d].skip) { d = workAfter(d); continue; }   // v662: a day nobody on it is free (a forecast tail)
       const o = pd[d] || {}, st = Array.isArray(o.staff) && o.staff.length ? o.staff : null, cd = st ? st.length : crew, ow = winOf(o);
       const per = ow ? ow[1] - ow[0] : win ? win[1] - win[0] : Math.max(0.25, HPD - (plan.times && plan.times[d] || (g === 0 && t0 != null ? Math.max(0, t0 - DAY0) : 0)));
+      // v678: a day where people have their own times takes each person's own hours, as set
+      const pw = st && ow && o.pw ? Object.fromEntries(st.map(x => x && o.pw[x.name] ? [x.name, [hoursOf(o.pw[x.name].t), hoursOf(o.pw[x.name].e)]] : null).filter(Boolean)) : null;
+      if (pw && Object.keys(pw).length) {
+        const crewH = st.reduce((a, x) => a + (pw[x.name] ? pw[x.name][1] - pw[x.name][0] : per), 0);
+        out.push({ date: d, hours: Math.round(per * 4) / 4, staff: st, crew: cd, pw, crewH: Math.round(crewH * 4) / 4 }); left -= crewH; d = workAfter(d); continue;
+      }
       const h = Math.min(per, left / cd);
       // v663 (Koy 2026-11-19: "remove everybody from a job, and it just turns red"): a day marked none keeps its place and hours, with nobody on it
       out.push({ date: d, hours: Math.round(h * 4) / 4, ...(o.none && !st ? { staff: [], crew: 0, none: true } : st ? { staff: st, crew: cd } : {}) }); left -= h * cd; d = workAfter(d);
@@ -278,7 +317,9 @@ function autoPlan(items, { board, schedules, plans, todayIso, end, offByDay = {}
   const hold = (it, f, who) => {
     // a block set to start after 7:00 holds the person's whole day, so nothing auto lands under it (v661: no double booking)
     const late = (hoursOf(f.t) || DAY0) > DAY0 + 1e-6;
-    slotsOf(f).forEach(d => { if (d.date <= end) (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : who).forEach(n => mark(n, d.date, late || d.from > DAY0 + 1e-6 && (it.plan || f.src === "duet") ? HPD : d.hours)); });
+    // v678: each person by their own window that day, when they have one
+    slotsOf(f).forEach(d => { if (d.date <= end) (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : who).forEach(n => { const w = ownWin(d, n);
+      mark(n, d.date, late || w[0] > DAY0 + 1e-6 && (it.plan || f.src === "duet") ? HPD : w[1] - w[0]); }); });
   };
   items.forEach(it => { if (!it.plan) return; const names = (it.plan.staff || []).map(x => x && x.name).filter(Boolean); hold(it, it.plan, names); });   // v663: a plan with no names has nobody on it (shown red), so it holds nobody
   // v662: the forecast tail after Simpro's last booked day (its people are the last booked day's crew) is checked day
@@ -789,14 +830,20 @@ function buildCalendar(input) {
     if (it.plan && board0 && !it.done) {
       const names0 = (it.plan.staff || []).map(x => x && x.name).filter(Boolean), probs = [];
       slotsOf(it.plan).forEach(d => { if (d.date < todayIso || d.date > end || it.booked.some(b => b.iso === d.date)) return;
-        const offD = offByDay[d.date] || [], on = (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names0).map(n => (board0.find(n) || { name: n }).name).filter(n => !offD.includes(n));
-        if (d.none || !on.length) { probs.push(`nobody on it ${md(d.date)}`); return; }
-        if (on.length !== 1) return;
-        const c = board0.crewOf(on[0]), t = (c && c.title && c.title[on[0]]) || "", leader = ["foreman", "jrforeman", "lead"].includes(t), mate = board0.partnerOf(on[0]);
-        const withThem = (schedules || []).some(x => x && x.Type === "job" && String(x.Reference || "").split("-")[0] === String(it.no) && String(x.Date || "").slice(0, 10) === d.date);
-        if (withThem) return;
-        if (leader && mate && offD.includes(mate)) return;
-        probs.push(leader ? `${firstOf(on[0])} is alone on it ${md(d.date)}` : `${firstOf(on[0])} is alone on it ${md(d.date)}, and a crew member or apprentice never goes alone`); });
+        const offD = offByDay[d.date] || [], ppl = (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names0).map(n => ({ n: (board0.find(n) || { name: n }).name, w: ownWin(d, n) })).filter(p => !offD.includes(p.n));
+        if (d.none || !ppl.length) { probs.push(`nobody on it ${md(d.date)}`); return; }
+        // v678 (Koy: a crew member or apprentice is never alone, at any time of the day): with people on their own times,
+        // anyone left with nobody else on the job for part of their time is alone then. Simpro's own people on this job that day count as company.
+        const sim = (schedules || []).filter(x => x && x.Type === "job" && String(x.Reference || "").split("-")[0] === String(it.no) && String(x.Date || "").slice(0, 10) === d.date)
+          .flatMap(x => (x.Blocks || []).map(b => [hoursOf(String((b && b.StartTime) || "").slice(0, 5)), hoursOf(String((b && b.EndTime) || "").slice(0, 5))])).filter(x => x[0] != null && x[1] != null);
+        const anySim = (schedules || []).some(x => x && x.Type === "job" && String(x.Reference || "").split("-")[0] === String(it.no) && String(x.Date || "").slice(0, 10) === d.date);
+        ppl.forEach(p => {
+          const gap = aloneGap(p.w, [...ppl.filter(q => q !== p).map(q => q.w), ...sim]); if (!gap) return;
+          if (anySim && !sim.length) return;   // Simpro has people on it that day with no clock times: not judged
+          const c = board0.crewOf(p.n), t = (c && c.title && c.title[p.n]) || "", leader = ["foreman", "jrforeman", "lead"].includes(t), mate = board0.partnerOf(p.n);
+          if (leader && mate && offD.includes(mate)) return;
+          const whole = gap[0] <= p.w[0] + 1e-6 && gap[1] >= p.w[1] - 1e-6, when = whole ? md(d.date) : `${md(d.date)} ${clock(gap[0])}–${clock(gap[1])}`;
+          probs.push(leader ? `${firstOf(p.n)} is alone on it ${when}` : `${firstOf(p.n)} is alone on it ${when}, and a crew member or apprentice never goes alone`); }); });
       if (probs.length) { it.planNeed = probs.slice(0, 3).join("; ") + (probs.length > 3 ? `; and ${probs.length - 3} more` : ""); needs.push({ key: it.key, why: it.planNeed.charAt(0).toUpperCase() + it.planNeed.slice(1), held: true, placed: true }); }
     }
     // v671 (Koy's rule 5: a return trip's block should be the trip's own crew): the trip names someone, and nobody on
@@ -855,12 +902,15 @@ function chipsOf(V, board) {
     const style = it.plan ? "kept" : f.src === "duet" ? "duet" : f.src === "auto" && f.held ? "held" : "auto";
     slotsOf(f).forEach(d => { if (d.date > V.end) return; const offD = (V.offByDay && V.offByDay[d.date]) || [];
       if (it.booked.some(b => b.iso === d.date)) return;   // Simpro already has this job or trip that day: its booking is the block
-      const inSim = (n) => ((sim[canon(n)] || {})[d.date] || []).some(([a, z]) => d.from < z - 1e-6 && a < d.to - 1e-6);
+      const inSim = (n) => { const w = ownWin(d, n); return ((sim[canon(n)] || {})[d.date] || []).some(([a, z]) => w[0] < z - 1e-6 && a < w[1] - 1e-6); };
       // v663 (Koy: "it shouldn't even be possible"): time off wins. Someone off that day is never shown on a forecast or plan that day.
       const isOff = (n) => { const u = board.find(n); return offD.includes(u ? u.name : n); };
       const rawD = d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : nm, nmD = rawD.filter(n => !isOff(n) && !inSim(n)), offLeft = rawD.filter(isOff).map(firstOf), simLeft = rawD.filter(n => !isOff(n) && inSim(n)).map(firstOf);
       if (d.none || (it.plan && !nmD.length)) { push(d.date, { it, style: "open", none: true, offLeft, simLeft, n: 0, who: [], names: [], fm: it.foreman ? fmOf([it.foreman]) : [], hrs: 0, time: d.label, from: d.from, to: d.to }); return; }
-      push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(firstOf), names: nmD, offLeft, simLeft, fm: fmOf(nmD), hrs: Math.round(d.hours * f.crew * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to }); });
+      // v678: people on their own times carry them on the chip (win), so busy times, clashes and the 10-hour count use them
+      const win = d.pw ? Object.fromEntries(nmD.map(n => [n, [ownWin(d, n)]])) : null;
+      const hrs = d.pw ? nmD.reduce((a, n) => { const w = ownWin(d, n); return a + (w[1] - w[0]); }, 0) : d.hours * f.crew;
+      push(d.date, { it, style, n: d.crew || f.crew, who: nmD.map(firstOf), names: nmD, offLeft, simLeft, fm: fmOf(nmD), hrs: Math.round(hrs * 10) / 10, team: f.team || "", time: d.label, from: d.from, to: d.to, ...(win ? { win } : {}) }); });
   });
   const ord = { booked: 0, cc: 1, kept: 2, duet: 3, auto: 3, held: 4, open: 5 }, kord = { rough: 0, finish: 1, trip: 2, service: 3, task: 4 };
   Object.values(out).forEach(l => l.sort((a, b) => (a.from || 7) - (b.from || 7) || ord[a.style] - ord[b.style] || kord[a.it.kind] - kord[b.it.kind] || String(a.it.no).localeCompare(String(b.it.no), undefined, { numeric: true })));
@@ -877,7 +927,7 @@ function busyOf(chips, board, V) {
     l.forEach(([a, z, type]) => ((out[who] = out[who] || {})[iso] = out[who][iso] || []).push({ from: a, to: z, booked: true, soft: false, key: "simpro-other", base: "simpro-other", label: `${/leave/i.test(type) ? "leave" : "an activity"} in Simpro ${clock(a)}–${clock(z)}` })); }));
   Object.entries(chips).forEach(([iso, l]) => l.forEach(c => {
     if (c.from == null || c.to == null) return;
-    (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held" || c.style === "duet", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.time || "all day"}` })); });
+    (c.names || []).forEach(n => { const u = board.find(n), k = u ? u.name : n; winsOf(c, n).forEach(([wf, wt]) => ((out[k] = out[k] || {})[iso] = out[k][iso] || []).push({ from: wf, to: wt, booked: c.style === "booked", soft: c.style === "auto" || c.style === "held" || c.style === "duet", key: c.it.key, base: c.it.copyOf || c.it.key, label: `${c.it.no ? "#" + c.it.no : c.it.name} ${c.win && c.style !== "booked" ? `${clock(wf)}–${clock(wt)}` : c.time || "all day"}` })); });
   }));
   return out;
 }
@@ -921,6 +971,9 @@ function viewOf(V, users, opts) {
       blocks: (chips[d] || []).map(c => { seen.add(c.it.key); const f = fcOf(c.it);
         return { kind: KIND_WORDS[c.style] || c.style, key: c.it.key, jobNo: String(c.it.no || ""), job: String(c.it.name || ""), what: String(c.it.tag || ""), people: c.names || [],
           ...(c.time ? { time: c.time } : {}), ...(c.from != null && c.to != null ? { from: hhmmOf(c.from), to: hhmmOf(c.to) } : {}), ...(c.hrs ? { crewHours: c.hrs } : {}),
+          // v678: when people on the block have their own times, each person's start and finish
+          ...(c.win && (c.names || []).some(n => winsOf(c, n).some(([a, z]) => Math.abs(a - c.from) > 1e-6 || Math.abs(z - c.to) > 1e-6))
+            ? { peopleTimes: (c.names || []).flatMap(n => winsOf(c, n).map(([a, z]) => ({ person: n, from: hhmmOf(a), to: hhmmOf(z) }))) } : {}),
           ...(c.team ? { team: c.team } : {}), ...(c.style === "held" && f && f.held ? { heldBecause: f.held } : {}), ...(c.style === "duet" && f ? { reason: f.why || "", proposalId: f.id || "" } : {}), ...(c.style === "kept" && c.it.plan && c.it.plan.by ? { placedBy: c.it.plan.by } : {}),
           ...(c.offLeft && c.offLeft.length ? { leftOffBecauseOff: c.offLeft } : {}), ...(c.simLeft && c.simLeft.length ? { leftOffBecauseInSimpro: c.simLeft } : {}) }; }) });
   }
@@ -942,7 +995,10 @@ function planSummary(plan) {
   if (!plan) return null;
   if (plan.off) return { off: true, ...(plan.why ? { why: String(plan.why).slice(0, 60) } : {}) };
   const names = (plan.staff || []).map(x => x && x.name).filter(Boolean);
-  return slotsOf(plan).slice(0, 14).map(d => ({ d: d.date, n: (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names).slice(0, 12), t: d.start, e: hhmmOf(d.to), ...(d.none ? { none: true } : {}) }));
+  return slotsOf(plan).slice(0, 14).map(d => { const n = (d.staff ? d.staff.map(x => x && x.name).filter(Boolean) : names).slice(0, 12);
+    // v678: people on their own times, so a summary (and its diff) shows who comes and goes when
+    const w = d.pw ? n.filter(x => d.pw[x]).map(x => ({ n: x, t: hhmmOf(d.pw[x][0]), e: hhmmOf(d.pw[x][1]) })) : [];
+    return { d: d.date, n, t: d.start, e: hhmmOf(d.to), ...(w.length ? { w } : {}), ...(d.none ? { none: true } : {}) }; });
 }
 // What changed between two summaries, in words, so a reader (Duet, or a person) sees the point at once.
 function planDiff(was, now) {
@@ -954,11 +1010,18 @@ function planDiff(was, now) {
   const ppl = (l) => [...new Set(l.flatMap(x => x.n || []))].sort(), pa = ppl(A), pb = ppl(B);
   const gone = pa.filter(n => !pb.includes(n)), came = pb.filter(n => !pa.includes(n));
   if (gone.length) out.push(`took off ${gone.map(firstOf).join(", ")}`);
-  if (came.length) out.push(`put on ${came.map(firstOf).join(", ")}`);
+  // v678: someone put on for only part of the day says when
+  const partOf = (n) => { const x = B.find(y => (y.w || []).some(z => z.n === n && (z.t !== y.t || z.e !== y.e))), z = x && x.w.find(y => y.n === n); return z ? ` ${z.t}-${z.e}` : ""; };
+  if (came.length) out.push(`put on ${came.map(n => firstOf(n) + partOf(n)).join(", ")}`);
   const ta = A[0] ? `${A[0].t}-${A[0].e}` : "", tb = B[0] ? `${B[0].t}-${B[0].e}` : "";
   if (ta && tb && ta !== tb) out.push(`time ${ta} → ${tb}`);
+  // v678: one person's own time changed (or set), by day
+  const own = (l) => { const o = {}; l.forEach(x => (x.n || []).forEach(n => { const w = (x.w || []).find(y => y.n === n); o[x.d + "|" + n] = w ? `${w.t}-${w.e}` : `${x.t}-${x.e}`; })); return o; };
+  const oa = own(A), ob = own(B), moved = [];
+  Object.keys(ob).forEach(k => { if (oa[k] && oa[k] !== ob[k] && !(ta !== tb && ob[k] === tb)) { const [d, n] = k.split("|"); moved.push(`${firstOf(n)} ${d} ${oa[k]} → ${ob[k]}`); } });
+  if (moved.length) out.push(...moved.slice(0, 4), ...(moved.length > 4 ? [`and ${moved.length - 4} more time changes`] : []));
   return out.length ? out : ["no change to who, when or how long"];
 }
 
-module.exports = { planSummary, planDiff, chipsOf, winsOf, busyOf, dayCounts, whyOf, viewOf, fcOf, isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
+module.exports = { pwOf, dayWindows, wOf, ownWin, aloneGap, planSummary, planDiff, chipsOf, winsOf, busyOf, dayCounts, whyOf, viewOf, fcOf, isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
   DAY0, winOf, pdOf, hhmmOf, md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };

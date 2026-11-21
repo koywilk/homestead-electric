@@ -80,7 +80,8 @@ function addPending(existing, pending, staffIds) {
 }
 
 // Every entry to write, in date order, with each person's running week total.
-// days: [{ date, hours }] (hours per person that day); staff: [{ id, name }].
+// days: [{ date, hours, start?, staffIds?, people? }] (hours per person that day; people: [{ staffId, start, hours }] for
+// anyone on their own time that day, v678); staff: [{ id, name }].
 function buildEntries(days, staff, existing) {
   const run = {};
   const out = [];
@@ -90,9 +91,11 @@ function buildEntries(days, staff, existing) {
       const wk = mondayOf(d.date), k = p.id + "|" + wk;
       if (run[k] == null) run[k] = Number(((existing || {})[p.id] || {})[wk]) || 0;
       const before = run[k];
-      const b = blocksFor(d.hours, before, d.start);
-      run[k] = before + q4(d.hours);
-      out.push({ date: d.date, staffId: Number(p.id), name: String(p.name || ""), hours: q4(d.hours), normal: b.normal, ot: b.ot, weekBefore: Math.round(before * 100) / 100, blocks: b.blocks });
+      // v678 (Koy 2026-11-21): a person on the block with their own start and finish that day books at those
+      const own = Array.isArray(d.people) ? d.people.find(x => x && Number(x.staffId) === Number(p.id)) : null, hrs = own ? q4(own.hours) : q4(d.hours), st = own ? own.start : d.start;
+      const b = blocksFor(hrs, before, st);
+      run[k] = before + hrs;
+      out.push({ date: d.date, staffId: Number(p.id), name: String(p.name || ""), hours: hrs, normal: b.normal, ot: b.ot, weekBefore: Math.round(before * 100) / 100, blocks: b.blocks });
     });
   });
   return out;
@@ -175,6 +178,18 @@ function validate(data, today) {
     if (x.start != null && x.start !== "") {
       if (!/^\d{2}:\d{2}$/.test(String(x.start))) return `Start time on ${x.date} must be like 07:00.`;
       const m = startMinOf(x.start); if (m < 5 * 60 || m > 17 * 60 || m % 15) return `Start time on ${x.date} must be between 5:00 AM and 5:00 PM, on the quarter hour.`;
+    }
+    if (x.people != null) {   // v678: people on their own times that day
+      const on = Array.isArray(x.staffIds) && x.staffIds.length ? new Set(x.staffIds.map(Number)) : pick;
+      if (!Array.isArray(x.people) || x.people.length > 10) return `The people's own times on ${x.date} didn't read right.`;
+      const sp = new Set();
+      for (const o of x.people) {
+        if (!o || !on.has(Number(o.staffId))) return `Someone with their own time on ${x.date} isn't booked that day.`;
+        if (sp.has(Number(o.staffId))) return `The same person has two times on ${x.date}.`; sp.add(Number(o.staffId));
+        if (!/^\d{2}:\d{2}$/.test(String(o.start || ""))) return `Start time on ${x.date} must be like 07:00.`;
+        const m = startMinOf(o.start); if (m < 5 * 60 || m > 17 * 60 || m % 15) return `Start time on ${x.date} must be between 5:00 AM and 5:00 PM, on the quarter hour.`;
+        const oh = q4(o.hours); if (!(oh >= 0.25 && oh <= 12)) return `Hours on ${x.date} must be between 0.25 and 12.`;
+      }
     }
   }
   if (d.cc != null && !["rough", "finish", "warranty"].includes(d.cc)) return "cc must be rough, finish or warranty";

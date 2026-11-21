@@ -85,7 +85,7 @@ const viewOf = async (w, from, to) => R.assemble({ ...(await R.gather(w.deps)), 
   ok(rules(await S.propose(w.deps, req([E("Josh Cloward", "2026-11-24", "07:00", "17:00"), E("Trever", "2026-11-24", "07:00", "17:00")]))) === "crew-board:Josh", "an admin is never proposed");
   ok(rules(await S.propose(w.deps, req([E("Trever", "2026-11-27", "07:00", "17:00"), E("Callen", "2026-11-27", "07:00", "17:00")]))) === "friday:Callen,friday:Trever", "Fridays are placed by hand, not proposed");
   ok(rules(await S.propose(w.deps, req([E("Trever", "2026-11-26", "07:00", "17:00"), E("Callen", "2026-11-26", "07:00", "17:00")]))) === "holiday:Callen,holiday:Trever", "a company holiday is refused");
-  for (const [bad, re] of [[req(two, { reason: "ok" }), /needs a reason/], [req([E("Trever", "2026-11-24", "07:00", "17:00"), E("Callen", "2026-11-24", "08:00", "17:00")]), /one start and finish/], [req(two, { jobNo: "555" }), /isn't on the calendar's list/]]) {
+  for (const [bad, re] of [[req(two, { reason: "ok" }), /needs a reason/], [req(two, { jobNo: "555" }), /isn't on the calendar's list/]]) {
     threw = ""; try { await S.propose(world().deps, bad); } catch (e) { threw = e.message; }
     ok(re.test(threw), "refused outright: " + re.source);
   }
@@ -194,6 +194,47 @@ const viewOf = async (w, from, to) => R.assemble({ ...(await R.gather(w.deps)), 
     ap = await S.edit(w.deps, { jobNo: "900", phase: "finish", backToAuto: true, reason: "Koy said let the auto-schedule have it.", mode: "apply", hash: p.hash });
     ok(ap.ok && w.updates[0]["cal/j_J1_f"] === "__DELETE__" && !w.prefs.cal["j_J1_f"], "and applying it removes only that block's plan");
     ok((await S.edit(world().deps, { jobNo: "900", phase: "finish", backToAuto: true, reason: "Koy said let the auto-schedule have it." })).noop, "handing back a block nobody placed is a no-op");
+  }
+
+  // ── v678: each person on a block has their own start and finish (Koy 2026-11-21) ──
+  {
+    // the Rose case: Daegan and Trever all day; Louis and James are on another job in Simpro 10-11, then join 11:30-5
+    const simWebb = [sched(2, "Louis Hoffman", "2026-11-24", "10:00", "11:00", "901-1"), sched(3, "James Livingston", "2026-11-24", "10:00", "11:00", "901-1")];
+    const rose = [E("Daegan", "2026-11-24", "07:00", "17:00"), E("Trever", "2026-11-24", "07:00", "17:00"), E("Louis", "2026-11-24", "11:30", "17:00"), E("James Livingston", "2026-11-24", "11:30", "17:00")];
+    w = world({ schedules: simWebb });
+    p = await S.propose(w.deps, req(rose));
+    const pd0 = p.ok && w.prefs.duet["j_J1_f"].pdl.find(x => x.d === "2026-11-24");
+    ok(p.ok && p.saved && pd0 && pd0.t === "07:00" && pd0.e === "17:00" && pd0.w.find(x => x.n === "Louis Hoffman").t === "11:30" && pd0.w.find(x => x.n === "Daegan Smith").t === "07:00", "a proposal with people on their own times is saved, the day's time as the span and each person's own time beside it");
+    ok(w.prefs.duet["j_J1_f"].hours === 31, "its hours are each person's own hours added up (10 + 10 + 5.5 + 5.5)");
+    v = await viewOf(w, "2026-11-23", "2026-11-27");
+    const rb = v.days.find(d => d.date === "2026-11-24").blocks.find(b => b.key === "j_J1_f"), lt = rb && (rb.peopleTimes || []).find(x => x.person === "Louis Hoffman");
+    ok(rb && rb.from === "07:00" && rb.to === "17:00" && lt && lt.from === "11:30" && lt.to === "17:00" && rb.crewHours === 31, "the calendar read gives the block's span and each person's own times");
+    ok(!v.days.find(d => d.date === "2026-11-24").under10h.some(x => x.name === "Daegan Smith"), "someone on all day isn't under 10 hours");
+    // the morning shift alone is refused, at any time of the day
+    w = world();
+    let r0 = await S.propose(w.deps, req([E("Trever", "2026-11-24", "07:00", "17:00"), E("Callen", "2026-11-24", "08:00", "17:00")]));
+    ok(!r0.ok && rules(r0) === "alone:Trever" && /7:00 AM–8:00 AM/.test(r0.refused[0].why) && w.sets.length === 0, "a lead left alone for part of the day (7-8) is refused, naming the time");
+    r0 = await S.propose(w.deps, req([E("Trever", "2026-11-24", "07:00", "12:00"), E("Callen", "2026-11-24", "07:00", "17:00")]));
+    ok(!r0.ok && rules(r0) === "alone:Callen" && /12:00 PM–5:00 PM/.test(r0.refused[0].why) && /at any time of the day/.test(r0.refused[0].why), "a crew member alone in the afternoon is refused");
+    r0 = await S.propose(w.deps, req([E("Trever", "2026-11-24", "07:00", "12:00"), E("Callen", "2026-11-24", "07:00", "12:00"), E("Daegan", "2026-11-24", "12:00", "17:00"), E("Louis", "2026-11-24", "12:00", "17:00"), E("James Livingston", "2026-11-24", "12:00", "17:00")]));
+    ok(r0.ok && r0.saved, "a morning pair and an afternoon crew on the same block is fine");
+    // edit a placed block: add two for the afternoon without changing anyone else's day
+    const placed = { cal: { "j_J1_f": { s: "2026-11-24", hours: 20, crew: 2, staff: [{ name: "Daegan Smith" }, { name: "Trever Worley" }], t: "07:00", e: "17:00", pdl: [{ d: "2026-11-24", n: ["Daegan Smith", "Trever Worley"], t: "07:00", e: "17:00" }], by: "Koy Wilkinson", at: "2026-11-20T01:00:00Z" } } };
+    w = world({ schedules: simWebb, prefs: JSON.parse(JSON.stringify(placed)) });
+    const ed1 = { jobNo: "900", phase: "finish", entries: rose, reason: "Koy asked to add Louis and James for the afternoon." };
+    p = await S.edit(w.deps, ed1);
+    ok(p.ok && p.canApply && p.whatChanges.join(" | ").includes("put on James 11:30-17:00, Louis 11:30-17:00") && !p.whatChanges.join(" | ").includes("time 07:00"), "an edit adding two people for the afternoon previews as just that: the others keep their day");
+    let ap1 = await S.edit(w.deps, { ...ed1, mode: "apply", hash: p.hash });
+    v = await viewOf(w, "2026-11-23", "2026-11-27");
+    const eb = v.days.find(d => d.date === "2026-11-24").blocks.find(b => b.key === "j_J1_f"), dt = eb && (eb.peopleTimes || []).find(x => x.person === "Daegan Smith");
+    ok(ap1.ok && eb && eb.kind === "plan" && eb.people.length === 4 && dt && dt.from === "07:00" && dt.to === "17:00" && (eb.peopleTimes || []).find(x => x.person === "James Livingston").from === "11:30", "applied, the plan has all four, each on their own time");
+    // a later proposal for the other job can use Louis 7-10, but not 12-1
+    const j2 = (a, b) => ({ jobNo: "901", phase: "finish", entries: [E("Louis", "2026-11-24", a, b), E("James Livingston", "2026-11-24", a, b)], reason: "Koy asked for a short visit on the other job." });
+    w = world({ prefs: JSON.parse(JSON.stringify(w.prefs)) });
+    ok((await S.propose(w.deps, j2("07:00", "10:00"))).ok, "people on a block only for the afternoon are free in the morning");
+    w = world({ prefs: JSON.parse(JSON.stringify(placed)) }); await S.edit(w.deps, ed1).then(x => S.edit(w.deps, { ...ed1, mode: "apply", hash: x.hash }));
+    r0 = await S.propose(w.deps, j2("12:00", "13:00"));
+    ok(!r0.ok && rules(r0).includes("on-a-plan:Louis"), "but are busy for their own time on it");
   }
 
   // ── never a booking, a job write, a stage or a status ──
