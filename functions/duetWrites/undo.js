@@ -124,6 +124,7 @@ function classify(audit) {
   if (!coll || !docId) return refuse("That audit record names no document — nothing to put back.");
   const base = { coll, docId, reads: [coll + "/" + docId] };
   if (AD.DOC_ACTIONS.includes(a.action)) return { ...base, mode: a.action === "team.edit" ? "teamEdit" : "anyDoc" };   // ship 12: the door's own classes (planUndoAnyDoc / planUndoTeam)
+  if (a.action === "meeting.addItem") return { ...base, mode: "anyDoc" };   // v676: one added.<id> / actions.<id> key, audited like doc.set (before null)
   switch (a.action) {
     case "task.create": return { ...base, mode: "closing", closing: "task voided (done + voided, the app's own void)" };
     case "autoTask.promote": return a.newDoc ? { ...base, mode: "closing", closing: "task voided (done + voided, the app's own void)" } : { ...base, mode: "edit" };
@@ -449,7 +450,7 @@ function planUndoAnyDoc(a, cls, raw, ctx) {
   }
   if (!root) return gone();
 
-  if (a.action === "doc.set") {
+  if (a.action === "doc.set" || a.action === "meeting.addItem") {
     if (!path) return refuse("That audit record names no path. Nothing was written.");
     const cur = getPath(root, path);
     if (!same(cur, a.after)) return changedSince([diffOf(path, cur, a.after)]);

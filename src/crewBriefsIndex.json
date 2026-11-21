@@ -1,5 +1,14 @@
 [
  {
+  "v": 676,
+  "heads": [
+   {
+    "h": "NEW on the dashboard Meetings tab",
+    "first": "Claude can now add items to the Lead Meeting, the Foreman Meeting and the Friday Strategy when Koy asks, this week or a week ahead. They show tagged Added, with \"Added by Claude\". Remove one like any "
+   }
+  ]
+ },
+ {
   "v": 675,
   "heads": [
    {
@@ -198,15 +207,6 @@
    {
     "h": "NEW on every meeting",
     "first": "Edit under any row changes its words for that week's meeting. The job itself doesn't change."
-   }
-  ]
- },
- {
-  "v": 656,
-  "heads": [
-   {
-    "h": "NEW for the office: the crew calendar",
-    "first": "Dashboard › Meetings and Forecast › Calendar now show a real calendar: a week view with each day's jobs, a Month view, and a 4 months view to see how far out work is scheduled."
    }
   ]
  }

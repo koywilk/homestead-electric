@@ -308,7 +308,9 @@ const REPORT_ACTIONS = RP.REPORT_ACTIONS;       // v616: Reports in the Claude t
 const DOC_ACTIONS = AD.DOC_ACTIONS;             // ship 12: anyDocWrite() — any top-level document through the one door (anyDoc.js: the policy + the planners)
 const CW = require("./claudeWork.js");
 const WORK_ACTIONS = [...CW.ROUTINE_ACTIONS, ...CW.FLAG_ACTIONS_API];   // v633: Automations + Needs you (claude_routines / claude_flags) — like Reports: no duet_writes audit, no undo, not in the hourly limit; nothing in Command Center is touched
-const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS, ...DOC_ACTIONS, ...WORK_ACTIONS];
+const MT = require("./meetings.js");
+const MEETING_ACTIONS = MT.MEETING_ACTIONS;     // v676: ONE item on a dashboard meeting (meetings/<kind>_<date>) — audited, undoable, in the hourly limit
+const ACTIONS = ["task.create", "task.update", ...JOB_WRITE_ACTIONS, ...PHOTO_ACTIONS, ...THREAD_ACTIONS, ...CREW_ACTIONS, ...TIMEOFF_ACTIONS, ...MATERIAL_PO_ACTIONS, ...JOB_SETUP_ACTIONS, ...OFFICE_ACTIONS, ...UNDO_ACTIONS, ...ACTIVITY_ACTIONS, ...REPORT_ACTIONS, ...DOC_ACTIONS, ...WORK_ACTIONS, ...MEETING_ACTIONS];
 const NEED_ID = /^need_[0-9]+_[a-z0-9]{3,8}$|^toneed_/;
 const JOB_ID = /^\d{10,15}$/;
 const RID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -1303,6 +1305,43 @@ async function anyDocWrite(io, requestId, action, args, ctx, finish, refused) {
   return { status: out.status, body: out.body };
 }
 
+// v676 (Koy 2026-11-20, "Build it"): ONE item on a dashboard meeting. meetings.js
+// checks the meeting / week / section / words before any read; then ONE
+// transaction reads meetings/<kind>_<date> (it may not exist yet: next week's
+// record is made by the first add) and the named job, plans, merge-sets the one
+// added.<id> / actions.<id> key with {type, date, updated_at, saved_by}, and
+// audits it like doc.set (path + before null + after the item), so undo.apply
+// takes the key back off while it still reads what this call left.
+// args.preview: true answers what WOULD be written and writes nothing (no audit).
+async function meetingAdd(io, requestId, action, args, ctx, finish, refused) {
+  const c = MT.check(args, ctx.todayYmd);
+  if (c.refused) return refused(c.status || 400, c.refused, { coll: "meetings" });
+  const itemId = "cl_" + String(requestId).replace(/[^A-Za-z0-9_]/g, "_").slice(0, 60);
+  const ref = io.anyRef("meetings", c.docId);
+  if (c.preview) {
+    const snap = await io.runTx(async (tx) => { const s = await tx.get(ref); return s && s.exists ? s.data() : null; });
+    const job = c.jobId ? await io.getJob(c.jobId) : null;
+    const p = MT.planAdd(c, snap, job, ctx, itemId);
+    if (p.refused) return { status: p.status || 400, body: { ok: false, refused: p.refused } };
+    return { status: 200, body: { ok: true, requestId, action, preview: true, wrote: false, ...p.result, message: "Preview only. Nothing was written. Show Koy and send again without preview on his yes." } };
+  }
+  const job = c.jobId ? await io.getJob(c.jobId) : null;
+  let out = null;
+  await io.runTx(async (tx) => {
+    const s = await tx.get(ref);
+    const live = s && s.exists ? s.data() : null;
+    const p = MT.planAdd(c, live, job, ctx, itemId);
+    const auditBase = { coll: "meetings", docId: c.docId, path: p.path || null };
+    if (p.refused) { out = finish(p.status || 400, { ok: false, refused: p.refused }, { ok: false, why: p.refused, ...auditBase }); tx.set(io.auditRef(requestId), out.audit); return; }
+    const w = { ...p.write, updated_at: live && live.updated_at ? freshIso(live.updated_at) : ctx.nowIso };
+    tx.set(ref, dropUndefined(w), { merge: true });
+    const result = { ok: true, requestId, action, ...p.result, pushTo: [] };
+    out = finish(200, result, { ok: true, ...auditBase, fields: [p.path], itemId, before: null, after: p.item, ...(live ? {} : { newDoc: true }) });
+    tx.set(io.auditRef(requestId), out.audit);
+  });
+  return { status: out.status, body: out.body };
+}
+
 // opts (v633): { okBy } when Koy's own Yes on a dashboard flag runs the change
 // (claudeFlagAnswer, in-process) — stamped on the audit doc so the Claude tab and
 // undo show it was his tap, not Claude's own call.
@@ -1497,6 +1536,11 @@ async function handle(body, io, opts) {
     return { status: r.status, body: r.body };
   }
 
+  if (MEETING_ACTIONS.includes(b.action)) {
+    const r = await meetingAdd(io, requestId, b.action, args, ctx, finish, refused);
+    return { status: r.status, body: r.body };
+  }
+
   if (DOC_ACTIONS.includes(b.action)) {
     const r = await anyDocWrite(io, requestId, b.action, args, ctx, finish, refused);
     return { status: r.status, body: r.body };
@@ -1615,7 +1659,7 @@ function firestoreIo({ functions, db, FieldValue, FieldPath, getUsers, TZ, stora
     rand: () => Math.random().toString(36).slice(2, 7),
     getAudit: async (id) => { const s = await db.collection(AUDIT).doc(id).get(); return s.exists ? s.data() : null; },
     countRecent: async (sinceIso) => { const s = await db.collection(AUDIT).where("at", ">", sinceIso).count().get(); return s.data().count || 0; },
-    getJob: async (id) => { const s = await db.collection("jobs").doc(id).get(); const d = s.exists ? (s.data() || {}).data : null; return d ? { id, name: d.name || "", foreman: d.foreman || "", archived: !!d.archived, deleted: !!d.deleted } : null; },
+    getJob: async (id) => { const s = await db.collection("jobs").doc(id).get(); const d = s.exists ? (s.data() || {}).data : null; return d ? { id, name: d.name || "", foreman: d.foreman || "", archived: !!d.archived, deleted: !!d.deleted, simproNo: String(d.simproNo || "") } : null; },
     getUsers,
     openNeeds: async ({ jobId, assignedTo }) => {
       let q = db.collection("needs").where("data.status", "==", "open");
@@ -1834,6 +1878,7 @@ module.exports.ACTIVITY_ACTIONS = ACTIVITY_ACTIONS;
 module.exports.REPORT_ACTIONS = REPORT_ACTIONS;
 module.exports.DOC_ACTIONS = DOC_ACTIONS;
 module.exports.WORK_ACTIONS = WORK_ACTIONS;
+module.exports.MEETING_ACTIONS = MEETING_ACTIONS;
 module.exports.SEND_PO_PER_HOUR = SEND_PO_PER_HOUR;
 module.exports.BROADCAST_PER_HOUR = BROADCAST_PER_HOUR;
 module.exports.SETTINGS_DOCS = SETTINGS_DOCS;
