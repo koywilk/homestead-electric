@@ -534,5 +534,30 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(/Nobody on it 11\/24/.test((run({ s: "2026-11-24", hours: 4, crew: 1, staff: [], t: "07:00", e: "11:00" }) || {}).why || ""), "a placed block with nobody on it is listed under Needs you");
 }
 
+// ── v677: a contractor is never crew ──
+{
+  const us = usersP.concat([{ id: "pl", name: "Paul", title: "foreman", access: "contractor", active: true }, { id: "pc", name: "Paul Helper", title: "crew", foremanId: "pl", active: true }]);
+  const bd = SC.crewBoard(us);
+  ok(!bd.crewOf("Paul") && !Object.values(bd.crews).some(c => c.people.includes("Paul")) && !bd.crewOf("Paul Helper"), "someone with contractor access is not on the board, and neither is anyone under them");
+  const V = SC.buildCalendar({ jobs: [], schedules: [], phaseHours: {}, today, weeks: 2, users: us, effRS: j => "", effFS: j => "" });
+  const chips = SC.chipsOf(V, bd), k = SC.dayCounts("2026-11-24", chips, SC.busyOf(chips, bd, V), bd, V, "All");
+  ok(!k.open.includes("Paul") && !k.open.includes("Paul Helper") && k.open.includes("Daegan Smith"), "a contractor never shows in a day's open names; the crews still do");
+}
+
+// ── v677: a finished trip drops the block someone placed for it ──
+{
+  const opt = { today, weeks: 5, users: usersP, effRS: j => j.roughStatus || "", effFS: j => j.finishStatus || "" };
+  const trip = (done) => [{ id: "ch", simproNo: "99", name: "Heater", roughStatus: "complete", finishStatus: "complete", foreman: "Daegan Smith",
+    returnTrips: [{ id: "h4", number: 4, scope: "Hook up heater", material: "x", ...(done ? { rtStatus: "complete", rtStatusDate: "2026-11-23", signedOff: true } : { rtStatus: "needs" }) }] }];
+  const sch = [{ Type: "job", Reference: "99-1", Date: "2026-11-23", Staff: { Name: "Daegan Smith" }, Blocks: [{ StartTime: "07:00", EndTime: "12:00", Hrs: 5 }] }, { Type: "job", Reference: "99-1", Date: "2026-11-23", Staff: { Name: "Callen Jakeman" }, Blocks: [{ StartTime: "07:00", EndTime: "12:00", Hrs: 5 }] }];
+  const plans = { "t_ch_h4": { s: "2026-11-30", hours: 10, crew: 2, staff: [], pdl: [{ d: "2026-11-30", z: 1 }], by: "Koy Wilkinson" } };
+  const bd = SC.crewBoard(usersP);
+  const open = SC.buildCalendar({ jobs: trip(false), schedules: [], phaseHours: {}, plans, ...opt }), cOpen = SC.chipsOf(open, bd);
+  ok((cOpen["2026-11-30"] || []).some(c => c.it.key === "t_ch_h4" && c.style === "open"), "while the trip is open, the block someone placed shows (red, nobody on it)");
+  const done = SC.buildCalendar({ jobs: trip(true), schedules: sch, phaseHours: {}, plans, ...opt }), cDone = SC.chipsOf(done, bd), itD = done.items.find(x => x.key === "t_ch_h4");
+  ok(itD && itD.done && !itD.plan && !(cDone["2026-11-30"] || []).some(c => c.it.key === "t_ch_h4") && (cDone["2026-11-23"] || []).some(c => c.it.key === "t_ch_h4" && c.style === "booked"), "once it's marked complete the placed block is gone; only the day Simpro had it booked still shows");
+  ok(!done.needs.some(n => n.key === "t_ch_h4"), "and a finished trip is never listed under Needs you");
+}
+
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

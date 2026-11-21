@@ -1,5 +1,18 @@
 [
  {
+  "v": 677,
+  "heads": [
+   {
+    "h": "FIXED on the crew calendar (office)",
+    "first": "A return trip you mark complete now comes off next week's calendar. Before, a block someone had placed for it could hang on in red."
+   },
+   {
+    "h": "CHANGED",
+    "first": "A return trip's block now says what the trip is for, under the job name. Two trips on the same job no longer look alike."
+   }
+  ]
+ },
+ {
   "v": 676,
   "heads": [
    {
@@ -194,19 +207,6 @@
    {
     "h": "NEW on the crew calendar",
     "first": "Tap + more on a busy day and that day's jobs open right over the calendar. Esc or a tap outside closes it."
-   }
-  ]
- },
- {
-  "v": 657,
-  "heads": [
-   {
-    "h": "NEW for the owners: Friday Strategy on the dashboard",
-    "first": "Dashboard › Meetings has a fourth button, Friday Strategy · Fri 8:00. Only admins see it (owners and the office)."
-   },
-   {
-    "h": "NEW on every meeting",
-    "first": "Edit under any row changes its words for that week's meeting. The job itself doesn't change."
    }
   ]
  }

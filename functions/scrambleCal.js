@@ -218,7 +218,10 @@ const lc = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
 // Title as the Crew Board reads it (App.js crewBoardTitle): admins are never on a crew.
 const boardTitle = (u) => u.title || (["admin", "justin", "jeromy"].includes(u.role) ? "admin" : ["foreman", "lead", "crew"].includes(u.role) ? u.role : "crew");
 function crewBoard(users) {
-  const act = (users || []).filter(u => u && String(u.name || "").trim() && u.active !== false);
+  // v677 (Koy 2026-11-20: "Leave Paul off the calendar and anybody that's not assigned to a team off the calendar as
+  // well"): someone with contractor access isn't crew, whatever their title, so they are never on the board: not in
+  // the open names, not scheduled, not bookable from here. People with no foreman were already left off.
+  const act = (users || []).filter(u => u && String(u.name || "").trim() && u.active !== false && String(u.access || "").toLowerCase() !== "contractor");
   const crews = {};
   act.forEach(u => { if (boardTitle(u) === "foreman") crews[u.id] = { id: u.id, foreman: u.name, people: [u.name], title: { [u.name]: "foreman" } }; });
   act.forEach(u => { const t = boardTitle(u); if (t !== "foreman" && t !== "admin" && u.foremanId && crews[u.foremanId]) { crews[u.foremanId].people.push(u.name); crews[u.foremanId].title[u.name] = t; } });
@@ -695,7 +698,10 @@ function buildCalendar(input) {
       else { it.left = Math.max(1, it.crewBooked || 4) * HPD * 4; it.leftBy = "week"; }
     }
     if (it.defHours == null) it.defHours = it.left > 0 ? it.left : HPD;
-    const p = plans && plans[it.key];
+    // v677 (Koy 2026-11-20, Chapman's heater trip: "I marked it as complete. It's still showing on the forecast next
+    // week"): a trip that is done has no plan. A finished trip is kept only so today's Simpro booking shows as its own;
+    // a block someone placed for it earlier (here: Monday, with nobody on it) used to hang on and draw next week.
+    const p = !it.done && plans && plans[it.key];
     // v656: { off: true } = taken off the calendar by hand (Koy: "if I don't want a job scheduled, I just delete it
     // off there"): no block, the auto-schedule leaves it alone, it stays on the list as needing scheduling.
     if (p && p.off) it.off = { by: p.by || "", at: p.at || "", why: String(p.why || "").slice(0, 60), note: String(p.note || "").slice(0, 200) };
@@ -704,7 +710,7 @@ function buildCalendar(input) {
     // the server before it was saved) takes the place of the auto-schedule's own guess for this job or trip. It sits at
     // the forecast level: a plan a person placed, or taking the job off the calendar, always wins, and it is ignored
     // once all its days are past.
-    const dp = !it.plan && !it.off && proposals && proposals[it.key];
+    const dp = !it.done && !it.plan && !it.off && proposals && proposals[it.key];
     if (dp && dp.s && Number(dp.hours) > 0 && pdOf(dp.pdl)) {
       const f = { s: startOf(dp.s), hours: Number(dp.hours), crew: Math.max(1, Number(dp.crew) || 1), staff: Array.isArray(dp.staff) ? dp.staff : [], pd: pdOf(dp.pdl), src: "duet", why: String(dp.why || "").slice(0, 200), id: String(dp.id || ""), at: dp.at || "" };
       if (planDays(f).some(d => d.date >= todayIso)) it.auto = f;
