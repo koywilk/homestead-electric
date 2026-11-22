@@ -52074,6 +52074,7 @@ const SCAL_KIND = { rough: "#1F3A68", finish: "#3B6FB6", trip: "#5B8BCB", servic
 const SCAL_SOFT = { rough: "#E4EAF4", finish: "#E8F0FA", trip: "#FFFFFF", service: "#F0F2F5", task: "#F6F7F9" };
 const SCAL_ON = { rough: ["#1F3A68", "#fff"], finish: ["#3B6FB6", "#fff"], trip: ["#D3E2F5", "#14233A"], service: [OD_GREY, "#fff"], task: ["#E6E9EE", "#1B1F24"] };
 const SCAL_HELD = "#8A919C";
+const SCAL_FLAG = "#5B3FA0", SCAL_FLAG_SOFT = "#EFEBF8";   // v679: open Needs you flags on a job (purple: apart from the blues and the unstaffed red)
 const SCAL_WAIT = ["Waiting on GC or homeowner", "Waiting on material", "Waiting on inspection", "On hold", "Other"];
 const SCAL_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 // What is still open on a phase (v672): rough = its open punch items; finish = finish and QC punch plus failed-final items
@@ -52248,6 +52249,34 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const chips = useMemo(() => SC.chipsOf(V, board), [V, board]); // eslint-disable-line
   const shown = (c) => (!simOnly || c.style === "booked") && (crewF === "All" || c.fm.includes(crewF) || (!c.fm.length && crewF === "All"));
   const dayChips = (iso) => (chips[iso] || []).filter(shown);
+  // v679 (Koy, 2026-11-22: "maybe they flag on the claendar itself so i ts all one spot", then "Ship it"): the open
+  // Needs you flags (claude_flags, through the admin-only claudeWork, the same read as the Claude tab) by job number.
+  // Each job box carries a mark with its count and lists them when tapped; jobs with flags and no box on the calendar
+  // show under Needs you. Admins only (flags can name people). Read-only: flags are still posted and closed the same way.
+  const [cwFlags, setCwFlags] = useState(null);
+  useEffect(() => {
+    if (!isAdm) { setCwFlags(null); return undefined; }
+    let dead = false;
+    gcAdminCallable("claudeWork", identity)({}).then(r => { const d = r && r.data; if (!dead && d && d.ok) setCwFlags(Array.isArray(d.open) ? d.open : []); }, () => {});
+    return () => { dead = true; };
+  }, [isAdm, identity && identity.name]); // eslint-disable-line
+  const flagsByNo = useMemo(() => { const o = {};
+    (cwFlags || []).forEach(f => { const n = String((f && f.jobNo) || "").replace(/^#/, "").trim(); if (/^\d{1,6}$/.test(n)) (o[n] = o[n] || []).push(f); });
+    return o; }, [cwFlags]);
+  const flagsOf = (it) => (it && it.no != null && flagsByNo[String(it.no)]) || [];
+  const onCalNos = useMemo(() => { const s = new Set(); Object.values(chips).forEach(l => (l || []).forEach(c => { if (c && c.it && c.it.no != null) s.add(String(c.it.no)); })); return s; }, [chips]);
+  const flagsOff = useMemo(() => Object.keys(flagsByNo).filter(n => !onCalNos.has(n))
+    .sort((a, b) => flagsByNo[b].length - flagsByNo[a].length || Number(a) - Number(b)), [flagsByNo, onCalNos]);
+  const flagMark = (n) => n ? <span className="sc-fm" aria-label={`${n} open flag${n > 1 ? "s" : ""}`}><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1v8M2 1h6l-1.5 2L8 5H2" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg>{n}</span> : null;
+  const flagLine = (f) => { const n = String(f.jobNo || ""), nm = String(f.jobName || "");
+    let t = String(f.title || "").trim().replace(new RegExp("^#?" + n + "\\s+"), "");
+    if (nm && t.startsWith(nm)) t = t.slice(nm.length);
+    t = t.replace(/^[\s:,-]+/, ""); return t ? t.charAt(0).toUpperCase() + t.slice(1) : String(f.title || ""); };
+  const flagSince = (f) => { const t = Date.parse(f.firstSeen || ""); return isNaN(t) ? "" : new Date(t).toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone: "America/Denver" }); };
+  const flagList = (fl) => (<span className="sc-fls">
+    {fl.map(f => <span key={f.id} className="sc-fl">{flagLine(f)}{flagSince(f) ? <small>Since {flagSince(f)}</small> : null}</span>)}
+    <small className="sc-sub">Answer or close these in Needs you on the Claude tab. A closed flag drops off here.</small></span>);
+  const [flOpen, setFlOpen] = useState("");
   const crewText = (c) => c.team ? `${c.team} · ${c.n}` : c.who.length ? (c.who.length > 3 ? `${c.who.slice(0, 2).join(", ")} +${c.who.length - 2}` : c.who.join(", ")) : `${c.n} ppl`;
 
   // Saving: every move, copy or change is a plan everyone sees right away.
@@ -52612,7 +52641,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const chipEl = (c, iso, compact) => {
     const it = c.it, movable = c.style !== "booked" && c.style !== "cc" && it.kind !== "service";
     return (
-      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${clashOnChip(c, iso) ? " clash" : ""}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
+      <button type="button" key={it.key + c.style + iso} className={`sc-chip2 ${c.style}${flagsOf(it).length ? " hasfm" : ""}${clashOnChip(c, iso) ? " clash" : ""}${sel === it.key ? " on" : ""}${picked === it.key ? " pick" : ""}${dropOn === it.key + iso || (pickP && pickP.iso === iso) ? " drop" : ""}`}
         style={kv(it.kind)}
         draggable={movable} onDragStart={e => { if (!movable) return; setDrag(it.key); try { e.dataTransfer.setData("text/plain", it.key); e.dataTransfer.effectAllowed = "move"; } catch (_) {} }}
         onDragEnd={() => { setDrag(""); setOver(""); }}
@@ -52623,6 +52652,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         onClick={e => { e.stopPropagation(); if (pickP && pickP.iso === iso) { addPerson(c, pickP.name, iso); setPickP(null); return; } if (picked && picked !== it.key) { tapDay(iso); return; } setSel(it.key); setSelDay(iso); setCustom(false); setBk(null); setCopyOpen(false); openIns(e); }}
         title={`${label(it)} · ${it.tag}${it.kind === "trip" && it.scope ? ": " + it.scope : ""}`}>
         <span className="t">{compact && c.style === "held" ? <span className="sc-bang" aria-hidden="true">!</span> : null}{label(it)}</span>
+        {flagMark(flagsOf(it).length)}
         {compact ? null : <span className="m"><i>{c.style === "held" ? <><span className="sc-bang" aria-hidden="true">!</span>Held · </> : c.style === "kept" ? "Plan · " : c.style === "duet" ? "Duet suggests · " : c.style === "open" ? "Nobody on it · " : ""}{it.tag}</i>{c.style === "cc" ? "Set in Command Center" : c.style === "open" ? (c.none ? `${c.time || ""} · tap to add people` : it.need || (fc(it) ? `Forecast starts ${SC.md(fc(it).s)}` : "Needs a crew")) : crewText(c)}</span>}
         {compact || !c.time ? null : <span className="m">{c.time}</span>}
         {compact || !ownTxt(c) ? null : <span className="m">{ownTxt(c)}</span>}
@@ -52871,6 +52901,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         {it.scope ? <small>{it.scope}{it.who ? ` · ${it.who}` : ""}</small> : null}
         {it.flags.map(x => <span key={x} className="sc-flag">{x}</span>)}
         {it.need ? <span className="sc-flag">Needs you: {it.need}</span> : null}
+        {flagsOf(it).length ? <><b className="sc-flh">{flagMark(flagsOf(it).length)}Open flags</b>{flagList(flagsOf(it))}</> : null}
         {held ? <span className="sc-flag">Held: {f.held}.</span> : null}
         {f && f.src === "duet" && !it.plan ? <><span className="sc-flag" style={{ color: "#22604B" }}>Duet suggests: {f.why || "no reason given"}</span>
           <div className="sc-btns"><button type="button" className="mt-btn" onClick={() => keepDuet(it)}>Keep it</button><button type="button" className="mt-btn ghost" onClick={() => dropDuet(it)}>Remove suggestion</button><small className="sc-sub">Keep makes it a plan. Or change the day, time or who below. Nothing is booked until you Book.</small></div></> : null}
@@ -53010,9 +53041,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       <span><b>You {whyAsk.outcome === "removed" ? "removed" : "changed"} Duet's suggestion{whyAsk.job ? ` for ${whyAsk.job}` : ""}.</b> Why? One tap helps it suggest better. Or skip.</span>
       <div className="sc-btns">{WHY_DUET.map(w => <button type="button" key={w} className="mt-btn ghost" onClick={() => sayWhy(w)}>{w}</button>)}<button type="button" className="mt-lnk" onClick={() => sayWhy("")}>Skip</button></div>
     </div>) : null;
-  const needsBox = V.needs.length ? (
+  const needsBox = V.needs.length || flagsOff.length ? (
     <div className="sc-box">
-      <span className="mt-lab">Needs you · {V.needs.length}</span>
+      <span className="mt-lab">Needs you · {V.needs.length + flagsOff.length}</span>
       <small className="sc-sub">Calls the auto-schedule won't make on its own. Tap one to see it.</small>
       <div className="sc-scroll">{SC.groupBy(V.needs.filter(n => byKey[n.key]), n => byKey[n.key]).map(g => (<Fragment key={g.k}>
         {grpHead("n:" + g.k, g.label, g.items.length)}
@@ -53025,7 +53056,13 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         }}>
           <b>{label(x)}</b><small><Pill it={x}/>{n.placed ? "Placed by a person" : n.held ? "Placed, held" : "Not placed"}</small><span className="sc-flag">{n.why}</span>
         </button>); })}
-      </Fragment>))}</div>
+      </Fragment>))}
+      {flagsOff.length ? <>{grpHead("n:flags", "Job flags, not on the calendar", flagsOff.length)}
+        {!openG.has("n:flags") ? null : flagsOff.map(no => { const fl = flagsByNo[no], lb = odClaudeJobLabel(fl[0], jobs).label; return (
+          <button type="button" key={"fl" + no} className={"sc-need fl" + (flOpen === no ? " on" : "")} aria-expanded={flOpen === no} onClick={() => setFlOpen(o => (o === no ? "" : no))}>
+            <b className="sc-flrow"><span>#{lb}</span>{flagMark(fl.length)}</b>
+            {flOpen === no ? flagList(fl) : <small>{flagLine(fl[0])}{fl.length > 1 ? ` · +${fl.length - 1} more` : ""}</small>}
+          </button>); })}</> : null}</div>
     </div>) : null;
   const list = V.list.filter(x => !q || String(x.no).includes(q.replace(/^#/, "")) || String(x.name).toLowerCase().includes(q.toLowerCase()));
   const listBox = (
@@ -53224,6 +53261,15 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-sub{font-size:12px;color:var(--cdim)}
         .sc2 .sc-scroll{display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow:auto}
         .sc2 .sc-need{all:unset;box-sizing:border-box;cursor:pointer;border:1px solid var(--cline);border-left:3px solid var(--o);border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;background:var(--card)}
+        .sc2 .sc-chip2{position:relative}.sc2 .sc-chip2.hasfm .t{padding-right:32px}
+        .sc2 .sc-fm{display:inline-flex;align-items:center;gap:3px;height:17px;padding:0 6px;border-radius:999px;background:${SCAL_FLAG};color:#fff;font-size:11px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;flex:none}
+        .sc2 .sc-fm svg{width:9px;height:9px}
+        .sc2 .sc-chip2 .sc-fm{position:absolute;top:5px;right:5px;box-shadow:0 0 0 1.5px #fff}
+        .sc2 .sc-flh{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--cink)}
+        .sc2 .sc-fls{display:flex;flex-direction:column;gap:5px}
+        .sc2 .sc-fl{display:flex;flex-direction:column;gap:1px;padding:6px 8px;background:${SCAL_FLAG_SOFT};border-radius:8px;font-size:12.5px;line-height:1.35;color:var(--cink)}
+        .sc2 .sc-fl small{font-size:11px;color:var(--cdim)}
+        .sc2 .sc-need.fl{border-left-color:${SCAL_FLAG}}.sc2 .sc-flrow{display:flex;justify-content:space-between;align-items:center;gap:6px}
         .sc2 .sc-need.on{box-shadow:0 0 0 2px var(--o)}.sc2 .sc-need b,.sc2 .sc-card b{font-size:13px;color:var(--cink)}.sc2 .sc-need small,.sc2 .sc-card small{font-size:12px;color:var(--cdim)}
         .sc2 .sc-fold{all:unset;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--o-ink)}
         .sc2 .sc-card{border:1px solid var(--cline);border-radius:11px;padding:7px 9px;display:flex;flex-direction:column;gap:3px}
@@ -65626,8 +65672,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-21 · App SW version: v678
+**Last manifest update:** 2026-11-22 · App SW version: v679
 ---
+
+- **Crew calendar: open job flags on each job's block, and in Needs you for jobs not on it** · 'in-flight 2026-11-22' · 'SW v679' · 'flagsByNo' · 'flagsOff' · 'SCAL_FLAG' · 'claudeWork' · Koy (crew-schedule chat, on where the Needs you flags should live): *"is there somewhere better to put them, in my day on the main cc or maybe they flag on the claendar itself so i ts all one spot"*, then *"yes"* to the plan and *"Ship it"* to the preview (claude.ai/artifact/YMSAt8viCssV4kkMht2SfR). **What:** for an admin the crew calendar reads the open Claude flags (the same admin-PIN 'claudeWork' read as the Claude tab) and groups them by job number. Each block of that job carries a purple mark (flag and count, white ring so it reads on navy, blue, white and the unstaffed red). Tapping the job opens the job box, which lists each flag line and the day it was first seen. Jobs with open flags and no block anywhere in the view show under **Needs you** in a new folded group **Job flags, not on the calendar** (job number and name, the first line and how many more; tap to see them all). Flags with no job number stay on the Claude tab only. **Admins only:** flags can name people (sick, clock-outs), and 'claudeWork' already refuses anyone but an admin; no mark or group for anyone else. **Read only:** flags are still posted, answered and closed the same way (cc_post_flags, Needs you on the Claude tab, cc_close_flag); a closed flag leaves the calendar on the next read. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** display only; one more read of an existing admin callable; nothing is written.
 
 - **Crew calendar: each person on a block has their own start and finish** · 'in-flight 2026-11-21' · 'SW v678' · 'pdl w' · 'pw' · 'dayWindows' · 'ownWin' · 'aloneGap' · 'winFor' · 'defWin' · 'SB.buildEntries people' · Koy: *"People should be able to be on the same job without having to be there all day so that doesn't really make any sense to me: why they can't be on the same block with different times"*. Before, a block had one start and finish per day for everyone on it, so Gage and Payton (Webb 10-11 on Tue 11/24) couldn't join Rose 11:30-5 without cutting Keegan and Austin's 7-5 day, on the screen or through Duet's tools. **Now** each person on a day can have their own time. **Saved:** the day's 'pdl' row keeps its people ('n') and gains 'w: [{ n, t, e }]' when anyone's time differs; the day's 't' / 'e' becomes the span (earliest start to latest finish), so a build without this reads everyone on for the whole span (it only ever blocks more). A day saved before reads exactly as it did. **Job box:** each ticked name has a **Time** link (shows the person's own time when it differs); it opens Start / Finish for that person and **Same as the job**. **Full day / Half day / Custom** now set everyone (the label reads *Time for everyone* when people have their own). Picking someone busy for part of the day (*Use the hours they're free*) now adds just that person for those hours; nobody else's time changes. A new person on a day gets the time most people that day have. The block on the calendar shows who is there part of the day (*Gage, Payton 11:30 AM–5:00 PM*). **Rules by each person's own time:** busy times and double-booking, Simpro clashes, the 10-hour count, the auto-schedule's holds, **Book in Simpro** (each person goes in at their own start and hours; the 40-hour / 1.5x line counts their own hours; 'days[].people' on 'scrambleBook'), and **never alone**: a crew member or apprentice is never left with nobody else on the job for any stretch of 15 minutes or more (Needs you on the screen; refused in Duet's proposals, edits and bookings, with the time). A lead / jr foreman / foreman alone for part of the day follows the same rule as a whole day. **Duet:** 'cc_propose_block' and 'cc_edit_block' take each person's own times (one entry per person per day was already the shape; the "everyone shares one start" refusal is gone); 'cc_read_calendar' blocks add 'peopleTimes' when people's times differ; previews and the edit record say *put on Gage 11:30-17:00*. Never touches a job's stage or status. Tests: new sections in scramble-cal, scramble-door and scramble-suggest tests. Guide 'dashboard.html'. **Deploy:** hosting and functions ('Deploy-functions: scrambleBook, duetBook, duetApi, duetRead'). **Why it won't lose data:** a new optional list on a day of a plan; old plans read the same; the span is saved as the day's time so an older build blocks more, never less; Book writes only schedule entries.
 

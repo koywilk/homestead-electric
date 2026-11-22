@@ -1,5 +1,18 @@
 [
  {
+  "v": 679,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (admins)",
+    "first": "**Open job flags show on the calendar.** A job with open flags from Claude's watches (a missing PO, open punch, missing info) now has a small purple mark on its block with how many. Tap the job and th"
+   },
+   {
+    "h": "CHANGED",
+    "first": "Flags are still answered and closed in Needs you on the Claude tab. A closed flag drops off the calendar."
+   }
+  ]
+ },
+ {
   "v": 678,
   "heads": [
    {
@@ -194,19 +207,6 @@
    {
     "h": "NEW on the crew calendar",
     "first": "Every job on the calendar shows its time, like 7:00 AM–9:00 AM."
-   }
-  ]
- },
- {
-  "v": 659,
-  "heads": [
-   {
-    "h": "FIXED for the office: pairs on the Crew Board",
-    "first": "Anyone can be paired with anyone now: a foreman with an apprentice, two leads, or people on different crews."
-   },
-   {
-    "h": "NEW on the crew calendar",
-    "first": "Approved time off shows on each day (\"Off: names\"). Nobody gets scheduled on a day they're off."
    }
   ]
  }
