@@ -52253,13 +52253,40 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // Needs you flags (claude_flags, through the admin-only claudeWork, the same read as the Claude tab) by job number.
   // Each job box carries a mark with its count and lists them when tapped; jobs with flags and no box on the calendar
   // show under Needs you. Admins only (flags can name people). Read-only: flags are still posted and closed the same way.
+  // v681 (Koy: "there's not really a point in being able to see all these here and not do any of that and have to go
+  // to the Need You tab"): each flag here is the same card as Needs you on the Claude tab, answered through the same
+  // claudeFlagAnswer (Koy's own record only; same confirm before a change or a My Day task). A flag that closes drops
+  // off at once and the count on its mark goes down.
   const [cwFlags, setCwFlags] = useState(null);
+  const [cwCan, setCwCan] = useState(false);
+  const [cwTick, setCwTick] = useState(0);
+  const [flBusy, setFlBusy] = useState(null);
+  const [flMsg, setFlMsg] = useState({});
   useEffect(() => {
     if (!isAdm) { setCwFlags(null); return undefined; }
     let dead = false;
-    gcAdminCallable("claudeWork", identity)({}).then(r => { const d = r && r.data; if (!dead && d && d.ok) setCwFlags(Array.isArray(d.open) ? d.open : []); }, () => {});
+    gcAdminCallable("claudeWork", identity)({}).then(r => { const d = r && r.data; if (!dead && d && d.ok) { setCwFlags(Array.isArray(d.open) ? d.open : []); setCwCan(!!d.canAnswer); } }, () => {});
     return () => { dead = true; };
-  }, [isAdm, identity && identity.name]); // eslint-disable-line
+  }, [isAdm, identity && identity.name, cwTick]); // eslint-disable-line
+  const answerFl = (f, choice, text) => {
+    if (flBusy) return;
+    if (choice === "yes" && (f.proposal || []).length) {
+      const n = f.proposal.length;
+      if (!window.confirm(`Make ${n > 1 ? `these ${n} changes` : "this change"} in Command Center now?`)) return;
+    }
+    if (choice === "task" && !window.confirm(`Add this to your My Day?\n\n${f.title}${f.jobNo || f.jobName ? `\nJob: ${[f.jobNo, f.jobName].filter(Boolean).join(" ")}` : ""}`)) return;
+    setFlBusy(f.id); setFlMsg(m => ({ ...m, [f.id]: "Working…" }));
+    gcAdminCallable("claudeFlagAnswer", identity)({ id: f.id, choice, text: text || "", seenAt: f.updatedAt }).then(
+      r => { const x = (r && r.data) || {}; setFlBusy(null);
+        if (x.refused) { setFlMsg(m => ({ ...m, [f.id]: x.refused })); return; }
+        const lb = `#${odClaudeJobLabel(f, jobs).label}`;
+        say(x.status === "applied" ? `${lb}: done, the change is in Command Center (undo is in Changes on the Claude tab).` : x.status === "tasked" ? `${lb}: added to your My Day.`
+          : x.status === "toSchedule" ? `${lb}: sent to crew schedule. It posts a booking for your OK at its next check.` : x.status === "failed" ? `${lb}: stopped part way. Open it again to see why.` : `${lb}: flag closed.`);
+        setFlMsg(m => { const o = { ...m }; delete o[f.id]; return o; });
+        setCwFlags(l => (l || []).filter(g => g.id !== f.id || x.status === "failed"));   // gone at once; the read below confirms
+        setCwTick(t => t + 1); },
+      e => { setFlMsg(m => ({ ...m, [f.id]: (e && e.message) || "Couldn't save. Try again." })); setFlBusy(null); });
+  };
   const flagsByNo = useMemo(() => { const o = {};
     (cwFlags || []).forEach(f => { const n = String((f && f.jobNo) || "").replace(/^#/, "").trim(); if (/^\d{1,6}$/.test(n)) (o[n] = o[n] || []).push(f); });
     return o; }, [cwFlags]);
@@ -52273,9 +52300,10 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (nm && t.startsWith(nm)) t = t.slice(nm.length);
     t = t.replace(/^[\s:,-]+/, ""); return t ? t.charAt(0).toUpperCase() + t.slice(1) : String(f.title || ""); };
   const flagSince = (f) => { const t = Date.parse(f.firstSeen || ""); return isNaN(t) ? "" : new Date(t).toLocaleDateString("en-US", { month: "numeric", day: "numeric", timeZone: "America/Denver" }); };
-  const flagList = (fl) => (<span className="sc-fls">
-    {fl.map(f => <span key={f.id} className="sc-fl">{flagLine(f)}{flagSince(f) ? <small>Since {flagSince(f)}</small> : null}</span>)}
-    <small className="sc-sub">Answer or close these in Needs you on the Claude tab. A closed flag drops off here.</small></span>);
+  const flagList = (fl) => (<div className="sc-fls">
+    {fl.map(f => <div key={f.id} className="sc-fl"><b>{flagLine(f)}</b>{flagSince(f) ? <small>Since {flagSince(f)}</small> : null}
+      <OdFlag f={f} label={`#${odClaudeJobLabel(f, jobs).label}`} canAnswer={cwCan} busy={flBusy === f.id} msg={flMsg[f.id]} onAnswer={(c, t) => answerFl(f, c, t)}/></div>)}
+  </div>);
   const [flOpen, setFlOpen] = useState("");
   const crewText = (c) => c.team ? `${c.team} · ${c.n}` : c.who.length ? (c.who.length > 3 ? `${c.who.slice(0, 2).join(", ")} +${c.who.length - 2}` : c.who.join(", ")) : `${c.n} ppl`;
 
@@ -53116,10 +53144,13 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       </Fragment>))}
       {flagsOff.length ? <>{grpHead("n:flags", "Job flags, not on the calendar", flagsOff.length)}
         {!openG.has("n:flags") ? null : flagsOff.map(no => { const fl = flagsByNo[no], lb = odClaudeJobLabel(fl[0], jobs).label; return (
-          <button type="button" key={"fl" + no} className={"sc-need fl" + (flOpen === no ? " on" : "")} aria-expanded={flOpen === no} onClick={() => setFlOpen(o => (o === no ? "" : no))}>
-            <b className="sc-flrow"><span>#{lb}</span>{flagMark(fl.length)}</b>
-            {flOpen === no ? flagList(fl) : <small>{flagLine(fl[0])}{fl.length > 1 ? ` · +${fl.length - 1} more` : ""}</small>}
-          </button>); })}</> : null}</div>
+          <div key={"fl" + no} className={"sc-need fl" + (flOpen === no ? " on" : "")}>
+            <button type="button" className="sc-flhead" aria-expanded={flOpen === no} onClick={() => setFlOpen(o => (o === no ? "" : no))}>
+              <b className="sc-flrow"><span>#{lb}</span>{flagMark(fl.length)}</b>
+              {flOpen === no ? <small>Tap to close</small> : <small>{flagLine(fl[0])}{fl.length > 1 ? ` · +${fl.length - 1} more` : ""}</small>}
+            </button>
+            {flOpen === no ? flagList(fl) : null}
+          </div>); })}</> : null}</div>
     </div>) : null;
   const list = V.list.filter(x => !q || String(x.no).includes(q.replace(/^#/, "")) || String(x.name).toLowerCase().includes(q.toLowerCase()));
   const listBox = (
@@ -53324,8 +53355,18 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-chip2 .sc-fm{position:absolute;top:5px;right:5px;box-shadow:0 0 0 1.5px #fff}
         .sc2 .sc-flh{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--cink)}
         .sc2 .sc-fls{display:flex;flex-direction:column;gap:5px}
-        .sc2 .sc-fl{display:flex;flex-direction:column;gap:1px;padding:6px 8px;background:${SCAL_FLAG_SOFT};border-radius:8px;font-size:12.5px;line-height:1.35;color:var(--cink)}
-        .sc2 .sc-fl small{font-size:11px;color:var(--cdim)}
+        .sc2 .sc-fl{display:flex;flex-direction:column;gap:1px;padding:7px 8px 4px;background:${SCAL_FLAG_SOFT};border-radius:8px;font-size:12.5px;line-height:1.35;color:var(--cink)}
+        .sc2 .sc-fl>b{font-size:12.5px;color:var(--cink)}.sc2 .sc-fl>small{font-size:11px;color:var(--cdim)}
+        .sc2 .sc-flhead{all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:2px}.sc2 .sc-flhead:focus-visible{outline:2px solid var(--o)}
+        .sc2 .sc-fl .od-flagbox{border:1px solid var(--cline);border-radius:10px;padding:8px 10px;margin:6px 0 4px;background:var(--card);font-size:12.5px;line-height:1.45;color:var(--cink);overflow-wrap:anywhere}
+        .sc2 .sc-fl .od-flagbox p{margin:4px 0}.sc2 .sc-fl .od-flag-meta{font-size:11px;color:var(--cdim);margin-bottom:4px}.sc2 .sc-fl .od-flag-detail{white-space:pre-wrap}
+        .sc2 .sc-fl .od-flag-bad{color:var(--cink);font-weight:600}.sc2 .sc-fl .od-flag-help,.sc2 .sc-fl .od-rep-foot{font-size:11.5px;color:var(--cdim);margin-top:6px}
+        .sc2 .sc-fl .od-rep-tl{font-size:11px;font-weight:700;color:var(--cdim);text-transform:uppercase;letter-spacing:.04em;margin:6px 0 4px}
+        .sc2 .sc-fl .od-rep-tw{overflow-x:auto}.sc2 .sc-fl table{border-collapse:collapse;font-size:12px;min-width:100%}.sc2 .sc-fl th,.sc2 .sc-fl td{border-bottom:1px solid var(--cline);padding:4px 6px;text-align:left;vertical-align:top}.sc2 .sc-fl th{color:var(--cdim);white-space:nowrap;width:30%}
+        .sc2 .sc-fl .od-ct-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+        .sc2 .sc-fl .od-mini-btn{border:1px solid var(--cline);background:var(--card);color:var(--cink);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+        .sc2 .sc-fl .od-mini-btn:disabled{opacity:.55;cursor:default}.sc2 .sc-fl .od-mini-btn.od-yes{background:var(--o);border-color:var(--o);color:#fff}
+        .sc2 .sc-fl .od-flag-ans{display:flex;gap:6px;align-items:center;margin-top:6px}.sc2 .sc-fl .od-q{flex:1;min-width:0;border:1px solid var(--cline);background:var(--card);border-radius:999px;padding:6px 11px;font:inherit;font-size:12.5px;color:var(--cink)}
         .sc2 .sc-need.fl{border-left-color:${SCAL_FLAG}}.sc2 .sc-flrow{display:flex;justify-content:space-between;align-items:center;gap:6px}
         .sc2 .sc-need.on{box-shadow:0 0 0 2px var(--o)}.sc2 .sc-need b,.sc2 .sc-card b{font-size:13px;color:var(--cink)}.sc2 .sc-need small,.sc2 .sc-card small{font-size:12px;color:var(--cdim)}
         .sc2 .sc-fold{all:unset;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--o-ink)}
@@ -65733,8 +65774,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-22 · App SW version: v680
+**Last manifest update:** 2026-11-22 · App SW version: v681
 ---
+
+- **Crew calendar: answer job flags right in the job box** · 'in-flight 2026-11-22' · 'SW v681' · 'answerFl' · 'OdFlag' · 'claudeFlagAnswer' · Koy, on v679: *"Yeah there's not really a point in being able to see all these here and not do any of that and have to go to the \"Need You\" tab"*. Each open flag in the calendar's job box, and under **Job flags, not on the calendar** in Needs you, is now the same card as Needs you on the Claude tab: what it is, which watch raised it, the change it would make, and the same buttons (Yes / No on a card with a change, Schedule it, Add to my tasks, Done, Dismiss, and a typed answer when the watch asked for one). Same 'claudeFlagAnswer' call, same confirm before a change or a My Day task, Koy's own record only (other admins see the cards with *Koy answers these*). A flag that closes drops off at once, the count on its mark goes down, and a line at the top of the calendar says what happened. The Yes button is the calendar blue, not green. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** the existing answer path, unchanged; the calendar only calls it.
 
 - **Crew calendar: take one day off a job, the rest stays** · 'in-flight 2026-11-22' · 'SW v680' · 'dayOff' · 'dayBack' · 'skippedOf' · 'pd skip (pdl x)' · Koy: *"why can i not remove a job from a day only, right now, if I remove a job, it removes it completely from the calendar."* Remove… on a job of two or more days now opens with **Just <day>?** and two buttons: **Off this day, hours move later** (the job ends a day later) and **Off this day, drop its hours** (the job gets a day shorter). The other days, their people and their times stay put. The job box lists **Days taken off** with **Put back**, and the change has an Undo. Whole-job Remove is the same two taps as before. Screen only: it writes the skip-a-day mark the auto-schedule and Duet's suggestions already use, so no scheduler or function change. A later day that would double-book someone is refused. Simpro-booked days still change in Simpro. Also ('showBox'): **Book in Simpro…** and **Remove…** open their box at the bottom of the job box, which scrolls, so on a tall box the tap looked dead (Koy: *"when i click book to simpro when i click on one it doesnt do anything"*); opening one now scrolls it into view. **Booking, fewer taps and one day** ('openBook day' · 'openWeekBook day' · 'bookArgs only' · 'afterBook' · 'planLess' · 'wbRun'; Koy: *"That's way too many clicks to book shit in Simpro. Also, can I have the option to book just Monday instead of everything on the screen?"*): Book in Simpro… and Book this week… open with the preview already built (tap, read, tap; unticking a block or changing the days rebuilds it; changing who shows the Show button again). **Just Mon … Just Fri** beside Book this week books every block on that day, that day only; the job box's Book has **All its days / Just <day>**. After a one-day book only that day comes off a saved plan (skip + its hours), so the rest stays planned and is never sent twice. Screen only: scrambleBook already books exactly the days it is sent. Preview-then-confirm is unchanged.
 

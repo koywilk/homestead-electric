@@ -1,5 +1,18 @@
 [
  {
+  "v": 681,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (admins)",
+    "first": "**Answer job flags right on the calendar.** Each flag in a job's box is now the same card as Needs you on the Claude tab, with the same buttons: Yes or No on a change, Schedule it, Add to my tasks, Do"
+   },
+   {
+    "h": "CHANGED",
+    "first": "Jobs under Job flags, not on the calendar open the same cards."
+   }
+  ]
+ },
+ {
   "v": 680,
   "heads": [
    {
@@ -206,15 +219,6 @@
    {
     "h": "FIXED on the crew calendar",
     "first": "The auto-schedule can no longer put someone on a job when they're already booked somewhere else that day. Two rare cases could still do it: a job that started late after a return trip and ran into an "
-   }
-  ]
- },
- {
-  "v": 661,
-  "heads": [
-   {
-    "h": "NEW on the crew calendar",
-    "first": "Nobody can be double-booked anymore. If someone is already on a job at that time, or off, they're grayed out and can't be added, and Simpro booking refuses it too."
    }
   ]
  }
