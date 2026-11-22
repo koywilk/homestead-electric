@@ -353,6 +353,14 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   const C1 = SC.buildCalendar({ jobs: jB, schedules: sC, phaseHours: { "620": { r: [0, 60] } }, today, weeks: 5, users, effRS: ef, effFS: eff }).items.find(x => x.key === "j_tb_r");
   ok(C1.auto && !SC.slotsOf(C1.auto).some(d => d.date === "2026-11-23") && SC.slotsOf(C1.auto)[0].date === "2026-11-24", "a forecast day when nobody on it is free is skipped");
   ok(SC.pdOf([{ d: "2026-11-23", x: 1 }])["2026-11-23"].skip === true, "a skipped day saves and loads back");
+  // v680: one day taken off a longer job by hand. 3 days of 2 people (60 crew-hours) from Mon 11-30.
+  { const base = { s: "2026-11-30", hours: 60, crew: 2 }, days = (p) => SC.slotsOf(p).map(d => d.date).join(",");
+    ok(days(base) === "2026-11-30,2026-12-01,2026-12-02", "the job runs Mon, Tue, Wed before a day comes off");
+    ok(days({ ...base, pd: { "2026-12-01": { skip: true } } }) === "2026-11-30,2026-12-02,2026-12-03", "a day taken off with its hours moved later: the other days stay and the job ends a day later");
+    ok(days({ ...base, hours: 40, pd: { "2026-12-01": { skip: true } } }) === "2026-11-30,2026-12-02", "a day taken off with its hours dropped: the other days stay and the job is a day shorter");
+    ok(days({ ...base, pd: { "2026-11-30": { skip: true } } }) === "2026-12-01,2026-12-02,2026-12-03", "the first day can come off too");
+    const kept = { ...base, pd: { "2026-12-01": { skip: true }, "2026-12-02": { staff: [{ name: "A" }, { name: "B" }], t: "07:00", e: "12:00" } } };
+    ok(SC.slotsOf(kept).find(d => d.date === "2026-12-02").label === SC.slotsOf({ ...base, pd: { "2026-12-02": kept.pd["2026-12-02"] } }).find(d => d.date === "2026-12-02").label, "another day's own people and time don't move when a day comes off"); }
 }
 
 // ── v663: the review's fixes ─────────────────────────────────────────────────

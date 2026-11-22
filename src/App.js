@@ -52383,6 +52383,31 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!okOrSay(it.key, p)) return; commit(it.key, p, "kept"); say(`${label(it)} kept as Duet suggested. It's a plan now and can be booked.`); };
   const dropDuet = (it) => { settleDuet(it.key, "removed", null); say(`Duet's suggestion for ${label(it)} is removed.`); };
   const backToAuto = (it) => { commit(it.key, null); setBk(null); setCopyOpen(false); if (it.copyOf) setSel(""); };
+  // v680 (Koy 2026-11-22: "why can i not remove a job from a day only ... if I remove a job, it removes it completely
+  // from the calendar"): one day comes off a longer job and the rest stays. drop = false leaves the job's hours alone, so
+  // they run on to the next workday (the job ends a day later); drop = true takes that day's hours off the block too.
+  // The day is saved with the same skip mark the auto-schedule and Duet's suggestions already use, so every reader lays
+  // it out the same. Checked like any other change: a later day that would double-book someone is refused.
+  const skippedOf = (f) => { const sl = SC.slotsOf(f), lo = sl.length ? sl[0].date : "", hi = sl.length ? sl[sl.length - 1].date : "";
+    return Object.entries((f && f.pd) || {}).filter(([d, o]) => o && o.skip && d < hi && d >= (SC.anyIso(f.s) || lo)).map(([d]) => d).sort(); };
+  const planLess = (f, iso, drop) => { const x = f && SC.planDays(f).find(d => d.date === iso); if (!x) return null;
+    const rest = withTimes(f), crew = Math.max(1, Number(f.crew) || 1);
+    const dayH = x.crewH != null ? x.crewH : x.hours * (x.staff && x.staff.length ? x.staff.length : crew);
+    const next = { ...rest, staff: f.staff || [], pd: { ...(rest.pd || {}), [iso]: { skip: true } }, ...(drop ? { hours: Math.max(0.25, Math.round((Number(f.hours) - dayH) * 4) / 4) } : {}) };
+    return SC.slotsOf(next).length ? next : null; };
+  const dayOff = (it, iso, drop) => {
+    const f = fc(it); if (!f || oneDay(it, f)) return false; const next = planLess(f, iso, drop); if (!next) return false;
+    if (!okOrSay(it.key, next)) return false;
+    const was = it.plan ? { ...it.plan } : null;
+    commit(it.key, next); setRm(null); setBk(null); setCopyOpen(false);
+    const sl = SC.slotsOf(next), end = sl[sl.length - 1].date; setSelDay((sl.find(d => d.date > iso) || sl[sl.length - 1]).date);
+    const msg = `${label(it)} is off ${SC.short(iso)} only. ${drop ? "That day's hours came off the job" : "Its hours moved later"}; it now runs to ${SC.short(end)}.`;
+    say(msg); heUndo(`Off ${SC.short(iso)}`, () => commit(it.key, was));
+    return true; };
+  const dayBack = (it, iso) => { const f = fc(it); if (!f || !(f.pd && f.pd[iso] && f.pd[iso].skip)) return false;
+    const rest = withTimes(f), pd = { ...(rest.pd || {}) }; delete pd[iso]; const next = { ...rest, staff: f.staff || [], pd: Object.keys(pd).length ? pd : null };
+    if (!okOrSay(it.key, next)) return false; commit(it.key, next); setSelDay(iso);
+    const sl = SC.slotsOf(next); say(`${label(it)} is back on ${SC.short(iso)}. It now runs to ${SC.short(sl[sl.length - 1].date)}.`); return true; };
   // Remove: off the calendar and left open on the list (Koy: "if I don't want a job scheduled, I just delete it off
   // there"); the auto-schedule leaves it alone until Restore or it's placed again. Simpro is never touched.
   // Remove can carry a reason (Koy 2026-11-20: "put a reason why I'm removing it off of the schedule, like we're waiting
@@ -52528,30 +52553,50 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!pre.size && it.kind === "trip" && it.who) { const s = staffOfName(it.who); if (s) pre.add(s.id); }
     return pre;
   };
-  const openBook = (it) => setBk({ key: it.key, staff: preStaff(it), preview: null, busy: false, err: "", done: null, find: "" });
+  // v680 (Koy 2026-11-22: "when i click book to simpro ... it doesnt do anything"): the booking box and the Remove box open
+  // at the bottom of the job box, which scrolls, so on a tall job box they opened out of sight and the tap looked dead.
+  // Opening one now brings it into view.
+  const showBox = (cls) => setTimeout(() => { try { const el = document.querySelector(`.sc2 .sc-ins .${cls}`); if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (_) {} }, 80);
+  // v680 (Koy 2026-11-22: "That's way too many clicks to book shit in Simpro"): Book builds the preview at once with the
+  // people already on the block, so it is tap Book, read it, tap Book these. Changing who or which days builds it again.
+  // Nothing goes to Simpro before that last tap. day = "" books all the block's days; a date books that day only.
+  const openBook = (it, day = "") => { const staff = preStaff(it); setBk({ key: it.key, staff, day, preview: null, busy: false, err: "", done: null, find: "" }); showBox("sc-book"); if (staff.size) runPreview(it, { staff, day }); };
+  // After a block is booked its saved plan goes (Simpro has the days now). After one day of it is booked, only that day
+  // comes off the plan, with its hours, so the rest stays planned and a later Book doesn't send that day twice.
+  const afterBook = (it, day) => { if (!(kept[it.key] || drafts[it.key])) return; const f = fc(it);
+    const rest = day && f ? SC.slotsOf(f).filter(d => d.date >= V.today && d.date !== day) : [];
+    const next = rest.length ? planLess(f, day, true) : null; commit(it.key, next || null); };
   // Book the week (Koy 2026-11-20: "where is the button to book the simpro"): every block on the week shown that can be
   // booked (a plan or auto block, not held, with a job number), each with its people. Preview all, then book all; each
   // block books all of its days, as its own Book does. Nothing is written before the confirm.
   const [wb, setWb] = useState(null);                  // { rows: [{ key, staff:Set, on, preview, err, done }], busy, phase }
   const bookable = (it) => { const f = fc(it); return !!(f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !(!it.plan && f.held)); };
-  const openWeekBook = () => {
+  // v680 (Koy 2026-11-22: "can I have the option to book just Monday instead of everything on the screen"): day = "" is
+  // the whole week; a date is that one day, every block on it, that day only. It opens with the preview already built
+  // (one tap fewer); unticking a block builds it again, since the 1.5x split of the blocks after it can change.
+  const wbRun = useRef(0);
+  const openWeekBook = (day = "") => {
     const wEnd = SC.addDays(weekStart, 4), rows = [];   // v663: through Friday, for blocks put there by hand
-    V.items.forEach(it => { if (!bookable(it)) return; const f = fc(it); if (!SC.slotsOf(f).some(d => d.date >= weekStart && d.date <= wEnd)) return;
+    V.items.forEach(it => { if (!bookable(it)) return; const f = fc(it); if (!SC.slotsOf(f).some(d => day ? d.date === day && !d.none : d.date >= weekStart && d.date <= wEnd)) return;
       rows.push({ key: it.key, staff: preStaff(it), on: true, preview: null, err: "", done: null }); });
-    setWb({ rows, busy: false, phase: "pick" }); setInsAt(null);
+    setWb({ rows, day, busy: !!rows.length, phase: rows.length ? "preview" : "pick" }); setInsAt(null);
+    if (rows.length) runWeekPreview(rows, day);
   };
-  const runWeekPreview = async () => {
-    setWb(w => ({ ...w, busy: true }));
+  const runWeekPreview = async (rows0, day0) => {
+    const src = rows0 || wb.rows, day = day0 != null ? day0 : (wb && wb.day) || "", run = ++wbRun.current;
+    setWb(w => w && ({ ...w, busy: true }));
     const rows = [], pend = [];   // v663: each preview counts the hours of the blocks ahead of it, so a Friday past 40 shows as 1.5x and books
-    for (const r of wb.rows) {
+    for (const r of src) {
       const it = byKey[r.key];
       if (!r.on || !it || !r.staff.size) { rows.push({ ...r, preview: null, err: r.on && !r.staff.size ? "No one picked." : "" }); continue; }
       const stop = bookStop(it, r.staff); if (stop) { rows.push({ ...r, preview: null, err: stop }); continue; }
-      try { const x = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, r.staff), ...(pend.length ? { pending: pend.slice(0, 400) } : {}) }); rows.push({ ...r, preview: x.data, err: "" });
+      if (wbRun.current !== run) return;
+      try { const x = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, r.staff, day), ...(pend.length ? { pending: pend.slice(0, 400) } : {}) }); rows.push({ ...r, preview: x.data, err: "" });
         ((x.data && x.data.entries) || []).forEach(e => pend.push({ staffId: e.staffId, date: e.date, hours: e.hours })); }
       catch (e) { rows.push({ ...r, preview: null, err: (e && e.message) || "Couldn't build the preview." }); }
     }
-    setWb(w => ({ ...w, rows, busy: false, phase: "preview" }));
+    if (wbRun.current !== run) return;
+    setWb(w => w && ({ ...w, rows, busy: false, phase: "preview" }));
   };
   const runWeekBook = async () => {
     setWb(w => ({ ...w, busy: true }));
@@ -52559,8 +52604,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     for (const r of wb.rows) {
       const it = byKey[r.key];
       if (!r.on || !r.preview || !it) { rows.push(r); continue; }
-      try { const x = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, r.staff), hash: r.preview.hash }); const d = x.data || {};
-        if (d.ok && (kept[it.key] || drafts[it.key])) commit(it.key, null); rows.push({ ...r, done: d }); }
+      try { const x = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, r.staff, wb.day || ""), hash: r.preview.hash }); const d = x.data || {};
+        if (d.ok) afterBook(it, wb.day || ""); rows.push({ ...r, done: d }); }
       catch (e) { rows.push({ ...r, done: { ok: false, err: (e && e.message) || "Nothing was written for this one." } }); }
     }
     const n = rows.reduce((a, r) => a + (r.done && r.done.created ? r.done.created.length : 0), 0);
@@ -52589,9 +52634,9 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!SC.slotsOf({ ...p, crew: staff.size }).some(d => d.date >= todayYmd && !d.none)) return SC.slotsOf({ ...p, crew: staff.size }).some(d => d.date >= todayYmd) ? "Nobody is on this block. Add people to its days first." :  "Every day on this block is already past. Move it to a day from today on.";
     return "";
   };
-  const bookArgs = (it, staff) => {
+  const bookArgs = (it, staff, only) => {
     const p = fc(it), all = new Set([...staff].map(Number));
-    const days = SC.slotsOf({ ...p, crew: staff.size }).filter(d => d.date >= V.today && !d.none).map(d => {
+    const days = SC.slotsOf({ ...p, crew: staff.size }).filter(d => d.date >= V.today && !d.none && (!only || d.date === only)).map(d => {
       const own = d.staff ? [...new Set(d.staff.map(x => x && (x.id ? Number(x.id) : idOfName(x.name))).filter(Boolean))] : null;
       if (own && own.length) own.forEach(id => all.add(id));
       // v678: people on their own times that day book at those times
@@ -52602,19 +52647,20 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const ids = [...all], anyAll = days.some(d => !d.staffIds);
     return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, ...(it.kind === "trip" && it.cc ? { cc: it.cc } : {}), ...(it.kind === "trip" && it.jobId && it.tripId && !it.copyOf ? { jobId: it.jobId, tripId: it.tripId } : {}), staffIds: ids, days: days.map(d => d.staffIds || !anyAll || ids.length === staff.size ? d : { ...d, staffIds: [...staff].map(Number) }) };
   };
-  const runPreview = async (it) => {
-    const stop = bookStop(it, bk.staff); if (stop) { setBk(b => ({ ...b, err: stop, preview: null })); return; }
-    setBk(b => ({ ...b, busy: true, err: "", preview: null }));
-    try { const r = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, bk.staff) }); setBk(b => ({ ...b, busy: false, preview: r.data })); }
-    catch (e) { setBk(b => ({ ...b, busy: false, err: (e && e.message) || "Couldn't build the preview." })); }
+  const runPreview = async (it, o) => {
+    const staff = (o && o.staff) || bk.staff, day = o && "day" in o ? o.day : (bk && bk.day) || "";
+    const stop = bookStop(it, staff) || (day && !bookArgs(it, staff, day).days.length ? `Nobody is on this block ${SC.short(day)}.` : ""); if (stop) { setBk(b => b && ({ ...b, busy: false, err: stop, preview: null })); return; }
+    setBk(b => b && ({ ...b, busy: true, err: "", preview: null }));
+    try { const r = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, staff, day) }); setBk(b => b && b.key === it.key && (b.day || "") === day ? ({ ...b, busy: false, preview: r.data }) : b); }
+    catch (e) { setBk(b => b && ({ ...b, busy: false, err: (e && e.message) || "Couldn't build the preview." })); }
   };
   const runBook = async (it) => {
     setBk(b => ({ ...b, busy: true, err: "" }));
     try {
-      const r = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, bk.staff), hash: bk.preview.hash });
+      const r = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, bk.staff, bk.day), hash: bk.preview.hash });
       const d = r.data || {};
       setBk(b => ({ ...b, busy: false, done: d, preview: d.ok ? null : b.preview }));
-      if (d.ok) { if (kept[it.key] || drafts[it.key]) commit(it.key, null); say(`Booked ${d.created.length} entries in Simpro.`); }
+      if (d.ok) { afterBook(it, bk.day); say(`Booked ${d.created.length} entries in Simpro.`); }
       setReload(n => n + 1);
     } catch (e) { setBk(b => ({ ...b, busy: false, err: (e && e.message) || "Nothing was written." })); }
   };
@@ -52919,6 +52965,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
             const setOwn = (n, t, e) => { if (setDay(it, day, { at: { [n]: t && e ? { t, e } : null } })) say(t && e ? `${SC.firstOf(n)} is on ${label(it)} ${SC.clock(SC.hoursOf(t))}–${SC.clock(SC.hoursOf(e))} on ${SC.short(day)}. Everyone else keeps their time.` : `${SC.firstOf(n)} is back on the job's time on ${SC.short(day)}.`); };
             return (<>
               <div className="sc-day1"><b>{SCAL_DOW[SC.dowOf(day)] || ""} {SC.short(day)}</b>{sl.length > 1 ? <small> · one of {sl.length} days, {SC.short(sl[0].date)} to {SC.short(sl[sl.length - 1].date)}</small> : null}</div>
+              {it.plan && !it.copyOf && skippedOf(f).some(x => !it.booked.some(bd => bd.iso === x)) ? <small className="sc-sub">Days taken off: {skippedOf(f).filter(x => !it.booked.some(bd => bd.iso === x)).map(x => <span key={x}>{SC.short(x)} <button type="button" className="mt-lnk" onClick={() => dayBack(it, x)}>Put back</button> </span>)}</small> : null}
               <span className="mt-lab">Who that day · {on.length}</span>
               <div className="sc-ppl">{people.map(n => { const has = on.includes(n), why = has ? "" : dayWhy(it.key, day, n, d.from, d.to), mv = why ? movable(it.key, day, n, d.from, d.to) : null, tr = why ? trimFor(it.key, day, n, d.from, d.to) : null;
                 return <label key={n} className={why && !mv && !tr ? "busy" : ""} title={why}><input type="checkbox" checked={has} disabled={!!why && !mv && !tr} onChange={() => { if (!has && (mv || tr)) { setSwap({ key: it.key, day, n, mv, tr, why }); return; } setSwap(null); setDay(it, day, { names: has ? on.filter(x => x !== n) : [...on, n] }); }}/>{n}{why ? <i> · {why.replace(SC.firstOf(n) + " ", "")}{mv || tr ? " (tick for choices)" : ""}</i> : !has && softOn(it.key, day, n, d.from, d.to) ? <i> · free to pick (auto-scheduled on {softOn(it.key, day, n, d.from, d.to)}, which will move)</i> : null}
@@ -52957,10 +53004,17 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
             {it.kind !== "service" ? <button type="button" className="mt-btn ghost" onClick={() => setCopyOpen(o => !o)}>{copyOpen ? "Done copying" : "Copy to other days"}</button> : null}
             {canBook ? <button type="button" className="mt-btn" onClick={() => b ? setBk(null) : openBook(it)}>{b ? "Close booking" : "Book in Simpro…"}</button> : null}
             {it.plan && !it.copyOf ? <button type="button" className="mt-lnk dim" onClick={() => backToAuto(it)}>{it.booked.length ? "Back to Simpro's days" : "Back to auto"}</button> : null}
-            {it.kind !== "service" ? <button type="button" className="mt-btn ghost sc-del" onClick={() => it.copyOf ? removeIt(it) : setRm(r => r && r.key === it.key ? null : { key: it.key, why: "", note: "" })}>{it.copyOf ? "Remove this copy" : "Remove…"}</button> : null}
+            {it.kind !== "service" ? <button type="button" className="mt-btn ghost sc-del" onClick={() => { if (it.copyOf) { removeIt(it); return; } setRm(r => r && r.key === it.key ? null : { key: it.key, why: "", note: "" }); showBox("sc-rm"); }}>{it.copyOf ? "Remove this copy" : "Remove…"}</button> : null}
           </div>
           {rm && rm.key === it.key ? (
             <div className="sc-rm">
+              {(() => { if (it.copyOf || oneDay(it, f)) return null; const sl = SC.slotsOf(f), rd = (sl.find(x => x.date === selDay) || sl[0] || {}).date; if (!rd) return null;
+                return (<>
+                  <span className="mt-lab">Just {SC.short(rd)}?</span>
+                  <div className="sc-btns"><button type="button" className="mt-btn ghost" onClick={() => dayOff(it, rd, false)}>Off this day, hours move later</button><button type="button" className="mt-btn ghost" onClick={() => dayOff(it, rd, true)}>Off this day, drop its hours</button></div>
+                  <small className="sc-sub">The other days stay. Move later: the job ends a day later. Drop: the job gets a day shorter. Put it back any time from this box.</small>
+                  <span className="mt-lab">Or the whole job</span>
+                </>); })()}
               <span className="mt-lab">Why is it coming off?</span>
               <div className="sc-copy"><div>{SCAL_WAIT.map(w => <button type="button" key={w} aria-pressed={rm.why === w} onClick={() => setRm(r => ({ ...r, why: r.why === w ? "" : w }))}>{w}</button>)}</div></div>
               <input type="text" value={rm.note} maxLength={200} onChange={e => setRm(r => ({ ...r, note: e.target.value }))} placeholder="Note (optional)" aria-label="Note"/>
@@ -52984,7 +53038,10 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
               <label key={s.id}><input type="checkbox" checked={b.staff.has(s.id)} onChange={() => setBk(x => { const n = new Set(x.staff); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return { ...x, staff: n, preview: null }; })}/>{s.name}</label>))}</div>
             <small>Only people on a Crew Board crew are listed.</small>
             {b.staff.size && b.staff.size !== f.crew ? <small>Planned for {f.crew} people; booking {b.staff.size} spreads the same {Math.round(f.hours)} h over them.</small> : null}
-            <button type="button" className="mt-btn ghost" disabled={!b.staff.size || b.busy} onClick={() => runPreview(it)}>{b.busy && !b.preview ? "Building the preview…" : "Show what it would book"}</button>
+            {!oneDay(it, f) && selDay && SC.slotsOf(f).some(x => x.date === selDay && x.date >= V.today) ? <span className="sc-seg sc-tseg" role="group" aria-label="Which days to book">
+              <button type="button" aria-pressed={!b.day} onClick={() => { setBk(x => ({ ...x, day: "", preview: null })); runPreview(it, { staff: b.staff, day: "" }); }}>All its days</button>
+              <button type="button" aria-pressed={b.day === selDay} onClick={() => { setBk(x => ({ ...x, day: selDay, preview: null })); runPreview(it, { staff: b.staff, day: selDay }); }}>Just {SC.short(selDay)}</button></span> : null}
+            {b.busy && !b.preview ? <small>Building the preview…</small> : !b.preview ? <button type="button" className="mt-btn ghost" disabled={!b.staff.size || b.busy} onClick={() => runPreview(it)}>Show what it would book</button> : null}
             {b.err ? <small className="warn">{b.err}</small> : null}
             {b.preview ? (<>
               <small>Job #{b.preview.job.no} {b.preview.job.name} · {b.preview.costCenter.sectionName} › {b.preview.costCenter.name}{b.preview.costCenter.because ? ` (${b.preview.costCenter.because})` : ""} · {b.preview.totals.entries} entries · {b.preview.totals.hours} h{b.preview.totals.ot ? ` · ${b.preview.totals.ot} h at 1.5x` : ""}</small>
@@ -53320,29 +53377,33 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
           <div className="sc-popl">{list.map(c => chipEl(c, pop.iso, false))}</div>
         </div>); })() : null}
       {pickP ? <div className="sc-pickbar">Adding {SC.firstOf(pickP.name)}{board.partnerOf(pickP.name) ? ` (and ${SC.firstOf(board.partnerOf(pickP.name))} if open)` : ""}: tap a job on {SC.short(pickP.iso)}.<button type="button" onClick={() => setPickP(null)}>Cancel</button></div> : null}
-      {view === "week" || view === "crew" ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={openWeekBook}>Book this week in Simpro…</button><small className="sc-sub">Week of {SC.md(weekStart)}. You see every entry before anything goes in.</small></div> : null}
+      {view === "week" || view === "crew" ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={() => openWeekBook("")}>Book this week in Simpro…</button>
+        <span className="sc-seg" role="group" aria-label="Book one day in Simpro">{[0, 1, 2, 3, 4].map(i => SC.addDays(weekStart, i)).filter(d => d >= V.today).map(d => <button type="button" key={d} onClick={() => openWeekBook(d)} title={`Book only ${SC.short(d)} in Simpro`}>Just {SCAL_DOW[SC.dowOf(d)]}</button>)}</span>
+        <small className="sc-sub">Week of {SC.md(weekStart)}. You see every entry before anything goes in.</small></div> : null}
       {wb ? (() => { const on = wb.rows.filter(r => r.on); const pv = on.filter(r => r.preview), ent = pv.reduce((a, r) => a + r.preview.totals.entries, 0), hrs = pv.reduce((a, r) => a + r.preview.totals.hours, 0), ot = pv.reduce((a, r) => a + (r.preview.totals.ot || 0), 0);
         return (
           <div className="sc-pop sc-wbk" role="dialog" aria-label="Book this week in Simpro">
-            <div className="sc-poph"><b>Book the week of {SC.md(weekStart)}</b><span>{on.length} of {wb.rows.length} jobs</span><button type="button" onClick={() => setWb(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
+            <div className="sc-poph"><b>{wb.day ? `Book ${SC.short(wb.day)} only` : `Book the week of ${SC.md(weekStart)}`}</b><span>{on.length} of {wb.rows.length} jobs</span><button type="button" onClick={() => setWb(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
             <div className="sc-popl">
-              {!wb.rows.length ? <small>Nothing to book this week: every block is booked already, held, or has no job number.</small> : null}
+              {wb.rows.length && !staffList.length ? <small className="warn">{ctx ? "Couldn't read Simpro's staff list, so nobody can be matched and nothing can be booked. Close this and try again in a minute." : "Still reading Simpro's staff list. Close this and open it again in a moment."}</small> : null}
+              {!wb.rows.length ? <small>Nothing to book {wb.day ? "that day" : "this week"}: every block is booked already, held, or has no job number.</small> : null}
               {wb.rows.map((r, i) => { const it = byKey[r.key]; if (!it) return null; const f = fc(it); const names = staffList.filter(x => r.staff.has(x.id)).map(x => SC.firstOf(x.name));
                 return (
                   <div key={r.key} className="sc-wrow">
-                    <label className="sc-wrh"><input type="checkbox" checked={r.on} disabled={wb.phase !== "pick"} onChange={() => setWb(w => ({ ...w, rows: w.rows.map((x, j) => j === i ? { ...x, on: !x.on } : x) }))}/>
+                    <label className="sc-wrh"><input type="checkbox" checked={r.on} disabled={wb.phase === "done" || wb.busy} onChange={() => { const rows = wb.rows.map((x, j) => j === i ? { ...x, on: !x.on, preview: null, err: "" } : x); setWb(w => ({ ...w, rows })); if (wb.phase === "preview") runWeekPreview(rows, wb.day || ""); }}/>
                       <b>{label(it)}</b><Pill it={it}/></label>
-                    <small>{SC.slotsOf(f).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}</small>
-                    <small>{names.length ? names.join(", ") : "No one matched in Simpro's staff list. Open the job and use its Book."}</small>
-                    {r.err ? <small className="warn">{r.err}</small> : null}
+                    <small>{SC.slotsOf(f).filter(d => !wb.day || d.date === wb.day).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}</small>
+                    <small>{names.length ? names.join(", ") : !staffList.length ? "" : "No one matched in Simpro's staff list. Open the job and use its Book."}</small>
+                    {r.err && (staffList.length || r.err !== "No one picked.") ? <small className="warn">{r.err}</small> : null}
                     {r.preview ? <div className="sc-tbl"><table><thead><tr><th>Day</th><th>Person</th><th>Time</th><th>Normal</th><th>OT 1.5x</th></tr></thead>
                       <tbody>{r.preview.entries.map(e => <tr key={e.date + e.staffId}><td>{SC.short(e.date)}</td><td>{e.name}</td><td>{e.blocks.map(x => x.StartTime + "–" + x.EndTime).join(", ")}</td><td>{e.normal}</td><td className={e.ot ? "ot" : ""}>{e.ot || "–"}</td></tr>)}</tbody></table></div> : null}
                     {r.preview && (r.preview.notes || []).length ? r.preview.notes.map(n => <small key={n} className="warn">Check: {n}</small>) : null}
                     {r.done ? <small className={r.done.ok ? "ok" : "warn"}>{r.done.ok ? `Booked ${r.done.created.length} entries.` : r.done.err || `Booked ${(r.done.created || []).length} of ${r.done.planned}, then Simpro refused ${r.done.failed && r.done.failed.name}. Check Simpro.`}</small> : null}
                   </div>); })}
               {wb.phase === "pick" && wb.rows.length ? <button type="button" className="mt-btn ghost" disabled={wb.busy || !on.length} onClick={runWeekPreview}>{wb.busy ? "Building the preview…" : `Show what it would book (${on.length})`}</button> : null}
-              {wb.phase === "preview" ? (<>
-                <small>{ent} entries · {Math.round(hrs * 4) / 4} h{ot ? ` · ${ot} h at 1.5x` : ""}. Each block books all of its days. Hours over 40 in a person's week go in at 1.5x. It only adds schedule entries; no job stage or status changes.</small>
+              {wb.phase === "preview" && wb.busy ? <small>Building the preview…</small> : null}
+              {wb.phase === "preview" && !wb.busy ? (<>
+                <small>{ent} entries · {Math.round(hrs * 4) / 4} h{ot ? ` · ${ot} h at 1.5x` : ""}. {wb.day ? `Only ${SC.short(wb.day)} is booked; the other days stay planned.` : "Each block books all of its days."} Hours over 40 in a person's week go in at 1.5x. It only adds schedule entries; no job stage or status changes.</small>
                 <div className="sc-btns"><button type="button" className="mt-btn" disabled={wb.busy || !ent} onClick={runWeekBook}>{wb.busy ? "Booking…" : `Book these ${ent} entries in Simpro`}</button>
                   <button type="button" className="mt-lnk dim" onClick={() => setWb(w => ({ ...w, phase: "pick", rows: w.rows.map(x => ({ ...x, preview: null, err: "" })) }))}>Back</button></div>
               </>) : null}
@@ -65672,8 +65733,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-22 · App SW version: v679
+**Last manifest update:** 2026-11-22 · App SW version: v680
 ---
+
+- **Crew calendar: take one day off a job, the rest stays** · 'in-flight 2026-11-22' · 'SW v680' · 'dayOff' · 'dayBack' · 'skippedOf' · 'pd skip (pdl x)' · Koy: *"why can i not remove a job from a day only, right now, if I remove a job, it removes it completely from the calendar."* Remove… on a job of two or more days now opens with **Just <day>?** and two buttons: **Off this day, hours move later** (the job ends a day later) and **Off this day, drop its hours** (the job gets a day shorter). The other days, their people and their times stay put. The job box lists **Days taken off** with **Put back**, and the change has an Undo. Whole-job Remove is the same two taps as before. Screen only: it writes the skip-a-day mark the auto-schedule and Duet's suggestions already use, so no scheduler or function change. A later day that would double-book someone is refused. Simpro-booked days still change in Simpro. Also ('showBox'): **Book in Simpro…** and **Remove…** open their box at the bottom of the job box, which scrolls, so on a tall box the tap looked dead (Koy: *"when i click book to simpro when i click on one it doesnt do anything"*); opening one now scrolls it into view. **Booking, fewer taps and one day** ('openBook day' · 'openWeekBook day' · 'bookArgs only' · 'afterBook' · 'planLess' · 'wbRun'; Koy: *"That's way too many clicks to book shit in Simpro. Also, can I have the option to book just Monday instead of everything on the screen?"*): Book in Simpro… and Book this week… open with the preview already built (tap, read, tap; unticking a block or changing the days rebuilds it; changing who shows the Show button again). **Just Mon … Just Fri** beside Book this week books every block on that day, that day only; the job box's Book has **All its days / Just <day>**. After a one-day book only that day comes off a saved plan (skip + its hours), so the rest stays planned and is never sent twice. Screen only: scrambleBook already books exactly the days it is sent. Preview-then-confirm is unchanged.
 
 - **Crew calendar: open job flags on each job's block, and in Needs you for jobs not on it** · 'in-flight 2026-11-22' · 'SW v679' · 'flagsByNo' · 'flagsOff' · 'SCAL_FLAG' · 'claudeWork' · Koy (crew-schedule chat, on where the Needs you flags should live): *"is there somewhere better to put them, in my day on the main cc or maybe they flag on the claendar itself so i ts all one spot"*, then *"yes"* to the plan and *"Ship it"* to the preview (claude.ai/artifact/YMSAt8viCssV4kkMht2SfR). **What:** for an admin the crew calendar reads the open Claude flags (the same admin-PIN 'claudeWork' read as the Claude tab) and groups them by job number. Each block of that job carries a purple mark (flag and count, white ring so it reads on navy, blue, white and the unstaffed red). Tapping the job opens the job box, which lists each flag line and the day it was first seen. Jobs with open flags and no block anywhere in the view show under **Needs you** in a new folded group **Job flags, not on the calendar** (job number and name, the first line and how many more; tap to see them all). Flags with no job number stay on the Claude tab only. **Admins only:** flags can name people (sick, clock-outs), and 'claudeWork' already refuses anyone but an admin; no mark or group for anyone else. **Read only:** flags are still posted, answered and closed the same way (cc_post_flags, Needs you on the Claude tab, cc_close_flag); a closed flag leaves the calendar on the next read. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** display only; one more read of an existing admin callable; nothing is written.
 

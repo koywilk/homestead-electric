@@ -1,5 +1,22 @@
 [
  {
+  "v": 680,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "**Take a job off one day and leave the rest.** Remove used to take the whole job off the calendar. Now, on a job of two or more days, Remove first asks about just the day you tapped. \"Off this day, ho"
+   },
+   {
+    "h": "FIXED",
+    "first": "**Book in Simpro looked like it did nothing.** On a job with a long box, the booking part opened below the bottom edge where you couldn't see it. It now scrolls into view when you tap Book in Simpro. "
+   },
+   {
+    "h": "CHANGED",
+    "first": "Removing the whole job works the same as before, same number of taps."
+   }
+  ]
+ },
+ {
   "v": 679,
   "heads": [
    {
@@ -198,15 +215,6 @@
    {
     "h": "NEW on the crew calendar",
     "first": "Nobody can be double-booked anymore. If someone is already on a job at that time, or off, they're grayed out and can't be added, and Simpro booking refuses it too."
-   }
-  ]
- },
- {
-  "v": 660,
-  "heads": [
-   {
-    "h": "NEW on the crew calendar",
-    "first": "Every job on the calendar shows its time, like 7:00 AM–9:00 AM."
    }
   ]
  }
