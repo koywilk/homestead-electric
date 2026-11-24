@@ -53042,7 +53042,14 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         {it.booked.length ? <small>Booked in Simpro: {it.booked.map(d => SC.short(d.iso)).join(", ")}. Change booked days in Simpro.</small> : null}
         {f ? (<>
           {(() => {
-            const sl = SC.slotsOf(f), day = (sl.find(x => x.date === selDay) || sl[0] || {}).date; if (!day) return null;
+            const sl = SC.slotsOf(f), bd = SC.boxDay(f, it.booked, selDay), day = bd.day; if (!day) return null;
+            // v683: a day Simpro has booked that isn't one of this job's planned days: show it as Simpro has it, read-only
+            if (bd.kind === "booked") { const bk0 = bd.booked, who = (bk0.names || []).map(n => SC.firstOf(n)).join(", ");
+              return (<>
+                <div className="sc-day1"><b>{SCAL_DOW[SC.dowOf(day)] || ""} {SC.short(day)}</b><small> · booked in Simpro</small></div>
+                <small><b>{who || "Someone"}</b> {(bk0.names || []).length === 1 ? "is" : "are"} booked on this job {bk0.from != null && bk0.to != null ? `${SC.clock(bk0.from)}–${SC.clock(bk0.to)}` : "that day"}. To change who is on a day Simpro has booked, change it in Simpro; the calendar never changes Simpro from here.</small>
+                {sl.length ? <small className="sc-sub">The days you can change here are this job's planned days, {SC.short(sl[0].date)} to {SC.short(sl[sl.length - 1].date)}. Tap one of them on the calendar.</small> : null}
+              </>); }
             const d0 = slotOn(f, day), on = dayNames(it, f, day), people = [...new Set([...on, ...pool])];
             // v678: with people on their own times, someone new is judged on the time most people that day have
             const dw = defWin(d0, on), d = { ...d0, from: dw[0], to: dw[1] }, own = (n) => winFor(d0, n), ownDiff = (n) => { const w = own(n); return !!d0.pw && (Math.abs(w[0] - dw[0]) > 1e-6 || Math.abs(w[1] - dw[1]) > 1e-6); };

@@ -1,5 +1,14 @@
 [
  {
+  "v": 685,
+  "heads": [
+   {
+    "h": "FIXED on the crew calendar (office)",
+    "first": "**A job's box now opens on the day you tapped.** Before, if you tapped a day that Simpro has a job booked but that isn't one of the job's planned days, the box opened on the first planned day instead,"
+   }
+  ]
+ },
+ {
   "v": 684,
   "heads": [
    {
@@ -218,19 +227,6 @@
    {
     "h": "NEW photos on every meeting",
     "first": "+ Photo under any item, and + Add a photo to this section under the notes. On a phone you can take one or pick one."
-   }
-  ]
- },
- {
-  "v": 665,
-  "heads": [
-   {
-    "h": "NEW on the crew calendar (office)",
-    "first": "Tick someone who is busy for only part of a job's time and you now get their free hours as a choice. Example: Jacob is on another job 10 to 12, this job is 7 to 11. You can add Jacob and make this job"
-   },
-   {
-    "h": "FIXED",
-    "first": "A job or trip that's already booked in Simpro for a day no longer also shows its old plan for that day."
    }
   ]
  }

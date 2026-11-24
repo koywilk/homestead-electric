@@ -1007,6 +1007,18 @@ function whyOf(it) {
     it.done ? "" : it.tripH ? `${it.tripH} h each (the time set on the trip)` : `${TRIP_DEFAULT_H} h each (a guess: no time on the trip)`].filter(Boolean).join(" · ");
   return "";
 }
+// v683 (Koy 2026-11-24: "when I click on Wednesday it shows Trevor at Ashcraft ... when I unticked Keegan and Austin on Jimenez it
+// didn't move them to open"): which day a job's box is about. Tapping a day the job is booked in Simpro, but that is not one of
+// its planned days, used to open the box on the plan's FIRST day (a different day, with other people on it), and unticking
+// someone there changed that other day. Now the box is about the day tapped: a planned day gives its slot; a Simpro-booked day
+// gives { kind: "booked" } (shown as Simpro has it, never editable here); anything else falls back to the first planned day.
+function boxDay(plan, booked, selDay) {
+  const sl = slotsOf(plan), hit = sl.find(x => x.date === selDay);
+  if (hit) return { day: hit.date, kind: "plan" };
+  const b = (booked || []).find(x => x && x.iso === selDay);
+  if (b) return { day: selDay, kind: "booked", booked: b };
+  return sl.length ? { day: sl[0].date, kind: "plan" } : { day: "", kind: "" };
+}
 // v682: crew hours with nothing on them from `from` to `to` (Monday to Thursday workdays): everyone open is 10 hours, and
 // someone under 10 hours is the rest. The same counts the screen's day headers use, so the what-if view and the live one
 // can be set side by side. users: the Team list.
@@ -1145,4 +1157,4 @@ function planDiff(was, now) {
 }
 
 module.exports = { pwOf, dayWindows, wOf, ownWin, aloneGap, planSummary, planDiff, chipsOf, winsOf, busyOf, dayCounts, whyOf, viewOf, fcOf, isFri, startOf, HPD, ymd, parseYmd, anyDate, anyIso, addDays, dowOf, isHoliday, isWork, nextWork, workAfter, mondayOf, viewDays, span, workdaysBetween, planDays,
-  DAY0, winOf, pdOf, hhmmOf, md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, idleHours, leftSrc, explainItem, explainJob, setDupFirsts, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };
+  DAY0, winOf, pdOf, hhmmOf, md, short, safeKey, firstOf, bookingsByNo, poState, tripIso, upNo, upName, boxDay, idleHours, leftSrc, explainItem, explainJob, setDupFirsts, crewBoard, autoPlan, buildCalendar, slotsOf, clock, hoursOf, tripHours, TRIP_DEFAULT_H, setHolidays, holidayName, DEFAULT_HOLIDAYS, GROUPS, groupOf, groupBy };

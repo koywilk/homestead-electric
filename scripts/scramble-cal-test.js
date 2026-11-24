@@ -408,6 +408,14 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
   ok(!Object.keys(base).some(k => k === "whatIf") && JSON.stringify(SC.buildCalendar(base).items.map(x => x.key + (x.auto ? x.auto.s : ""))) === JSON.stringify(Vn.items.map(x => x.key + (x.auto ? x.auto.s : ""))), "asking the same thing twice without what-if gives the same calendar (nothing carried over)");
   const iN = SC.idleHours(Vn, users, "2026-11-23", "2026-12-17"), iW = SC.idleHours(Vw, users, "2026-11-23", "2026-12-17");
   ok(iN.days > 0 && iW.days === iN.days && iW.hours < iN.hours, "the what-if view has fewer idle crew hours than the live one (" + iN.hours + " to " + iW.hours + " over " + iN.days + " workdays)");
+  // v683: a job box follows the day that was tapped (Jimenez: Simpro-booked Wed 11/25, planned from Mon 11/30)
+  { const bkd = [{ iso: "2026-11-25", names: ["Trever Worley", "Keegan Wilkinson"], from: 7, to: 17, hrs: 20, who: ["Trever", "Keegan"] }];
+    const plan = { s: "2026-11-30", hours: 40, crew: 2, staff: [{ name: "Keegan Wilkinson" }, { name: "Payton Bolda" }] };
+    const bdW = SC.boxDay(plan, bkd, "2026-11-25"), bdP = SC.boxDay(plan, bkd, "2026-12-01"), bdO = SC.boxDay(plan, bkd, "2026-12-30");
+    ok(bdW.kind === "booked" && bdW.day === "2026-11-25" && bdW.booked.names.length === 2, "a Simpro-booked day that isn't a planned day opens the box on that day, as Simpro has it (it used to open on the plan's first day)");
+    ok(bdP.kind === "plan" && bdP.day === "2026-12-01", "a planned day opens on itself");
+    ok(bdO.kind === "plan" && bdO.day === "2026-11-30", "a day that is neither falls back to the first planned day, as before");
+    ok(SC.boxDay(null, bkd, "2026-11-25").kind === "booked" && SC.boxDay(null, [], "2026-11-25").day === "", "with no plan, a booked day still resolves, and nothing resolves to no day"); }
   ok(SC.idleHours(Vn, users, "2026-11-26", "2026-11-26").days === 0 && SC.idleHours(Vn, users, "2026-11-27", "2026-11-27").days === 0, "a holiday or a Friday is not counted as idle"); }
 }
 
