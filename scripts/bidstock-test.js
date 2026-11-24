@@ -5,9 +5,16 @@ const src = fs.readFileSync(path.join(__dirname, "..", "src", "App.js"), "utf8")
 const a = src.indexOf("// ── Bid stock derivations"), b = src.indexOf("// ── end Bid stock derivations");
 if (a < 0 || b < 0) { console.error("bidstock-test: markers not found"); process.exit(1); }
 const ctx = vm.createContext({});
-vm.runInContext(src.slice(a, b) + "\nthis.bidWireLike = bidWireLike; this.bidStockStatus = bidStockStatus; this.bidWireRollup = bidWireRollup;", ctx);
-const { bidWireLike, bidStockStatus, bidWireRollup } = ctx;
+vm.runInContext(src.slice(a, b) + "\nthis.bidWireLike = bidWireLike; this.bidStockStatus = bidStockStatus; this.bidWireRollup = bidWireRollup; this.bidCcSetChanged = bidCcSetChanged;", ctx);
+const { bidWireLike, bidStockStatus, bidWireRollup, bidCcSetChanged } = ctx;
 const eq = (x, y, m) => assert.strictEqual(JSON.stringify(x), JSON.stringify(y), m);
+// v683: a saved Bid Items copy vs the job's live cost-center ids (1224 Jimenez: section 29081 moved in)
+const live = ["14131-17218", "14131-17219", "29081-19287", "29081-19288", "29081-19289"];
+eq(bidCcSetChanged({ costCenters: [{ sectionId: 14131, id: 17218 }, { sectionId: 14131, id: 17219 }] }, live), true, "cost-center copy missing the new section");
+eq(bidCcSetChanged({ costCenters: [{ sectionId: 14131, ccId: 17218 }, { sectionId: 14131, ccId: 17219 }, { sectionId: 29081, ccId: 19287 }, { sectionId: 29081, ccId: 19288 }, { sectionId: 29081, ccId: 19289 }] }, live), false, "stock copy that has them all");
+eq(bidCcSetChanged({ costCenters: [{ sectionId: 14131, id: 17218 }, { sectionId: 14131, id: 17219 }, { sectionId: 1, id: 2 }, { sectionId: 29081, id: 19287 }, { sectionId: 29081, id: 19288 }] }, live), true, "a moved cost center counts");
+eq(bidCcSetChanged(null, live), false, "no copy: the loader reads it anyway");
+eq(bidCcSetChanged({ costCenters: [] }, null), false, "no live ids: no change");
 // wire detection (real Miller names)
 eq(["NM-B-12/2-CU-WG-250CL","NM-B-14/2-WG-CU-500CL","UF-B-12/2-CU-WG-250CL","*THERMOSTAT WIRE 500' 47104807","12/2 MC Lighting Whip"].map(n => bidWireLike(n, "")), [true,true,true,true,true], "wire names");
 eq(["ROMEX STAPLE 12/2 AND 14/2 (5000)","1G ANGLED FLEX BOX","WHT DRI-BOX VERT","JOBSITE MARKER SHARP BLACK","WIRE NUT RED"].map(n => bidWireLike(n, "")), [false,false,false,false,false], "not wire: staples, boxes, markers, wire nuts");

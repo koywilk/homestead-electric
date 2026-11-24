@@ -128,6 +128,8 @@ async function liveCheck() {
   const itemCalls = () => calls.filter(c => /costCenters\/\d+\//.test(c)).length;
   const cold = await X.pullJob({ no: "9" }, null, req);
   assert.strictEqual(cold.itemReads, 2, "first read opens both cost centers' items");
+  assert.deepStrictEqual(cold.ids, ["1-11", "1-12"], "v683: the job's section-costCenter ids, for the app's Bid Items check");
+  assert.ok(!/\d\.\d|sell|mat|lab/.test(JSON.stringify(cold.ids)), "ids carry no figures");
   near(X.hoursDoc([cold.row])["9"].r[1], 100, "rough estimate 80 + 20", 0.1);
   near(X.hoursDoc([cold.row])["9"].f[1], 20, "finish estimate", 0.1);
   calls.length = 0; job.base.act = 50;

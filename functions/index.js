@@ -8288,7 +8288,28 @@ exports.getPhaseHours = functions
     const r = await pcJob({ ...((prev && prev.meta) || {}), no }, prev);
     // Item reads mean an estimate changed: keep the new split so the next open and tonight's pull skip them.
     if (r.itemReads) await ref.set({ at: new Date().toISOString(), meta: (prev && prev.meta) || { no }, row: r.row, ccs: r.ccs, cache: r.cache });
-    return { ok: true, at: new Date().toISOString(), itemReads: r.itemReads, ...(_pc.hoursDoc([r.row])[no] || {}) };
+    // v683: ccIds = the job's cost centers as Simpro has them now ("section-costCenter" ids, no figures), so the
+    // app can tell when its saved Bid Items copy is missing a new or moved section and re-read it.
+    return { ok: true, at: new Date().toISOString(), itemReads: r.itemReads, ccIds: r.ids || [], ...(_pc.hoursDoc([r.row])[no] || {}) };
+  });
+// v683 (Koy, 1224 Jimenez: "Why is the Dimmers cost center not showing up … It got moved into it in Simpro but it's
+// still not showing"): Job Costs showed last night's pull, so a section added in Simpro today stayed hidden until 2:15 AM.
+// Opening a job on the tab now reads that one job live (same reads as getPhaseHours: sections + one list per section,
+// items only for a cost center that is new or whose estimate changed) and saves the split back, so tonight's pull
+// reuses it. Admins / managers only (live PIN): it returns the tab's dollar figures. Read-only against Simpro.
+exports.getJobCostsLive = functions
+  .runWith({ timeoutSeconds: 120 })
+  .https.onCall(async (data) => {
+    await requireAdmin(data);
+    const no = String((data && data.simproJobNo) || "").trim();
+    if (!/^\d+$/.test(no)) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+    const ref = db.collection(PC_STATE).doc(no);
+    const snap = await ref.get(); const prev = snap.exists ? snap.data() : null;
+    const meta = (prev && prev.meta) || { no };
+    const r = await pcJob({ ...meta, no }, prev);
+    const at = new Date().toISOString();
+    await ref.set({ at, meta, row: r.row, ccs: r.ccs, cache: r.cache });
+    return { ok: true, at, row: r.row, ccs: r.ccs, itemReads: r.itemReads };
   });
 // "Pull from Simpro now" on the Job Costs tab (admins; same app-key guard as every other callable).
 exports.sendTestPhaseCosts = functions

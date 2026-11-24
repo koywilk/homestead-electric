@@ -163,11 +163,12 @@ async function pullJob(meta, prevState, req) {
   const secs = await req("GET", `/jobs/${no}/sections/?pageSize=100`);
   if (!(secs.ok && Array.isArray(secs.data))) throw new Error(`sections ${secs.status}`);
   const prev = (prevState && prevState.cache) || {};
-  const cache = {}, ccs = []; let itemReads = 0;
+  const cache = {}, ccs = [], ids = []; let itemReads = 0;
   for (const s of secs.data.slice().sort((a, b) => (a.DisplayOrder || 0) - (b.DisplayOrder || 0))) {
     const l = await req("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250&columns=ID,Name,CostCenter,Totals`);
     if (!(l.ok && Array.isArray(l.data))) throw new Error(`cost centers ${l.status} (section ${s.ID})`);
     for (const cc of l.data) {
+      ids.push(`${s.ID}-${cc.ID}`);   // v683: which cost centers the job has now (section-costCenter), no figures
       const t = ccTotals(cc), sig = ccSig(t), key = String(cc.ID);
       let c = prev[key] && prev[key].sig === sig ? prev[key] : null;
       if (!c) {
@@ -183,7 +184,7 @@ async function pullJob(meta, prevState, req) {
       ccs.push(ccRow(s.Name, t, c.w, c.items, c.tagged));
     }
   }
-  return { row: jobRow(meta, ccs), ccs, cache, itemReads };
+  return { row: jobRow(meta, ccs), ccs, cache, itemReads, ids };
 }
 
 module.exports = { pullItems, pullJob, P, phaseOfType, phaseOfItem, ITEM_KINDS, ITEM_COLUMNS, itemOf, weightsOf, split, spentSplit, ccTotals, ccSig, needsItems, ccRow, jobRow, hasEstimate, hoursDoc, shardCcs };

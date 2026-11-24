@@ -1,5 +1,14 @@
 [
  {
+  "v": 683,
+  "heads": [
+   {
+    "h": "FIXED",
+    "first": "**New cost centers show up right away.** When the office moves a change order into a job in Simpro (a new section like \"Change Order - 11/19/26\"), Bid Items used to keep showing the old bid for up to "
+   }
+  ]
+ },
+ {
   "v": 682,
   "heads": [
    {
@@ -210,19 +219,6 @@
    {
     "h": "FIXED on the crew calendar (office)",
     "first": "The box that opens when you tap a job now always fits on the screen. Before, on a job low on the page, the Time buttons, Move, Book and Remove were cut off at the bottom. If the box is taller than the"
-   }
-  ]
- },
- {
-  "v": 663,
-  "heads": [
-   {
-    "h": "NEW on the crew calendar (office)",
-    "first": "Untick everybody on a job and it stays on its day in red, \"Nobody on it\". Tap it to add people."
-   },
-   {
-    "h": "FIXED",
-    "first": "Two half days on two jobs no longer show as double-booked."
    }
   ]
  }

@@ -2872,8 +2872,9 @@ const _phaseHoursLive = new Map();
 function loadPhaseHoursLive(sjn) {
   const hit = _phaseHoursLive.get(sjn);
   if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.p;
+  // v683: also the job's live cost-center ids (no figures), for the Bid Items freshness check (bidCcSetChanged).
   const p = httpsCallable(functions, "getPhaseHours")({ simproJobNo: sjn })
-    .then(res => (res.data && res.data.ok) ? { ...(res.data.r ? { r: res.data.r } : {}), ...(res.data.f ? { f: res.data.f } : {}) } : null)
+    .then(res => (res.data && res.data.ok) ? { hrs: { ...(res.data.r ? { r: res.data.r } : {}), ...(res.data.f ? { f: res.data.f } : {}) }, ccIds: Array.isArray(res.data.ccIds) ? res.data.ccIds : null } : null)
     .catch(e => { console.warn("[phaseHours live]", e); _phaseHoursLive.delete(sjn); return null; });
   _phaseHoursLive.set(sjn, { at: Date.now(), p });
   return p;
@@ -17226,6 +17227,19 @@ function bidWireRollup(costCenters) {
   }
   return [...agg.values()].sort((x, y) => (y.required - x.required) || String(x.name).localeCompare(String(y.name)));
 }
+// v683 (Koy, 1224 Jimenez: "It got moved into it in Simpro but it's still not showing"): the Bid Items copy saved
+// on the job is kept 12 h, so a section added or moved in Simpro stayed hidden. getPhaseHours (read live on every
+// job open anyway) now also sends the job's cost centers as "section-costCenter" ids; this says whether a saved copy
+// (simproCostCentersCache: {sectionId, id} · simproStockCache: {sectionId, ccId}) is missing one or still has an old one.
+function bidCcSetChanged(cache, liveIds) {
+  if (!Array.isArray(liveIds) || !cache || !Array.isArray(cache.costCenters)) return false;
+  const saved = new Set(cache.costCenters.filter(c => c && c.sectionId != null && (c.id != null || c.ccId != null))
+    .map(c => `${c.sectionId}-${c.id != null ? c.id : c.ccId}`));
+  const live = new Set(liveIds.map(String));
+  if (saved.size !== live.size) return true;
+  for (const k of live) if (!saved.has(k)) return true;
+  return false;
+}
 // ── end Bid stock derivations ────────────────────────────────────────────────
 
 // ── Orders (v523) ─────────────────────────────────────────────
@@ -31430,6 +31444,25 @@ function useQuickJobBid(job, u, wanted) {
     }
   }, [simproNo, stockTick, wanted]);
 
+  // v683: same freshness check as JobDetail's — the live cost-center ids (getPhaseHours, cached 5 min) against the
+  // saved copies; a new or moved section re-reads them once instead of waiting out the 12 h cache.
+  const rechecked = useRef(false);
+  useEffect(() => {
+    if (!wanted || !simproNo || rechecked.current) return;
+    let live = true;
+    loadPhaseHoursLive(simproNo).then(h => {
+      if (!live || !h || !h.ccIds || rechecked.current) return;
+      // A missing or stale copy is being re-read already by the effects above.
+      const fresh = (c) => !!(c && c.fetchedAt && Date.now() - Date.parse(c.fetchedAt) <= TTL);
+      const ccOld = fresh(job.simproCostCentersCache) && bidCcSetChanged(job.simproCostCentersCache, h.ccIds);
+      const stOld = fresh(job.simproStockCache) && bidCcSetChanged(job.simproStockCache, h.ccIds);
+      rechecked.current = true;
+      if (ccOld) setCcTick(n => n + 1);
+      if (stOld) setStockTick(n => n + 1);
+    });
+    return () => { live = false; };
+  }, [simproNo, wanted]);
+
   return {
     costCenters, costCentersErr, costCentersRefreshing, refetchCostCenters: () => setCcTick(n => n + 1),
     stock, stockErr, stockRefreshing, refetchStock: () => setStockTick(n => n + 1),
@@ -32933,13 +32966,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
   // v577: this job's rough / finish hours ({ r: [used, est], f: [used, est] }) for the phase tabs' badges.
   const [phaseHrs, setPhaseHrs] = useState(null);
+  const [liveCcIds, setLiveCcIds] = useState(null);   // v683: the job's cost centers as Simpro has them now (ids only)
   useEffect(() => {
     const sjn = simproJobNoOf(job); let live = true;
     if (!sjn) { setPhaseHrs(null); return; }
     // Last night's numbers show at once; the live read replaces them a second or two later.
     let gotLive = false;
     loadPhaseHours().then(all => { if (live && !gotLive) setPhaseHrs(all[sjn] || null); });
-    loadPhaseHoursLive(sjn).then(h => { if (live && h) { gotLive = true; setPhaseHrs(h); } });
+    loadPhaseHoursLive(sjn).then(h => { if (live && h) { gotLive = true; setPhaseHrs(h.hrs); setLiveCcIds(h.ccIds); } });
     return () => { live = false; };
   }, [job.simproNo]);
 
@@ -33041,6 +33075,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         .catch(e => { console.error("[simproStock error]", e); setSimproStockRefreshing(false); setSimproStockErr(e.message || "Failed to load required vs assigned"); if (!cached) setSimproStock(null); });
     }
   }, [job.simproNo, simproStockTick]);
+  // v683: the live cost-center ids from that same read. If the saved Bid Items copies (cost centers, Required vs
+  // Assigned) are missing a section or cost center Simpro has now, re-read both at once instead of waiting out the
+  // 12 h cache. At most once per job open, so a section Simpro won't send can't loop it.
+  const ccRecheckedRef = useRef(false);
+  useEffect(() => {
+    if (!liveCcIds || ccRecheckedRef.current) return;
+    if (simproCostCentersRefreshing || simproStockRefreshing) return;
+    const ccOld = bidCcSetChanged(job.simproCostCentersCache, liveCcIds), stOld = bidCcSetChanged(job.simproStockCache, liveCcIds);
+    if (!ccOld && !stOld) return;
+    ccRecheckedRef.current = true;
+    if (ccOld) refetchSimproCostCenters();
+    if (stOld) refetchSimproStock();
+  }, [liveCcIds, simproCostCentersRefreshing, simproStockRefreshing]);
 
   useEffect(() => {
     if (!simproJobNoOf(job)) {                        // quotes have no bid on /jobs
@@ -53577,6 +53624,20 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
     getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setCostsGoals(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
   }, [costsTick]);
+  // v683 (Koy, 1224 Jimenez: "It got moved into it in Simpro but it's still not showing"): the tab is last night's pull,
+  // so a section added in Simpro today was missing. Opening a job now reads that one job live (getJobCostsLive, admins /
+  // managers: it returns the tab's figures) and its row and cost centers swap in; on any failure the nightly numbers stay.
+  const [costsLive, setCostsLive] = useState({});          // simproNo → { at, row, ccs } | "busy" | "err"
+  const canLive = ["admin", "manager"].includes(getAccess(identity));
+  useEffect(() => {
+    if (!cSel || !canLive || costsLive[cSel]) return undefined;
+    let dead = false;
+    setCostsLive(m => ({ ...m, [cSel]: "busy" }));
+    memberCallable("getJobCostsLive", identity, { timeout: 120000 })({ simproJobNo: cSel })
+      .then(r => { const d = r && r.data; if (!dead) setCostsLive(m => ({ ...m, [cSel]: d && d.ok && d.row && Array.isArray(d.ccs) ? { at: d.at, row: d.row, ccs: d.ccs } : "err" })); })
+      .catch(e => { console.warn("[jobCosts live]", e); if (!dead) setCostsLive(m => ({ ...m, [cSel]: "err" })); });
+    return () => { dead = true; setCostsLive(m => (m[cSel] === "busy" ? (({ [cSel]: _x, ...rest }) => rest)(m) : m)); };
+  }, [cSel, canLive]);
   const costShard = cSel && costsDoc && costsDoc.ccShard ? costsDoc.ccShard[cSel] : undefined;
   useEffect(() => {
     if (costShard == null || costsCc[costShard]) return undefined;
@@ -53586,7 +53647,9 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
     return () => { dead = true; };
   }, [costShard]); // eslint-disable-line
   const costsView = useMemo(() => {
-    const rows = costsDoc && Array.isArray(costsDoc.rows) ? odCostsJoin(costsDoc.rows, jobs, costsGoals && costsGoals.jobs) : [];
+    // v683: a job read live just now shows its live numbers; today's Simpro name / stage stay from the nightly row.
+    const liveRow = (r) => { const L = costsLive[r.no]; return L && L.row ? { ...r, ...L.row, no: r.no, name: r.name, site: r.site, stage: r.stage, status: r.status, tech: r.tech, pulledAt: L.at } : r; };
+    const rows = costsDoc && Array.isArray(costsDoc.rows) ? odCostsJoin(costsDoc.rows.map(liveRow), jobs, costsGoals && costsGoals.jobs) : [];
     const joshJob = (j) => !!(j.josh && j.josh.counts);
     const inStage = (j) => cStage === "all" || (cStage === "josh" ? joshJob(j) : !joshJob(j) && j.status !== "Invoiced");
     const ownerOf = (j, role) => j[role] || (role === "foreman" ? "No technician" : "No lead");
@@ -53599,7 +53662,7 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
       boxes: odCostsSummary(counted.filter(mine)),           // the picked person's, less switched-off jobs
       crew: cRole === "crew" ? odCostsByCrew(staged, crewsInfo) : odCostsPeople(staged, users), crewWi: cOff.size ? (cRole === "crew" ? odCostsByCrew(counted, crewsInfo) : odCostsPeople(counted, users)) : null,
       pct: new Map(rows.map(j => [j.no, odCostsJobPct(j)])) };
-  }, [costsDoc, costsGoals, jobs, users, cStage, cWho, cOff, cRole]);
+  }, [costsDoc, costsGoals, jobs, users, cStage, cWho, cOff, cRole, costsLive]);
   // v564: every cost center (base bid and change orders) split item by item into rough / finish;
   // credit and finished-job margins by Josh's rule (v566); margins weighted, plain average beside.
   const v = costsView, s = v.boxes, co = v.company, isM = cm === "margin";
@@ -53699,7 +53762,8 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
   const bar = (x) => x == null ? <span className="jc-dim">–</span> : <span className={`jc-pct${x > 1 ? " over" : ""}`}>{fp(x)}</span>;
   const margin = (x) => x == null ? <span className="jc-dim">not started</span> : <span className={`jc-pct${x < OD_COST_GOAL ? " over" : " good"}`}>{fp(x)}</span>;
   const toggle = (no) => setCOff(prev => { const n = new Set(prev); if (n.has(no)) n.delete(no); else n.add(no); return n; });
-  const ccs = cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
+  const ccLive = cSel && costsLive[cSel] && costsLive[cSel].ccs ? costsLive[cSel] : null;
+  const ccs = ccLive ? ccLive.ccs : cSel && costShard != null && costsCc[costShard] && costsCc[costShard] !== "err" ? (costsCc[costShard][cSel] || []) : null;
   // Foreman view: a cost center's share of the sell going to each phase (Margin), or what's used as a share of its estimate.
   const ccPct = (a, b) => b > 0 ? fp((a || 0) / b) : "–";
   const ccCols = noM && isM ? [["rough_sh", "To rough", "r", (c) => ccPct(c.rough_sell, c.sell)], ["finish_sh", "To finish", "f", (c) => ccPct(c.finish_sell, c.sell)], ["other_sh", "Untagged", "n", (c) => ccPct(c.other_sell, c.sell)]]
@@ -53710,8 +53774,10 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
     <tr className="jc-det"><td colSpan={4 + cols.length}>
       <div className="jc-det-h"><b>{j.name}</b><span>Each cost center's estimate split item by item; what was {isM ? "sold" : USED[cm]} on a cost center splits the same way as its estimate.</span>
         {j.jobId ? <button type="button" className="jc-btn" onClick={() => onOpenJob && onOpenJob((jobs || []).find(x => x.id === j.jobId))}>Open job</button> : null}</div>
-      {costShard == null ? <div className="jc-empty">No cost centers saved for this job yet.</div>
-        : costsCc[costShard] === "err" ? <div className="jc-empty">The cost centers could not be read. Press Refresh.</div>
+      {costsLive[j.no] === "busy" ? <div className="jc-dim" style={{fontSize:13,margin:"0 0 6px"}}>Checking Simpro for new cost centers…</div>
+        : ccLive ? <div className="jc-dim" style={{fontSize:13,margin:"0 0 6px"}}>Read from Simpro {fmtAt(ccLive.at)}.</div> : null}
+      {!ccLive && costShard == null ? <div className="jc-empty">{costsLive[j.no] === "busy" ? "Reading cost centers…" : "No cost centers saved for this job yet."}</div>
+        : !ccLive && costsCc[costShard] === "err" ? <div className="jc-empty">The cost centers could not be read. Press Refresh.</div>
         : !ccs ? <div className="jc-empty">Reading cost centers…</div>
         : <div className="jc-scroll"><table className="jc-cct">
             <thead><tr><th className="l">Section</th><th className="l">Cost center</th><th className="l n">Type</th>{ccCols.map(([k, l, c]) => <th key={k} className={c}>{l}</th>)}</tr></thead>
@@ -65804,10 +65870,13 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-22 · App SW version: v681
+**Last manifest update:** 2026-11-24 · App SW version: v683
 ---
 
-- **Crew calendar: answer job flags right in the job box** · 'in-flight 2026-11-22' · 'SW v681' · 'answerFl' · 'OdFlag' · 'claudeFlagAnswer' · Koy, on v679: *"Yeah there's not really a point in being able to see all these here and not do any of that and have to go to the \"Need You\" tab"*. Each open flag in the calendar's job box, and under **Job flags, not on the calendar** in Needs you, is now the same card as Needs you on the Claude tab: what it is, which watch raised it, the change it would make, and the same buttons (Yes / No on a card with a change, Schedule it, Add to my tasks, Done, Dismiss, and a typed answer when the watch asked for one). Same 'claudeFlagAnswer' call, same confirm before a change or a My Day task, Koy's own record only (other admins see the cards with *Koy answers these*). A flag that closes drops off at once, the count on its mark goes down, and a line at the top of the calendar says what happened. The Yes button is the calendar blue, not green. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** the existing answer path, unchanged; the calendar only calls it.
+- **New or moved Simpro cost centers show up right away: Bid Items checks on open, Job Costs reads an opened job live** · 'in-flight 2026-11-24' · 'SW v683' · 'bidCcSetChanged' · 'getPhaseHours ccIds' · 'getJobCostsLive' · 'pullJob ids' · Koy, 1224 Jimenez Residence: *"Why is the Dimmers cost center not showing up in Jimenez on the app? It got moved into it in Simpro but it's still not showing"*. Every reader already reads all of a job's sections; the misses were saved copies: Bid Items keeps its copy 12 h on the job ('simproCostCentersCache' / 'simproStockCache') and Job Costs is the 2:15 AM pull, so quote 3453 moved in as section "Change Order - 11/19/26" at 1:42 PM stayed hidden. **Bid Items:** 'getPhaseHours' (already read live on every job open for the Rough / Finish badges, cached 5 min) now also returns the job's cost centers as "section-costCenter" ids, no figures; 'bidCcSetChanged' compares them with both saved copies and re-reads them at once when one is missing or gone, once per job open (full jobs and quick jobs). No extra Simpro calls on an unchanged job. **Job Costs:** opening a job on the tab calls new 'getJobCostsLive' (admins / managers, live PIN: it returns the tab's figures), the same one-job read; its row and cost centers swap in with "Read from Simpro <time>", and the split is saved back to 'phaseCostsState' so tonight reuses it; on failure the nightly numbers stay. Booking was already live (Book in Simpro reads the job's sections on every preview). Guides 'biditems.html' step 4, 'dashboard.html' Job Costs. Test 'phasecosts-test' checks the ids. **Needs functions getPhaseHours, getJobCostsLive.** **Why it won't lose data:** read-only against Simpro; the only writes are the existing cache fields and the server-only 'phaseCostsState' doc in the shape the nightly writes; no rules, loader or job field change.
+
+- **Crew calendar: small fixes, explain-itself changes and a what-if view from the scheduler review** · 'in-flight 2026-11-24' · 'SW v682' · 'tripHours' · 'setDupFirsts' · 'firstOf' · 'scrambleLock' · 'SL.take' · 'scrambleBookLocks' · Koy: *"Do small fixes"* after Grok's review of the scheduler. (1) A return trip's time written as "1 hr 30 min" or "1h30m" now reads as an hour and a half (it read 1 hour). (2) When two active crew people share a first name, every place the calendar prints a first name adds a last initial ("James C.", "James L."); a bare "James" still refuses to guess who. (3) Book in Simpro takes a short lock on each person-day it is about to write, before it reads Simpro; a second booking for the same person and day in the same moment is refused with a plain message and writes nothing, and the lock is released when the booking ends or expires in 3 minutes. Covers the Book button and Duet's booking. New server-only collection scrambleBookLocks. Nothing else about booking changes. (4) 'leftSrc' · 'whyOf' · 'hoursFrom': the Why it's here line says where a job's hours left came from (the bid, the stage percent once the hours used have run out, a week as a guess, or for a trip the time set on it versus the 4-hour default), and Duet's calendar read gains hoursFrom. (5) 'explainItem' · 'explainJob' · 'explainOf' · 'calendar.explain' · 'cc_explain_placement': Duet can ask why one job is or isn't placed and gets the state, the reasons, what a person could change and where it sits; read-only, same calendar as the screen. duetRead gains the calendar.explain action; the connector tool ships as cc_explain_placement (connector branch why-not-placed). (6) 'companyHoliday': Duet's calendar read marks a company holiday and lists nobody as open or under 10 hours that day (it listed the whole crew as open on Thanksgiving, which read as 160 idle hours); the screen already hid those counts. (7) 'whatIf' · 'provisionalCrew' · 'idleHours' · 'sc-whatif': a switch on the crew calendar, **If all start on estimate**, lays every Upcoming job with an estimated start out on it (the normal calendar only places an Upcoming job once its start is confirmed). A job with no foreman gets the least-booked crew that does residential work, marked as a guess. A banner says what it is, compares idle crew hours for the next 4 weeks (real calendar versus this), and a collapsed list shows what was added and what couldn't be placed. A look only: while it is on, nothing saves (savePrefs and commit stop with a note) and Book is hidden. Koy: *"If all these jobs started on their estimated start date, this is what it would look like."*
+- **Crew calendar: answer job flags right in the job box** · 'in-flight 2026-11-22' · 'SW v681' · 'answerFl' · 'OdFlag' · 'claudeFlagAnswer' · Koy, on v679: *"Yeah there's not really a point in being able to see all these here and not do any of that and have to go to the 'Need You' tab"*. Each open flag in the calendar's job box, and under **Job flags, not on the calendar** in Needs you, is now the same card as Needs you on the Claude tab: what it is, which watch raised it, the change it would make, and the same buttons (Yes / No on a card with a change, Schedule it, Add to my tasks, Done, Dismiss, and a typed answer when the watch asked for one). Same 'claudeFlagAnswer' call, same confirm before a change or a My Day task, Koy's own record only (other admins see the cards with *Koy answers these*). A flag that closes drops off at once, the count on its mark goes down, and a line at the top of the calendar says what happened. The Yes button is the calendar blue, not green. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** the existing answer path, unchanged; the calendar only calls it.
 
 - **Crew calendar: take one day off a job, the rest stays** · 'in-flight 2026-11-22' · 'SW v680' · 'dayOff' · 'dayBack' · 'skippedOf' · 'pd skip (pdl x)' · Koy: *"why can i not remove a job from a day only, right now, if I remove a job, it removes it completely from the calendar."* Remove… on a job of two or more days now opens with **Just <day>?** and two buttons: **Off this day, hours move later** (the job ends a day later) and **Off this day, drop its hours** (the job gets a day shorter). The other days, their people and their times stay put. The job box lists **Days taken off** with **Put back**, and the change has an Undo. Whole-job Remove is the same two taps as before. Screen only: it writes the skip-a-day mark the auto-schedule and Duet's suggestions already use, so no scheduler or function change. A later day that would double-book someone is refused. Simpro-booked days still change in Simpro. Also ('showBox'): **Book in Simpro…** and **Remove…** open their box at the bottom of the job box, which scrolls, so on a tall box the tap looked dead (Koy: *"when i click book to simpro when i click on one it doesnt do anything"*); opening one now scrolls it into view. **Booking, fewer taps and one day** ('openBook day' · 'openWeekBook day' · 'bookArgs only' · 'afterBook' · 'planLess' · 'wbRun'; Koy: *"That's way too many clicks to book shit in Simpro. Also, can I have the option to book just Monday instead of everything on the screen?"*): Book in Simpro… and Book this week… open with the preview already built (tap, read, tap; unticking a block or changing the days rebuilds it; changing who shows the Show button again). **Just Mon … Just Fri** beside Book this week books every block on that day, that day only; the job box's Book has **All its days / Just <day>**. After a one-day book only that day comes off a saved plan (skip + its hours), so the rest stays planned and is never sent twice. Screen only: scrambleBook already books exactly the days it is sent. Preview-then-confirm is unchanged.
 
