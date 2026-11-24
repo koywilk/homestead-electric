@@ -38,13 +38,14 @@ function blocksFor(hours, weekBefore, start) {
 // v661 (Koy 2026-11-20: "That needs to not be able to even happen at all. If they're scheduled somewhere else, that time
 // is blocked off."): every entry checked against what Simpro already has for that person that day (any job, activity or
 // time off). Returns [{ date, name, staffId, at: "07:00–17:00", type }] for each overlap; empty when clear.
-function overlaps(schedules, entries) {
+function overlaps(schedules, entries, jobNo) {
   const toMin = (v) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(v || "")); return m ? +m[1] * 60 + +m[2] : null; };
   const out = [];
   (entries || []).forEach(e => {
     const mine = (e.blocks || []).map(b => [toMin(b.StartTime), toMin(b.EndTime)]).filter(x => x[0] != null && x[1] != null);
     (schedules || []).forEach(s => {
       if (Number(s && s.Staff && s.Staff.ID) !== Number(e.staffId) || String(s.Date || "").slice(0, 10) !== e.date) return;
+      if (jobNo != null && String(s.Type || "job") === "job" && jobOfRef(s.Reference) === String(jobNo)) return;   // v684: the same job's own schedule is changed, not doubled
       (s.Blocks || []).forEach(b => { const a0 = toMin(b.StartTime), a1 = toMin(b.EndTime); if (a0 == null || a1 == null) return;
         if (mine.some(([m0, m1]) => m0 < a1 && a0 < m1)) out.push({ date: e.date, name: e.name, staffId: e.staffId, at: `${b.StartTime}–${b.EndTime}`, type: String(s.Type || ""), ref: String(s.Reference || "") }); });
     });
@@ -149,6 +150,117 @@ function pickCostCenter(sections, phase, cc) {
   return null;
 }
 
+// v684 (Koy 2026-11-23: "it needs to book to the correct cost center as well" and "even if the job has a finish in a
+// rough cost center, I still want it booked accurately to the cost center"). Where the work goes, in this order:
+//   a person's pick (from the job box) > the pick saved for this job and phase > warranty work on an open Warranty cost
+//   center > a change order trip on its own change order cost center (by the CO's date or words) > the one open cost
+//   center that fits the work (Rough In / Finish by Simpro's own cost center type or the cost center's name, change
+//   order sections left out) > the one open work cost center on the job. When it still can't tell, it asks: { ask:
+//   [options] } lists every open work cost center, best fits first. A fully invoiced cost center goes to an open Warranty
+//   one, as before. Permit and Service cost centers are never picked or offered.
+const typeOf = (c) => String((c && c.CostCenter && c.CostCenter.Name) || "");
+const isCoSec = (s, c) => /change\s*order/i.test(String((s && s.Name) || "")) || /change\s*order/i.test(typeOf(c));
+const isSide = (s, c) => /service|permit/i.test(typeOf(c)) || /permit/i.test(String((c && c.Name) || "")) || /permit/i.test(String((s && s.Name) || ""));
+const fitsPhase = (c, want) => (want === "rough" ? /rough/i : /finish/i).test(typeOf(c) + " " + String((c && c.Name) || ""));
+function allCcs(sections) {
+  const out = [];
+  (sections || []).forEach(s => (Array.isArray(s && s.ccs) ? s.ccs : []).forEach(c => { if (c && c.ID) out.push([s, c]); }));
+  return out;
+}
+const optOf = (s, c, why) => ({ sectionId: Number(s.ID), sectionName: String(s.Name || ""), id: Number(c.ID), name: String(c.Name || ""), type: typeOf(c), ...(why ? { why } : {}) });
+// "Change Order - 11/2/26" style dates a CO made on iso day would carry.
+function coDateTags(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); if (!m) return [];
+  const y = m[1], mo = String(+m[2]), d = String(+m[3]);
+  return [`${mo}/${d}/${y.slice(2)}`, `${mo}/${d}/${y}`, `${m[2]}/${m[3]}/${y.slice(2)}`, `${m[2]}/${m[3]}/${y}`];
+}
+const words = (t) => new Set(String(t || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length > 2 && !/^(and|the|for|with|install|provide|add|new)$/.test(w)));
+// sections: [{ ID, Name, DisplayOrder, ccs: [Simpro cost centers] }]; phase rough|finish|trip; cc rough|finish|warranty|null;
+// o: { pick: { sectionId, id }, saved: { sectionId, id }, co: { date: "YYYY-MM-DD", desc } }.
+// Returns a cost center ({ sectionId, sectionName, id, name, ... }), { refused }, or { ask: [options] }.
+function chooseCostCenter(sections, phase, cc, o) {
+  const opt = o || {}, all = allCcs(sections);
+  const NO_WARRANTY = "This is warranty work, and the job has no open Warranty cost center in Simpro (none, or they are all invoiced). Add a Warranty cost center on the job in Simpro, then book.";
+  const viaWarranty = (c) => { const w = pickWarranty(sections); return w ? { ...w, because: `${c.Name} is fully invoiced` } : { refused: `${c.Name} on this job is fully invoiced, so a booking can't go there. ${NO_WARRANTY.replace("This is warranty work, and the", "The")}` }; };
+  const find = (p) => p && all.find(([s, c]) => Number(s.ID) === Number(p.sectionId) && Number(c.ID) === Number(p.id));
+  if (opt.pick) {
+    const hit = find(opt.pick);
+    if (!hit) return { refused: "That cost center isn't on the job in Simpro anymore. Pick again." };
+    if (invoiced(hit[1])) return isWarranty(hit[1], hit[0]) ? { refused: `${hit[1].Name} is fully invoiced. ${NO_WARRANTY.replace("This is warranty work, and the", "The")}` } : viaWarranty(hit[1]);
+    return ccOut(hit[0], hit[1], { picked: true });
+  }
+  if (cc === "warranty") return pickWarranty(sections) || { refused: NO_WARRANTY };
+  const want = phase === "trip" ? (cc === "rough" ? "rough" : "finish") : phase;
+  const work = all.filter(([s, c]) => !isWarranty(c, s) && !isSide(s, c)), open = work.filter(([, c]) => !invoiced(c));
+  const saved = find(opt.saved);
+  if (saved && !invoiced(saved[1]) && !isSide(saved[0], saved[1])) return ccOut(saved[0], saved[1], { saved: true });
+  const asks = (first) => { const seen = new Set(), list = [];
+    [...first, ...open.filter(([s, c]) => !isCoSec(s, c) && fitsPhase(c, want)), ...open].forEach(([s, c, why]) => { const k = s.ID + "-" + c.ID; if (seen.has(k)) return; seen.add(k); list.push(optOf(s, c, why || (isCoSec(s, c) ? "change order" : fitsPhase(c, want) ? (want === "rough" ? "rough in" : "finish") : ""))); });
+    return list.length ? { ask: list.slice(0, 40) } : null; };
+  // a change order trip: its own change order cost center
+  if (opt.co) {
+    const tags = coDateTags(opt.co.date), coOpen = open.filter(([s, c]) => isCoSec(s, c));
+    const byDate = coOpen.filter(([s]) => tags.some(t => String(s.Name || "").includes(t)));
+    if (byDate.length === 1) return ccOut(byDate[0][0], byDate[0][1], { because: "the change order's own cost center" });
+    const w = words(opt.co.desc), pool = byDate.length ? byDate : coOpen;
+    const scored = pool.map(x => [x, [...words(x[1].Name)].filter(t => w.has(t)).length]).sort((a, b) => b[1] - a[1]);
+    if (scored.length && scored[0][1] >= 2 && (scored.length === 1 || scored[1][1] < scored[0][1])) return ccOut(scored[0][0][0], scored[0][0][1], { because: "the change order's own cost center" });
+    const coInv = work.filter(([s, c]) => isCoSec(s, c) && invoiced(c) && tags.some(t => String(s.Name || "").includes(t)));
+    if (!byDate.length && coInv.length === 1) return viaWarranty(coInv[0][1]);
+    return asks(pool.map(x => [x[0], x[1], "change order"])) || { refused: "The job has no open cost center in Simpro to book on." };
+  }
+  // the Base section's own Rough In / Finish when it is the only fit (as before v684), else the one fit anywhere
+  const fit = work.filter(([s, c]) => !isCoSec(s, c) && fitsPhase(c, want)), fitOpen = fit.filter(([, c]) => !invoiced(c));
+  if (fitOpen.length === 1) return ccOut(fitOpen[0][0], fitOpen[0][1]);
+  if (!fitOpen.length && fit.length) {
+    if (open.filter(([s, c]) => !isCoSec(s, c)).length === 0) return viaWarranty(fit[0][1]);
+  }
+  if (!fitOpen.length) { const nonCo = open.filter(([s, c]) => !isCoSec(s, c)); if (nonCo.length === 1) return ccOut(nonCo[0][0], nonCo[0][1]); }
+  return asks([]) || (fit.length ? viaWarranty(fit[0][1]) : { refused: "The job has no open cost center in Simpro to book on." });
+}
+
+// v684 (Koy: "the time cards exactly how they are"): Simpro keeps one schedule per person, per job, per day, with any
+// number of blocks on it ("a schedule for this job on this date already exists"). A person who already has this job that
+// day gets that schedule changed instead of a second one: its blocks that overlap the new times are replaced, the rest
+// stay, and the new blocks go on. sameJob: the person's schedules on this job that day.
+const toMinB = (v) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(v || "")); return m ? +m[1] * 60 + +m[2] : null; };
+const jobOfRef = (r) => String(r || "").split("-")[0];
+function sameJobRows(schedules, no, staffId, date) {
+  return (schedules || []).filter(s => s && String(s.Type || "job") === "job" && jobOfRef(s.Reference) === String(no) && Number(s.Staff && s.Staff.ID) === Number(staffId) && String(s.Date || "").slice(0, 10) === date);
+}
+function splitBlocks(existing, fresh) {
+  const mine = (fresh || []).map(b => [toMinB(b.StartTime), toMinB(b.EndTime)]);
+  const keep = [], drop = [];
+  (existing || []).forEach(b => { const a0 = toMinB(b.StartTime), a1 = toMinB(b.EndTime); (a0 != null && a1 != null && mine.some(([m0, m1]) => m0 < a1 && a0 < m1) ? drop : keep).push(b); });
+  return { keep, drop };
+}
+// Simpro's rows with this job's blocks that the new entries replace taken out (so the 40-hour line doesn't count them
+// twice, and the overlap check doesn't refuse booking the same job over itself).
+function withoutReplaced(schedules, no, entries) {
+  const byKey = {}; (entries || []).forEach(e => { (byKey[e.staffId + "|" + e.date] = byKey[e.staffId + "|" + e.date] || []).push(...(e.blocks || [])); });
+  return (schedules || []).map(s => {
+    if (!s || String(s.Type || "job") !== "job" || jobOfRef(s.Reference) !== String(no)) return s;
+    const fresh = byKey[Number(s.Staff && s.Staff.ID) + "|" + String(s.Date || "").slice(0, 10)]; if (!fresh) return s;
+    return { ...s, Blocks: splitBlocks(s.Blocks, fresh).keep };
+  });
+}
+const rateId = (b) => Number((b && b.ScheduleRate && typeof b.ScheduleRate === "object" ? b.ScheduleRate.ID : b && b.ScheduleRate)) || RATE_NORMAL.id;
+// What to send for each entry: { e, method, path, body, keeps, replaces, otherCc? }. ccSec: { ccId: sectionId } for the job.
+function planWrites(no, cc, entries, schedules, ccSec) {
+  const base = `/jobs/${no}/sections/${cc.sectionId}/costCenters/${cc.id}/schedules/`;
+  return (entries || []).map(e => {
+    const same = sameJobRows(schedules, no, e.staffId, e.date)[0];
+    if (!same) return { e, method: "POST", path: base, body: bodyOf(e) };
+    const ccId = Number(String(same.Reference || "").split("-")[1]), sec = ccSec && ccSec[ccId];
+    if (!ccId || !sec) return { e, refused: `${e.name} already has job #${no} in Simpro on ${e.date}, on a cost center this can't find. Nothing was written; change it in Simpro.` };
+    const { keep, drop } = splitBlocks(same.Blocks, e.blocks);
+    const blocks = [...keep.map(b => ({ StartTime: String(b.StartTime).slice(0, 5), EndTime: String(b.EndTime).slice(0, 5), ScheduleRate: rateId(b) })),
+      ...e.blocks.map(b => ({ StartTime: b.StartTime, EndTime: b.EndTime, ScheduleRate: b.ScheduleRate }))].sort((a, b) => toMinB(a.StartTime) - toMinB(b.StartTime));
+    return { e, method: "PATCH", path: `/jobs/${no}/sections/${sec}/costCenters/${ccId}/schedules/${same.ID}`, body: { Blocks: blocks }, scheduleId: same.ID,
+      keeps: keep.map(b => `${String(b.StartTime).slice(0, 5)}–${String(b.EndTime).slice(0, 5)}`), replaces: drop.map(b => `${String(b.StartTime).slice(0, 5)}–${String(b.EndTime).slice(0, 5)}`), ...(ccId !== Number(cc.id) ? { otherCc: ccId } : {}) };
+  });
+}
+
 // Input check. today is "YYYY-MM-DD" in Denver. Returns an error string or "".
 function validate(data, today) {
   const d = data || {};
@@ -193,6 +305,7 @@ function validate(data, today) {
     }
   }
   if (d.cc != null && !["rough", "finish", "warranty"].includes(d.cc)) return "cc must be rough, finish or warranty";
+  if (d.ccPick != null && !(d.ccPick && Number.isInteger(Number(d.ccPick.sectionId)) && Number(d.ccPick.sectionId) > 0 && Number.isInteger(Number(d.ccPick.id)) && Number(d.ccPick.id) > 0)) return "The cost center picked didn't read right. Pick it again.";
   if (d.jobId != null && !/^[A-Za-z0-9_-]{1,80}$/.test(String(d.jobId))) return "Bad job id.";
   if (d.tripId != null && !/^[A-Za-z0-9_.-]{1,80}$/.test(String(d.tripId))) return "Bad trip id.";
   if (d.pending != null) {
@@ -203,4 +316,4 @@ function validate(data, today) {
   return "";
 }
 
-module.exports = { RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, addPending, buildEntries, bodyOf, hashOf, pickCostCenter, pickWarranty, invoiced, validate, mondayOf, addDays };
+module.exports = { chooseCostCenter, planWrites, withoutReplaced, sameJobRows, splitBlocks, coDateTags, RATE_NORMAL, RATE_OT, MAX_ENTRIES, blocksFor, overlaps, weekHours, addPending, buildEntries, bodyOf, hashOf, pickCostCenter, pickWarranty, invoiced, validate, mondayOf, addDays };

@@ -8561,9 +8561,27 @@ async function sbRun(data, user, held) {
       const cr = await simproReqWithRetry("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250`);
       s.ccs = Array.isArray(cr.data) ? cr.data : [];
     }
-    const cc = SB.pickCostCenter(sections, phase, data.cc);
+    // v684: where the work goes (SB.chooseCostCenter): the person's pick, else the pick saved for this job and phase
+    // (scrambleCcPicks/<job>, server-only), else warranty / the change order's own / the one that fits; when it can't
+    // tell, the preview asks with the job's open cost centers and nothing is written.
+    const pickKey = phase === "trip" && data.tripId ? "t_" + String(data.tripId).replace(/[^A-Za-z0-9_-]/g, "_") : phase === "trip" ? "trip_" + (data.cc || "finish") : phase;
+    let saved = null, co = null;
+    try { const ps = await db.collection("scrambleCcPicks").doc(no).get(); saved = ps.exists ? ((ps.data() || {})[pickKey] || null) : null; } catch (e) { functions.logger.warn("[scrambleBook] pick read failed", e.message); }
+    if (phase === "trip" && data.jobId && data.tripId && data.cc !== "warranty") {
+      try { const js = await db.collection("jobs").doc(String(data.jobId)).get(), jd = js.exists && js.data() && js.data().data;
+        const t = jd && String(jd.simproNo || "").trim() === no ? (jd.returnTrips || []).find(x => x && String(x.id) === String(data.tripId)) : null;
+        const o = t && t.fromCOId ? (jd.changeOrders || []).find(x => x && x.id === t.fromCOId) : null;
+        if (o) co = { date: String(o.createdAt || o.date || "").slice(0, 10), desc: `${o.desc || ""} ${o.task || ""}` };
+      } catch (e) { functions.logger.warn("[scrambleBook] co read failed", e.message); }
+    }
+    const cc = SB.chooseCostCenter(sections, phase, data.cc, { pick: data.ccPick || null, saved, co });
     if (cc && cc.refused) throw new functions.https.HttpsError("failed-precondition", `Job #${no}: ${cc.refused} Nothing was written.`);
-    if (!cc) throw new functions.https.HttpsError("failed-precondition", `Job #${no} has no ${phase === "rough" || (phase === "trip" && data.cc === "rough") ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Book it in Simpro.`);
+    if (cc && cc.ask) {
+      if (data.mode === "book") throw new functions.https.HttpsError("failed-precondition", `Job #${no}: pick which cost center this goes on first. Nothing was written.`);
+      return { ok: true, job: { no, name: String(jr.data.Name || "") }, askCostCenter: cc.ask };
+    }
+    const ccSec = {}; sections.forEach(s => (s.ccs || []).forEach(c => { if (c && c.ID) ccSec[Number(c.ID)] = Number(s.ID); }));
+    const ccName = (id) => { for (const s of sections) { const c = (s.ccs || []).find(x => Number(x.ID) === Number(id)); if (c) return `${s.Name} › ${c.Name}`; } return "another cost center"; };
     // Who, by Simpro's own names.
     const staffAll = await sbActiveStaff();
     const staff = ids.map(id => staffAll.find(s => s.id === id)).filter(Boolean);
@@ -8580,9 +8598,13 @@ async function sbRun(data, user, held) {
       // v663: a schedule too big to read whole is not a schedule to check against. Refuse instead of checking part of it.
       if (page === 12) throw new functions.https.HttpsError("failed-precondition", "That's too long a stretch to check against Simpro's schedule in one go. Nothing was written; book it in shorter pieces.");
     }
-    const entries = SB.buildEntries(days, staff, data.mode === "preview" ? SB.addPending(SB.weekHours(rows, ids), data.pending, ids) : SB.weekHours(rows, ids));
+    // v684: this job's own blocks that the new times replace don't count toward the 40 (times don't depend on the split,
+    // so a first build finds what is replaced and the second build counts the week without it).
+    const rows2 = SB.withoutReplaced(rows, no, SB.buildEntries(days, staff, {}));
+    const entries = SB.buildEntries(days, staff, data.mode === "preview" ? SB.addPending(SB.weekHours(rows2, ids), data.pending, ids) : SB.weekHours(rows2, ids));
     // Nobody is booked over time they already have in Simpro (another job, an activity or time off), in preview or book.
-    const clash = SB.overlaps(rows, entries);
+    // v684: the same job that day is not a clash; that schedule is changed to match (SB.planWrites).
+    const clash = SB.overlaps(rows, entries, no);
     if (clash.length) {
       const c = clash[0], more = clash.length > 1 ? ` (${clash.length - 1} more)` : "";
       throw new functions.https.HttpsError("failed-precondition", `${c.name} already has ${c.type === "activity" ? "time off or an activity" : "a booking" + (c.ref ? " on " + c.ref.split("-")[0] : "")} in Simpro ${c.date} ${c.at}${more}. Nothing was written; change the time or the person.`);
@@ -8591,11 +8613,15 @@ async function sbRun(data, user, held) {
     // them): a Crew Board crew, not off, not a holiday or a weekend refuse the booking; a split pair or someone alone is
     // shown on the preview as a note, since a person pressing Book is the one who decides that.
     const [sbUsers, sbPto, sbPrefs] = await Promise.all([getUsers(), db.collection("settings").doc("crewPTO").get(), db.collection("meetings").doc("scramble__prefs").get()]);
-    const people = require("./scrambleDoor.js").humanCheck({ entries, users: sbUsers, pto: sbPto.exists ? (sbPto.data() || {}).list : [], holidays: sbPrefs.exists ? (sbPrefs.data() || {}).holidays : null, schedules: rows, jobNo: no });
+    const people = require("./scrambleDoor.js").humanCheck({ entries, users: sbUsers, pto: sbPto.exists ? (sbPto.data() || {}).list : [], holidays: sbPrefs.exists ? (sbPrefs.data() || {}).holidays : null, schedules: rows2, jobNo: no });
     if (people.refused.length) {
       const c = people.refused[0], more = people.refused.length > 1 ? ` (${people.refused.length - 1} more)` : "";
       throw new functions.https.HttpsError("failed-precondition", `${c.why}${more} Nothing was written.`);
     }
+    const plan = SB.planWrites(no, cc, entries, rows, ccSec), stuck = plan.find(p => p.refused);
+    if (stuck) throw new functions.https.HttpsError("failed-precondition", stuck.refused);
+    // What the preview shows per person-day when Simpro already has this job that day.
+    plan.forEach(p => { if (p.method === "PATCH") p.e.merge = { keeps: p.keeps, replaces: p.replaces, ...(p.otherCc ? { on: ccName(p.otherCc) } : {}) }; });
     const hash = SB.hashOf(no, cc, entries);
     const job = { no, name: String(jr.data.Name || ""), stage: String(jr.data.Stage || "") };
     const totals = { entries: entries.length, hours: entries.reduce((a, e) => a + e.hours, 0), ot: entries.reduce((a, e) => a + e.ot, 0) };
@@ -8605,14 +8631,19 @@ async function sbRun(data, user, held) {
     }
     const path = `/jobs/${no}/sections/${cc.sectionId}/costCenters/${cc.id}/schedules/`;
     const created = []; let failed = null;
-    for (const e of entries) {
-      const r = await simproReqWithRetry("POST", path, SB.bodyOf(e));
+    for (const p of plan) {
+      const e = p.e, r = await simproReqWithRetry(p.method, p.path, p.body);
       if (!r.ok) {
         const why = typeof r.data === "string" ? r.data : JSON.stringify(r.data || {});
         failed = { date: e.date, name: e.name, status: r.status, error: why.slice(0, 300) };
         break;
       }
-      created.push({ date: e.date, name: e.name, hours: e.hours, ot: e.ot, scheduleId: (r.data && r.data.ID) || null });
+      created.push({ date: e.date, name: e.name, hours: e.hours, ot: e.ot, scheduleId: (r.data && r.data.ID) || p.scheduleId || null, ...(p.method === "PATCH" ? { changed: true } : {}), ...(p.otherCc ? { otherCc: true } : {}) });
+    }
+    // v684: the cost center a person picked is kept for this job and phase, so the next Book doesn't ask again.
+    if (created.length && (cc.picked || cc.saved)) {
+      try { await db.collection("scrambleCcPicks").doc(no).set({ [pickKey]: { sectionId: cc.sectionId, id: cc.id, name: cc.name, sectionName: cc.sectionName, by: user.name || "", at: new Date().toISOString() } }, { merge: true }); }
+      catch (e) { functions.logger.warn("[scrambleBook] pick save failed", e.message); }
     }
     try {
       await db.collection("scrambleBookings").add({ at: new Date().toISOString(), by: user.name || "", job, phase, costCenter: cc,
@@ -8626,7 +8657,7 @@ async function sbRun(data, user, held) {
       try {
         const date = created.map(c => c.date).sort()[0];
         trip = await sbTripWrite(String(data.jobId), no, (trips) => ST.planTripBooked(trips, String(data.tripId), date,
-          { at: new Date().toISOString(), by: user.name || "", path, ids: created.map(c => c.scheduleId).filter(Boolean) }), user.name);
+          { at: new Date().toISOString(), by: user.name || "", path, ids: created.filter(c => !c.otherCc).map(c => c.scheduleId).filter(Boolean) }), user.name);
       } catch (e) { functions.logger.warn("[scrambleBook] trip mark failed", e.message); trip = { ok: false }; }
     }
     return { ok: !failed, job, costCenter: cc, created, failed, planned: entries.length, trip };
