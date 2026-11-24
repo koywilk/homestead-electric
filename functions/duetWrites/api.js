@@ -1789,10 +1789,11 @@ module.exports = function makeDuetApi({ functions, db, FieldValue, FieldPath, ge
       if (!tokenOk(req)) { res.status(401).json({ ok: false, error: "unauthorized" }); return; }
       if (req.method !== "POST") { res.status(405).json({ ok: false, error: "POST only" }); return; }
       const b = req.body || {};
-      if (b.action !== "calendar.read") { res.status(400).json({ ok: false, refused: "Unknown read. The only one is calendar.read." }); return; }
+      if (b.action !== "calendar.read" && b.action !== "calendar.explain") { res.status(400).json({ ok: false, refused: "Unknown read. The reads are calendar.read and calendar.explain." }); return; }
       if (!materialDeps || typeof materialDeps.simproReqWithRetry !== "function") { res.status(500).json({ ok: false, error: "Simpro reads are not wired into duetRead." }); return; }
       try {
-        res.status(200).json(await SR.readCalendar({ db, getUsers, simproReq: materialDeps.simproReqWithRetry, tz: TZ }, b.args || {}));
+        const rd = { db, getUsers, simproReq: materialDeps.simproReqWithRetry, tz: TZ };
+        res.status(200).json(b.action === "calendar.explain" ? await SR.explainCalendar(rd, b.args || {}) : await SR.readCalendar(rd, b.args || {}));
       } catch (e) {
         if (e && e.bad) { res.status(400).json({ ok: false, refused: e.message }); return; }
         functions.logger.error("[duetRead] failed", { action: b.action, error: e && e.message });

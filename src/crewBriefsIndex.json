@@ -1,5 +1,18 @@
 [
  {
+  "v": 682,
+  "heads": [
+   {
+    "h": "NEW on the crew calendar (office)",
+    "first": "**A what-if view: \"If all start on estimate\".** A new button in the calendar's top bar lays every upcoming job that has an estimated start date out on that date, even though the start isn't confirmed."
+   },
+   {
+    "h": "FIXED on the crew calendar (office)",
+    "first": "**Duet no longer counts a company holiday as a day everyone is idle.** Its calendar read listed the whole crew as open on Thanksgiving. It now marks the holiday and lists nobody open that day."
+   }
+  ]
+ },
+ {
   "v": 681,
   "heads": [
    {
@@ -210,15 +223,6 @@
    {
     "h": "FIXED",
     "first": "Two half days on two jobs no longer show as double-booked."
-   }
-  ]
- },
- {
-  "v": 662,
-  "heads": [
-   {
-    "h": "FIXED on the crew calendar",
-    "first": "The auto-schedule can no longer put someone on a job when they're already booked somewhere else that day. Two rare cases could still do it: a job that started late after a return trip and ran into an "
    }
   ]
  }

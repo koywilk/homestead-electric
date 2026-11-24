@@ -20,11 +20,12 @@ const TODAY = "2026-11-23";   // a Monday
 const sched = (id, date, s, e, ref, type) => ({ Type: type || "job", Reference: ref || "500-1", Date: date, Staff: { ID: id, Name: staff.find(x => x.id === id).name }, Blocks: [{ StartTime: s, EndTime: e, Hrs: (parseInt(e, 10) * 60 + +e.slice(3) - parseInt(s, 10) * 60 - +s.slice(3)) / 60 }] });
 
 function world(over) {
-  const w = { schedules: [], pto: [], posts: [], tripWrites: [], logs: [], job: { simproNo: "900", roughStatus: "complete", returnTrips: [{ id: "r1", number: 1, scope: "x", rtStatus: "needs", material: "" }, { id: "r2", number: 2, rtStatus: "complete" }, { id: "r3", number: 3, rtStatus: "needs", fromFailedRough: true, material: "wire" }] }, ...(over || {}) };
+  const w = { locks: {}, schedules: [], pto: [], posts: [], tripWrites: [], logs: [], job: { simproNo: "900", roughStatus: "complete", returnTrips: [{ id: "r1", number: 1, scope: "x", rtStatus: "needs", material: "" }, { id: "r2", number: 2, rtStatus: "complete" }, { id: "r3", number: 3, rtStatus: "needs", fromFailedRough: true, material: "wire" }] }, ...(over || {}) };
   const docOf = (data) => ({ get: async () => ({ exists: data != null, data: () => data }) });
   w.deps = {
     today: TODAY, getUsers: async () => users, staff: async () => staff, log: (m) => w.logs.push(m),
-    db: { collection: (n) => n === "jobs" ? { doc: (id) => docOf(id === "J1" ? { data: w.job } : null) } : n === "settings" ? { doc: () => docOf({ list: w.pto }) } : n === "meetings" ? { doc: () => docOf({}) } : { add: async (x) => { w.logs.push(x); } } },
+    db: { runTransaction: async (fn) => { const writes = []; const r = await fn({ get: (ref) => ref.get(), set: (ref, d) => writes.push([ref.k, d]) }); writes.forEach(([k, d]) => { w.locks[k] = d; }); return r; },
+      collection: (n) => n === "scrambleBookLocks" ? { doc: (k) => ({ k, get: async function () { return { exists: !!w.locks[k], data: () => w.locks[k], ref: this }; }, delete: async () => { delete w.locks[k]; } }) } : n === "jobs" ? { doc: (id) => docOf(id === "J1" ? { data: w.job } : null) } : n === "settings" ? { doc: () => docOf({ list: w.pto }) } : n === "meetings" ? { doc: () => docOf({}) } : { add: async (x) => { w.logs.push(x); } } },
     tripWrite: async (jobId, no, plan, who) => { const p = plan(w.job.returnTrips); w.tripWrites.push({ jobId, no, who, p }); if (!p) return { ok: true, noop: true }; w.job.returnTrips = p.returnTrips; return { ok: true, rtStatus: p.after.rtStatus, rtStatusDate: p.after.rtStatusDate }; },
     simproReq: async (method, path, body) => {
       if (method === "POST") { w.posts.push({ path, body }); if (w.failAt && w.posts.length === w.failAt) return { ok: false, status: 422, data: "nope" }; return { ok: true, data: { ID: 7000 + w.posts.length } }; }
@@ -56,6 +57,22 @@ const rules = (r) => (r.refused || []).map(x => x.rule + ":" + x.person.split(" 
   ok(p.entries[0].person === "Louis Hoffman" && /7:00 AM–5:00 PM Normal Time/.test(p.entries[0].time), "the preview names the Crew Board person and the clock time and rate");
   let b = await D.run(w.deps, { ...base(pair), mode: "book", hash: p.hash });
   ok(b.ok && b.created.length === 2 && w.posts.length === 2 && w.posts[0].path === "/jobs/900/sections/11/costCenters/102/schedules/" && w.posts[0].body.Staff === 2 && w.posts[0].body.Blocks[0].StartTime === "07:00" && Object.keys(w.posts[0].body).sort().join() === "Blocks,Date,Staff", "book writes exactly those two entries, schedule fields only");
+  ok(Object.keys(w.locks).length === 0, "v682: the person-day locks a booking takes are all released when it finishes");
+  { // v682: two bookings for the same person and day can't both go through
+    const w2 = world(), p2 = await D.run(w2.deps, base(pair));
+    w2.locks["2_2026-11-24"] = { owner: "Someone else#abc", by: "Josh", until: Date.now() + 60000 };   // Louis on the 24th is being booked right now
+    let t2 = ""; try { await D.run(w2.deps, { ...base(pair), mode: "book", hash: p2.hash }); } catch (e) { t2 = e.message; }
+    ok(/going into Simpro right now/.test(t2) && w2.posts.length === 0, "v682: a booking for someone already being booked that day is refused and writes nothing");
+    ok(w2.locks["2_2026-11-24"].owner === "Someone else#abc" && !w2.locks["3_2026-11-24"], "v682: the refused booking leaves the other booking's lock alone and takes none of its own");
+    const w3 = world(), p3 = await D.run(w3.deps, base(pair));
+    w3.locks["2_2026-11-25"] = { owner: "Someone else#abc", by: "Josh", until: Date.now() + 60000 };   // a different day
+    ok((await D.run(w3.deps, { ...base(pair), mode: "book", hash: p3.hash })).ok, "v682: a lock on a different day doesn't get in the way");
+    const w4 = world(), p4 = await D.run(w4.deps, base(pair));
+    w4.locks["2_2026-11-24"] = { owner: "Crashed#abc", by: "Josh", until: Date.now() - 1000 };   // never released, now expired
+    ok((await D.run(w4.deps, { ...base(pair), mode: "book", hash: p4.hash })).ok && w4.posts.length === 2, "v682: a lock nobody released expires by itself and doesn't block");
+    const w5 = world(), p5 = await D.run(w5.deps, base(pair)); w5.noSched = true;
+    try { await D.run(w5.deps, { ...base(pair), mode: "book", hash: p5.hash }); } catch (e) { /* refused: no schedule */ }
+    ok(Object.keys(w5.locks).length === 0, "v682: the locks are released even when the booking is refused part-way"); }
   let threw = ""; try { await D.run(world().deps, { ...base(pair), mode: "book", hash: "abc.def" }); } catch (e) { threw = e.message; }
   ok(/changed since that preview/.test(threw), "a book whose hash doesn't match the fresh build writes nothing");
   w = world(); p = await D.run(w.deps, base(pair)); w.schedules.push(sched(1, "2026-11-24", "07:00", "17:00"));   // someone else booked meanwhile, same week

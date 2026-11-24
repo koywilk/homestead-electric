@@ -8508,6 +8508,12 @@ exports.scrambleBook = functions
   .runWith({ timeoutSeconds: 300 })
   .https.onCall(async (data) => {
     const user = await requireOffice(data);
+    const held = { release: null };
+    try { return await sbRun(data, user, held); }
+    finally { if (held.release) await held.release(); }
+  });
+const SL = require("./scrambleLock");
+async function sbRun(data, user, held) {
     const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
     const bad = SB.validate(data, today);
     if (bad) throw new functions.https.HttpsError("invalid-argument", bad);
@@ -8516,6 +8522,12 @@ exports.scrambleBook = functions
       // v678: people on their own start and finish that day (checked in SB.validate)
       ...(Array.isArray(d.people) && d.people.length ? { people: d.people.map(o => ({ staffId: Number(o.staffId), start: String(o.start), hours: Number(o.hours) })) } : {}) }));
     const ids = data.staffIds.map(Number);
+    // v682: one booking at a time per person and day. Taken before Simpro is read, so a second booking for the same person
+    // waits out the first and then sees its entries; released by the caller when this returns or throws.
+    if (data.mode === "book") {
+      try { held.release = await SL.take(db, SL.pairsOf(days, ids), user.name || "office"); }
+      catch (e) { if (e && e.busy) throw new functions.https.HttpsError("aborted", e.message); throw e; }
+    }
     // The job and the cost center it books on.
     const jr = await simproReqWithRetry("GET", `/jobs/${no}?columns=ID,Name,Stage`);
     if (!jr.ok || !jr.data || !jr.data.ID) throw new functions.https.HttpsError("not-found", `Simpro has no job #${no}.`);
@@ -8597,7 +8609,7 @@ exports.scrambleBook = functions
       } catch (e) { functions.logger.warn("[scrambleBook] trip mark failed", e.message); trip = { ok: false }; }
     }
     return { ok: !failed, job, costCenter: cc, created, failed, planned: entries.length, trip };
-  });
+}
 // One return trip's schedule fields on jobs/<id>, the way every server job write goes: re-read in a transaction, write
 // data.returnTrips back as a dotted key, updated_at strictly newer, the version-lock stamp, merged:false.
 const SB_BUILD = 663;

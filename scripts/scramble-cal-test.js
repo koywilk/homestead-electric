@@ -361,6 +361,54 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
     ok(days({ ...base, pd: { "2026-11-30": { skip: true } } }) === "2026-12-01,2026-12-02,2026-12-03", "the first day can come off too");
     const kept = { ...base, pd: { "2026-12-01": { skip: true }, "2026-12-02": { staff: [{ name: "A" }, { name: "B" }], t: "07:00", e: "12:00" } } };
     ok(SC.slotsOf(kept).find(d => d.date === "2026-12-02").label === SC.slotsOf({ ...base, pd: { "2026-12-02": kept.pd["2026-12-02"] } }).find(d => d.date === "2026-12-02").label, "another day's own people and time don't move when a day comes off"); }
+  // v682: where hours left came from, and explaining why a job is or isn't placed
+{ const ef = j => j.roughStatus || "", eff = j => j.finishStatus || "";
+  const J = (id, no, o) => ({ id, simproNo: no, name: "Case " + no, foreman: "Daegan Smith", roughStatus: "inprogress", roughMaterials: [{ ordered: true }], ...o });
+  const build = (jobsX, o) => SC.buildCalendar({ jobs: jobsX, schedules: (o && o.sch) || [], phaseHours: (o && o.ph) || {}, today, weeks: 5, users, effRS: ef, effFS: eff, plans: (o && o.plans) || {} });
+  const get = (V, id) => V.items.find(x => x.key === "j_" + id + "_r");
+  const V1 = build([J("e1", "7101"), J("e2", "7102", { roughStage: "60" }), J("e3", "7103"), J("e4", "7104", { foreman: "" }), J("e5", "7105", { roughStatus: "waiting" }), J("e6", "7106", { roughStatus: "scheduled" }), J("e8", "7108")],
+    { ph: { "7101": { r: [10, 60] }, "7102": { r: [100, 100] }, "7104": { r: [0, 40] }, "7108": { r: [0, 40] } }, sch: [S("7108", "2026-11-24", "Daegan Smith", 10)] });
+  ok(SC.leftSrc(get(V1, "e1")) === "bid" && /50 h left of the 60 h bid/.test(SC.whyOf(get(V1, "e1"))), "hours left from the bid say so");
+  ok(SC.leftSrc(get(V1, "e2")) === "stage" && /about 40 h left: 40% of the 100 h bid, since the hours used have run out/.test(SC.whyOf(get(V1, "e2"))), "hours left from the stage percent say so, with the numbers");
+  ok(SC.leftSrc(get(V1, "e3")) === "week" && /a guess/.test(SC.whyOf(get(V1, "e3"))), "a week planned with no bid hours says it is a guess");
+  ok(/3 h each \(the time set on the trip\)/.test(SC.whyOf({ kind: "trip", booked: [], material: "x", tag: "Return trip #1", tripH: 3 })) && /4 h each \(a guess: no time on the trip\)/.test(SC.whyOf({ kind: "trip", booked: [], material: "x", tag: "Return trip #1" })), "a trip's time says whether it was set or is the default guess");
+  const ex = (V, no) => SC.explainJob(V, no);
+  ok(/^placed/.test(ex(V1, "7101")[0].state) && ex(V1, "7101")[0].where.length > 0, "a job the auto-schedule laid out says so and where");
+  ok(ex(V1, "7104")[0].state === "needs-you" && /No foreman set/.test(ex(V1, "7104")[0].because.join(" ")) && /Set a foreman/.test(ex(V1, "7104")[0].toChange.join(" ")), "a job with no foreman is Needs you, with what to change");
+  ok(ex(V1, "7105")[0].state === "not-placed" && /Waiting/.test(ex(V1, "7105")[0].because.join(" ")), "a waiting job says the auto-schedule skips waiting work");
+  ok(ex(V1, "7106")[0].state === "not-placed" && /no start date/.test(ex(V1, "7106")[0].because.join(" ")), "a job with no start date and not in progress says there is no day to start from");
+  ok(ex(V1, "7108")[0].state === "booked-in-simpro" && /Tue 11\/24/.test(ex(V1, "7108")[0].because.join(" ")), "a job Simpro has booked says Simpro has it, and when");
+  ok(ex(V1, "9999").length === 0, "a job number the calendar doesn't have gives nothing to explain");
+  const planned = { "j_e1_r": { s: "2026-11-24", hours: 20, crew: 2, staff: [{ name: "Daegan Smith" }, { name: "Louis Hoffman" }], by: "Koy Wilkinson" } };
+  const V2 = build([J("e1", "7101")], { ph: { "7101": { r: [10, 60] } }, plans: planned });
+  ok(ex(V2, "7101")[0].state === "plan" && /placed by a person/.test(ex(V2, "7101")[0].headline) && /never moves/.test(ex(V2, "7101")[0].because.join(" ")), "a placed block says a person placed it and the auto-schedule won't move it");
+  const V3 = build([J("e1", "7101")], { ph: { "7101": { r: [10, 60] } }, plans: { "j_e1_r": { off: true, why: "Waiting on GC", by: "Koy Wilkinson", at: "2026-11-20T10:00:00Z" } } });
+  ok(ex(V3, "7101")[0].state === "off-calendar" && /Waiting on GC/.test(ex(V3, "7101")[0].because.join(" ")) && /Restore/.test(ex(V3, "7101")[0].toChange.join(" ")), "a block taken off says who, why, and how to put it back");
+  const stub = { today: "2026-11-18", end: "2027-03-14", items: [] };
+  ok(SC.explainItem({ key: "k", kind: "trip", tag: "Return trip #2", no: "1", name: "X", done: true, flags: [], booked: [] }, stub).state === "done", "a finished trip says it is done");
+  ok(SC.explainItem({ key: "k", kind: "rough", tag: "Rough-in", no: "1", name: "X", flags: [], booked: [], auto: { src: "duet", why: "Louis is free", s: "2026-11-24", hours: 10, crew: 2, staff: [{ name: "Louis Hoffman" }, { name: "Callen Jakeman" }] } }, stub).state === "duet-suggestion", "a Duet suggestion says it is one");
+  ok(SC.explainItem({ key: "k", kind: "rough", tag: "Rough-in", no: "1", name: "X", flags: [], booked: [], need: "Daegan's crew is booked through 3/14" }, stub).toChange[0].length > 20, "a Needs you reason with no special advice still says to place it by hand"); }
+  // v682: the what-if view lays Upcoming jobs out on their estimated start
+{ const ef = j => j.roughStatus || "", eff = j => j.finishStatus || "";
+  const jobsW = [{ id: "w1", simproNo: "7301", name: "In app", foreman: "Daegan Smith", roughStatus: "inprogress", roughMaterials: [{ ordered: true }] }];
+  const upW = [{ id: "u1", name: "#7201 - First upcoming", projectedStart: "12/1/2026", startConfirmed: false, foreman: "" },
+    { id: "u2", name: "#7202 - With a foreman", projectedStart: "12/1/2026", startConfirmed: false, foreman: "Daegan Smith" },
+    { id: "u3", name: "#7203 - No date", projectedStart: "", startConfirmed: false, foreman: "" },
+    { id: "u4", name: "#7204 - No hours", projectedStart: "12/2/2026", startConfirmed: false, foreman: "" }];
+  const base = { jobs: jobsW, upcoming: upW, schedules: [], phaseHours: { "7301": { r: [0, 80] } }, upHours: { "7201": { est: 40, used: 0 }, "7202": { est: 40, used: 0 }, "7203": { est: 40, used: 0 } }, today, weeks: 17, users, effRS: ef, effFS: eff };
+  const Vn = SC.buildCalendar(base), Vw = SC.buildCalendar({ ...base, whatIf: true });
+  const it = (V, k) => V.items.find(x => x.key === k);
+  ok(Vn.whatIf === false && Vw.whatIf === true, "the calendar says whether it is the what-if view");
+  ok(!it(Vn, "u_u1").auto && it(Vn, "u_u1").inList && !it(Vn, "u_u2").auto, "normally an upcoming job with an estimated start is not placed");
+  ok(!!it(Vw, "u_u1").auto && it(Vw, "u_u1").whatIf && it(Vw, "u_u1").provisional && it(Vw, "u_u1").foreman === "Daegan Smith" && /What-if crew/.test(it(Vw, "u_u1").flags.join(" ")), "in the what-if view it is laid out, with a provisional crew marked as a guess");
+  ok(!!it(Vw, "u_u2").auto && it(Vw, "u_u2").whatIf && !it(Vw, "u_u2").provisional, "one with its own foreman is laid out with that foreman's crew, no guess");
+  ok(!it(Vw, "u_u3").auto && !it(Vw, "u_u3").need, "one with no start date stays off the calendar even in the what-if view");
+  ok(!it(Vw, "u_u4").auto && /No hours in Job Costs/.test(it(Vw, "u_u4").need || ""), "one with no hours goes to Needs you with the reason, not placed");
+  ok(SC.slotsOf(it(Vw, "u_u1").auto)[0].date >= "2026-12-01", "it starts on or after its estimated start");
+  ok(!Object.keys(base).some(k => k === "whatIf") && JSON.stringify(SC.buildCalendar(base).items.map(x => x.key + (x.auto ? x.auto.s : ""))) === JSON.stringify(Vn.items.map(x => x.key + (x.auto ? x.auto.s : ""))), "asking the same thing twice without what-if gives the same calendar (nothing carried over)");
+  const iN = SC.idleHours(Vn, users, "2026-11-23", "2026-12-17"), iW = SC.idleHours(Vw, users, "2026-11-23", "2026-12-17");
+  ok(iN.days > 0 && iW.days === iN.days && iW.hours < iN.hours, "the what-if view has fewer idle crew hours than the live one (" + iN.hours + " to " + iW.hours + " over " + iN.days + " workdays)");
+  ok(SC.idleHours(Vn, users, "2026-11-26", "2026-11-26").days === 0 && SC.idleHours(Vn, users, "2026-11-27", "2026-11-27").days === 0, "a holiday or a Friday is not counted as idle"); }
 }
 
 // ── v663: the review's fixes ─────────────────────────────────────────────────

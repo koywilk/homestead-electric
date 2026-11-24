@@ -17,6 +17,7 @@
 "use strict";
 const SC = require("./scrambleCal.js");
 const SB = require("./scrambleBook.js");
+const SL = require("./scrambleLock.js");
 const ST = require("./scrambleTrip.js");
 
 const MAX_ROWS = 80;
@@ -198,6 +199,11 @@ class Refused extends Error { constructor(message, extra) { super(message); this
 // The whole door. deps: { simproReq(method, path, body), staff(): [{ id, name }], getUsers(), db, tripWrite(jobId, no,
 // plan, who), today (YYYY-MM-DD in Denver), log? }. args: see checkRequest. Returns the preview, or what was written.
 async function run(deps, args) {
+  const held = { release: null };
+  try { return await runBook(deps, args, held); }
+  finally { if (held.release) await held.release(); }
+}
+async function runBook(deps, args, held) {
   const a = args || {}, bad = checkRequest(a, deps.today);
   if (bad) throw new Refused(bad);
   const no = String(a.jobNo), phase = a.phase, by = String(a.by || "Duet").slice(0, 60);
@@ -240,6 +246,11 @@ async function run(deps, args) {
     deps.db.collection("settings").doc("crewPTO").get(), deps.db.collection("meetings").doc("scramble__prefs").get()]);
   const board = SC.crewBoard(users || []);
   const who = resolvePeople(a.entries, board, staffAll);
+  // v682: one booking at a time per person and day (functions/scrambleLock.js), taken before Simpro's schedule is read
+  if (a.mode === "book") {
+    try { held.release = await SL.take(deps.db, who.rows.map(r => ({ staffId: r.staffId, date: r.date })), by); }
+    catch (e) { if (e && e.busy) throw new Refused(e.message); throw e; }
+  }
   // Simpro's schedule for every week touched
   const dates = a.entries.map(r => r.date).sort(), from = SB.mondayOf(dates[0]), to = SB.addDays(SB.mondayOf(dates[dates.length - 1]), 6);
   let schedules = [];

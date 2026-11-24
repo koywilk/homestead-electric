@@ -133,4 +133,33 @@ async function readCalendar(deps, args) {
     ...view };
 }
 
-module.exports = { handEditsOf, lessonsOf, WEEKS, effRS, effFS, wallNow, jobsOf, calendarOf, outcomesOf, assemble, gather, readSchedules, readCalendar };
+// v682 (Grok's review, 2026-11-24: "ask the scheduler why"): why one Simpro job's rough-in, finish and return trips are or
+// aren't on the calendar, from the same calendar the screen shows. Pure: everything already read in, the answer out.
+// args: { jobNo, phase? ("rough" | "finish" | "trip") }.
+function explainOf(inp, args) {
+  const i = inp || {}, a = args || {}, no = String(a.jobNo || "").trim(), phase = ["rough", "finish", "trip"].includes(a.phase) ? a.phase : "";
+  const V = calendarOf(i), items = SC.explainJob(V, no, phase);
+  const out = { ok: true, jobNo: no, ...(phase ? { phase } : {}), planningThrough: V.end, explanations: items };
+  if (items.length) return out;
+  // nothing on the calendar for that number: say why, from the job as Command Center holds it
+  const raw = (i.jobDocs || []).map(d => (d && d.data && d.data.data) || (d && d.data) || {}).find(j => String(j.simproNo || "").trim() === no);
+  const up = (Array.isArray(i.upcoming) ? i.upcoming : []).find(u => SC.upNo(u) === no);
+  const why = [];
+  if (raw && raw.division === "commercial") why.push("It is a commercial job, and the crew calendar only lays out residential work.");
+  else if (raw) { const rs = effRS(raw), fs = effFS(raw);
+    why.push(`In Command Center rough-in is "${rs || "not set"}" and finish is "${fs || "not set"}".`);
+    why.push("A job is on the calendar when a phase is In Progress, Scheduled, Date confirmed or Waiting, or has a start date, hours or Simpro bookings. This one has none of those, or both phases are complete, so there is nothing to place."); }
+  else if (up) why.push(`It is an upcoming row (${up.startConfirmed ? "start confirmed" : "start not confirmed"}). Upcoming jobs are only placed once the start is confirmed and they have hours.`);
+  else why.push(`Command Center has no residential job with Simpro number ${no || "(none given)"}, and it is not on the upcoming list.`);
+  return { ...out, notOnCalendar: { reasons: why } };
+}
+async function explainCalendar(deps, args) {
+  const a = args || {};
+  if (!/^\d{1,6}$/.test(String(a.jobNo || "").trim())) throw Object.assign(new Error("jobNo must be the Simpro job number, digits only."), { bad: true });
+  if (a.phase != null && !["rough", "finish", "trip"].includes(a.phase)) throw Object.assign(new Error("phase must be rough, finish or trip."), { bad: true });
+  const now = deps.now || wallNow(deps.tz);
+  return { ...explainOf(await gather({ ...deps, now }), a), asOf: new Date().toISOString(), source: "Command Center crew calendar (same rules as the screen), Simpro schedule read live",
+    note: "Read only. state: placed = laid out by the auto-schedule; placed-held = laid out but held for a person's call; plan = placed by a person; duet-suggestion = Duet's suggestion, not a plan; booked-in-simpro; needs-you = could not be placed; off-calendar = taken off by a person; not-placed = never a candidate, see because. toChange is what a person could do; none of it changes a job's stage or status." };
+}
+
+module.exports = { handEditsOf, lessonsOf, WEEKS, effRS, effFS, wallNow, jobsOf, calendarOf, outcomesOf, assemble, gather, readSchedules, readCalendar, explainOf, explainCalendar };

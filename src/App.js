@@ -52081,7 +52081,7 @@ const SCAL_DOW = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 // not done. The server's calendar read counts the same way (functions/scrambleRead.js), so both lay 100% jobs alike.
 const scalOpenPunch = (j, ph) => { if (ph === "rough") return PunchListStage.openPunchItems(j && j.roughPunch).length + (j && j.roughInspectionResult === "fail" ? (j.roughInspectionItems || []).filter(i => i && typeof i === "object" && !i.done).length : 0);
   const o = PunchListStage.punchListOpen(j); return o.finishPunch + o.qcPunch + o.inspection; };
-function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs, onOpenJob, say, startWk = 0 }) {
+function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, savePrefs: savePrefsProp, onOpenJob, say, startWk = 0 }) {
   const SC = ScrambleCal;
   const me = (identity && identity.name) || "";
   const [sched, setSched] = useState(undefined);       // Simpro schedule for the view (undefined loading, null failed)
@@ -52128,6 +52128,13 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // calendar covers the whole screen (over the app's sidebar and header), and the browser's own full screen too where
   // it allows it. Exit full screen or Esc brings it back; Esc first closes an open box.
   const [full, setFull] = useState(false);
+  // v682 (Koy 2026-11-24: "Can there be a view of scheduling it with the estimated start date? If all these jobs started on
+  // their estimated start date, this is what it would look like"): a switch that lays every Upcoming job with an estimated
+  // start out on it (SC.buildCalendar whatIf). It is a look, never a plan: while it is on, nothing on the calendar saves
+  // (savePrefs and commit stop with a note) and nothing can be booked, so a guess can never become a plan or a Simpro entry.
+  const [whatIf, setWhatIf] = useState(false), [waOpen, setWaOpen] = useState(false);
+  const roBlock = () => toast.info("This is the what-if view, so nothing is saved. Tap Back to the real calendar to change anything.");
+  const savePrefs = (...a) => { if (whatIf) { roBlock(); return undefined; } return savePrefsProp(...a); };
   // v661 (Koy: "make all the sections on the left drop-downs that start collapsed"): each type on the lists is a
   // dropdown with its count, closed until tapped.
   const [openG, setOpenG] = useState(() => new Set());
@@ -52210,8 +52217,11 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   const boardUsers = Array.isArray(sched) && (users || []).length ? users : null;
   // Company holidays: the list in the meeting prefs (admins edit it below), else the default list.
   const holList = Array.isArray(prefs && prefs.holidays) ? prefs.holidays : SC.DEFAULT_HOLIDAYS;
-  const V = useMemo(() => SC.buildCalendar({ jobs, upcoming, schedules: sched || [], phaseHours: ph, upHours: (ctx && ctx.upHours) || {}, plans, proposals: duetP, openPunch: scalOpenPunch, today, weeks: SCAL_WEEKS, effRS, effFS, users: boardUsers, holidays: holList, timeOff: pto }),
-    [jobs, upcoming, sched, ph, ctx, plans, duetP, boardUsers, holList, pto]); // eslint-disable-line
+  const calIn = () => ({ jobs, upcoming, schedules: sched || [], phaseHours: ph, upHours: (ctx && ctx.upHours) || {}, plans, proposals: duetP, openPunch: scalOpenPunch, today, weeks: SCAL_WEEKS, effRS, effFS, users: boardUsers, holidays: holList, timeOff: pto });
+  const V = useMemo(() => SC.buildCalendar({ ...calIn(), whatIf }),
+    [jobs, upcoming, sched, ph, ctx, plans, duetP, boardUsers, holList, pto, whatIf]); // eslint-disable-line
+  const V0 = useMemo(() => whatIf ? SC.buildCalendar(calIn()) : null,   // the real one, to set the what-if view beside
+    [jobs, upcoming, sched, ph, ctx, plans, duetP, boardUsers, holList, pto, whatIf]); // eslint-disable-line
   const isAdm = getAccess(identity) === "admin";
   // v663 (Koy: "If it gets unscheduled, it goes back to 'needs to be scheduled'"): a return trip this calendar booked
   // that Simpro shows nothing for on its day. The server asks Simpro about the exact entries before it changes anything.
@@ -52336,6 +52346,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const dw = o.pw && names.length ? SC.dayWindows(names.map(name => ({ name, ...(o.pw[name] || { t: o.t, e: o.e }) }))) : null;
     return dw && dw.pw ? { t: dw.t, e: dw.e, w: SC.wOf(dw.pw) } : { t: o.t, e: o.e }; };
   const commit = (key, p, outcome) => {
+    if (whatIf) { roBlock(); return; }
     if (p) settleDuet(key, outcome || (p.off ? "removed" : "changed"), p);
     logEdit(key, p);
     setDrafts(d => ({ ...d, [key]: p }));
@@ -52588,7 +52599,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // v680 (Koy 2026-11-22: "That's way too many clicks to book shit in Simpro"): Book builds the preview at once with the
   // people already on the block, so it is tap Book, read it, tap Book these. Changing who or which days builds it again.
   // Nothing goes to Simpro before that last tap. day = "" books all the block's days; a date books that day only.
-  const openBook = (it, day = "") => { const staff = preStaff(it); setBk({ key: it.key, staff, day, preview: null, busy: false, err: "", done: null, find: "" }); showBox("sc-book"); if (staff.size) runPreview(it, { staff, day }); };
+  const openBook = (it, day = "") => { if (whatIf) { roBlock(); return; } const staff = preStaff(it); setBk({ key: it.key, staff, day, preview: null, busy: false, err: "", done: null, find: "" }); showBox("sc-book"); if (staff.size) runPreview(it, { staff, day }); };
   // After a block is booked its saved plan goes (Simpro has the days now). After one day of it is booked, only that day
   // comes off the plan, with its hours, so the rest stays planned and a later Book doesn't send that day twice.
   const afterBook = (it, day) => { if (!(kept[it.key] || drafts[it.key])) return; const f = fc(it);
@@ -52604,6 +52615,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // (one tap fewer); unticking a block builds it again, since the 1.5x split of the blocks after it can change.
   const wbRun = useRef(0);
   const openWeekBook = (day = "") => {
+    if (whatIf) { roBlock(); return; }
     const wEnd = SC.addDays(weekStart, 4), rows = [];   // v663: through Friday, for blocks put there by hand
     V.items.forEach(it => { if (!bookable(it)) return; const f = fc(it); if (!SC.slotsOf(f).some(d => day ? d.date === day && !d.none : d.date >= weekStart && d.date <= wEnd)) return;
       rows.push({ key: it.key, staff: preStaff(it), on: true, preview: null, err: "", done: null }); });
@@ -52962,7 +52974,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!it) return <div className="sc-ins"><small>Tap a job to see its crew, days and hours. Drag it to another day to move it (press and hold on a phone, then tap a day).</small></div>;
     const f = fc(it), b = bk && bk.key === it.key ? bk : null;
     const held = f && !it.plan && f.held;
-    const canBook = f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !held;
+    const canBook = !whatIf && f && it.no && !it.upcoming && it.kind !== "service" && it.kind !== "task" && !held;
     const pool = (() => { const c = board.crewOf(it.foreman) || board.crewOf(it.jlead) || board.crewOf(it.who); return c ? c.people : []; })();
     const copyDays = []; for (let d = SC.workAfter(V.today), g = 0; d <= V.end && g < 25; d = SC.workAfter(d), g++) copyDays.push(d);
     const copied = new Set(Object.keys(plans).filter(k => k.startsWith((it.copyOf || it.key) + "~")).map(k => k.split("~")[1]));
@@ -53288,6 +53300,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-rm{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--cline);padding-top:8px}
         .sc2 .sc-rm input{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--cline);border-radius:8px;background:var(--card);color:var(--cink)}
         .sc2 .sc-wc{display:flex;gap:6px;align-items:center;font-size:13px;font-weight:700;color:var(--o-ink)}
+        .sc2 .sc-whatif{border:1.5px dashed var(--cink);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;background:var(--card);margin:6px 0}.sc2 .sc-whatif>span{font-size:12.5px;color:var(--cdim)}.sc2 .sc-wa{display:flex;flex-direction:column;gap:3px;font-size:12.5px;color:var(--cdim)}
         .sc2 .sc-wbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
         .sc2 .sc-wbk{left:50%;top:6vh;transform:translateX(-50%);width:min(620px,calc(100vw - 16px));max-height:86vh}
         .sc2 .sc-wrow{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--cline)}
@@ -53395,9 +53408,26 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         </span> : null}
         {foremen.length ? <span className="sc-seg" role="group" aria-label="Crew">{["All", ...foremen].map(f => <button type="button" key={f} aria-pressed={crewF === f} onClick={() => setCrewF(f)}>{f}</button>)}</span> : null}
         <span className="sc-seg" role="group" aria-label="Show"><button type="button" aria-pressed={!simOnly} onClick={() => setSimOnly(false)}>Everything</button><button type="button" aria-pressed={simOnly} onClick={() => setSimOnly(true)}>Simpro only</button></span>
+        <button type="button" className="mt-btn ghost" onClick={() => { setWhatIf(w => !w); setBk(null); setWb(null); setRm(null); setCopyOpen(false); setPicked(""); setWaOpen(false); }} aria-pressed={whatIf} title="Lay every upcoming job out on its estimated start. A look only: nothing is saved or booked.">{whatIf ? "Back to the real calendar" : "If all start on estimate"}</button>
         <button type="button" className="mt-btn ghost sc-fullbtn" onClick={() => setFull(f => !f)} aria-pressed={full}>{full ? "Exit full screen" : "Full screen"}</button>
       </div>
       {whyBar}
+      {whatIf ? (() => {
+        const from = SC.nextWork(V.today), to = SC.addDays(V.today, 27), a = V0 ? SC.idleHours(V0, boardUsers, from, to) : null, b = SC.idleHours(V, boardUsers, from, to);
+        const startOf = (it) => { const sl = it.auto ? SC.slotsOf(it.auto) : []; return sl.length ? sl[0].date : ""; };
+        const added = V.items.filter(it => it.whatIf && it.auto).sort((x, y) => startOf(x) < startOf(y) ? -1 : 1), stuck = V.items.filter(it => it.whatIf && !it.auto && it.need);
+        return (<div className="sc-whatif" role="status">
+          <b>What if everything starts on its estimated date</b>
+          <span>Every upcoming job with an estimated start is laid out on it below, even though the start isn't confirmed. A job with no foreman gets the least-booked crew, marked as a guess. This is a look: nothing here is saved or booked, and nothing can be changed until you tap Back to the real calendar.</span>
+          {a ? <span><b>Idle crew hours, the next 4 weeks ({b.days} workdays):</b> {a.hours} h on the real calendar, {b.hours} h with these jobs started.</span> : null}
+          <span>{added.length} upcoming job{added.length === 1 ? "" : "s"} laid out{stuck.length ? `; ${stuck.length} can't be placed (see why below)` : ""}.</span>
+          {added.length || stuck.length ? <button type="button" className="mt-lnk" onClick={() => setWaOpen(o => !o)} aria-expanded={waOpen}>{waOpen ? "Hide the list" : `Show what was added (${added.length + stuck.length})`}</button> : null}
+          {waOpen ? <div className="sc-wa">
+            {added.map(it => <span key={it.key}><b>#{it.no} {it.name}</b> · {it.tag} · starts {SC.short(startOf(it))} · {it.auto.team || "a crew"}{it.provisional ? " (a guess: no foreman yet)" : ""} · {Math.round(it.auto.hours)} h</span>)}
+            {stuck.map(it => <span key={it.key}><b>#{it.no} {it.name}</b> · not placed: {it.need}</span>)}
+          </div> : null}
+        </div>);
+      })() : null}
       <div className="sc-key">
         <span><span className="sc-sw" style={{ background: SCAL_KIND.rough }}/>Booked in Simpro</span>
         <span><span className="sc-sw" style={{ background: SCAL_SOFT.rough, border: `1.5px dashed ${SCAL_KIND.rough}` }}/>Auto-scheduled</span>
@@ -53418,7 +53448,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
           <div className="sc-popl">{list.map(c => chipEl(c, pop.iso, false))}</div>
         </div>); })() : null}
       {pickP ? <div className="sc-pickbar">Adding {SC.firstOf(pickP.name)}{board.partnerOf(pickP.name) ? ` (and ${SC.firstOf(board.partnerOf(pickP.name))} if open)` : ""}: tap a job on {SC.short(pickP.iso)}.<button type="button" onClick={() => setPickP(null)}>Cancel</button></div> : null}
-      {view === "week" || view === "crew" ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={() => openWeekBook("")}>Book this week in Simpro…</button>
+      {!whatIf && (view === "week" || view === "crew") ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={() => openWeekBook("")}>Book this week in Simpro…</button>
         <span className="sc-seg" role="group" aria-label="Book one day in Simpro">{[0, 1, 2, 3, 4].map(i => SC.addDays(weekStart, i)).filter(d => d >= V.today).map(d => <button type="button" key={d} onClick={() => openWeekBook(d)} title={`Book only ${SC.short(d)} in Simpro`}>Just {SCAL_DOW[SC.dowOf(d)]}</button>)}</span>
         <small className="sc-sub">Week of {SC.md(weekStart)}. You see every entry before anything goes in.</small></div> : null}
       {wb ? (() => { const on = wb.rows.filter(r => r.on); const pv = on.filter(r => r.preview), ent = pv.reduce((a, r) => a + r.preview.totals.entries, 0), hrs = pv.reduce((a, r) => a + r.preview.totals.hours, 0), ot = pv.reduce((a, r) => a + (r.preview.totals.ot || 0), 0);
