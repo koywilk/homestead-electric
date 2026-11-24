@@ -1,5 +1,18 @@
 [
  {
+  "v": 684,
+  "heads": [
+   {
+    "h": "FIXED on Job Prep (office)",
+    "first": "**Temp peds don't disappear on a missed tap.** Tapping the TEMP PED chip anywhere now opens its menu instead of flipping the ped on or off. Before, missing the little arrow could clear the Ped # and d"
+   },
+   {
+    "h": "NEW on Job Prep",
+    "first": "**Every job is on the board.** Quick jobs (with or without a job #), temp ped pickups and temp ped jobs now show in Office Admin until they're done, each with a small tag by its name."
+   }
+  ]
+ },
+ {
   "v": 683,
   "heads": [
    {
@@ -210,15 +223,6 @@
    {
     "h": "FIXED",
     "first": "A job or trip that's already booked in Simpro for a day no longer also shows its old plan for that day."
-   }
-  ]
- },
- {
-  "v": 664,
-  "heads": [
-   {
-    "h": "FIXED on the crew calendar (office)",
-    "first": "The box that opens when you tap a job now always fits on the screen. Before, on a job low on the page, the Time buttons, Move, Book and Remove were cut off at the bottom. If the box is taller than the"
    }
   ]
  }
