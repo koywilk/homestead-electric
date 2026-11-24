@@ -1,5 +1,18 @@
 [
  {
+  "v": 683,
+  "heads": [
+   {
+    "h": "FIXED on Job Prep (office)",
+    "first": "**Temp peds don't disappear on a missed tap.** Tapping the TEMP PED chip anywhere now opens its menu instead of flipping the ped on or off. Before, missing the little arrow could clear the Ped # and d"
+   },
+   {
+    "h": "NEW on Job Prep",
+    "first": "**Every job is on the board.** Quick jobs (with or without a job #), temp ped pickups and temp ped jobs now show in Office Admin until they're done, each with a small tag by its name."
+   }
+  ]
+ },
+ {
   "v": 681,
   "heads": [
    {
@@ -210,15 +223,6 @@
    {
     "h": "FIXED",
     "first": "Two half days on two jobs no longer show as double-booked."
-   }
-  ]
- },
- {
-  "v": 662,
-  "heads": [
-   {
-    "h": "FIXED on the crew calendar",
-    "first": "The auto-schedule can no longer put someone on a job when they're already booked somewhere else that day. Two rare cases could still do it: a job that started late after a return trip and ran into an "
    }
   ]
  }

@@ -49,7 +49,7 @@ t("commercial jobs now show (the tracker gives them their own lane)", () => {
   assert.deepStrictEqual(got.filter(F.isCommercial).map(j => j.id), ["c"]);
 });
 
-t("quick jobs show only with a job #, and drop off when done", () => {
+t("v683: every quick job shows, job # or not, until it's complete or ready to invoice", () => {
   assert.deepStrictEqual(ids([
     { id: "q1", name: "Q1", quickJob: true, simproNo: "12345" },
     { id: "q2", name: "Q2", quickJob: true, simproNo: "" },
@@ -58,14 +58,26 @@ t("quick jobs show only with a job #, and drop off when done", () => {
     { id: "q5", name: "Q5", quickJob: true, simproNo: "222", quickJobStatus: "inprogress" },
     { id: "q6", name: "Q6", quickJob: true, simproNo: "333", quickJobStatus: "complete" },
     { id: "q7", name: "Q7", quickJob: true, simproNo: "444", quickJobStatus: "invoice" },
-  ]).sort(), ["q1", "q5"]);
+  ]).sort(), ["q1", "q2", "q3", "q4", "q5"]);
 });
 
-t("temp ped runs, temp ped cards and quotes never show", () => {
+t("v683: temp ped cards show until Completed; temp ped pickup runs show like any quick job", () => {
   assert.deepStrictEqual(ids([
-    { id: "tp", name: "Ped", tempPed: true },
+    { id: "tp0", name: "Ped0", tempPed: true },
+    { id: "tp1", name: "Ped1", tempPed: true, tempPedStatus: "ready" },
+    { id: "tp2", name: "Ped2", tempPed: true, tempPedStatus: "scheduled" },
+    { id: "tp3", name: "Ped3", tempPed: true, tempPedStatus: "completed" },
     { id: "run", name: "Pickup", quickJob: true, quickJobType: "tempped", simproNo: "555" },
+    { id: "runDone", name: "Pickup2", quickJob: true, quickJobType: "tempped", quickJobStatus: "complete" },
+  ]).sort(), ["run", "tp0", "tp1", "tp2"]);
+});
+
+t("quotes and deleted / archived jobs never show", () => {
+  assert.deepStrictEqual(ids([
     { id: "bid", name: "Bid", type: "quote", simproNo: "Q-9" },
+    { id: "del", name: "Del", deleted: true },
+    { id: "arc", name: "Arc", archived: true },
+    { id: "arc2", name: "Arc2", quickJob: true, archivedAt: "11/1/2026" },
   ]), []);
 });
 

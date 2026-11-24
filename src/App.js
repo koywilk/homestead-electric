@@ -65774,10 +65774,12 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-22 · App SW version: v681
+**Last manifest update:** 2026-11-24 · App SW version: v683
 ---
 
-- **Crew calendar: answer job flags right in the job box** · 'in-flight 2026-11-22' · 'SW v681' · 'answerFl' · 'OdFlag' · 'claudeFlagAnswer' · Koy, on v679: *"Yeah there's not really a point in being able to see all these here and not do any of that and have to go to the \"Need You\" tab"*. Each open flag in the calendar's job box, and under **Job flags, not on the calendar** in Needs you, is now the same card as Needs you on the Claude tab: what it is, which watch raised it, the change it would make, and the same buttons (Yes / No on a card with a change, Schedule it, Add to my tasks, Done, Dismiss, and a typed answer when the watch asked for one). Same 'claudeFlagAnswer' call, same confirm before a change or a My Day task, Koy's own record only (other admins see the cards with *Koy answers these*). A flag that closes drops off at once, the count on its mark goes down, and a line at the top of the calendar says what happened. The Yes button is the calendar blue, not green. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** the existing answer path, unchanged; the calendar only calls it.
+- **Job Prep: every job shows (quick jobs and temp peds too), and a missed tap on TEMP PED can't make a ped vanish** · 'in-flight 2026-11-24' · 'SW v683' · 'jobPrepIncluded' · 'jobPrepIsPedRun' · 'JobPrepAdminRow' · 'JobPrepJobInfo' · Koy: *"in the job prep tab when i dont click exactly on the arrow of temp ped they dissapear, and also we need every single job pulled intot ther including quick jobs and tmep peds"*. **The vanishing:** a tap on the TEMP PED chip's label (anywhere but the small ▾) flipped the ped on or off in one go. Off cleared the Ped # and took the ped out of Temp Peds Out; on stamped today as its out date. Either way the row could jump into the folded ✓ complete strip, so it looked like it disappeared. Now a tap anywhere on TEMP PED opens its menu (Mark done / Mark outstanding / N/A / Went in on), in the Office Admin and Commercial lanes. ACCOUNT and PRE-LIEN still tick in one tap. **Every job:** 'jobPrepIncluded' now keeps every quick job, with or without a Simpro job #, temp ped pickup runs included, until Complete or Ready to Invoice, and every temp ped job until Completed (it then lives in Temp Peds Out). Quotes and deleted / archived jobs stay out. Quick jobs and temp ped jobs ride the Office Admin lane only (never the Resi prep lane or its held / override / cleared counts) with a small tag by the name (*Service Call*, *Temp Ped Pickup*, *Temp ped*…); on temp ped jobs and pickup runs the TEMP PED chip is hidden and counts as handled, since they are the ped. Header adds *· N temp ped jobs*. Tests: 'scripts/jobprep-included-test.js'. Guide 'jobprep.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** display and tap routing only; the menu writes the same 'adminItemPatch' fields it always did; no new field, loader, rules or function change. No stage is read differently or written.
+
+- **Crew calendar: answer job flags right in the job box** · 'in-flight 2026-11-22' · 'SW v681' · 'answerFl' · 'OdFlag' · 'claudeFlagAnswer' · Koy, on v679: *"Yeah there's not really a point in being able to see all these here and not do any of that and have to go to the 'Need You' tab"*. Each open flag in the calendar's job box, and under **Job flags, not on the calendar** in Needs you, is now the same card as Needs you on the Claude tab: what it is, which watch raised it, the change it would make, and the same buttons (Yes / No on a card with a change, Schedule it, Add to my tasks, Done, Dismiss, and a typed answer when the watch asked for one). Same 'claudeFlagAnswer' call, same confirm before a change or a My Day task, Koy's own record only (other admins see the cards with *Koy answers these*). A flag that closes drops off at once, the count on its mark goes down, and a line at the top of the calendar says what happened. The Yes button is the calendar blue, not green. Guide 'dashboard.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** the existing answer path, unchanged; the calendar only calls it.
 
 - **Crew calendar: take one day off a job, the rest stays** · 'in-flight 2026-11-22' · 'SW v680' · 'dayOff' · 'dayBack' · 'skippedOf' · 'pd skip (pdl x)' · Koy: *"why can i not remove a job from a day only, right now, if I remove a job, it removes it completely from the calendar."* Remove… on a job of two or more days now opens with **Just <day>?** and two buttons: **Off this day, hours move later** (the job ends a day later) and **Off this day, drop its hours** (the job gets a day shorter). The other days, their people and their times stay put. The job box lists **Days taken off** with **Put back**, and the change has an Undo. Whole-job Remove is the same two taps as before. Screen only: it writes the skip-a-day mark the auto-schedule and Duet's suggestions already use, so no scheduler or function change. A later day that would double-book someone is refused. Simpro-booked days still change in Simpro. Also ('showBox'): **Book in Simpro…** and **Remove…** open their box at the bottom of the job box, which scrolls, so on a tall box the tap looked dead (Koy: *"when i click book to simpro when i click on one it doesnt do anything"*); opening one now scrolls it into view. **Booking, fewer taps and one day** ('openBook day' · 'openWeekBook day' · 'bookArgs only' · 'afterBook' · 'planLess' · 'wbRun'; Koy: *"That's way too many clicks to book shit in Simpro. Also, can I have the option to book just Monday instead of everything on the screen?"*): Book in Simpro… and Book this week… open with the preview already built (tap, read, tap; unticking a block or changing the days rebuilds it; changing who shows the Show button again). **Just Mon … Just Fri** beside Book this week books every block on that day, that day only; the job box's Book has **All its days / Just <day>**. After a one-day book only that day comes off a saved plan (skip + its hours), so the rest stays planned and is never sent twice. Screen only: scrambleBook already books exactly the days it is sent. Preview-then-confirm is unchanged.
 
@@ -68660,19 +68662,25 @@ const JOBPREP_ADMIN_ITEMS = [
 // done = existing boolean true; N/A = adminNA flag (boolean false); else outstanding.
 // v440: Temp Pedestal turned off in Job Info → Job Sections reads as N/A, so
 // the board stops counting it as outstanding on jobs that have no ped.
+// v683: a temp ped card or a temp ped pickup run IS the ped, so its own TEMP PED
+// item never counts as outstanding (the chip is hidden on those rows).
+const jobPrepIsPedRun = (job) => !!job && (!!job.tempPed || job.quickJobType === "tempped");
 const adminItemState = (job, item) =>
   job[item.boolKey] ? "done"
-    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && isSectionHidden(job, "tempPed")) ? "na" : "todo");
+    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && (isSectionHidden(job, "tempPed") || jobPrepIsPedRun(job))) ? "na" : "todo");
 const adminAllHandled = (job) => JOBPREP_ADMIN_ITEMS.every(it => adminItemState(job, it) !== "todo");
-// The tab's job universe: full jobs until finish completes, plus (v623) quick jobs that
-// carry a Simpro job # until they're done — both divisions; JobPrepTracker splits
-// Commercial into its own lane. Temp ped runs (quickJobType "tempped") stay in the
-// Temp Peds lane only. Next start on top.
+// The tab's job universe: every live job, both divisions; JobPrepTracker splits
+// Commercial into its own lane. Full jobs until finish completes; (v683, Koy 2026-11-24:
+// "we need every single job pulled into there including quick jobs and temp peds")
+// every quick job (job # or not, temp ped pickup runs too) until complete / ready to
+// invoice, and every temp ped card until it's Completed (then it lives in Temp Peds Out).
+// Quotes and deleted / archived jobs stay out. Next start on top.
 // roughProjectedStart is M/D/YYYY (DateInp storage) with legacy YYYY-MM-DD mixed in —
 // parseAnyDate handles both; NEVER string-compare these.
 const jobPrepIncluded = (jobs) => (jobs||[])
-  .filter(j => j && !j.tempPed && j.type !== "quote" && (j.quickJob
-    ? (j.quickJobType !== "tempped" && !!String(j.simproNo || "").trim() && !["complete", "invoice"].includes(j.quickJobStatus || ""))
+  .filter(j => j && !j.deleted && !j.archived && !j.archivedAt && j.type !== "quote" && (
+    j.tempPed ? j.tempPedStatus !== "completed"
+    : j.quickJob ? !["complete", "invoice"].includes(j.quickJobStatus || "")
     : effFS(j) !== "complete"))
   .sort((a,b) => {
     const da = parseAnyDate(a.roughProjectedStart), db = parseAnyDate(b.roughProjectedStart);
@@ -68841,6 +68849,9 @@ function JobPrepJobInfo({ job, onSelectJob }) {
       <div onClick={()=>onSelectJob(job)}
         style={{fontWeight:700, fontSize:14, color:C.text, cursor:"pointer"}}>{job.name||"Untitled Job"}</div>
       <div style={{display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:12.5, color:C.dim, flexWrap:"wrap"}}>
+        {(job.tempPed || job.quickJob) && <span style={{fontSize:11.5, fontWeight:700, letterSpacing:"0.04em", textTransform:"uppercase",
+          border:`1px solid ${C.border}`, borderRadius:5, padding:"1px 6px"}}>
+          {job.tempPed ? "Temp ped" : ((QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || {}).label || "Quick job")}</span>}
         {job.simproNo && <span>#{job.simproNo}</span>}
         {job.foreman && <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
           <span style={{width:7,height:7,borderRadius:99,background:C.dim,display:"inline-block"}}/>{job.foreman}</span>}
@@ -68859,7 +68870,7 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
     <div style={jobPrepRowStyle(adminAllHandled(job) ? "#2E8B57" : C.red)}>
       <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
       <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
-        {JOBPREP_ADMIN_ITEMS.map(item => {
+        {JOBPREP_ADMIN_ITEMS.filter(item => !(item.key === "tempPed" && jobPrepIsPedRun(job))).map(item => {
           const state = adminItemState(job, item);
           const s = JOBPREP_CHIP_STATES[state];
           return (
@@ -68867,8 +68878,12 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
               fontWeight:700, letterSpacing:"0.05em", cursor:"pointer", userSelect:"none",
               border:`1px ${state==="na" ? "dashed" : "solid"} ${s.border}`, background:s.bg, color:s.fg,
               minHeight:32, overflow:"hidden"}}>
-              <span onClick={(e)=> state==="na"
-                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A is deliberate — menu only
+              {/* v683 (Koy 2026-11-24: "when i dont click exactly on the arrow of temp ped they disappear"):
+                  a tap on the TEMP PED label used to flip the ped on/off in one go — off wiped the Ped # and
+                  dropped it from Temp Peds Out, on stamped today as the out date — and the row jumped to the
+                  folded complete strip. The whole TEMP PED chip now opens its menu, same as the ▾. */}
+              <span onClick={(e)=> (state==="na" || item.key === "tempPed")
+                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A, and any ped change, is deliberate — menu only
                   : onUpdateJob(job.id, adminItemPatch(job, item, state === "done" ? "todo" : "done"))}
                 style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
                   textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.chip}</span>
@@ -69946,7 +69961,10 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
   // Commercial lane with the Office Admin items only — their prep is the Job Start tab.
   const allIncluded = useMemo(() => jobPrepIncluded(jobs), [jobs]);
   const adminJobs = useMemo(() => allIncluded.filter(j => !isCommercial(j)), [allIncluded]);
-  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob), [adminJobs]);
+  // v683: quick jobs and temp ped cards ride the Office Admin lane only, never the Resi prep lane.
+  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob && !j.tempPed), [adminJobs]);
+  const nQuick    = adminJobs.filter(j => j.quickJob).length;
+  const nPedCards = adminJobs.filter(j => j.tempPed).length;
   const commJobs  = useMemo(() => allIncluded.filter(isCommercial), [allIncluded]);
   const pedGroups = useMemo(() => tempPedGroups(jobs), [jobs]);
   const pedSuggest = useMemo(() => tpLinkSuggestions(pedGroups, jobs), [pedGroups, jobs]);
@@ -69990,7 +70008,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           </div>
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
             {included.length} active jobs
-            {adminJobs.length > included.length && <span> · {adminJobs.length - included.length} quick job{adminJobs.length - included.length===1?"":"s"}</span>}
+            {nQuick > 0 && <span> · {nQuick} quick job{nQuick===1?"":"s"}</span>}
+            {nPedCards > 0 && <span> · {nPedCards} temp ped job{nPedCards===1?"":"s"}</span>}
             {commJobs.length > 0 && <span> · {commJobs.length} commercial</span>}
             {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
             {onOvr > 0 && <span style={{color:C.slate,fontWeight:700}}> · {onOvr} started on override</span>}
