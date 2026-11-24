@@ -65870,8 +65870,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-24 · App SW version: v683
+**Last manifest update:** 2026-11-24 · App SW version: v684
 ---
+
+- **Job Prep: every job shows (quick jobs and temp peds too), and a missed tap on TEMP PED can't make a ped vanish** · 'in-flight 2026-11-24' · 'SW v684' · 'jobPrepIncluded' · 'jobPrepIsPedRun' · 'JobPrepAdminRow' · 'JobPrepJobInfo' · Koy: *"in the job prep tab when i dont click exactly on the arrow of temp ped they dissapear, and also we need every single job pulled intot ther including quick jobs and tmep peds"*. **The vanishing:** a tap on the TEMP PED chip's label (anywhere but the small ▾) flipped the ped on or off in one go. Off cleared the Ped # and took the ped out of Temp Peds Out; on stamped today as its out date. Either way the row could jump into the folded ✓ complete strip, so it looked like it disappeared. Now a tap anywhere on TEMP PED opens its menu (Mark done / Mark outstanding / N/A / Went in on), in the Office Admin and Commercial lanes. ACCOUNT and PRE-LIEN still tick in one tap. **Every job:** 'jobPrepIncluded' now keeps every quick job, with or without a Simpro job #, temp ped pickup runs included, until Complete or Ready to Invoice, and every temp ped job until Completed (it then lives in Temp Peds Out). Quotes and deleted / archived jobs stay out. Quick jobs and temp ped jobs ride the Office Admin lane only (never the Resi prep lane or its held / override / cleared counts) with a small tag by the name (*Service Call*, *Temp Ped Pickup*, *Temp ped*…); on temp ped jobs and pickup runs the TEMP PED chip is hidden and counts as handled, since they are the ped. Header adds *· N temp ped jobs*. Tests: 'scripts/jobprep-included-test.js'. Guide 'jobprep.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** display and tap routing only; the menu writes the same 'adminItemPatch' fields it always did; no new field, loader, rules or function change. No stage is read differently or written.
 
 - **New or moved Simpro cost centers show up right away: Bid Items checks on open, Job Costs reads an opened job live** · 'in-flight 2026-11-24' · 'SW v683' · 'bidCcSetChanged' · 'getPhaseHours ccIds' · 'getJobCostsLive' · 'pullJob ids' · Koy, 1224 Jimenez Residence: *"Why is the Dimmers cost center not showing up in Jimenez on the app? It got moved into it in Simpro but it's still not showing"*. Every reader already reads all of a job's sections; the misses were saved copies: Bid Items keeps its copy 12 h on the job ('simproCostCentersCache' / 'simproStockCache') and Job Costs is the 2:15 AM pull, so quote 3453 moved in as section "Change Order - 11/19/26" at 1:42 PM stayed hidden. **Bid Items:** 'getPhaseHours' (already read live on every job open for the Rough / Finish badges, cached 5 min) now also returns the job's cost centers as "section-costCenter" ids, no figures; 'bidCcSetChanged' compares them with both saved copies and re-reads them at once when one is missing or gone, once per job open (full jobs and quick jobs). No extra Simpro calls on an unchanged job. **Job Costs:** opening a job on the tab calls new 'getJobCostsLive' (admins / managers, live PIN: it returns the tab's figures), the same one-job read; its row and cost centers swap in with "Read from Simpro <time>", and the split is saved back to 'phaseCostsState' so tonight reuses it; on failure the nightly numbers stay. Booking was already live (Book in Simpro reads the job's sections on every preview). Guides 'biditems.html' step 4, 'dashboard.html' Job Costs. Test 'phasecosts-test' checks the ids. **Needs functions getPhaseHours, getJobCostsLive.** **Why it won't lose data:** read-only against Simpro; the only writes are the existing cache fields and the server-only 'phaseCostsState' doc in the shape the nightly writes; no rules, loader or job field change.
 
@@ -68759,19 +68761,25 @@ const JOBPREP_ADMIN_ITEMS = [
 // done = existing boolean true; N/A = adminNA flag (boolean false); else outstanding.
 // v440: Temp Pedestal turned off in Job Info → Job Sections reads as N/A, so
 // the board stops counting it as outstanding on jobs that have no ped.
+// v683: a temp ped card or a temp ped pickup run IS the ped, so its own TEMP PED
+// item never counts as outstanding (the chip is hidden on those rows).
+const jobPrepIsPedRun = (job) => !!job && (!!job.tempPed || job.quickJobType === "tempped");
 const adminItemState = (job, item) =>
   job[item.boolKey] ? "done"
-    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && isSectionHidden(job, "tempPed")) ? "na" : "todo");
+    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && (isSectionHidden(job, "tempPed") || jobPrepIsPedRun(job))) ? "na" : "todo");
 const adminAllHandled = (job) => JOBPREP_ADMIN_ITEMS.every(it => adminItemState(job, it) !== "todo");
-// The tab's job universe: full jobs until finish completes, plus (v623) quick jobs that
-// carry a Simpro job # until they're done — both divisions; JobPrepTracker splits
-// Commercial into its own lane. Temp ped runs (quickJobType "tempped") stay in the
-// Temp Peds lane only. Next start on top.
+// The tab's job universe: every live job, both divisions; JobPrepTracker splits
+// Commercial into its own lane. Full jobs until finish completes; (v683, Koy 2026-11-24:
+// "we need every single job pulled into there including quick jobs and temp peds")
+// every quick job (job # or not, temp ped pickup runs too) until complete / ready to
+// invoice, and every temp ped card until it's Completed (then it lives in Temp Peds Out).
+// Quotes and deleted / archived jobs stay out. Next start on top.
 // roughProjectedStart is M/D/YYYY (DateInp storage) with legacy YYYY-MM-DD mixed in —
 // parseAnyDate handles both; NEVER string-compare these.
 const jobPrepIncluded = (jobs) => (jobs||[])
-  .filter(j => j && !j.tempPed && j.type !== "quote" && (j.quickJob
-    ? (j.quickJobType !== "tempped" && !!String(j.simproNo || "").trim() && !["complete", "invoice"].includes(j.quickJobStatus || ""))
+  .filter(j => j && !j.deleted && !j.archived && !j.archivedAt && j.type !== "quote" && (
+    j.tempPed ? j.tempPedStatus !== "completed"
+    : j.quickJob ? !["complete", "invoice"].includes(j.quickJobStatus || "")
     : effFS(j) !== "complete"))
   .sort((a,b) => {
     const da = parseAnyDate(a.roughProjectedStart), db = parseAnyDate(b.roughProjectedStart);
@@ -68940,6 +68948,9 @@ function JobPrepJobInfo({ job, onSelectJob }) {
       <div onClick={()=>onSelectJob(job)}
         style={{fontWeight:700, fontSize:14, color:C.text, cursor:"pointer"}}>{job.name||"Untitled Job"}</div>
       <div style={{display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:12.5, color:C.dim, flexWrap:"wrap"}}>
+        {(job.tempPed || job.quickJob) && <span style={{fontSize:11.5, fontWeight:700, letterSpacing:"0.04em", textTransform:"uppercase",
+          border:`1px solid ${C.border}`, borderRadius:5, padding:"1px 6px"}}>
+          {job.tempPed ? "Temp ped" : ((QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || {}).label || "Quick job")}</span>}
         {job.simproNo && <span>#{job.simproNo}</span>}
         {job.foreman && <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
           <span style={{width:7,height:7,borderRadius:99,background:C.dim,display:"inline-block"}}/>{job.foreman}</span>}
@@ -68958,7 +68969,7 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
     <div style={jobPrepRowStyle(adminAllHandled(job) ? "#2E8B57" : C.red)}>
       <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
       <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
-        {JOBPREP_ADMIN_ITEMS.map(item => {
+        {JOBPREP_ADMIN_ITEMS.filter(item => !(item.key === "tempPed" && jobPrepIsPedRun(job))).map(item => {
           const state = adminItemState(job, item);
           const s = JOBPREP_CHIP_STATES[state];
           return (
@@ -68966,8 +68977,12 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
               fontWeight:700, letterSpacing:"0.05em", cursor:"pointer", userSelect:"none",
               border:`1px ${state==="na" ? "dashed" : "solid"} ${s.border}`, background:s.bg, color:s.fg,
               minHeight:32, overflow:"hidden"}}>
-              <span onClick={(e)=> state==="na"
-                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A is deliberate — menu only
+              {/* v683 (Koy 2026-11-24: "when i dont click exactly on the arrow of temp ped they disappear"):
+                  a tap on the TEMP PED label used to flip the ped on/off in one go — off wiped the Ped # and
+                  dropped it from Temp Peds Out, on stamped today as the out date — and the row jumped to the
+                  folded complete strip. The whole TEMP PED chip now opens its menu, same as the ▾. */}
+              <span onClick={(e)=> (state==="na" || item.key === "tempPed")
+                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A, and any ped change, is deliberate — menu only
                   : onUpdateJob(job.id, adminItemPatch(job, item, state === "done" ? "todo" : "done"))}
                 style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
                   textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.chip}</span>
@@ -70045,7 +70060,10 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
   // Commercial lane with the Office Admin items only — their prep is the Job Start tab.
   const allIncluded = useMemo(() => jobPrepIncluded(jobs), [jobs]);
   const adminJobs = useMemo(() => allIncluded.filter(j => !isCommercial(j)), [allIncluded]);
-  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob), [adminJobs]);
+  // v683: quick jobs and temp ped cards ride the Office Admin lane only, never the Resi prep lane.
+  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob && !j.tempPed), [adminJobs]);
+  const nQuick    = adminJobs.filter(j => j.quickJob).length;
+  const nPedCards = adminJobs.filter(j => j.tempPed).length;
   const commJobs  = useMemo(() => allIncluded.filter(isCommercial), [allIncluded]);
   const pedGroups = useMemo(() => tempPedGroups(jobs), [jobs]);
   const pedSuggest = useMemo(() => tpLinkSuggestions(pedGroups, jobs), [pedGroups, jobs]);
@@ -70089,7 +70107,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           </div>
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
             {included.length} active jobs
-            {adminJobs.length > included.length && <span> · {adminJobs.length - included.length} quick job{adminJobs.length - included.length===1?"":"s"}</span>}
+            {nQuick > 0 && <span> · {nQuick} quick job{nQuick===1?"":"s"}</span>}
+            {nPedCards > 0 && <span> · {nPedCards} temp ped job{nPedCards===1?"":"s"}</span>}
             {commJobs.length > 0 && <span> · {commJobs.length} commercial</span>}
             {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
             {onOvr > 0 && <span style={{color:C.slate,fontWeight:700}}> · {onOvr} started on override</span>}
