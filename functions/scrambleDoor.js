@@ -237,10 +237,20 @@ async function runBook(deps, args, held) {
       s.ccs = cr && Array.isArray(cr.data) ? cr.data : [];
     }
     const want = a.warranty === true ? "warranty" : phase === "trip" ? tripCc(trip, ccJob) : phase;
-    cc = SB.pickCostCenter(sections, phase, want);
+    // v684: the cost center the work belongs to (SB.chooseCostCenter), the same as a person's Book; when it can't tell,
+    // it refuses with the job's open cost centers so the request can name one (costCenter: { sectionId, id }).
+    const o = trip && trip.fromCOId && ccJob ? (ccJob.changeOrders || []).find(x => x && x.id === trip.fromCOId) : null;
+    cc = SB.chooseCostCenter(sections, phase, want, { co: o && want !== "warranty" ? { date: String(o.createdAt || o.date || "").slice(0, 10), desc: `${o.desc || ""} ${o.task || ""}` } : null });
     if (cc && cc.refused) throw new Refused(`Job #${no}: ${cc.refused}`);
-    if (!cc) throw new Refused(`Job #${no} has no ${want === "rough" ? "Rough In" : "Finish"} cost center in its Base section, so this can't pick where to book. Name the cost center, or book it in Simpro.`);
+    if (cc && cc.ask) throw new Refused(`Job #${no}: more than one cost center could fit this work, so name the one it goes on (costCenter: { sectionId, id }) and ask Koy if it isn't clear. Open ones: ${cc.ask.slice(0, 12).map(x => `${x.sectionName} › ${x.name} (${x.sectionId}/${x.id})`).join("; ")}.`, { costCenters: cc.ask });
   }
+  // v684: every section's cost centers, so a person who already has this job that day is changed on the schedule they have
+  for (const s of sections.slice(0, 20)) {
+    if (Array.isArray(s.ccs) && s.ccs.length && s.ccs[0].CostCenter !== undefined) continue;
+    const cr = await deps.simproReq("GET", `/jobs/${no}/sections/${s.ID}/costCenters/?pageSize=250`);
+    s.ccs = cr && Array.isArray(cr.data) ? cr.data : (s.ccs || []);
+  }
+  const ccSec = {}; sections.forEach(s => (s.ccs || []).forEach(c => { if (c && c.ID) ccSec[Number(c.ID)] = Number(s.ID); }));
   // who
   const [users, staffAll, ptoSnap, prefSnap] = await Promise.all([deps.getUsers(), deps.staff(),
     deps.db.collection("settings").doc("crewPTO").get(), deps.db.collection("meetings").doc("scramble__prefs").get()]);
@@ -267,14 +277,19 @@ async function runBook(deps, args, held) {
   // (Koy can put a Friday by hand) but the preview says so.
   who.rows.forEach(r => { const said = prefs.fri && Array.isArray(prefs.fri[r.date]) ? prefs.fri[r.date] : null;
     if (SC.dowOf(r.date) === 4 && said && !said.includes(r.person)) g.notes.push(`${first(r.person)} isn't on the said-yes list for Friday ${r.date}.`); });
-  const entries = entriesFor(who.rows, SB.weekHours(schedules, who.rows.map(r => r.staffId)));
-  const clash = SB.overlaps(schedules, entries).map(c => ({ person: c.name, date: c.date, rule: "double-booked",
+  // v684: this job's own blocks that the new times replace don't count toward the 40, and aren't a clash (planWrites changes them)
+  const sched2 = SB.withoutReplaced(schedules, no, entriesFor(who.rows, {}));
+  const entries = entriesFor(who.rows, SB.weekHours(sched2, who.rows.map(r => r.staffId)));
+  const clash = SB.overlaps(schedules, entries, no).map(c => ({ person: c.name, date: c.date, rule: "double-booked",
     why: `${c.name} already has ${c.type === "activity" ? "time off or an activity" : c.type === "leave" ? "leave" : "a booking" + (c.ref ? " on job " + c.ref.split("-")[0] : "")} in Simpro ${c.date} ${c.at}.` }));
   const seenR = new Set(), refusals = [...who.refusals, ...g.refusals, ...clash].filter(x => { const k = x.person + "|" + x.date + "|" + x.rule; if (seenR.has(k)) return false; seenR.add(k); return true; });
+  const plan = SB.planWrites(no, cc, entries, schedules, ccSec);
+  plan.filter(p => p.refused).forEach(p => refusals.push({ person: p.e.person, date: p.e.date, rule: "existing-schedule", why: p.refused }));
   const hash = SB.hashOf(no, cc, entries);
   const job = { no, name: String(jr.data.Name || "") };
   const totals = { entries: entries.length, hours: entries.reduce((x, e) => x + e.hours, 0), overtimeHours: entries.reduce((x, e) => x + e.ot, 0) };
-  const lines = entries.map(e => ({ date: e.date, person: e.person, simproEmployee: e.name, time: e.blocks.map(b => `${clockOf(b.StartTime)}–${clockOf(b.EndTime)} ${b.rate}`).join(", "), hours: e.hours, overtimeHours: e.ot, weekHoursBefore: e.weekBefore }));
+  const lines = entries.map(e => ({ date: e.date, person: e.person, simproEmployee: e.name, time: e.blocks.map(b => `${clockOf(b.StartTime)}–${clockOf(b.EndTime)} ${b.rate}`).join(", "), hours: e.hours, overtimeHours: e.ot, weekHoursBefore: e.weekBefore,
+    ...((pl => pl && pl.method !== "POST" ? { alreadyOnThisJob: { keeps: pl.keeps, replaces: pl.replaces } } : {})(plan.find(p => p.e === e))) }));
   const tripLine = trip ? { tripId: String(trip.id), willBeMarkedScheduledOn: dates[0], material: String(trip.material || "").replace(/<[^>]*>/g, "").trim() ? "on the trip" : "none on the trip: Koy gets a Send a PO item" } : null;
   if (a.mode === "preview" || refusals.length) {
     return { ok: !refusals.length, mode: "preview", canBook: !refusals.length, job, costCenter: cc, entries: lines, totals, notes: g.notes, ...(tripLine ? { trip: tripLine } : {}),
@@ -283,17 +298,17 @@ async function runBook(deps, args, held) {
   if (a.hash !== hash) throw new Refused("Simpro changed since that preview, or the request isn't the same one (someone booked or moved a day). Nothing was written. Preview again and confirm the new one.");
   const path = `/jobs/${no}/sections/${cc.sectionId}/costCenters/${cc.id}/schedules/`;
   const created = []; let failed = null;
-  for (const e of entries) {
-    const r = await deps.simproReq("POST", path, SB.bodyOf(e));
+  for (const p of plan) {
+    const e = p.e, r = await deps.simproReq(p.method, p.path, p.body);
     if (!r || !r.ok) { failed = { date: e.date, person: e.person, status: r && r.status, error: (typeof (r && r.data) === "string" ? r.data : JSON.stringify((r && r.data) || {})).slice(0, 300) }; break; }
-    created.push({ date: e.date, person: e.person, hours: e.hours, overtimeHours: e.ot, scheduleId: (r.data && r.data.ID) || null, time: e.blocks.map(b => `${b.StartTime}-${b.EndTime}`).join(", ") });
+    created.push({ date: e.date, person: e.person, hours: e.hours, overtimeHours: e.ot, scheduleId: (r.data && r.data.ID) || p.scheduleId || null, ...(p.method !== "POST" ? { changedExisting: true } : {}), ...(p.otherCc ? { otherCc: true } : {}), time: e.blocks.map(b => `${b.StartTime}-${b.EndTime}`).join(", ") });
   }
   try { await deps.db.collection("scrambleBookings").add({ at: new Date().toISOString(), by, via: "duet", job, phase, costCenter: cc,
     planned: entries.map(e => ({ date: e.date, staffId: e.staffId, name: e.name, hours: e.hours, ot: e.ot })), created, failed, ok: !failed }); } catch (e) { if (deps.log) deps.log("log failed: " + (e && e.message)); }
   let tripDone = null;
   if (trip && created.length) {
     try { tripDone = await deps.tripWrite(String(a.jobId), no, (trips) => ST.planTripBooked(trips, String(a.tripId), created.map(c => c.date).sort()[0],
-      { at: new Date().toISOString(), by, path, ids: created.map(c => c.scheduleId).filter(Boolean) }), by); }
+      { at: new Date().toISOString(), by, path, ids: created.filter(c => !c.otherCc).map(c => c.scheduleId).filter(Boolean) }), by); }
     catch (e) { tripDone = { ok: false }; if (deps.log) deps.log("trip mark failed: " + (e && e.message)); }
   }
   return { ok: !failed, mode: "book", job, costCenter: cc, path, created, planned: entries.length, notes: g.notes, ...(failed ? { failed, message: `Booked ${created.length} of ${entries.length}, then Simpro refused one. The rest were not written. Check Simpro before trying again.` } : {}),

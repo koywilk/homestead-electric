@@ -663,5 +663,58 @@ ok(VU.items.find(x => x.key === "j_un_r").auto && VU.items.find(x => x.key === "
     && /quarter hour/.test(okV([{ date: "2026-11-24", hours: 10, start: "07:00", people: [{ staffId: 3, start: "11:20", hours: 5.5 }] }])), "Book checks each person's own time: on that day, on the quarter hour");
 }
 
+
+// ── v684: Book in Simpro books the cost center the work belongs to, and a split day is one Simpro schedule ──
+{
+  const ty = (n) => ({ ID: 1, Name: n }), R = ty("Residential (Rough In)"), F = ty("Residential (Finish)"), W = ty("Residential (Warranty)"), SV = ty("Residential (Service)");
+  const inv = { ToDate: { Percent: 100 } };
+  // #1435 Hardman: no Base, four work cost centers all typed Rough In, a permit
+  const hard = [{ ID: 24758, Name: "200A Overhead Meter Upgrade", ccs: [{ ID: 18815, Name: "200A Overhead Meter Upgrade", CostCenter: R }, { ID: 18816, Name: "2\" PVC Surface Run", CostCenter: R }] },
+    { ID: 24759, Name: "Shop Panel", ccs: [{ ID: 18817, Name: "100A Shop Panel W/Service Drop", CostCenter: R }, { ID: 18818, Name: "Underground Wire Feed", CostCenter: R }] },
+    { ID: 24760, Name: "Permitting", ccs: [{ ID: 18819, Name: "Permit Cost", CostCenter: SV }] }];
+  const a1 = SB.chooseCostCenter(hard, "trip", "finish", {});
+  ok(a1.ask && a1.ask.length === 4 && !a1.ask.some(x => x.id === 18819), "a job with no Base Rough In / Finish asks which cost center instead of refusing, and never offers the permit");
+  ok(SB.chooseCostCenter(hard, "trip", "finish", { pick: { sectionId: 24759, id: 18817 } }).id === 18817, "the person's pick is what it books on");
+  ok(SB.chooseCostCenter(hard, "trip", "rough", { saved: { sectionId: 24759, id: 18817 } }).id === 18817, "a pick saved for the job and phase is used without asking again");
+  ok(SB.chooseCostCenter(hard, "trip", "finish", { pick: { sectionId: 1, id: 2 } }).refused, "a pick that isn't on the job is refused");
+  // a plain job: Base Rough In and Finish
+  const plain = [{ ID: 1, Name: "Base", ccs: [{ ID: 10, Name: "Rough In", CostCenter: R }, { ID: 11, Name: "Finish", CostCenter: F }] }];
+  ok(SB.chooseCostCenter(plain, "finish", null, {}).id === 11 && SB.chooseCostCenter(plain, "rough", null, {}).id === 10, "a Base-only job books its own Rough In / Finish without asking");
+  // finish work in a cost center Simpro types Rough In, on a job with one other section
+  const odd = [{ ID: 1, Name: "Base", ccs: [{ ID: 10, Name: "Rough In", CostCenter: R }] }, { ID: 2, Name: "Pool House", ccs: [{ ID: 20, Name: "Pool House", CostCenter: R }] }];
+  ok(SB.chooseCostCenter(odd, "finish", null, {}).ask, "finish work with no Finish cost center asks rather than guessing between two");
+  // several sections fit: ask
+  const rose = [{ ID: 1, Name: "Base", ccs: [{ ID: 10, Name: "Rough In", CostCenter: R }, { ID: 11, Name: "Finish", CostCenter: F }] },
+    { ID: 2, Name: "Pool House", ccs: [{ ID: 21, Name: "Finish", CostCenter: F }] },
+    { ID: 3, Name: "Change Order - 11/2/26", ccs: [{ ID: 31, Name: "Bath Fan Mud Cover Removal (x14)", CostCenter: R }] },
+    { ID: 4, Name: "Change Order - 9/11/26", ccs: [{ ID: 41, Name: "Generator Inlet", CostCenter: R }] },
+    { ID: 5, Name: "Warranty", ccs: [{ ID: 51, Name: "Warranty", CostCenter: W }] }];
+  const ra = SB.chooseCostCenter(rose, "finish", null, {});
+  ok(ra.ask && ra.ask[0].id !== 31 && ra.ask.slice(0, 2).map(x => x.id).sort().join() === "11,21" && !ra.ask.some(x => x.id === 51), "two Finish sections: it asks, fits first, warranty left out");
+  ok(SB.chooseCostCenter(rose, "trip", "finish", { co: { date: "2026-11-02", desc: "remove mud covers" } }).id === 31, "a change order trip books on the change order's own section, by its date");
+  ok(SB.chooseCostCenter(rose, "trip", "finish", { co: { date: "2026-10-01", desc: "Generator inlet install" } }).id === 41, "or by its words when the date doesn't match");
+  ok(SB.chooseCostCenter(rose, "trip", "warranty", {}).id === 51, "warranty work goes on the Warranty cost center");
+  const roseInv = rose.map(s => s.ID === 1 ? { ...s, ccs: [{ ID: 11, Name: "Finish", CostCenter: F, Claimed: inv }] } : s.ID === 2 ? { ...s, ccs: [] } : s);
+  const wi = SB.chooseCostCenter(roseInv, "finish", null, {});
+  ok(wi.ask || wi.id === 51, "a fully invoiced Finish never gets booked");
+  ok(SB.chooseCostCenter(roseInv, "finish", null, { pick: { sectionId: 1, id: 11 } }).id === 51, "picking an invoiced one goes to the open Warranty cost center");
+  // split day: Gage has Jimenez 7-10 in Simpro; booking 11-5 on Jimenez changes that schedule, it doesn't make a second
+  const sch = [{ ID: 135594, Type: "job", Reference: "1224-17219", Staff: { ID: 198 }, Date: "2026-11-24", Blocks: [{ StartTime: "07:00", EndTime: "10:00", Hrs: 3, ScheduleRate: { ID: 1 } }] },
+    { ID: 135298, Type: "job", Reference: "1304-19281", Staff: { ID: 198 }, Date: "2026-11-24", Blocks: [{ StartTime: "10:00", EndTime: "11:00", Hrs: 1, ScheduleRate: { ID: 1 } }] }];
+  const ent = SB.buildEntries([{ date: "2026-11-24", hours: 6, start: "11:00" }], [{ id: 198, name: "Gage Lund" }], SB.weekHours(sch, [198]));
+  ok(SB.overlaps(sch, ent, "1224").length === 0, "11-5 doesn't clash with Webb 10-11 or with its own job's 7-10");
+  const pw = SB.planWrites("1224", { sectionId: 9, id: 17219 }, ent, sch, { 17219: 9 });
+  ok(pw[0].method === "PATCH" && pw[0].path === "/jobs/1224/sections/9/costCenters/17219/schedules/135594" && pw[0].body.Blocks.map(b => b.StartTime + "-" + b.EndTime).join() === "07:00-10:00,11:00-17:00", "the split day goes on Gage's one Jimenez schedule as two blocks, 7-10 and 11-5");
+  const re = SB.buildEntries([{ date: "2026-11-24", hours: 2, start: "07:30" }], [{ id: 198, name: "Gage Lund" }], {});
+  const pr = SB.planWrites("1224", { sectionId: 9, id: 17219 }, re, sch, { 17219: 9 });
+  ok(pr[0].body.Blocks.length === 1 && pr[0].body.Blocks[0].StartTime === "07:30" && pr[0].replaces.join() === "07:00–10:00", "a new time over the same job's old one replaces it, so Simpro matches the calendar");
+  const s2 = SB.withoutReplaced(sch, "1224", re);
+  ok(SB.weekHours(s2, [198])[198]["2026-11-23"] === 1, "the replaced hours don't count toward the 40");
+  ok(SB.overlaps(sch, re, "1224").length === 0 && SB.overlaps(sch, SB.buildEntries([{ date: "2026-11-24", hours: 2, start: "09:30" }], [{ id: 198, name: "Gage Lund" }], {}), "1224").length === 1, "another job at the same time is still refused");
+  const fresh = SB.planWrites("889", { sectionId: 1, id: 11 }, ent, sch, {});
+  ok(fresh[0].method === "POST" && fresh[0].path === "/jobs/889/sections/1/costCenters/11/schedules/", "a person without that job that day gets a new schedule");
+  ok(SB.planWrites("1224", { sectionId: 9, id: 17219 }, ent, sch, {})[0].refused, "an existing schedule on a cost center it can't find is refused, nothing written");
+  ok(/pick/i.test(SB.validate({ mode: "preview", jobNo: "1435", phase: "trip", staffIds: [1], days: [{ date: "2026-11-24", hours: 10 }], ccPick: { sectionId: "x" } }, "2026-11-23")), "a bad pick is refused");
+}
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("scramble-cal-test: all passed");

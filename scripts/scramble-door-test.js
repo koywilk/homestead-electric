@@ -209,7 +209,7 @@ const rules = (r) => (r.refused || []).map(x => x.rule + ":" + x.person.split(" 
 
   // ── never a stage or status ──
   const src = require("fs").readFileSync(require("path").join(__dirname, "../functions/scrambleDoor.js"), "utf8").replace(/\/\/[^\n]*/g, "");
-  ok(!/Stage\s*:|Status\s*:|roughStatus\s*[:=][^=]|finishStatus\s*[:=][^=]|"PATCH"|"DELETE"|"PUT"/.test(src), "the door never writes a stage or status, and only ever creates schedule entries (no edit, no delete)");
+  ok(!/Stage\s*:|Status\s*:|roughStatus\s*[:=][^=]|finishStatus\s*[:=][^=]|"PATCH"|"DELETE"|"PUT"/.test(src), "the door never writes a stage or status, never deletes, and only changes a schedule through SB.planWrites (v684: the same person, job and day is one schedule)");
 
   // ── v678: people on one booking with their own times (Koy 2026-11-21) ──
   {

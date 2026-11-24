@@ -199,5 +199,21 @@ ok(F.team.length === 0, "Team check starts empty");
   ok(Fs.team.length === 1 && /Out: Gage Nov 23–Nov 24/.test(Fs.team[0].detail) && /1 failed inspection/.test(Fs.team[0].detail), "Team check: a line per crew, who's out and failed inspections");
   ok((Fs.guyNotes.gage || [])[0] === "Out Nov 23–Nov 24", "Guys: time off under the guy's name");
 }
+{ // v684: job reports on the Foreman Meeting
+  const reps = [
+    { id: "rep_a", jobNo: "1438", title: "1438 Miller Residence - Alpine: Margin Watch", updatedAt: "2026-11-17T10:00:00Z" },
+    { id: "rep_b", jobNo: "1438", title: "1438 Miller Residence - Alpine: Job Report", updatedAt: "2026-11-12T10:00:00Z" },
+    { id: "rep_c", jobNo: "1438", title: "1438 Miller Residence - Alpine: Job Report (week 2)", updatedAt: "2026-11-19T10:00:00Z" },
+    { id: "rep_d", jobNo: "1438", title: "Post-rough-in review", updatedAt: "2026-11-18T10:00:00Z" },
+    { id: "rep_e", jobNo: "1438", title: "Game plan", updatedAt: "2026-11-20T10:00:00Z" },
+    { id: "rep_f", jobNo: "1438", title: "Owner margin math", updatedAt: "2026-11-21T10:00:00Z", ownersOnly: true },
+    { id: "rep_g", jobNo: "1438", title: "Shared off", updatedAt: "2026-11-21T10:00:00Z", shareOff: true },
+    { id: "rep_h", jobNo: "14380", title: "Other job: Job Report", updatedAt: "2026-11-21T10:00:00Z" },
+  ];
+  const r = M.reportsForJob(reps, "1438").map(x => x.id).join();
+  ok(r === "rep_c,rep_b,rep_d,rep_a,rep_e", "job reports: newest Job Report first, then Margin Watch / post-rough-in, then the rest");
+  ok(!/rep_f|rep_g|rep_h/.test(r), "job reports: no owners-only, no sharing-off, exact job number only");
+  ok(M.reportsForJob(reps, "#1438").length === 5 && M.reportsForJob(null, "1438").length === 0 && M.reportsForJob(reps, "").length === 0, "job reports: # prefix, empty input");
+}
 if (fails) { console.error(fails + " failed"); process.exit(1); }
 console.log("meeting-model-test: all passed");

@@ -811,8 +811,25 @@ function buildPrefill(kind, input) {
   }
   return { rows };
 }
+// v684 (Koy, 2026-11-19: "have each foremans job reports made for their jobs available to dive into", "Every active job"):
+// the Foreman Meeting's Jobs rows open that job's reports from the Claude tab's Reports. Matched by job number.
+// Owners-only reports never show here (the meeting is on screen for the foremen), nor ones with sharing off.
+// Order: the newest Job Report first, then Margin Watch and post-rough-in, then the rest; newest first in each.
+function reportRank(title) {
+  const t = String(title || "");
+  if (/job report/i.test(t)) return 0;
+  if (/margin watch|post[\s-]?rough/i.test(t)) return 1;
+  return 2;
+}
+function reportsForJob(reports, jobNo) {
+  const no = String(jobNo == null ? "" : jobNo).replace(/^#/, "").trim();
+  if (!no) return [];
+  return (Array.isArray(reports) ? reports : [])
+    .filter(r => r && String(r.jobNo || "").replace(/^#/, "").trim() === no && !r.ownersOnly && !r.shareOff && !r.archived)
+    .sort((a, b) => (reportRank(a.title) - reportRank(b.title)) || (String(b.updatedAt || "") > String(a.updatedAt || "") ? 1 : String(b.updatedAt || "") < String(a.updatedAt || "") ? -1 : 0));
+}
 module.exports = { SECS, ATTENDEES, WATCHES, ymd, parseYmd, anyDate, meetingDate, meetingId, prevMeetingDate, weekRange, safeKey, firstOf,
   bookingsByJob, buildSections, applyPrefs, carriedSteps, SEED_2026_11_10, needIdFor,
   CFG, LEAD_SECS, LEAD_OLD, TYPED, LEAD_WATCHES, buildLeadSections, rangeText, seedFor, SEED_LEAD_2026_11_11, leadRange, secHasContent, phaseOf,
   FOREMAN_SECS, marginRows, buildForemanSections, isMainGroup, STRATEGY_SECS, strategyNumbers, parkedRows, buildStrategySections,
-  PREFILL_SECS, leadSuggestions, foremanSuggestions, buildPrefill, outIn, trainingIdeas, STANDARDS, appIdeas };
+  PREFILL_SECS, leadSuggestions, foremanSuggestions, buildPrefill, outIn, trainingIdeas, STANDARDS, appIdeas, reportRank, reportsForJob };

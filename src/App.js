@@ -17227,7 +17227,7 @@ function bidWireRollup(costCenters) {
   }
   return [...agg.values()].sort((x, y) => (y.required - x.required) || String(x.name).localeCompare(String(y.name)));
 }
-// v683 (Koy, 1224 Jimenez: "It got moved into it in Simpro but it's still not showing"): the Bid Items copy saved
+// v684 (Koy, 1224 Jimenez: "It got moved into it in Simpro but it's still not showing"): the Bid Items copy saved
 // on the job is kept 12 h, so a section added or moved in Simpro stayed hidden. getPhaseHours (read live on every
 // job open anyway) now also sends the job's cost centers as "section-costCenter" ids; this says whether a saved copy
 // (simproCostCentersCache: {sectionId, id} · simproStockCache: {sectionId, ccId}) is missing one or still has an old one.
@@ -52646,7 +52646,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
   // v680 (Koy 2026-11-22: "That's way too many clicks to book shit in Simpro"): Book builds the preview at once with the
   // people already on the block, so it is tap Book, read it, tap Book these. Changing who or which days builds it again.
   // Nothing goes to Simpro before that last tap. day = "" books all the block's days; a date books that day only.
-  const openBook = (it, day = "") => { if (whatIf) { roBlock(); return; } const staff = preStaff(it); setBk({ key: it.key, staff, day, preview: null, busy: false, err: "", done: null, find: "" }); showBox("sc-book"); if (staff.size) runPreview(it, { staff, day }); };
+  const openBook = (it, day = "") => { if (whatIf) { roBlock(); return; } const staff = preStaff(it); setBk({ key: it.key, staff, day, preview: null, busy: false, err: "", done: null, find: "" }); showBox("sc-book"); if (staff.size) runPreview(it, { staff, day, pick: null }); };
   // After a block is booked its saved plan goes (Simpro has the days now). After one day of it is booked, only that day
   // comes off the plan, with its hours, so the rest stays planned and a later Book doesn't send that day twice.
   const afterBook = (it, day) => { if (!(kept[it.key] || drafts[it.key])) return; const f = fc(it);
@@ -52678,7 +52678,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       if (!r.on || !it || !r.staff.size) { rows.push({ ...r, preview: null, err: r.on && !r.staff.size ? "No one picked." : "" }); continue; }
       const stop = bookStop(it, r.staff); if (stop) { rows.push({ ...r, preview: null, err: stop }); continue; }
       if (wbRun.current !== run) return;
-      try { const x = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, r.staff, day), ...(pend.length ? { pending: pend.slice(0, 400) } : {}) }); rows.push({ ...r, preview: x.data, err: "" });
+      try { const x = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, r.staff, day, r.pick), ...(pend.length ? { pending: pend.slice(0, 400) } : {}) }); rows.push({ ...r, preview: x.data, err: "" });
         ((x.data && x.data.entries) || []).forEach(e => pend.push({ staffId: e.staffId, date: e.date, hours: e.hours })); }
       catch (e) { rows.push({ ...r, preview: null, err: (e && e.message) || "Couldn't build the preview." }); }
     }
@@ -52690,8 +52690,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     const rows = [];
     for (const r of wb.rows) {
       const it = byKey[r.key];
-      if (!r.on || !r.preview || !it) { rows.push(r); continue; }
-      try { const x = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, r.staff, wb.day || ""), hash: r.preview.hash }); const d = x.data || {};
+      if (!r.on || !r.preview || !r.preview.hash || !it) { rows.push(r); continue; }
+      try { const x = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, r.staff, wb.day || "", r.pick), hash: r.preview.hash }); const d = x.data || {};
         if (d.ok) afterBook(it, wb.day || ""); rows.push({ ...r, done: d }); }
       catch (e) { rows.push({ ...r, done: { ok: false, err: (e && e.message) || "Nothing was written for this one." } }); }
     }
@@ -52721,7 +52721,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
     if (!SC.slotsOf({ ...p, crew: staff.size }).some(d => d.date >= todayYmd && !d.none)) return SC.slotsOf({ ...p, crew: staff.size }).some(d => d.date >= todayYmd) ? "Nobody is on this block. Add people to its days first." :  "Every day on this block is already past. Move it to a day from today on.";
     return "";
   };
-  const bookArgs = (it, staff, only) => {
+  const bookArgs = (it, staff, only, pick) => {
     const p = fc(it), all = new Set([...staff].map(Number));
     const days = SC.slotsOf({ ...p, crew: staff.size }).filter(d => d.date >= V.today && !d.none && (!only || d.date === only)).map(d => {
       const own = d.staff ? [...new Set(d.staff.map(x => x && (x.id ? Number(x.id) : idOfName(x.name))).filter(Boolean))] : null;
@@ -52732,19 +52732,19 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       return { date: d.date, hours: d.hours, start: d.start, ...(own && own.length ? { staffIds: own } : {}), ...(people.length ? { people } : {}) };
     });
     const ids = [...all], anyAll = days.some(d => !d.staffIds);
-    return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, ...(it.kind === "trip" && it.cc ? { cc: it.cc } : {}), ...(it.kind === "trip" && it.jobId && it.tripId && !it.copyOf ? { jobId: it.jobId, tripId: it.tripId } : {}), staffIds: ids, days: days.map(d => d.staffIds || !anyAll || ids.length === staff.size ? d : { ...d, staffIds: [...staff].map(Number) }) };
+    return { jobNo: it.no, phase: it.kind === "trip" ? "trip" : it.kind, ...(it.kind === "trip" && it.cc ? { cc: it.cc } : {}), ...(pick ? { ccPick: { sectionId: pick.sectionId, id: pick.id } } : {}), ...(it.kind === "trip" && it.jobId && it.tripId && !it.copyOf ? { jobId: it.jobId, tripId: it.tripId } : {}), staffIds: ids, days: days.map(d => d.staffIds || !anyAll || ids.length === staff.size ? d : { ...d, staffIds: [...staff].map(Number) }) };
   };
   const runPreview = async (it, o) => {
-    const staff = (o && o.staff) || bk.staff, day = o && "day" in o ? o.day : (bk && bk.day) || "";
+    const staff = (o && o.staff) || bk.staff, day = o && "day" in o ? o.day : (bk && bk.day) || "", pick = o && "pick" in o ? o.pick : (bk && bk.pick) || null;
     const stop = bookStop(it, staff) || (day && !bookArgs(it, staff, day).days.length ? `Nobody is on this block ${SC.short(day)}.` : ""); if (stop) { setBk(b => b && ({ ...b, busy: false, err: stop, preview: null })); return; }
     setBk(b => b && ({ ...b, busy: true, err: "", preview: null }));
-    try { const r = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, staff, day) }); setBk(b => b && b.key === it.key && (b.day || "") === day ? ({ ...b, busy: false, preview: r.data }) : b); }
+    try { const r = await memberCallable("scrambleBook", identity)({ mode: "preview", ...bookArgs(it, staff, day, pick) }); setBk(b => b && b.key === it.key && (b.day || "") === day ? ({ ...b, busy: false, preview: r.data }) : b); }
     catch (e) { setBk(b => b && ({ ...b, busy: false, err: (e && e.message) || "Couldn't build the preview." })); }
   };
   const runBook = async (it) => {
     setBk(b => ({ ...b, busy: true, err: "" }));
     try {
-      const r = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, bk.staff, bk.day), hash: bk.preview.hash });
+      const r = await memberCallable("scrambleBook", identity)({ mode: "book", ...bookArgs(it, bk.staff, bk.day, bk.pick), hash: bk.preview.hash });
       const d = r.data || {};
       setBk(b => ({ ...b, busy: false, done: d, preview: d.ok ? null : b.preview }));
       if (d.ok) { afterBook(it, bk.day); say(`Booked ${d.created.length} entries in Simpro.`); }
@@ -53130,10 +53130,15 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
               <button type="button" aria-pressed={b.day === selDay} onClick={() => { setBk(x => ({ ...x, day: selDay, preview: null })); runPreview(it, { staff: b.staff, day: selDay }); }}>Just {SC.short(selDay)}</button></span> : null}
             {b.busy && !b.preview ? <small>Building the preview…</small> : !b.preview ? <button type="button" className="mt-btn ghost" disabled={!b.staff.size || b.busy} onClick={() => runPreview(it)}>Show what it would book</button> : null}
             {b.err ? <small className="warn">{b.err}</small> : null}
-            {b.preview ? (<>
+            {b.preview && b.preview.askCostCenter ? (<div className="sc-ccpick">
+              <small>Which cost center in Simpro does this go on? Your pick is kept for this job.</small>
+              {b.preview.askCostCenter.map(o => <button type="button" key={o.sectionId + "-" + o.id} className="mt-btn ghost" disabled={b.busy} onClick={() => { const pick = { sectionId: o.sectionId, id: o.id }; setBk(x => ({ ...x, pick, preview: null })); runPreview(it, { staff: b.staff, day: b.day || "", pick }); }}>{o.sectionName} › {o.name}{o.why ? ` (${o.why})` : ""}</button>)}
+            </div>) : null}
+            {b.preview && !b.preview.askCostCenter ? (<>
               <small>Job #{b.preview.job.no} {b.preview.job.name} · {b.preview.costCenter.sectionName} › {b.preview.costCenter.name}{b.preview.costCenter.because ? ` (${b.preview.costCenter.because})` : ""} · {b.preview.totals.entries} entries · {b.preview.totals.hours} h{b.preview.totals.ot ? ` · ${b.preview.totals.ot} h at 1.5x` : ""}</small>
               <div className="sc-tbl"><table><thead><tr><th>Day</th><th>Person</th><th>Time</th><th>Normal</th><th>OT 1.5x</th></tr></thead>
-                <tbody>{b.preview.entries.map(e => <tr key={e.date + e.staffId}><td>{SC.short(e.date)}</td><td>{e.name}</td><td>{e.blocks.map(x => x.StartTime + "–" + x.EndTime).join(", ")}</td><td>{e.normal}</td><td className={e.ot ? "ot" : ""}>{e.ot || "–"}</td></tr>)}</tbody></table></div>
+                <tbody>{b.preview.entries.map(e => <tr key={e.date + e.staffId}><td>{SC.short(e.date)}</td><td>{e.name}</td><td>{e.blocks.map(x => x.StartTime + "–" + x.EndTime).join(", ")}{e.merge ? <small className="sc-sub">{e.merge.keeps.length ? ` keeps ${e.merge.keeps.join(", ")} already on this job` : ""}{e.merge.replaces.length ? ` replaces ${e.merge.replaces.join(", ")}` : ""}{e.merge.on ? ` (on ${e.merge.on})` : ""}</small> : null}</td><td>{e.normal}</td><td className={e.ot ? "ot" : ""}>{e.ot || "–"}</td></tr>)}</tbody></table></div>
+              {b.pick || b.preview.costCenter.picked ? <button type="button" className="mt-lnk dim" onClick={() => { setBk(x => ({ ...x, pick: null, preview: null })); runPreview(it, { staff: b.staff, day: b.day || "", pick: null }); }}>Change cost center</button> : null}
               {(b.preview.notes || []).map(n => <small key={n} className="warn">Check: {n}</small>)}
               <small>Hours over 40 in a person's week go in at 1.5x, counting what's already on their Simpro schedule. Time off doesn't count toward the 40. This only adds schedule entries; it never changes the job's stage or status.{it.kind === "trip" ? " The return trip is marked Scheduled on the first day booked." : ""}</small>
               <button type="button" className="mt-btn" disabled={b.busy} onClick={() => runBook(it)}>{b.busy ? "Booking…" : `Book these ${b.preview.totals.entries} entries in Simpro`}</button>
@@ -53400,6 +53405,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
         .sc2 .sc-copy button{all:unset;cursor:pointer;border:1px solid var(--cline);border-radius:999px;padding:3px 9px;font-size:12px;font-weight:700;color:var(--cdim)}
         .sc2 .sc-copy button[aria-pressed=true]{background:var(--o);border-color:var(--o);color:#fff}
         .sc2 .sc-book{border-top:1px solid var(--cline);padding-top:8px;display:flex;flex-direction:column;gap:7px}
+        .sc2 .sc-ccpick{display:flex;flex-direction:column;gap:6px;align-items:stretch}.sc2 .sc-ccpick .mt-btn{text-align:left;white-space:normal}
         .sc2 .sc-staff{max-height:170px;overflow:auto;display:flex;flex-direction:column;gap:2px;font-size:13px}
         .sc2 .sc-staff label{display:flex;gap:6px;align-items:center}
         .sc2 .sc-tbl{overflow:auto;max-height:240px;border:1px solid var(--cline);border-radius:10px}
@@ -53498,7 +53504,7 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
       {!whatIf && (view === "week" || view === "crew") ? <div className="sc-wbar"><button type="button" className="mt-btn" onClick={() => openWeekBook("")}>Book this week in Simpro…</button>
         <span className="sc-seg" role="group" aria-label="Book one day in Simpro">{[0, 1, 2, 3, 4].map(i => SC.addDays(weekStart, i)).filter(d => d >= V.today).map(d => <button type="button" key={d} onClick={() => openWeekBook(d)} title={`Book only ${SC.short(d)} in Simpro`}>Just {SCAL_DOW[SC.dowOf(d)]}</button>)}</span>
         <small className="sc-sub">Week of {SC.md(weekStart)}. You see every entry before anything goes in.</small></div> : null}
-      {wb ? (() => { const on = wb.rows.filter(r => r.on); const pv = on.filter(r => r.preview), ent = pv.reduce((a, r) => a + r.preview.totals.entries, 0), hrs = pv.reduce((a, r) => a + r.preview.totals.hours, 0), ot = pv.reduce((a, r) => a + (r.preview.totals.ot || 0), 0);
+      {wb ? (() => { const on = wb.rows.filter(r => r.on); const pv = on.filter(r => r.preview && r.preview.totals), ent = pv.reduce((a, r) => a + r.preview.totals.entries, 0), hrs = pv.reduce((a, r) => a + r.preview.totals.hours, 0), ot = pv.reduce((a, r) => a + (r.preview.totals.ot || 0), 0);
         return (
           <div className="sc-pop sc-wbk" role="dialog" aria-label="Book this week in Simpro">
             <div className="sc-poph"><b>{wb.day ? `Book ${SC.short(wb.day)} only` : `Book the week of ${SC.md(weekStart)}`}</b><span>{on.length} of {wb.rows.length} jobs</span><button type="button" onClick={() => setWb(null)} aria-label="Close"><Icon name="x" size={14}/></button></div>
@@ -53513,7 +53519,8 @@ function OdScrambleCal({ jobs, upcoming = [], users = [], identity, prefs, saveP
                     <small>{SC.slotsOf(f).filter(d => !wb.day || d.date === wb.day).map(d => `${SC.short(d.date)} ${d.label}`).join(" · ")}</small>
                     <small>{names.length ? names.join(", ") : !staffList.length ? "" : "No one matched in Simpro's staff list. Open the job and use its Book."}</small>
                     {r.err && (staffList.length || r.err !== "No one picked.") ? <small className="warn">{r.err}</small> : null}
-                    {r.preview ? <div className="sc-tbl"><table><thead><tr><th>Day</th><th>Person</th><th>Time</th><th>Normal</th><th>OT 1.5x</th></tr></thead>
+                    {r.preview && r.preview.askCostCenter ? <div className="sc-ccpick"><small>Which cost center in Simpro does this go on?</small>{r.preview.askCostCenter.map(o => <button type="button" key={o.sectionId + "-" + o.id} className="mt-btn ghost" disabled={wb.busy || wb.phase === "done"} onClick={() => { const rows = wb.rows.map((x, j) => j === i ? { ...x, pick: { sectionId: o.sectionId, id: o.id }, preview: null } : x); setWb(w => ({ ...w, rows })); runWeekPreview(rows, wb.day || ""); }}>{o.sectionName} › {o.name}{o.why ? ` (${o.why})` : ""}</button>)}</div> : null}
+                    {r.preview && r.preview.entries ? <div className="sc-tbl"><table><thead><tr><th>Day</th><th>Person</th><th>Time</th><th>Normal</th><th>OT 1.5x</th></tr></thead>
                       <tbody>{r.preview.entries.map(e => <tr key={e.date + e.staffId}><td>{SC.short(e.date)}</td><td>{e.name}</td><td>{e.blocks.map(x => x.StartTime + "–" + x.EndTime).join(", ")}</td><td>{e.normal}</td><td className={e.ot ? "ot" : ""}>{e.ot || "–"}</td></tr>)}</tbody></table></div> : null}
                     {r.preview && (r.preview.notes || []).length ? r.preview.notes.map(n => <small key={n} className="warn">Check: {n}</small>) : null}
                     {r.done ? <small className={r.done.ok ? "ok" : "warn"}>{r.done.ok ? `Booked ${r.done.created.length} entries.` : r.done.err || `Booked ${(r.done.created || []).length} of ${r.done.planned}, then Simpro refused ${r.done.failed && r.done.failed.name}. Check Simpro.`}</small> : null}
@@ -53624,7 +53631,7 @@ function OdJobCosts({ jobs, users = [], identity, fview = false, owns = null, on
     getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setCostsGoals(snap.exists() ? (snap.data() || null) : null); }, () => {});
     return () => { dead = true; };
   }, [costsTick]);
-  // v683 (Koy, 1224 Jimenez: "It got moved into it in Simpro but it's still not showing"): the tab is last night's pull,
+  // v684 (Koy, 1224 Jimenez: "It got moved into it in Simpro but it's still not showing"): the tab is last night's pull,
   // so a section added in Simpro today was missing. Opening a job now reads that one job live (getJobCostsLive, admins /
   // managers: it returns the tab's figures) and its row and cost centers swap in; on any failure the nightly numbers stay.
   const [costsLive, setCostsLive] = useState({});          // simproNo → { at, row, ccs } | "busy" | "err"
@@ -54005,6 +54012,54 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
   const timers = useRef({});
   const ro = week !== thisWeek;
   const mid = M.meetingId(week, kind), prevDate = M.prevMeetingDate(week), pid = M.meetingId(prevDate, kind), prefsId = kind + "__prefs";
+  // v684: job reports on the Foreman Meeting (Koy: "have each foremans job reports made for their jobs available to
+  // dive into", "Every active job"). The Claude tab's Reports, read through the same live-PIN callable claudeReports,
+  // matched to each Jobs row by job number. Owners-only reports never show here, and a report always opens as its
+  // foreman copy (the server's foremanSafe text), even for an admin, because the meeting is on screen for the foremen.
+  // Read-only: nothing here writes.
+  const [jobReps, setJobReps] = useState(undefined);   // undefined = loading · null = not reachable · [] list
+  const [repsFor, setRepsFor] = useState(null);        // the Simpro # whose report list is open
+  const [repOpenId, setRepOpenId] = useState(null);
+  const [repBodies, setRepBodies] = useState({});      // id → "loading" | report | { err }
+  useEffect(() => {
+    if (kind !== "foreman") return undefined;
+    let dead = false;
+    setJobReps(undefined);
+    memberCallable("claudeReports", identity)({}).then(
+      r => { if (!dead) setJobReps(r && r.data && r.data.ok && Array.isArray(r.data.reports) ? r.data.reports : null); },
+      () => { if (!dead) setJobReps(null); });
+    return () => { dead = true; };
+  }, [kind]); // eslint-disable-line
+  const openJobRep = (id) => {
+    if (repOpenId === id) { setRepOpenId(null); return; }
+    setRepOpenId(id);
+    const have = repBodies[id];
+    if (have && have !== "loading" && !have.err) return;
+    setRepBodies(m => ({ ...m, [id]: "loading" }));
+    memberCallable("claudeReports", identity)({ id }).then(
+      r => { const x = r && r.data; setRepBodies(m => ({ ...m, [id]: x && x.ok && x.report ? x.report : { err: "This report isn't there any more." } })); },
+      e => setRepBodies(m => ({ ...m, [id]: { err: (e && e.message) || "Couldn't open it. Try again." } })));
+  };
+  const repDay = (iso) => { const d = iso ? new Date(iso) : null; return d && !isNaN(d) ? d.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" }) : ""; };
+  const repName = (r) => { const t = String(r.title || ""), i = t.indexOf(": "); return i > 0 && /^\s*#?\d+/.test(t) ? t.slice(i + 2) : (t || r.typeLabel || "Report"); };
+  const jobRepsView = (j) => {
+    const list = Array.isArray(jobReps) ? M.reportsForJob(jobReps, j.no) : [];
+    if (!list.length) return null;
+    const isOpen = repsFor === String(j.no);
+    return (<>
+      <button type="button" className="mt-lnk" aria-expanded={isOpen} onClick={() => { setRepsFor(isOpen ? null : String(j.no)); setRepOpenId(null); }}>{isOpen ? "Hide reports" : `Reports (${list.length})`}</button>
+      {isOpen ? <ul className="mt-reps">{list.map(r => {
+        const on = repOpenId === r.id, b = repBodies[r.id];
+        const text = b && b !== "loading" && !b.err ? (typeof b.foremanContent === "string" ? b.foremanContent : b.content) : "";
+        return (<li key={r.id}>
+          <button type="button" className="mt-rep" aria-expanded={on} onClick={() => openJobRep(r.id)}><span>{repName(r)}</span><small>{repDay(r.updatedAt)}</small></button>
+          {on ? (!b || b === "loading" ? <div className="od-rep-body od-empty">Opening…</div>
+            : b.err ? <div className="od-rep-body od-empty">{b.err}</div>
+            : <div className="od-rep-body"><ReportBlocks content={text}/><div className="od-rep-foot">#{j.no} {j.name} · foreman copy, no dollar figures · version {b.version || 1}</div></div>) : null}
+        </li>);
+      })}</ul> : null}
+    </>);
+  };
 
   useEffect(() => {
     getDocs(query(collection(db, "meetings"), where("type", "==", kind))).then(
@@ -54383,13 +54438,14 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
     const notes = Object.entries((md.rowNotes || {})[key] || {}).filter(([, n]) => n && n.text).sort((a, b) => String(a[1].at) < String(b[1].at) ? -1 : 1);
     return (<>
       {notes.length ? <ul className="mt-rn">{notes.map(([nid, n]) => <li key={nid}>{n.text} <small>· {M.firstOf(n.by)}</small>{!ro ? <button type="button" className="mt-lnk" onClick={() => delRowNote(key, nid)}>Remove</button> : null}</li>)}</ul> : null}
+      {ro ? <div className="mt-rowacts">{jobRepsView(j)}</div> : null}
       {!ro ? (noteFor === key ? (
         <div className="mt-inl">
           <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder={`Note on ${j.name}…`} aria-label={`Note on ${j.name}`}
             onKeyDown={e => { if (e.key === "Enter") addRowNote(key); if (e.key === "Escape") setNoteFor(null); }}/>
           <button type="button" className="mt-btn" onClick={() => addRowNote(key)}>Save</button>
         </div>
-      ) : <div className="mt-rowacts"><button type="button" className="mt-lnk" onClick={() => { setNoteFor(key); setNoteText(""); }}>+ Note</button>
+      ) : <div className="mt-rowacts">{jobRepsView(j)}<button type="button" className="mt-lnk" onClick={() => { setNoteFor(key); setNoteText(""); }}>+ Note</button>
         {photoBtn(key)}
         <button type="button" className="mt-lnk dim" onClick={() => hideRow("jobs", { key, title })}>Hide</button></div>) : null}
       {photoStrip(key)}
@@ -54639,6 +54695,11 @@ function OdMeetings({ jobs, needs = [], upcoming = [], users = [], identity, fla
         .od-mtg .mt-days b{color:var(--o-ink)}
         .od-mtg .mt-rn{margin:6px 0 0;padding-left:18px;font-size:13px}.od-mtg .mt-rn li{margin:2px 0}.od-mtg .mt-rn small{display:inline;font-size:11.5px}
         .od-mtg .mt-rowacts{display:flex;gap:14px;align-items:center;margin-top:5px;flex-wrap:wrap}
+        .od-mtg .mt-reps{order:9;list-style:none;margin:6px 0 2px;padding:0;display:flex;flex-direction:column;gap:4px;flex-basis:100%;max-width:520px}
+        .od-mtg .mt-rep{width:100%;display:flex;justify-content:space-between;gap:10px;text-align:left;border:1px solid var(--cline);background:var(--card);border-radius:9px;padding:7px 10px;cursor:pointer;font:inherit;color:var(--cink)}
+        .od-mtg .mt-rep span{font-weight:600;font-size:13px}
+        .od-mtg .mt-rep small{color:var(--cdim);font-size:12px;white-space:nowrap}
+        .od-mtg .mt-rep[aria-expanded="true"]{border-color:var(--o-ink)}
         .od-mtg .mt-inl{display:flex;gap:6px;align-items:center;margin-top:6px}.od-mtg .mt-inl input{flex:1}
         .od-mtg .mt-rt{display:flex;flex-direction:column;align-items:flex-end;gap:4px;text-align:right}
         .od-mtg .mt-pill{font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;background:${C.slateBg};color:${C.slateInk};white-space:nowrap}
@@ -65870,9 +65931,14 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-24 · App SW version: v683
+**Last manifest update:** 2026-11-24 · App SW version: v684
 ---
 
+- **Book in Simpro: split days go on one Simpro schedule, and each booking goes on the cost center the work belongs to** · 'in-flight 2026-11-24' · 'SW v684' · 'SB.chooseCostCenter' · 'SB.planWrites' · 'SB.withoutReplaced' · 'scrambleCcPicks' · 'askCostCenter' · 'ccPick' · Koy: *"I need to be able to hit the book and Simpro button, either book the week or book the day, and have it just book it. the time cards exactly how they are. And also in there, it doesn't book anything if there's not a rough or a finished cost center. Like it needs to book to the correct cost center as well."* and *"even if the job has a finish in a rough cost center, I still want it booked accurately to the cost center."* **Before:** a split day (1224 Jimenez 7-10, 1304 Webb 10-11, Jimenez 11-5) failed on the second Jimenez piece with Simpro 422 "a schedule for this job on this date already exists"; a job with no Base Rough In / Finish (1435 Hardman) was refused. **Now:** a person who already has the job that day gets that schedule changed (PATCH its Blocks): blocks that overlap the new times are replaced, the rest kept, so Simpro matches the calendar; another job at the same time is still refused; replaced hours don't count toward the 40. Cost center: a person's pick > the pick saved for the job and phase ('scrambleCcPicks/<job>', server-only) > warranty > a change order trip's own change order section (by the CO's date in the section name, else its words) > the one open cost center that fits (Simpro's cost center type or name; CO sections left out) > the one open work cost center; else the preview asks (job box and Book the week list every open work cost center, fits first; Permit / Service never offered) and nothing is written. Invoiced goes to an open Warranty one as before. Duet's booking door refuses with the open cost centers to name one. Never touches a job's stage or status. Tests: v684 section in scramble-cal-test. **Deploy:** hosting and functions ('Deploy-functions: scrambleBook, duetBook, duetApi, duetRead'). **Why it won't lose data:** Simpro gets schedule entries only, the same person/job/day schedule is changed only to the blocks shown in the preview; one new server-only Firestore doc per job for the remembered pick; no rules change.
+
+- **Foreman Meeting: each job's reports open right from its row in Jobs** · 'in-flight 2026-11-24' · 'SW v684' · 'OdMeetings' · 'jobRepsView' · 'reportsForJob' · 'reportRank' · 'claudeReports' · 'foremanSafe' · Koy: *"have each foremans job reports made for their jobs available to dive into"*, *"Every active job"*, then *"We should build the foreman meeting 1, 2, and ship that tonight"*. Under each job in the Foreman Meeting's Jobs table, **Reports (N)** lists that job's reports from the Claude tab's Reports, matched by job number: the newest Job Report first, then Margin Watch and post-rough-in, then the rest, newest first in each. Tap one to read it right there. A job with no reports shows no link. **No dollars on screen:** owners-only reports never show here, nor ones with sharing off, and a report always opens as its foreman copy (the server's foremanSafe text), even for an admin, because the meeting is on screen for the foremen. Past weeks show the link too. Test: 'scripts/meeting-model-test.js' (order, owners-only and sharing-off left out, exact job number). Guide 'dashboard.html' (Foreman Meeting). **Deploy:** hosting only. **Why it won't lose data:** read-only, through the existing claudeReports callable; nothing is written.
+
+- **Job Prep: every job shows (quick jobs and temp peds too), and a missed tap on TEMP PED can't make a ped vanish** · 'in-flight 2026-11-24' · 'SW v684' · 'jobPrepIncluded' · 'jobPrepIsPedRun' · 'JobPrepAdminRow' · 'JobPrepJobInfo' · Koy: *"in the job prep tab when i dont click exactly on the arrow of temp ped they dissapear, and also we need every single job pulled intot ther including quick jobs and tmep peds"*. **The vanishing:** a tap on the TEMP PED chip's label (anywhere but the small ▾) flipped the ped on or off in one go. Off cleared the Ped # and took the ped out of Temp Peds Out; on stamped today as its out date. Either way the row could jump into the folded ✓ complete strip, so it looked like it disappeared. Now a tap anywhere on TEMP PED opens its menu (Mark done / Mark outstanding / N/A / Went in on), in the Office Admin and Commercial lanes. ACCOUNT and PRE-LIEN still tick in one tap. **Every job:** 'jobPrepIncluded' now keeps every quick job, with or without a Simpro job #, temp ped pickup runs included, until Complete or Ready to Invoice, and every temp ped job until Completed (it then lives in Temp Peds Out). Quotes and deleted / archived jobs stay out. Quick jobs and temp ped jobs ride the Office Admin lane only (never the Resi prep lane or its held / override / cleared counts) with a small tag by the name (*Service Call*, *Temp Ped Pickup*, *Temp ped*…); on temp ped jobs and pickup runs the TEMP PED chip is hidden and counts as handled, since they are the ped. Header adds *· N temp ped jobs*. Tests: 'scripts/jobprep-included-test.js'. Guide 'jobprep.html'. **Deploy:** hosting only ('Deploy-functions: none'). **Why it won't lose data:** display and tap routing only; the menu writes the same 'adminItemPatch' fields it always did; no new field, loader, rules or function change. No stage is read differently or written.
 - **New or moved Simpro cost centers show up right away: Bid Items checks on open, Job Costs reads an opened job live** · 'in-flight 2026-11-24' · 'SW v683' · 'bidCcSetChanged' · 'getPhaseHours ccIds' · 'getJobCostsLive' · 'pullJob ids' · Koy, 1224 Jimenez Residence: *"Why is the Dimmers cost center not showing up in Jimenez on the app? It got moved into it in Simpro but it's still not showing"*. Every reader already reads all of a job's sections; the misses were saved copies: Bid Items keeps its copy 12 h on the job ('simproCostCentersCache' / 'simproStockCache') and Job Costs is the 2:15 AM pull, so quote 3453 moved in as section "Change Order - 11/19/26" at 1:42 PM stayed hidden. **Bid Items:** 'getPhaseHours' (already read live on every job open for the Rough / Finish badges, cached 5 min) now also returns the job's cost centers as "section-costCenter" ids, no figures; 'bidCcSetChanged' compares them with both saved copies and re-reads them at once when one is missing or gone, once per job open (full jobs and quick jobs). No extra Simpro calls on an unchanged job. **Job Costs:** opening a job on the tab calls new 'getJobCostsLive' (admins / managers, live PIN: it returns the tab's figures), the same one-job read; its row and cost centers swap in with "Read from Simpro <time>", and the split is saved back to 'phaseCostsState' so tonight reuses it; on failure the nightly numbers stay. Booking was already live (Book in Simpro reads the job's sections on every preview). Guides 'biditems.html' step 4, 'dashboard.html' Job Costs. Test 'phasecosts-test' checks the ids. **Needs functions getPhaseHours, getJobCostsLive.** **Why it won't lose data:** read-only against Simpro; the only writes are the existing cache fields and the server-only 'phaseCostsState' doc in the shape the nightly writes; no rules, loader or job field change.
 
 - **Crew calendar: small fixes, explain-itself changes and a what-if view from the scheduler review** · 'in-flight 2026-11-24' · 'SW v682' · 'tripHours' · 'setDupFirsts' · 'firstOf' · 'scrambleLock' · 'SL.take' · 'scrambleBookLocks' · Koy: *"Do small fixes"* after Grok's review of the scheduler. (1) A return trip's time written as "1 hr 30 min" or "1h30m" now reads as an hour and a half (it read 1 hour). (2) When two active crew people share a first name, every place the calendar prints a first name adds a last initial ("James C.", "James L."); a bare "James" still refuses to guess who. (3) Book in Simpro takes a short lock on each person-day it is about to write, before it reads Simpro; a second booking for the same person and day in the same moment is refused with a plain message and writes nothing, and the lock is released when the booking ends or expires in 3 minutes. Covers the Book button and Duet's booking. New server-only collection scrambleBookLocks. Nothing else about booking changes. (4) 'leftSrc' · 'whyOf' · 'hoursFrom': the Why it's here line says where a job's hours left came from (the bid, the stage percent once the hours used have run out, a week as a guess, or for a trip the time set on it versus the 4-hour default), and Duet's calendar read gains hoursFrom. (5) 'explainItem' · 'explainJob' · 'explainOf' · 'calendar.explain' · 'cc_explain_placement': Duet can ask why one job is or isn't placed and gets the state, the reasons, what a person could change and where it sits; read-only, same calendar as the screen. duetRead gains the calendar.explain action; the connector tool ships as cc_explain_placement (connector branch why-not-placed). (6) 'companyHoliday': Duet's calendar read marks a company holiday and lists nobody as open or under 10 hours that day (it listed the whole crew as open on Thanksgiving, which read as 160 idle hours); the screen already hid those counts. (7) 'whatIf' · 'provisionalCrew' · 'idleHours' · 'sc-whatif': a switch on the crew calendar, **If all start on estimate**, lays every Upcoming job with an estimated start out on it (the normal calendar only places an Upcoming job once its start is confirmed). A job with no foreman gets the least-booked crew that does residential work, marked as a guess. A banner says what it is, compares idle crew hours for the next 4 weeks (real calendar versus this), and a collapsed list shows what was added and what couldn't be placed. A look only: while it is on, nothing saves (savePrefs and commit stop with a note) and Book is hidden. Koy: *"If all these jobs started on their estimated start date, this is what it would look like."*
@@ -68759,19 +68825,25 @@ const JOBPREP_ADMIN_ITEMS = [
 // done = existing boolean true; N/A = adminNA flag (boolean false); else outstanding.
 // v440: Temp Pedestal turned off in Job Info → Job Sections reads as N/A, so
 // the board stops counting it as outstanding on jobs that have no ped.
+// v683: a temp ped card or a temp ped pickup run IS the ped, so its own TEMP PED
+// item never counts as outstanding (the chip is hidden on those rows).
+const jobPrepIsPedRun = (job) => !!job && (!!job.tempPed || job.quickJobType === "tempped");
 const adminItemState = (job, item) =>
   job[item.boolKey] ? "done"
-    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && isSectionHidden(job, "tempPed")) ? "na" : "todo");
+    : ((job.adminNA||{})[item.key] || (item.key === "tempPed" && (isSectionHidden(job, "tempPed") || jobPrepIsPedRun(job))) ? "na" : "todo");
 const adminAllHandled = (job) => JOBPREP_ADMIN_ITEMS.every(it => adminItemState(job, it) !== "todo");
-// The tab's job universe: full jobs until finish completes, plus (v623) quick jobs that
-// carry a Simpro job # until they're done — both divisions; JobPrepTracker splits
-// Commercial into its own lane. Temp ped runs (quickJobType "tempped") stay in the
-// Temp Peds lane only. Next start on top.
+// The tab's job universe: every live job, both divisions; JobPrepTracker splits
+// Commercial into its own lane. Full jobs until finish completes; (v683, Koy 2026-11-24:
+// "we need every single job pulled into there including quick jobs and temp peds")
+// every quick job (job # or not, temp ped pickup runs too) until complete / ready to
+// invoice, and every temp ped card until it's Completed (then it lives in Temp Peds Out).
+// Quotes and deleted / archived jobs stay out. Next start on top.
 // roughProjectedStart is M/D/YYYY (DateInp storage) with legacy YYYY-MM-DD mixed in —
 // parseAnyDate handles both; NEVER string-compare these.
 const jobPrepIncluded = (jobs) => (jobs||[])
-  .filter(j => j && !j.tempPed && j.type !== "quote" && (j.quickJob
-    ? (j.quickJobType !== "tempped" && !!String(j.simproNo || "").trim() && !["complete", "invoice"].includes(j.quickJobStatus || ""))
+  .filter(j => j && !j.deleted && !j.archived && !j.archivedAt && j.type !== "quote" && (
+    j.tempPed ? j.tempPedStatus !== "completed"
+    : j.quickJob ? !["complete", "invoice"].includes(j.quickJobStatus || "")
     : effFS(j) !== "complete"))
   .sort((a,b) => {
     const da = parseAnyDate(a.roughProjectedStart), db = parseAnyDate(b.roughProjectedStart);
@@ -68940,6 +69012,9 @@ function JobPrepJobInfo({ job, onSelectJob }) {
       <div onClick={()=>onSelectJob(job)}
         style={{fontWeight:700, fontSize:14, color:C.text, cursor:"pointer"}}>{job.name||"Untitled Job"}</div>
       <div style={{display:"flex", alignItems:"center", gap:8, marginTop:3, fontSize:12.5, color:C.dim, flexWrap:"wrap"}}>
+        {(job.tempPed || job.quickJob) && <span style={{fontSize:11.5, fontWeight:700, letterSpacing:"0.04em", textTransform:"uppercase",
+          border:`1px solid ${C.border}`, borderRadius:5, padding:"1px 6px"}}>
+          {job.tempPed ? "Temp ped" : ((QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || {}).label || "Quick job")}</span>}
         {job.simproNo && <span>#{job.simproNo}</span>}
         {job.foreman && <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
           <span style={{width:7,height:7,borderRadius:99,background:C.dim,display:"inline-block"}}/>{job.foreman}</span>}
@@ -68958,7 +69033,7 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
     <div style={jobPrepRowStyle(adminAllHandled(job) ? "#2E8B57" : C.red)}>
       <JobPrepJobInfo job={job} onSelectJob={onSelectJob}/>
       <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
-        {JOBPREP_ADMIN_ITEMS.map(item => {
+        {JOBPREP_ADMIN_ITEMS.filter(item => !(item.key === "tempPed" && jobPrepIsPedRun(job))).map(item => {
           const state = adminItemState(job, item);
           const s = JOBPREP_CHIP_STATES[state];
           return (
@@ -68966,8 +69041,12 @@ function JobPrepAdminRow({ job, onSelectJob, onUpdateJob, onOpenMenu }) {
               fontWeight:700, letterSpacing:"0.05em", cursor:"pointer", userSelect:"none",
               border:`1px ${state==="na" ? "dashed" : "solid"} ${s.border}`, background:s.bg, color:s.fg,
               minHeight:32, overflow:"hidden"}}>
-              <span onClick={(e)=> state==="na"
-                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A is deliberate — menu only
+              {/* v683 (Koy 2026-11-24: "when i dont click exactly on the arrow of temp ped they disappear"):
+                  a tap on the TEMP PED label used to flip the ped on/off in one go — off wiped the Ped # and
+                  dropped it from Temp Peds Out, on stamped today as the out date — and the row jumped to the
+                  folded complete strip. The whole TEMP PED chip now opens its menu, same as the ▾. */}
+              <span onClick={(e)=> (state==="na" || item.key === "tempPed")
+                  ? onOpenMenu(e, job.id, item.key)   // leaving N/A, and any ped change, is deliberate — menu only
                   : onUpdateJob(job.id, adminItemPatch(job, item, state === "done" ? "todo" : "done"))}
                 style={{padding:"9px 5px 9px 12px", whiteSpace:"nowrap",
                   textDecoration: state==="na" ? "line-through" : "none"}}>{s.mark}{item.chip}</span>
@@ -70045,7 +70124,10 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
   // Commercial lane with the Office Admin items only — their prep is the Job Start tab.
   const allIncluded = useMemo(() => jobPrepIncluded(jobs), [jobs]);
   const adminJobs = useMemo(() => allIncluded.filter(j => !isCommercial(j)), [allIncluded]);
-  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob), [adminJobs]);
+  // v683: quick jobs and temp ped cards ride the Office Admin lane only, never the Resi prep lane.
+  const included  = useMemo(() => adminJobs.filter(j => !j.quickJob && !j.tempPed), [adminJobs]);
+  const nQuick    = adminJobs.filter(j => j.quickJob).length;
+  const nPedCards = adminJobs.filter(j => j.tempPed).length;
   const commJobs  = useMemo(() => allIncluded.filter(isCommercial), [allIncluded]);
   const pedGroups = useMemo(() => tempPedGroups(jobs), [jobs]);
   const pedSuggest = useMemo(() => tpLinkSuggestions(pedGroups, jobs), [pedGroups, jobs]);
@@ -70089,7 +70171,8 @@ function JobPrepTracker({ jobs = [], identity, onSelectJob, onUpdateJob, onSched
           </div>
           <div style={{fontSize:13,color:C.dim,marginTop:4}}>
             {included.length} active jobs
-            {adminJobs.length > included.length && <span> · {adminJobs.length - included.length} quick job{adminJobs.length - included.length===1?"":"s"}</span>}
+            {nQuick > 0 && <span> · {nQuick} quick job{nQuick===1?"":"s"}</span>}
+            {nPedCards > 0 && <span> · {nPedCards} temp ped job{nPedCards===1?"":"s"}</span>}
             {commJobs.length > 0 && <span> · {commJobs.length} commercial</span>}
             {held > 0 && <span style={{color:C.red,fontWeight:700}}> · {held} held in prep</span>}
             {onOvr > 0 && <span style={{color:C.slate,fontWeight:700}}> · {onOvr} started on override</span>}
