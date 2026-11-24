@@ -1,5 +1,14 @@
 [
  {
+  "v": 682,
+  "heads": [
+   {
+    "h": "FIXED",
+    "first": "**New cost centers show up right away.** When the office moves a change order into a job in Simpro (a new section like \"Change Order - 11/19/26\"), Bid Items used to keep showing the old bid for up to "
+   }
+  ]
+ },
+ {
   "v": 681,
   "heads": [
    {
@@ -210,15 +219,6 @@
    {
     "h": "FIXED",
     "first": "Two half days on two jobs no longer show as double-booked."
-   }
-  ]
- },
- {
-  "v": 662,
-  "heads": [
-   {
-    "h": "FIXED on the crew calendar",
-    "first": "The auto-schedule can no longer put someone on a job when they're already booked somewhere else that day. Two rare cases could still do it: a job that started late after a return trip and ran into an "
    }
   ]
  }
