@@ -1,5 +1,14 @@
 [
  {
+  "v": 687,
+  "heads": [
+   {
+    "h": "NEW for admins: see anyone's My Jobs page",
+    "first": "**Admins now have My Jobs in the top bar.** Open it and use **Viewing as** at the top to pick any foreman, jr. foreman or lead. You see their page exactly as they see it: their jobs (a foreman's whole"
+   }
+  ]
+ },
+ {
   "v": 686,
   "heads": [
    {
@@ -212,18 +221,5 @@
  {
   "v": 668,
   "heads": []
- },
- {
-  "v": 667,
-  "heads": [
-   {
-    "h": "NEW for admins: copy and share Claude reports",
-    "first": "Dashboard, Claude tab, Reports: open a report and tap Copy. Pick Foreman / crew or Owners / admins, and Text or Email, then Copy and paste it anywhere."
-   },
-   {
-    "h": "NEW for everyone",
-    "first": "If someone sends you a report link, open it on your phone, sign in if asked, and the report opens over the app. Copy text is at the bottom."
-   }
-  ]
  }
 ]

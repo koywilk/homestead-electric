@@ -61,8 +61,19 @@ function myJobsFor(identity, users, jobs) {
   const p = peopleFor(rec, users);
   return { rec, title: p.title, titleLabel: TITLE_LABEL[p.title] || "", crew: p.crew, rows: jobsFor(p.people, jobs) };
 }
-// The My Jobs link in Command Center: foremen, jr. foremen and leads (the people the page is for).
-const showsMyJobsLink = (rec) => !!rec && rec.active !== false && ["foreman", "jrforeman", "lead"].includes(titleOf(rec));
+// Admin access, the app's getAccess rule: the record's access tier, else the legacy role map.
+const isAdminRec = (rec) => !!rec && (rec.access ? rec.access === "admin" : ["admin", "justin"].includes(rec.role));
+// The My Jobs link in Command Center: foremen, jr. foremen and leads (the people the page is for), and (v687, Koy:
+// "Any admin needs to be able to see all their pages too") every admin.
+const showsMyJobsLink = (rec) => !!rec && rec.active !== false && (["foreman", "jrforeman", "lead"].includes(titleOf(rec)) || isAdminRec(rec));
+// v687: who an admin can view My Jobs as: every active foreman, jr. foreman and lead on the team list,
+// foremen first, then jr. foremen, then leads, by name in each.
+const VIEW_ORDER = { foreman: 0, jrforeman: 1, lead: 2 };
+function viewablePeople(users) {
+  return (users || []).filter(u => u && u.active !== false && !u._standIn && String(u.name || "").trim() && titleOf(u) in VIEW_ORDER)
+    .map(u => ({ id: u.id, name: String(u.name).trim(), title: titleOf(u), titleLabel: TITLE_LABEL[titleOf(u)] }))
+    .sort((a, b) => VIEW_ORDER[a.title] - VIEW_ORDER[b.title] || a.name.localeCompare(b.name));
+}
 
 // ── Reports, grouped for one job ──────────────────────────────────────────────
 // Finish plans and foreman packets are new report types from 2026-11-25; the rest are the kinds the
@@ -96,4 +107,4 @@ function reportName(r) {
   return i > 0 && /^\s*#?\d+/.test(t) ? t.slice(i + 2) : (t || (r && r.typeLabel) || "Report");
 }
 
-module.exports = { sameName, titleOf, recordOf, peopleFor, isLiveJob, jobsFor, myJobsFor, showsMyJobsLink, REPORT_GROUPS, reportGroupOf, reportsByGroup, reportName };
+module.exports = { sameName, titleOf, recordOf, peopleFor, isLiveJob, jobsFor, myJobsFor, showsMyJobsLink, isAdminRec, viewablePeople, REPORT_GROUPS, reportGroupOf, reportsByGroup, reportName };

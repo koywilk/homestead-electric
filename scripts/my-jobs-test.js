@@ -49,7 +49,14 @@ ok(ids(kee) === "c", "Keegan's crew job shows once");
 ok(MJ.myJobsFor(null, users, jobs).rows.length === 0, "nobody signed in, no jobs");
 
 ok(MJ.showsMyJobsLink(users[0]) && MJ.showsMyJobsLink(users[1]) && MJ.showsMyJobsLink(users[4]), "the link shows for foremen, jr. foremen and leads");
-ok(!MJ.showsMyJobsLink(users[2]) && !MJ.showsMyJobsLink(users[6]), "not for crew or admins");
+ok(!MJ.showsMyJobsLink(users[2]), "not for crew");
+ok(MJ.showsMyJobsLink({ id: "x", name: "Josh", access: "admin", title: "admin" }), "v687: every admin gets the link");
+ok(MJ.showsMyJobsLink({ id: "y", name: "Old Admin", role: "admin" }), "a legacy admin role too");
+ok(!MJ.showsMyJobsLink({ id: "z", name: "Mgr", access: "manager", title: "crew" }), "a manager on the crew does not");
+ok(MJ.isAdminRec({ access: "admin" }) && !MJ.isAdminRec({ access: "manager", role: "admin" }), "the access tier wins over the old role");
+const vp = MJ.viewablePeople(users);
+ok(vp.map(p => p.name).join() === "Daegan Smith,Keegan Jones,Louis Hoffman,Austin Lead,Noah Loner", "an admin can view as every active foreman, jr. foreman and lead, foremen first");
+ok(!vp.some(p => p.name === "Koy" || p.name === "Gage Apprentice" || p.name === "Old Guy"), "never admins, crew or deactivated people");
 ok(!MJ.showsMyJobsLink({ ...users[0], active: false }), "not for a deactivated foreman");
 
 const reps = [

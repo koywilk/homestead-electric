@@ -57569,7 +57569,17 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
   useEffect(() => { try { document.title = "My Jobs · Homestead Electric"; } catch (e) {} }, []);
   const root = useRef(null);
   useOdMoneyMask(root, true);   // the safety net: a stray "$1,234" in a job name or report shows as $•••
-  const mj = useMemo(() => MyJobsModel.myJobsFor(identity, users, allJobs), [identity, users, allJobs]);
+  // v687 (Koy: "how do I see their pages myself?", "Any admin needs to be able to see all their pages too"): an admin
+  // picks any foreman, jr. foreman or lead under Viewing as and sees exactly that person's page. Only the jobs list
+  // changes: the reports and job costs read the same way, and the page stays read-only. The pick is remembered on
+  // this device only.
+  const isAdmin = MyJobsModel.isAdminRec(identity);
+  const viewable = useMemo(() => isAdmin ? MyJobsModel.viewablePeople(users) : [], [isAdmin, users]);
+  const [viewAsId, setViewAsId] = useState(() => { try { return localStorage.getItem("myjobs.viewAs") || ""; } catch (e) { return ""; } });
+  const viewAs = isAdmin ? (viewable.find(p => p.id === viewAsId) || null) : null;
+  const pickViewAs = (id) => { setViewAsId(id); try { if (id) localStorage.setItem("myjobs.viewAs", id); else localStorage.removeItem("myjobs.viewAs"); } catch (e) {} };
+  const whoId = viewAs ? viewAs.id : identity && identity.id, whoName = viewAs ? viewAs.name : identity && identity.name;
+  const mj = useMemo(() => MyJobsModel.myJobsFor(whoId || whoName ? { id: whoId, name: whoName } : null, users, allJobs), [whoId, whoName, users, allJobs]);
   const [costs, setCosts] = useState({ doc: undefined, goals: null });
   const [reports, setReports] = useState(undefined);   // undefined = loading · null = not reachable · [] list
   useEffect(() => {
@@ -57587,9 +57597,9 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
   const groupsOf = (rows) => {
     if (mj.title !== "foreman") return [{ key: "me", label: null, rows }];
     const order = [(mj.rec && mj.rec.name) || "", ...mj.crew];
-    return order.map(n => ({ key: n, label: n === order[0] ? "Your jobs" : `${odFirst(n)}'s jobs`, rows: rows.filter(r => r.person === n) })).filter(g => g.rows.length);
+    return order.map(n => ({ key: n, label: n === order[0] ? (viewAs ? `${odFirst(n)}'s own jobs` : "Your jobs") : `${odFirst(n)}'s jobs`, rows: rows.filter(r => r.person === n) })).filter(g => g.rows.length);
   };
-  const jobEl = (r) => <MyJobsJob key={r.job.id} row={r} costs={costs} reports={reports} identity={identity} users={users} allJobs={allJobs} onOpenJob={onOpenJob}/>;
+  const jobEl = (r) => <MyJobsJob key={(viewAs ? viewAs.id : "me") + ":" + r.job.id} row={r} costs={costs} reports={reports} identity={identity} users={users} allJobs={allJobs} onOpenJob={onOpenJob}/>;
   const [tipOff, setTipOff] = useState(() => { try { return mjIsStandalone() || localStorage.getItem("myjobs.tipOff") === "1"; } catch (e) { return true; } });
   return (
     <div className="od-page mj-page" ref={root}>
@@ -57603,6 +57613,9 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
         .mj-h .r{margin-left:auto;display:inline-flex;gap:8px;align-items:center}
         .mj-h .od-app{color:${C.text};background:${C.card};font-size:13.5px;font-weight:700;text-decoration:none;border:1px solid rgba(41,33,25,.14);border-radius:999px;padding:6px 12px;white-space:nowrap}
         .mj-h .od-bell{display:inline-flex}.mj-h .od-bell button{background:${C.card}!important;min-width:32px;min-height:32px;justify-content:center}
+        .mj-view{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:${C.card};border:1px solid rgba(41,33,25,.14);border-radius:12px;padding:8px 12px;margin:0 0 12px;font-size:13.5px;font-weight:700}
+        .mj-view select{font:inherit;font-weight:600;font-size:15px;min-height:40px;border:1px solid rgba(41,33,25,.2);border-radius:8px;padding:4px 8px;background:${C.card};color:${C.text};max-width:100%}
+        .mj-view small{font-weight:500;font-size:12px;color:${C.dim}}
         .mj-sec{margin:18px 0 8px;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:${C.dim};display:flex;gap:8px;align-items:center}
         .mj-sec span{font-weight:700;letter-spacing:0;text-transform:none;background:rgba(41,33,25,.07);border-radius:99px;padding:1px 8px}
         .mj-job{background:${C.card};border:1px solid rgba(41,33,25,.12);border-radius:14px;margin:0 0 8px;box-shadow:0 1px 2px rgba(41,33,25,.05)}
@@ -57641,12 +57654,19 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
         <style>{odDashCss()}</style>
         <div className="mj-h">
           <img src="/icon-192.png" alt="" onError={e => { e.currentTarget.style.display = "none"; }}/>
-          <div><h1>My Jobs</h1><p>{first ? `${first}, ` : ""}{mj.title === "foreman" ? "your jobs and your crew's" : "the jobs you run or lead"}: {odPlural(active.length, "active job")}.</p></div>
+          <div><h1>My Jobs</h1><p>{viewAs ? `${first}'s page, as ${first} sees it: ${mj.title === "foreman" ? "their jobs and their crew's" : "the jobs they run or lead"}` : `${first ? `${first}, ` : ""}${mj.title === "foreman" ? "your jobs and your crew's" : "the jobs you run or lead"}`}: {odPlural(active.length, "active job")}.</p></div>
           <span className="r">{actions}<a href="/" className="od-app">Command Center</a></span>
         </div>
         {!tipOff ? <div className="mj-tip"><Icon name="info" size={15}/><span>Put My Jobs on your home screen: in Safari tap Share, then Add to Home Screen.</span>
           <button type="button" onClick={() => { setTipOff(true); try { localStorage.setItem("myjobs.tipOff", "1"); } catch (e) {} }}>Got it</button></div> : null}
-        {!mj.rows.length ? <div className="mj-empty">No jobs list you as the foreman or lead{mj.title === "foreman" ? ", and none list anyone on your crew" : ""}. When the office puts you on a job, it shows here.</div> : null}
+        {isAdmin ? <label className="mj-view" htmlFor="mj-viewas"><span>Viewing as</span>
+          <select id="mj-viewas" value={viewAs ? viewAs.id : ""} onChange={e => pickViewAs(e.target.value)}>
+            <option value="">Me</option>
+            {[["foreman", "Foremen"], ["jrforeman", "Jr. foremen"], ["lead", "Leads"]].map(([t, l]) => { const ps = viewable.filter(p => p.title === t); return ps.length ? <optgroup key={t} label={l}>{ps.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</optgroup> : null; })}
+          </select><small>Only admins see this. Read-only.</small></label> : null}
+        {!mj.rows.length ? <div className="mj-empty">{viewAs ? `No jobs list ${first} as the foreman or lead${mj.title === "foreman" ? ", and none list anyone on their crew" : ""}.`
+          : isAdmin ? "No jobs list you as the foreman or lead. Pick a foreman, jr. foreman or lead under Viewing as to see their page."
+          : <>No jobs list you as the foreman or lead{mj.title === "foreman" ? ", and none list anyone on your crew" : ""}. When the office puts you on a job, it shows here.</>}</div> : null}
         {groupsOf(active).map(g => (<Fragment key={g.key}>
           {g.label ? <div className="mj-sec">{g.label}<span>{g.rows.length}</span></div> : null}
           {g.rows.map(jobEl)}
@@ -66173,8 +66193,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-25 · App SW version: v686
+**Last manifest update:** 2026-11-25 · App SW version: v687
 ---
+
+- **My Jobs for admins: a Viewing as picker shows any foreman's, jr. foreman's or lead's page exactly as they see it** · 'in-flight 2026-11-25' · 'SW v687' · 'MyJobsPage' · 'isAdminRec' · 'viewablePeople' · 'myjobs.viewAs' · Koy: *"Okay and how do I see their pages myself?"*, *"Any admin needs to be able to see all their pages too"*. Every admin now gets the **My Jobs** link in Command Center's top bar. On My Jobs an admin sees **Viewing as** (Me, then every active foreman, jr. foreman and lead, grouped by title); picking a person shows that person's page: the same jobs (a foreman's whole crew), the same grouping, margin and hours, job costs and reports. Only admins see the picker; the page stays read-only and still shows percentages and hours only, with owners-only reports left out. The pick is remembered on that device. Test: 'scripts/my-jobs-test.js' (admins get the link, the people list, never admins, crew or deactivated people). **Deploy:** hosting only. **Why it won't lose data:** a read-only view; nothing is written.
 
 - **My Jobs: each foreman's, jr. foreman's and lead's jobs with their job costs and reports in one place, on its own home-screen icon** · 'in-flight 2026-11-25' · 'SW v686' · 'MyJobsPage' · 'IS_MYJOBS_PAGE' · 'src/myJobs.js' · 'OdJobCosts embed.only' · 'odDashCss' · Koy: *"I need something set up for all the foremen ... the job costs and all of their reports in one spot. Organized and neat, drop downs, starting collapsed ... put it on their home screen like we do with the command center"*, then *"the foremans will show their whole crews, and then the leads and junior foremans will just show theirs."* New page at **/myjobs** (after the usual PIN sign-in), with its own manifest ('myjobs-manifest.json') so Add to Home Screen makes a **My Jobs** icon that opens straight to it. Foremen, jr. foremen and leads also get a **My Jobs** link in Command Center's top bar. **Whose jobs:** a foreman sees every live job they or anyone on their crew (the Crew Board in Settings) runs or leads, grouped by person; a jr. foreman or lead sees only the jobs they run or lead. Completed jobs fold at the bottom. **Each job** is a dropdown, closed to start, labeled job number and name, with its whole-job margin % and hours used (rough and finish together, of the estimate) right beside the name, and its stage and rough / finish hours % under it (Koy: *"I just want the margin to show right next to the job. before you drop down on them"*). Inside: **Job costs** (the Job Costs tab's own component for that one job, foreman view: Hours, Materials %, Labor %, Margin %, and its cost centers) and **Reports** from the Claude tab grouped as Finish plans, Foreman packets, Post-rough-in reports, Margin watch, Job reports, Other; each opens as the foreman copy. **No dollars:** percentages and hours only, plus the dashboard's $ mask as a safety net. Owners-only reports never reach a non-admin (the claudeReports callable), and this page drops owners-only, shared-off and archived reports for everyone, admins included. Read-only: nothing on the page writes; Open the job card opens the app's own card. Test: 'scripts/my-jobs-test.js' (crew from the Crew Board, jr. foreman / lead scope, Unassigned, deactivated, owners-only left out, exact job number, report groups). **Deploy:** hosting only. **Why it won't lose data:** a new read-only page; no rules, functions or saved fields change.
 
