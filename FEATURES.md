@@ -4,8 +4,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-11-25 · App SW version: v687
+**Last manifest update:** 2026-11-25 · App SW version: v688
 ---
+
+- **My Jobs: reports load every time, not "couldn't load"** · 'in-flight 2026-11-25' · 'SW v688' · 'MyJobsPage callAs' · Koy: *"is there a reason on all of the reports it says could not load"*. My Jobs opens before the team list has loaded, and until then the live record is the sign-in screen's stand-in, which has no PIN, so the one reports call was refused ("Sign in again") and never tried again: every job said couldn't load. Calls now go out with a record that has a PIN (the live one once it loads, else the signed-in copy on this device), the list is read again when that record changes, and a **Try again** shows beside "couldn't load" if a read still fails. **Deploy:** hosting only. **Why it won't lose data:** read-only page; only when a read is sent changes.
 
 - **My Jobs for admins: a Viewing as picker shows any foreman's, jr. foreman's or lead's page exactly as they see it** · 'in-flight 2026-11-25' · 'SW v687' · 'MyJobsPage' · 'isAdminRec' · 'viewablePeople' · 'myjobs.viewAs' · Koy: *"Okay and how do I see their pages myself?"*, *"Any admin needs to be able to see all their pages too"*. Every admin now gets the **My Jobs** link in Command Center's top bar. On My Jobs an admin sees **Viewing as** (Me, then every active foreman, jr. foreman and lead, grouped by title); picking a person shows that person's page: the same jobs (a foreman's whole crew), the same grouping, margin and hours, job costs and reports. Only admins see the picker; the page stays read-only and still shows percentages and hours only, with owners-only reports left out. The pick is remembered on that device. Test: 'scripts/my-jobs-test.js' (admins get the link, the people list, never admins, crew or deactivated people). **Deploy:** hosting only. **Why it won't lose data:** a read-only view; nothing is written.
 
