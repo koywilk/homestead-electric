@@ -55,10 +55,10 @@ const main = app.slice(app.indexOf("\n", app.indexOf("</ProjectsCtx.Provider>", 
 ["{jobDrawer}", "{quickAddSheet}", "{versionLockUi}", "{pushToastEl}", "{inboxOverlays}", "{inboxBellBtn}", "{saveHud}", "{appGlobalStyle}"].forEach(x =>
   assert.ok(main.includes(x), "the app still mounts " + x));
 
-assert.ok(app.includes('logUsage("views", IS_DASH_PAGE ? "dash" : view)'), "usage key");
-assert.ok(app.includes('if (view !== "myday" || IS_DASH_PAGE) return;'), "no My Day open counted on the dashboard");
+assert.ok(app.includes('logUsage("views", IS_DASH_PAGE ? "dash" : IS_MYJOBS_PAGE ? "myjobs" : view)'), "usage key (v686: My Jobs has its own)");
+assert.ok(app.includes('if (view !== "myday" || IS_DASH_PAGE || IS_MYJOBS_PAGE) return;'), "no My Day open counted on the dashboard or My Jobs");
 assert.ok(!app.includes('window.location.href = "/?jobId="'), "the reload hand-off is gone");
-assert.ok(/IS_DASH_PAGE\) \{\s*\n\s*if \(item\.view\) window\.location\.href = `\/\?view=/.test(app), "view items go to the app");
+assert.ok(/IS_DASH_PAGE \|\| IS_MYJOBS_PAGE\) \{\s*\n\s*if \(item\.view\) window\.location\.href = `\/\?view=/.test(app), "view items go to the app");
 assert.ok(/&nid=\$\{encodeURIComponent\(item\.id\)\}/.test(app), "and carry the nid");
 
 console.log("dash-oneplace-test: all checks passed");

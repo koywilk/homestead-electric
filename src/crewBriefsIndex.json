@@ -1,5 +1,14 @@
 [
  {
+  "v": 686,
+  "heads": [
+   {
+    "h": "NEW for foremen, jr. foremen and leads: My Jobs",
+    "first": "**Your jobs, their job costs and their reports, in one place.** Tap **My Jobs** in the top bar of the app. Foremen see their own jobs and every job their crew runs or leads, grouped by person. Jr. for"
+   }
+  ]
+ },
+ {
   "v": 685,
   "heads": [
    {
@@ -214,19 +223,6 @@
    {
     "h": "NEW for everyone",
     "first": "If someone sends you a report link, open it on your phone, sign in if asked, and the report opens over the app. Copy text is at the bottom."
-   }
-  ]
- },
- {
-  "v": 666,
-  "heads": [
-   {
-    "h": "NEW on the dashboard meetings (office and leads)",
-    "first": "The Scramble, Lead and Foreman Meetings fill themselves from the app the first time each week's meeting opens. Prefill again at the top makes a fresh one."
-   },
-   {
-    "h": "NEW photos on every meeting",
-    "first": "+ Photo under any item, and + Add a photo to this section under the notes. On a phone you can take one or pick one."
    }
   ]
  }

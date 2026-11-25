@@ -1,0 +1,16 @@
+{
+  "id": "/myjobs",
+  "name": "Homestead My Jobs",
+  "short_name": "My Jobs",
+  "description": "Your jobs' costs and reports, for Homestead Electric foremen and leads",
+  "start_url": "/myjobs",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F4EE",
+  "theme_color": "#F7F4EE",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
