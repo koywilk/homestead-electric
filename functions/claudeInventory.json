@@ -1,0 +1,961 @@
+{
+  "//": "Everything Claude runs (Claude tab). Server-only: claudeWork sends it to admins; koyOnly rows go to Koy alone. Edit this file to update the list (see scripts/claude-inventory-test.js for the shape). pulled:false shows the 'Not pulled yet' tag: nothing in the app or a Claude routine reads or refreshes it yet.",
+  "checkedAt": "2026-11-25",
+  "groups": [
+    {
+      "k": "autos",
+      "label": "Automations",
+      "sub": "Claude routines on a schedule · Denver time"
+    },
+    {
+      "k": "app",
+      "label": "App and dashboard features",
+      "sub": "parts of Command Center Claude fills in or works"
+    },
+    {
+      "k": "files",
+      "label": "Sheets and docs",
+      "sub": "Koy's files Claude made or uses"
+    },
+    {
+      "k": "shared",
+      "label": "Shared with me",
+      "sub": "files others shared with Koy"
+    },
+    {
+      "k": "pages",
+      "label": "Claude pages",
+      "sub": "live pages and tools Claude made"
+    }
+  ],
+  "items": [
+    {
+      "id": "morning-brief",
+      "group": "autos",
+      "on": true,
+      "title": "Morning brief",
+      "when": "Every day 5:48 AM",
+      "where": "morning-brief",
+      "what": "Posts one short read of the day: today's meetings, threads that went quiet, calendar clashes and the top 5 Command Center items.",
+      "from": "Google Calendar, Gmail, Google Chat and Command Center."
+    },
+    {
+      "id": "check-ins",
+      "group": "autos",
+      "on": true,
+      "title": "Check-ins (Heartbeat)",
+      "when": "Every 3 hours, about 5 AM to 8 PM, every day",
+      "where": "main chat",
+      "what": "Looks back and ahead 3 hours and posts only when something needs Koy. Quiet runs post nothing.",
+      "from": "Calendar, mail, chat, texts and the open tasks."
+    },
+    {
+      "id": "meeting-prep",
+      "group": "autos",
+      "on": true,
+      "title": "Meeting prep",
+      "when": "Weekdays 5:17 AM",
+      "where": "weekly-meetings",
+      "what": "Finds today's meeting docs, adds Claude's updates to them, and lists jobs that still need a date.",
+      "from": "Google Calendar and the meeting docs in Drive."
+    },
+    {
+      "id": "email-digest",
+      "group": "autos",
+      "on": true,
+      "title": "Email digest",
+      "when": "Weekdays 6:23 AM and 1:23 PM",
+      "where": "text-and-email-drafter",
+      "what": "Lists the emails that need Koy. Read only: it never sends or files anything.",
+      "from": "Koy's Gmail."
+    },
+    {
+      "id": "sync-check",
+      "group": "autos",
+      "on": true,
+      "title": "CC and Simpro sync check",
+      "when": "Weekdays 6:27 AM",
+      "where": "job-issues",
+      "what": "Finds newly scheduled Simpro jobs missing from Command Center, return trips missing material or POs, and CED orders ready for pickup. Each one becomes a Needs you flag.",
+      "from": "Simpro and Command Center.",
+      "note": "Stops Dec 31 unless Koy keeps it."
+    },
+    {
+      "id": "job-card-check",
+      "group": "autos",
+      "on": true,
+      "title": "Job card ready check",
+      "when": "Weekdays 6:33 AM",
+      "where": "main chat",
+      "what": "Any rough-in or finish starting in the next 7 days with an unfinished job card becomes a Needs you flag.",
+      "from": "Simpro schedule and Command Center job cards."
+    },
+    {
+      "id": "margin-watch",
+      "group": "autos",
+      "on": true,
+      "title": "Margin watch",
+      "when": "Weekdays 6:37 AM",
+      "where": "margin-tracker",
+      "what": "Lists jobs at 25% total margin or lower and works out whether each can still reach 15%. Files a report to the Reports list.",
+      "from": "Simpro job totals (whole job).",
+      "money": true
+    },
+    {
+      "id": "plan-revision",
+      "group": "autos",
+      "on": true,
+      "title": "Plan revision check",
+      "when": "Weekdays 6:43 AM",
+      "where": "job-issues",
+      "what": "Tells Koy which FieldInk plans got a new version since the last weekday.",
+      "from": "FieldInk plans."
+    },
+    {
+      "id": "ced-pickups",
+      "group": "autos",
+      "on": true,
+      "title": "CED pickups",
+      "when": "Weekdays 6:47 AM",
+      "where": "main chat",
+      "what": "Ticks Picked up on CED PO cards in Command Center once CED shows them picked up. Koy said yes to this one ahead of time.",
+      "from": "CED pickup emails and Command Center material cards."
+    },
+    {
+      "id": "post-rough",
+      "group": "autos",
+      "on": true,
+      "title": "Post-rough-in report",
+      "when": "Weekdays 6:51 AM",
+      "where": "margin-tracker",
+      "what": "Once a job's rough-in is 100% invoiced, writes how the rough went and files it to the Reports list.",
+      "from": "Simpro invoices and job costs, Command Center.",
+      "money": true
+    },
+    {
+      "id": "finish-plans",
+      "group": "autos",
+      "on": true,
+      "title": "Finish plans and foreman packets",
+      "when": "Weekdays 6:57 AM",
+      "where": "main chat",
+      "what": "Writes a finish plan when Base Rough In is 100% invoiced, and a foreman packet when a phase gets scheduled. Refreshes them when the job changes. Filed to Reports.",
+      "from": "Simpro, Command Center and the job's plans."
+    },
+    {
+      "id": "job-issues",
+      "group": "autos",
+      "on": true,
+      "title": "Job issues watch",
+      "when": "Weekdays 7:13 AM, 10:13 AM, 1:13 PM, 4:13 PM",
+      "where": "job-issues",
+      "what": "Finds change orders missing from Command Center (signed ones are added on their own), quotes not converted and failed inspections. The 4:13 run posts a decision list; Thursdays it builds the gaps doc.",
+      "from": "Simpro quotes and jobs, Command Center, inspection emails.",
+      "note": "Stops Dec 31 unless Koy keeps it."
+    },
+    {
+      "id": "crew-watch",
+      "group": "autos",
+      "on": true,
+      "title": "Crew schedule watch",
+      "when": "Weekdays 7:13 AM, 10:13 AM, 1:13 PM, 4:13 PM, 8:13 PM",
+      "where": "crew-schedule",
+      "what": "Catches scheduling asks, slipped jobs, phase starts with no PO, the Simpro inbox, time off and meeting action items. Puts suggested blocks on the crew calendar and preps Thursday strategy.",
+      "from": "Google Chat, texts, email, Simpro and the crew calendar.",
+      "note": "Stops Dec 31 unless Koy keeps it."
+    },
+    {
+      "id": "dash-check",
+      "group": "autos",
+      "on": true,
+      "title": "Command Center dashboard check",
+      "when": "Weekdays 7:41 AM, 11:41 AM, 3:41 PM",
+      "where": "command-center",
+      "what": "Checks the dashboard's numbers look right and that the last Vercel deploy had no errors.",
+      "from": "The dashboard and Vercel."
+    },
+    {
+      "id": "asks-watch",
+      "group": "autos",
+      "on": true,
+      "title": "Asks watch",
+      "when": "Weekdays 6:41 AM, 9:41 AM, 12:41 PM, 3:41 PM, 6:41 PM",
+      "where": "asks-of-me",
+      "what": "Collects asks people make of Koy and, on his yes, adds the ones that need him to My Day.",
+      "from": "Email, Google Chat, texts and My Day."
+    },
+    {
+      "id": "granola",
+      "group": "autos",
+      "on": true,
+      "title": "Granola next steps",
+      "when": "Weekdays 4:37 PM",
+      "where": "weekly-meetings",
+      "what": "Finds next steps from today's meetings that haven't landed anywhere yet.",
+      "from": "Granola meeting notes.",
+      "note": "Stops Dec 31 unless Koy keeps it."
+    },
+    {
+      "id": "plan-intake",
+      "group": "autos",
+      "on": true,
+      "title": "Plan Intake: file emailed plans",
+      "when": "Every day 7 AM, noon, 4 PM, 9 PM",
+      "where": "app repo",
+      "what": "Files plans that come in by email into the right job's Drive folder and matches redline walks to jobs. Anything it can't place waits under Plan Intake.",
+      "from": "Gmail attachments and the Job Plans folders in Drive."
+    },
+    {
+      "id": "plan-intake-review",
+      "group": "autos",
+      "on": true,
+      "title": "Plan Intake weekly review",
+      "when": "Mondays 6:30 AM",
+      "where": "app repo",
+      "what": "A read-only report on the last 30 days of plan filing: what went where and what it missed.",
+      "from": "Plan Intake's own results."
+    },
+    {
+      "id": "co-chase",
+      "group": "autos",
+      "on": true,
+      "title": "CO chase list",
+      "when": "Mondays 6:13 AM",
+      "where": "job-issues",
+      "what": "Lists change orders waiting on the GC 7 days or more and old open questions, and drafts follow-up emails in Gmail. It never sends them.",
+      "from": "Command Center change orders and questions, Gmail."
+    },
+    {
+      "id": "office-doc",
+      "group": "autos",
+      "on": true,
+      "title": "Tuesday office meeting doc",
+      "when": "Tuesdays 4:53 AM",
+      "where": "weekly-meetings",
+      "what": "Builds the Tuesday Office Meeting doc in the Meeting Prep folder.",
+      "from": "Command Center, Simpro and last week's doc."
+    },
+    {
+      "id": "office-prefill-old",
+      "group": "autos",
+      "on": true,
+      "title": "Monday office meeting prefill (old)",
+      "when": "Tuesdays 3:00 PM",
+      "where": "old Cowork",
+      "what": "The old office meeting prefill. It still runs and overlaps the Tuesday office meeting doc.",
+      "from": "Command Center and the old meeting doc.",
+      "note": "Overlaps the Tuesday doc. Can likely be turned off."
+    },
+    {
+      "id": "foreman-pull",
+      "group": "autos",
+      "on": true,
+      "title": "Foreman meeting pull",
+      "when": "Tuesdays 6:09 PM",
+      "where": "weekly-meetings",
+      "what": "Rebuilds the \"Wednesday Foreman Meeting: Template Options\" Claude Doc for the next morning.",
+      "from": "Job Costs (foreman view), Command Center."
+    },
+    {
+      "id": "forecast-review",
+      "group": "autos",
+      "on": true,
+      "title": "Forecast vs actual review",
+      "when": "Fridays 2:23 PM",
+      "where": "margin-tracker",
+      "what": "When a job closes, compares the margin forecast to how it really finished.",
+      "from": "Simpro final job totals and past margin watch reports.",
+      "money": true
+    },
+    {
+      "id": "appl-nightly",
+      "group": "autos",
+      "on": true,
+      "title": "Appliance Loads nightly refresh",
+      "when": "Every day 12:58 AM",
+      "where": "Cowork",
+      "what": "Pulls appliance specs from job and quote folders into Appliance Loads - Master and checks them against Command Center Home Runs. Mondays it also checks wire sizes.",
+      "from": "Job and quote folders in Drive, Command Center Home Runs."
+    },
+    {
+      "id": "deck-refresh",
+      "group": "autos",
+      "on": true,
+      "title": "Refresh command deck",
+      "when": "Every day 7 AM",
+      "where": "Cowork, Mac",
+      "what": "Updates the Koy Command Deck page with the newest build number and ship log.",
+      "from": "The app's repo.",
+      "note": "Runs only while Koy's Mac is on."
+    },
+    {
+      "id": "skill-refresh",
+      "group": "autos",
+      "on": true,
+      "title": "Homestead skill refresh",
+      "when": "Mondays 7 AM",
+      "where": "Cowork, Mac",
+      "what": "Weekly check that Claude's quick notes on the app still match the app.",
+      "from": "The app's repo and the vault notes.",
+      "note": "Runs only while Koy's Mac is on."
+    },
+    {
+      "id": "tidy",
+      "group": "autos",
+      "on": true,
+      "title": "Downloads and Desktop tidy-up",
+      "when": "Mondays 8 AM",
+      "where": "Cowork, Mac",
+      "what": "Sorts loose files on the Mac's Desktop and Downloads into folders.",
+      "from": "Koy's Mac.",
+      "note": "Runs only while Koy's Mac is on."
+    },
+    {
+      "id": "off-scheduling-helper",
+      "group": "autos",
+      "on": false,
+      "title": "Scheduling helper",
+      "what": "Old scheduling helper. Its channel is archived; the crew schedule watch does this now."
+    },
+    {
+      "id": "off-sconce",
+      "group": "autos",
+      "on": false,
+      "title": "Bukhshtaber sconce watch",
+      "what": "Watched for one job's sconces. Done."
+    },
+    {
+      "id": "off-crew-week",
+      "group": "autos",
+      "on": false,
+      "title": "Crew week board refresh",
+      "what": "Refreshed the crew week whiteboard. The crew calendar in Command Center replaced it."
+    },
+    {
+      "id": "off-autos-sync",
+      "group": "autos",
+      "on": false,
+      "title": "Automations list sync",
+      "what": "Kept the Automations list current. Turned off Nov 13; each routine checks in on its own now."
+    },
+    {
+      "id": "off-old-brief",
+      "group": "autos",
+      "on": false,
+      "title": "Old main-chat morning brief",
+      "what": "The first morning brief. The morning-brief one replaced it."
+    },
+    {
+      "id": "off-cc-snapshot",
+      "group": "autos",
+      "on": false,
+      "title": "CC snapshot (Dashboard tab)",
+      "what": "Took a daily snapshot of Command Center for the dashboard. The dashboard reads live now."
+    },
+    {
+      "id": "off-friday-prefill",
+      "group": "autos",
+      "on": false,
+      "title": "Friday strategy meeting prefill",
+      "what": "Prefilled the Friday strategy meeting. The Meetings tab does this now."
+    },
+    {
+      "id": "off-brain-sync",
+      "group": "autos",
+      "on": false,
+      "title": "Sync homestead brain (Obsidian)",
+      "what": "Synced the app's notes into Koy's Obsidian vault."
+    },
+    {
+      "id": "off-shelf",
+      "group": "autos",
+      "on": false,
+      "title": "Refresh Claude creations shelf",
+      "what": "Kept a shelf page of what Claude made. This page replaces it."
+    },
+    {
+      "id": "off-training",
+      "group": "autos",
+      "on": false,
+      "title": "Refresh app updates training",
+      "what": "Refreshed the app updates training page."
+    },
+    {
+      "id": "off-90-fri",
+      "group": "autos",
+      "on": false,
+      "title": "90-Day Friday review",
+      "what": "Friday check of Koy's first 90 days plan."
+    },
+    {
+      "id": "off-90-mon",
+      "group": "autos",
+      "on": false,
+      "title": "90-Day Monday plan",
+      "what": "Monday plan from Koy's first 90 days plan."
+    },
+    {
+      "id": "off-etsy",
+      "group": "autos",
+      "on": false,
+      "title": "Etsy weekly stats read (2)",
+      "what": "Read the Etsy shop's weekly stats. Two copies, both off."
+    },
+    {
+      "id": "off-app-map",
+      "group": "autos",
+      "on": false,
+      "title": "App Map suggestions watcher",
+      "what": "Watched for App Map suggestions."
+    },
+    {
+      "id": "f-needs",
+      "group": "app",
+      "title": "Needs you list",
+      "where": "Claude tab",
+      "what": "One flag per job for anything that needs Koy: missing POs, open punch, missing info, scheduling asks. Answer it right there with Yes, Schedule it, Add to my tasks, Done or Dismiss.",
+      "from": "The sync check, job issues, crew schedule, asks and Granola watches and the job card check."
+    },
+    {
+      "id": "f-autos",
+      "group": "app",
+      "title": "Automations list",
+      "where": "Claude tab",
+      "what": "Every Claude routine with when it runs, what it does on its own and how its last run went.",
+      "from": "Each routine checks in at the end of its run."
+    },
+    {
+      "id": "f-reports",
+      "group": "app",
+      "title": "Reports list",
+      "where": "Claude tab",
+      "what": "Every report Claude files: post-rough-in, margin watch, finish plans and foreman packets, by job then type. Dollar reports show to admins only.",
+      "from": "The report routines, filed through the Homestead connector."
+    },
+    {
+      "id": "f-myday",
+      "group": "app",
+      "title": "My Day asks",
+      "where": "My Day",
+      "what": "Asks people make of Koy that need something from him, added on his yes. Not FYIs.",
+      "from": "The asks watch."
+    },
+    {
+      "id": "f-calendar",
+      "group": "app",
+      "title": "Crew calendar suggestions",
+      "where": "Crew calendar",
+      "what": "Suggested blocks (dotted green) and proposed scheduling rules. Koy said these need no ask. A suggestion never books Simpro.",
+      "from": "The crew schedule watch, Simpro and the Crew Board."
+    },
+    {
+      "id": "f-material",
+      "group": "app",
+      "title": "Material cards",
+      "where": "Job cards",
+      "what": "Puts the sent Simpro PO number on a material card and ticks it Ordered, and ticks CED orders Picked up. Both are standing yeses.",
+      "from": "Simpro POs and CED pickup emails."
+    },
+    {
+      "id": "f-cos",
+      "group": "app",
+      "title": "Change orders",
+      "where": "Job cards",
+      "what": "Adds signed change orders from Simpro as approved so none get missed.",
+      "from": "The job issues watch reading Simpro quotes."
+    },
+    {
+      "id": "f-plan-intake",
+      "group": "app",
+      "title": "Plan intake queue",
+      "where": "Automations tab",
+      "what": "Emailed plans the intake routine couldn't file on its own wait here for Koy to File it or mark Not ours.",
+      "from": "Plan Intake runs."
+    },
+    {
+      "id": "f-meetings",
+      "group": "app",
+      "title": "Meetings tab items",
+      "where": "Meetings tab",
+      "what": "Adds one item at a time to the Lead, Foreman or Friday Strategy meeting on Koy's yes, marked Added by Claude.",
+      "from": "Koy's ask in chat."
+    },
+    {
+      "id": "f-fieldink",
+      "group": "app",
+      "title": "FieldInk Claude Duet layers",
+      "where": "FieldInk",
+      "what": "Markup and keypads Claude draws go on their own Claude Duet layers above Koy's, so he can keep, hide or delete them.",
+      "from": "The plan and Koy's ask."
+    },
+    {
+      "id": "s-write-log",
+      "group": "files",
+      "title": "Claude Scheduling Write Log",
+      "kind": "sheet",
+      "link": "https://docs.google.com/spreadsheets/d/1fZz1IoYGol8W_uCSFF0rdXDzXsafBGYCn4cuIuLuJXI/edit",
+      "what": "Audit log of Claude's scheduling writes. The Log tab has one row per write: when, app, job, who, work date, what changed and Koy's OK. The Watch tab has one row per text or chat message Claude checked: who sent it, the job, what it said, what Claude did and why.",
+      "from": "Claude's scheduling writes and message checks. Still being written (last edited Nov 26).",
+      "note": "The Changes and What I checked lists on this tab show the same things."
+    },
+    {
+      "id": "s-appl",
+      "group": "files",
+      "title": "Appliance Loads - Master",
+      "kind": "sheet",
+      "link": "https://docs.google.com/spreadsheets/d/1oiefT8TN2oSUGzyNgwg2dFsmXVPL8DxwYGoIksxQKKI/edit",
+      "what": "Appliance load workbook. Each job has its own tab (job number and name) with one row per appliance: item, location, qty, voltage, amps, breaker, model and whether Home Runs has it. Master combines every job; Model Library keeps specs by model number; Run Log and Wire Check track each night's pass.",
+      "from": "The Appliance Loads nightly refresh writes it; this tab reads its Run Log."
+    },
+    {
+      "id": "s-simpro-po",
+      "group": "files",
+      "title": "Simpro POs - Master",
+      "kind": "sheet",
+      "link": "https://docs.google.com/spreadsheets/d/1pxs9kEDbcN5w3_bnGBV4z9DWSpqQhdHuDEexhrt1Rpw/edit",
+      "what": "PO register. All POs has one row per PO: PO number, date, job number and name, supplier, rough or finish, cost center, status, picked up and which material list it landed on. Summary counts by job and status; Needs a look lists POs to fix, like a job number that matches no open job.",
+      "from": "The app's own Simpro PO pull writes it every hour. Not a Claude routine.",
+      "money": true,
+      "note": "The app rewrites it every hour, so hand edits don't stay."
+    },
+    {
+      "id": "s-one-on-one",
+      "group": "files",
+      "title": "One-on-One Tracker (old sheet)",
+      "kind": "sheet",
+      "pulled": false,
+      "koyOnly": true,
+      "link": "https://docs.google.com/spreadsheets/d/1lNknADbLYWUQKjBo5S-niwc6pkOnxbj-i337TFXxABE/edit",
+      "what": "Koy's first one-on-one tracker. A Guide tab with the 20-minute, six-step format, a Dashboard roll-up, and one tab per crew member with last and next due dates, a meetings log and an items list.",
+      "from": "Nothing updates it now.",
+      "note": "Replaced by the Residential One-on-Ones page."
+    },
+    {
+      "id": "s-goals",
+      "group": "files",
+      "title": "Copy of Team Goals 2026-2027",
+      "kind": "sheet",
+      "link": "https://docs.google.com/spreadsheets/d/1p4ZPUck4VM4GxffWx_zkHZCis0ZR3PWqHtDHRrYY-l4/edit",
+      "what": "Koy's copy of the team goals. One Goals tab with the overall goal, then tables by time period (Area, Goal, Who, By, Status).",
+      "from": "Koy keeps it; the Goals tab puts today's numbers beside it.",
+      "money": true
+    },
+    {
+      "id": "d-foreman-lead",
+      "group": "files",
+      "title": "Foreman + Lead Meeting Weekly Notes",
+      "kind": "doc",
+      "link": "https://docs.google.com/document/d/1t7i3gFiLsWmb-htGleutCZFh6TXSAnNbqbq9_ma3e80/edit",
+      "what": "Running weekly agenda for the Foreman + Lead meeting, newest week at the top: Notes, Highlight, Lowlight, Carried from last week and Needs.",
+      "from": "The app's foreman meeting prep writes the new week in."
+    },
+    {
+      "id": "d-lead",
+      "group": "files",
+      "title": "Notes - Weekly Lead Meeting",
+      "kind": "doc",
+      "link": "https://docs.google.com/document/d/1gn8CcqImvP2Zra_0gC8xAhUTzV8M8UGOrw44ipLwFKg/edit",
+      "what": "Weekly lead meeting notes, one dated section per meeting: a Schedule of crew by job for each day, then Upcoming jobs with their start dates.",
+      "from": "Koy writes it; the meeting prep runs read it."
+    },
+    {
+      "id": "d-resi-foreman",
+      "group": "files",
+      "title": "Notes - Weekly Resi Foreman Meeting",
+      "kind": "doc",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/1aQMn1fDlKeRQpHeOLEzIey0uGgTYcB5VlQWQkkCIkWU/edit",
+      "what": "Short residential foreman meeting notes, newest first: who came, Notes and Action items. Only a few October meetings are in it.",
+      "from": "Koy writes it. Nothing in the app reads it yet; the Meetings tab's Foreman Meeting is the live version."
+    },
+    {
+      "id": "d-texts",
+      "group": "files",
+      "title": "Work Texts",
+      "kind": "file",
+      "what": "An export of Koy's work texts that the watches read.",
+      "from": "Koy's Mac.",
+      "note": "Only refreshes while the Mac is awake."
+    },
+    {
+      "id": "d-generated",
+      "group": "files",
+      "title": "Docs Claude makes each week",
+      "kind": "folder",
+      "what": "Tuesday Office Meeting docs (Meeting Prep folder), CO and trip gaps docs (Friday Strategy folder) and the Claude Docs behind Reports (finish plans, packets, post-rough-in reports).",
+      "from": "The routines above make them."
+    },
+    {
+      "id": "x-koy-bonus",
+      "group": "shared",
+      "title": "Koy Bonus Tracker",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "money": true,
+      "link": "https://docs.google.com/spreadsheets/d/1YXBY_Obc-halWetukFMaZG0WgPT8tV6JAeosTDgoCHQ/edit",
+      "what": "Josh's bonus workbook for Koy, built from Simpro job data. Jobs pulls each job's revenue, cost and invoicing; Tracker scores each job (hit target, handoff, bonus earned, payout status). Supporting tabs: Detail, Small Jobs Pool, Config, Payouts, Handoff, Log and backups.",
+      "from": "Josh keeps it; nothing in the app reads it."
+    },
+    {
+      "id": "x-ced",
+      "group": "shared",
+      "title": "Homestead Material Forecast 2026 (CED American Fork)",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "money": true,
+      "link": "https://docs.google.com/spreadsheets/d/160vZ86F38-DpaDwW5JSDJt6DFsh1Qo-Zie8wGY9dYCA/edit",
+      "what": "Material outlook for CED American Fork: parts still to buy for sold jobs, by the month they'll be needed. Summary gives the 90-day outlook; CED Parts Forecast has one row per part with monthly quantities; the rest are inputs (won quotes, open POs, jobs, prices).",
+      "from": "Josh keeps it. The Weekly Scramble links to it but doesn't read it."
+    },
+    {
+      "id": "x-store-charges",
+      "group": "shared",
+      "title": "Store Charges With No PO",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "money": true,
+      "link": "https://docs.google.com/spreadsheets/d/158P3JRHdKz60kSiMDwqe_KMEkEsvARPOtADe6hQ4zqs/edit",
+      "what": "Supply-store card charges with no PO, to be matched up. One tab, one row per charge: date, store, amount, cardholder, job number, notes, status and whether the receipt is in BILL.",
+      "from": "Josh keeps it."
+    },
+    {
+      "id": "x-interview",
+      "group": "shared",
+      "title": "Interview Sheet",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "link": "https://docs.google.com/spreadsheets/d/1nlOZBBbLMC1HP-BCdfX7I3CsMl-CVLGwkmvmeVRfonU/edit",
+      "what": "Hiring log, one row per candidate: interview date, contact, location, license, school, experience, tools, start date, transportation, pay expectation, rank and notes.",
+      "from": "Josh keeps it."
+    },
+    {
+      "id": "x-strategy",
+      "group": "shared",
+      "title": "Notes - Weekly Strategy/Scheduling Meeting",
+      "kind": "doc",
+      "owner": "Josh",
+      "link": "https://docs.google.com/document/d/1u5Z63PnYVANQJyjam1USUSDbKj6P62sRFJCpxjgkvOM/edit",
+      "what": "Owners' and office strategy and scheduling notes, one section per week, newest first back to Sept 2025: who came, then notes job by job on material, change orders and next week.",
+      "from": "Josh writes it. The app's Friday Strategy prep reads it, read only."
+    },
+    {
+      "id": "x-builder",
+      "group": "shared",
+      "title": "Builder Scorecard",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "link": "https://docs.google.com/spreadsheets/d/1WgTTaOuq6elprEepcbHeOmx0OmM_A7CqsOZwzdz_gQM/edit",
+      "what": "Rates each builder on how they pay and how profitable their work is, with a verdict (keep, raise price, tighten terms, collect first). Scorecard is the main view; it draws on Sales, A/R Aging, Job Margin, Days to Pay, Change Orders, Win Rate and Upcoming Work tabs.",
+      "from": "Josh keeps it."
+    },
+    {
+      "id": "x-scramble",
+      "group": "shared",
+      "title": "Weekly Scramble (notes doc)",
+      "kind": "doc",
+      "owner": "Josh",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/1NOGyPr_u2oMl566cbXfYoAeV02nujdN96Ms8_fQA9JA/edit",
+      "what": "Weekly Scramble notes, one section per week, newest first: General and Schedule, with jobs grouped by phase showing percent done, booked crew and open items.",
+      "from": "The Meetings tab's Weekly Scramble follows its order but doesn't read the doc.",
+      "note": "Last edited Nov 10. The Meetings tab's Weekly Scramble took over."
+    },
+    {
+      "id": "x-sop-quotes",
+      "group": "shared",
+      "title": "SOP Sending Quote Options",
+      "kind": "doc",
+      "owner": "Josh",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/1OemQh8BN8H_TrOg42Te1LeQ0R9Hw3LyZJK-uNtL_1wE/edit",
+      "what": "Office SOP for quotes with optional items: the customer gets a link to pick options and their picks come back into Simpro. Purpose, the three quote statuses, then numbered steps.",
+      "from": "Josh keeps it."
+    },
+    {
+      "id": "x-goals-josh",
+      "group": "shared",
+      "title": "Team Goals 2026-2027 (Josh's)",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "money": true,
+      "link": "https://docs.google.com/spreadsheets/d/1yTfSyBvCLYmU0V9n-2R8ZpLgFZXfCLkixOV6uVtwUh4/edit",
+      "what": "The original team goals sheet Koy's copy came from: one Goals tab with goal tables by time period.",
+      "from": "Private to Josh, so the Goals tab reads Koy's copy instead."
+    },
+    {
+      "id": "x-koy-resp",
+      "group": "shared",
+      "title": "Koys Responsibilities",
+      "kind": "doc",
+      "owner": "Josh",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/1R4twppOLmIIVqvOov8qYo7UJVJKNKxHxayWgWWMXvRc/edit",
+      "what": "Josh's written role description for Koy: bulleted lists under Overall Residential Management, Job Prep and Redlines and more.",
+      "from": "Josh keeps it."
+    },
+    {
+      "id": "x-pm-sheet",
+      "group": "shared",
+      "title": "Project Managing Sheet",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "link": "https://docs.google.com/spreadsheets/d/19Bwj6xF673eeblgwH9lRYQMbsgaXfZ55eeBXHQfTHp0/edit",
+      "what": "Older project tracking sheet. Upcoming is a sales follow-up list; one tab per foreman with a row per job (phase, status, next steps, QC, panel schedules).",
+      "from": "Josh keeps it.",
+      "note": "Last edited Apr 2026."
+    },
+    {
+      "id": "x-profit-share",
+      "group": "shared",
+      "title": "Foreman - Profit Share",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "money": true,
+      "link": "https://docs.google.com/spreadsheets/d/1biUeQIHX15BPIg6LXat2Xlkgk8zmMbqY22uIF3sewPU/edit",
+      "what": "Older foreman profit share sheet: the payout rule on top, then one row per job with price, invoiced, cost and profit, then the split and date paid.",
+      "from": "Josh keeps it.",
+      "note": "Last edited Jun 2026."
+    },
+    {
+      "id": "x-bonus-foremen",
+      "group": "shared",
+      "title": "Foreman bonus trackers (Daegan, Gage, Abraham, Vasa, Colby, Keegan, MASTER)",
+      "kind": "sheet",
+      "owner": "Josh",
+      "pulled": false,
+      "money": true,
+      "what": "One bonus sheet per foreman (same layout: one row per job with price, invoiced, costs, profit and date paid), plus a MASTER roll-up with one row per foreman.",
+      "from": "Josh keeps them.",
+      "note": "Daegan's was last edited Sep 2026; the rest and the MASTER in Jul 2026.",
+      "link": "https://docs.google.com/spreadsheets/d/1CYVrj5Q7HfgrbSPOL58GjZ3jR35j1EFTF2_8YlwW9Gg/edit"
+    },
+    {
+      "id": "x-foreman-notes",
+      "group": "shared",
+      "title": "Notes - Foreman Meeting (older)",
+      "kind": "doc",
+      "owner": "Josh",
+      "pulled": false,
+      "what": "The older foreman meeting notes (Sept 2025 to June 2026): one section per meeting with General, P/L Review and Schedule Look Ahead, and a job status list per person. A smaller July copy also exists.",
+      "link": "https://docs.google.com/document/d/1wqALGNbjWB_qHbefXKisuqo2aZ-rny4Q946zhtyH5eA/edit"
+    },
+    {
+      "id": "x-reviews",
+      "group": "shared",
+      "title": "Review notes (Apr and Dec 2025 rounds)",
+      "kind": "doc",
+      "owner": "Josh",
+      "pulled": false,
+      "what": "Notes from the review rounds."
+    },
+    {
+      "id": "x-folders",
+      "group": "shared",
+      "title": "Folders: Employee Files, Service Size Calculator, Homestead Generator App",
+      "kind": "folder",
+      "owner": "Josh",
+      "pulled": false,
+      "what": "Employee Files holds one folder per employee. Service Size Calculator holds the code for a load calculator add-on to Command Center (two versions). Homestead Generator App holds a deploy guide and a handoff written for Koy.",
+      "from": "Josh keeps them."
+    },
+    {
+      "id": "x-standards",
+      "group": "shared",
+      "title": "Standards - Homestead Electric",
+      "kind": "doc",
+      "owner": "Brady",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/1IJRgbw2Ke9w4VRnO3ySyMojWksPjMTCVaEI7GqQ4iFY/edit",
+      "what": "The company's field install standards as a numbered outline by phase, starting with Rough In: who does what, standard heights and placement rules.",
+      "from": "Brady keeps it."
+    },
+    {
+      "id": "x-lead-aug",
+      "group": "shared",
+      "title": "Notes - Weekly Lead Meeting (Aug)",
+      "kind": "doc",
+      "owner": "Brady",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/18E0W68sDUftIMS_Sa55HWfjWXboRjxr7zz-i9_52RIU/edit",
+      "what": "Brady's earlier lead meeting notes (March to August 2026): one section per meeting with Notes, Highlight, Lowlight and Training.",
+      "note": "Koy's Notes - Weekly Lead Meeting replaced it."
+    },
+    {
+      "id": "x-sandlin",
+      "group": "shared",
+      "title": "Sandlin Design meeting notes",
+      "kind": "doc",
+      "owner": "Brady",
+      "pulled": false,
+      "what": "Gemini's auto notes from the Sept 17 Sandlin design call (1480 Sandlin Residence). It lists who was invited and links the transcript; there's no summary in it.",
+      "link": "https://docs.google.com/document/d/1j0VTs4xcjKUBwscvXybiEc4BtcQlnPxB0Fr-GjnIklE/edit"
+    },
+    {
+      "id": "x-commercial",
+      "group": "shared",
+      "title": "Notes - Commercial Project Review",
+      "kind": "doc",
+      "owner": "Justin",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/1IwdBh2XNJgR5Twu-WwqV7QLc2sF1qAX_c51cvBf32Xo/edit",
+      "what": "Notes from the commercial project review: mainly a numbered commercial job start process, from quote approval through setup, job numbers, cost codes and folders.",
+      "from": "Justin keeps it."
+    },
+    {
+      "id": "x-ai-coord",
+      "group": "shared",
+      "title": "Notes - AI Coordination",
+      "kind": "doc",
+      "owner": "Justin",
+      "pulled": false,
+      "link": "https://docs.google.com/document/d/145nArFaCBtWutpVqiVdXi7r-MG21o-qegbtHdWMRrAQ/edit",
+      "what": "Notes from the monthly AI Coordination meeting: General, Wins Review, Deep Dive Use Case, Brainstorm Round and Action items. One meeting is logged (March 2026).",
+      "from": "Justin keeps it."
+    },
+    {
+      "id": "x-surveys",
+      "group": "shared",
+      "title": "Satisfaction surveys (Aug 26, 2 forms)",
+      "kind": "form",
+      "owner": "Justin",
+      "pulled": false,
+      "what": "Two satisfaction survey forms."
+    },
+    {
+      "id": "x-generator",
+      "group": "shared",
+      "title": "Homestead Electric Generator Tracker",
+      "kind": "sheet",
+      "pulled": false,
+      "link": "https://docs.google.com/spreadsheets/d/1os6nnbjPo8OJMdy1d7U_vpbEsx_fjYwh8zDiT6_X3xE/edit",
+      "what": "Every generator Homestead installed: one row per install with the Simpro job number, install date, installer, brand, model, transfer switch, permit and inspection, warranty and next service due. Service Log has a row per visit.",
+      "from": "Justin keeps it.",
+      "owner": "Justin"
+    },
+    {
+      "id": "x-qc-template",
+      "group": "shared",
+      "title": "QC System Template",
+      "kind": "sheet",
+      "pulled": false,
+      "what": "The blank QC checklist copied for each job. Rough QC and Finish QC tabs: who did it and when, then rows by section with room, item, pass or fail and notes. Failed items collect on their own tabs.",
+      "note": "Older copies of it also exist.",
+      "link": "https://docs.google.com/spreadsheets/d/1vhLu1LtZd-8E10w6e36c75uZXxrUu1aDWgR7Uc0N_Qg/edit"
+    },
+    {
+      "id": "x-foreman-resp",
+      "group": "shared",
+      "title": "Foreman Responsibilities",
+      "kind": "doc",
+      "pulled": false,
+      "what": "Short outline of the foreman role: field project manager, material (PO oversight, waste, deliveries), tools, field strategy, morale, training and the schedule.",
+      "note": "Koy has newer residential versions of his own.",
+      "link": "https://docs.google.com/document/d/1NCggGGlV1vBYanlnDb5GjEUrkjMavV209yDaSEdaEaw/edit"
+    },
+    {
+      "id": "p-one-on-ones",
+      "group": "pages",
+      "title": "Residential One-on-Ones",
+      "koyOnly": true,
+      "link": "https://claude.ai/artifact/WmbyjZwfMexKgrgdV9qoPR",
+      "what": "Koy's one-on-one tracker for the residential team: who's due, notes and follow-ups.",
+      "from": "Saved on the page itself."
+    },
+    {
+      "id": "p-rate",
+      "group": "pages",
+      "title": "Rate Your Crew",
+      "link": "https://homestead-electric.vercel.app/rate",
+      "what": "The page where crew rate each other. Koy releases the ratings to My Day from this tab.",
+      "from": "Ratings saved in Command Center."
+    },
+    {
+      "id": "p-deck",
+      "group": "pages",
+      "title": "Koy Command Deck",
+      "koyOnly": true,
+      "link": "https://claude.ai/artifact/1Wwb4PU9p7uWsfzboUgJsi",
+      "what": "Koy's deck page with the newest build number and ship log.",
+      "from": "The Refresh command deck routine, daily.",
+      "note": "Refreshes only while Koy's Mac is on."
+    },
+    {
+      "id": "p-foreman-template",
+      "group": "pages",
+      "title": "Wednesday Foreman Meeting: Template Options",
+      "koyOnly": true,
+      "link": "https://claude.ai/artifact/JDX553u4v3NMD4gjVLBg3v",
+      "what": "Claude Doc with the foreman meeting layout options.",
+      "from": "Rebuilt by the foreman meeting pull on Tuesdays."
+    },
+    {
+      "id": "p-redline",
+      "group": "pages",
+      "title": "How Koy cleans up a redline walk",
+      "koyOnly": true,
+      "pulled": false,
+      "link": "https://claude.ai/artifact/43Qydgc5ZvATCqH1b8YsmV",
+      "what": "The plan markup rules Claude follows in FieldInk.",
+      "from": "Written from Koy's rules. Nothing refreshes it."
+    },
+    {
+      "id": "p-ops",
+      "group": "pages",
+      "title": "Homestead Operations Overview",
+      "koyOnly": true,
+      "pulled": false,
+      "link": "https://claude.ai/artifact/4BCWs7NBjFRQsZdTXf32ek",
+      "what": "Overview of how residential operations run.",
+      "from": "Made once (Nov 16). Nothing refreshes it."
+    },
+    {
+      "id": "p-crew-week",
+      "group": "pages",
+      "title": "Crew week whiteboard",
+      "koyOnly": true,
+      "pulled": false,
+      "link": "https://claude.ai/artifact/LSbNULH23Yv77VszJmwkvr",
+      "what": "Whiteboard of one crew week.",
+      "from": "Its refresh is off.",
+      "note": "The crew calendar replaced it."
+    },
+    {
+      "id": "p-rose",
+      "group": "pages",
+      "title": "Job game plan: 889 Rose",
+      "koyOnly": true,
+      "pulled": false,
+      "link": "https://claude.ai/artifact/SFhrtjAh5DKKmjpgENeuPz",
+      "what": "Whiteboard game plan for 889 Rose Residence.",
+      "from": "Made once (Nov 15). Nothing refreshes it."
+    },
+    {
+      "id": "p-myjobs",
+      "group": "pages",
+      "title": "My Jobs Preview",
+      "koyOnly": true,
+      "pulled": false,
+      "link": "https://claude.ai/artifact/LBCxvPrszFzqUx6sEbY96R",
+      "what": "Preview of the My Jobs page before it shipped.",
+      "from": "A one-time preview. The live page is in the app."
+    },
+    {
+      "id": "p-copy-share",
+      "group": "pages",
+      "title": "Report Copy and Share",
+      "koyOnly": true,
+      "pulled": false,
+      "link": "https://claude.ai/artifact/VSWiKfp3fkZ7pVS3Zz8Ncz",
+      "what": "Preview of the Copy and Share link on reports.",
+      "from": "A one-time preview. The live version is in Reports."
+    }
+  ]
+}
