@@ -1,5 +1,14 @@
 [
  {
+  "v": 688,
+  "heads": [
+   {
+    "h": "FIXED on My Jobs",
+    "first": "**Reports load now.** Every job's Reports could say \"couldn't load\" when My Jobs was opened fresh. They now load once the app finishes signing you in. If one ever still fails, tap **Try again** next t"
+   }
+  ]
+ },
+ {
   "v": 687,
   "heads": [
    {
@@ -217,9 +226,5 @@
     "first": "A flag that would change a job's start date now says, before you tap Yes, whether the GC gets emailed."
    }
   ]
- },
- {
-  "v": 668,
-  "heads": []
  }
 ]

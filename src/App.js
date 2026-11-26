@@ -57512,7 +57512,7 @@ function MyJobsReport({ r, body, onOpen }) {
         : <div className="od-rep-body"><ReportBlocks content={text}/><div className="od-rep-foot">No dollar figures · version {body.version || 1}</div></div>}
     </details>);
 }
-function MyJobsJob({ row, costs, reports, identity, users, allJobs, onOpenJob }) {
+function MyJobsJob({ row, costs, reports, identity, users, allJobs, onOpenJob, onRetryReports }) {
   const j = row.job, no = String(j.simproNo || "").replace(/^#/, "").trim();
   const [open, setOpen] = useState(false);
   const [costsOpen, setCostsOpen] = useState(false);
@@ -57554,7 +57554,8 @@ function MyJobsJob({ row, costs, reports, identity, users, allJobs, onOpenJob })
             : <div className="mj-empty">This job has no Simpro job number yet, so there are no job costs.</div>) : null}
         </details>
         <div className="mj-reps">
-          <div className="mj-rh"><b>Reports</b><small>{reports === undefined ? "reading…" : reports === null ? "couldn't load" : nReps ? `${nReps}` : "none yet"}</small></div>
+          <div className="mj-rh"><b>Reports</b><small>{reports === undefined ? "reading…" : reports === null ? "couldn't load" : nReps ? `${nReps}` : "none yet"}</small>
+            {reports === null && onRetryReports ? <button type="button" className="mj-retry" onClick={onRetryReports}>Try again</button> : null}</div>
           {groups.map(g => (
             <div key={g.key} className="mj-grp">
               <div className="mj-gl">{g.label}</div>
@@ -57565,7 +57566,7 @@ function MyJobsJob({ row, costs, reports, identity, users, allJobs, onOpenJob })
       </div> : null}
     </details>);
 }
-function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
+function MyJobsPage({ identity, signedIn, users, allJobs, onOpenJob, actions }) {
   useEffect(() => { try { document.title = "My Jobs · Homestead Electric"; } catch (e) {} }, []);
   const root = useRef(null);
   useOdMoneyMask(root, true);   // the safety net: a stray "$1,234" in a job name or report shows as $•••
@@ -57582,15 +57583,28 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
   const mj = useMemo(() => MyJobsModel.myJobsFor(whoId || whoName ? { id: whoId, name: whoName } : null, users, allJobs), [whoId, whoName, users, allJobs]);
   const [costs, setCosts] = useState({ doc: undefined, goals: null });
   const [reports, setReports] = useState(undefined);   // undefined = loading · null = not reachable · [] list
+  const [repTick, setRepTick] = useState(0);
+  // v688 (Koy: "on all of the reports it says could not load"): the page opens before the team list loads. Until
+  // it does, the live record is the sign-in screen's stand-in, which has no PIN, so the one reports call was refused
+  // and never tried again. Calls now go out with a record that has a PIN (the live one once loaded, else the
+  // signed-in copy on this device), and the list is read again when that record changes.
+  const callAs = identity && identity.pin && !identity._standIn ? identity : (signedIn && signedIn.pin ? signedIn : identity);
+  const callKey = callAs ? `${callAs.id || callAs.name || ""}|${callAs.pin || ""}` : "";
   useEffect(() => {
     let dead = false;
     getDoc(doc(db, "settings", "phaseCosts")).then(snap => { if (!dead) setCosts(c => ({ ...c, doc: snap.exists() ? (snap.data() || null) : null })); }, () => { if (!dead) setCosts(c => ({ ...c, doc: null })); });
     getDoc(doc(db, "settings", "goalsSimpro")).then(snap => { if (!dead) setCosts(c => ({ ...c, goals: snap.exists() ? (snap.data() || null) : null })); }, () => {});
-    memberCallable("claudeReports", identity)({}).then(
-      r => { if (!dead) setReports(r && r.data && r.data.ok && Array.isArray(r.data.reports) ? r.data.reports.filter(x => x && !x.ownersOnly && !x.shareOff && !x.archived) : null); },
-      () => { if (!dead) setReports(null); });
     return () => { dead = true; };
-  }, []); // eslint-disable-line
+  }, []);
+  useEffect(() => {
+    if (!callAs || !callAs.pin) return undefined;   // no PIN yet: wait for the team list, keep showing "reading…"
+    let dead = false;
+    setReports(undefined);
+    memberCallable("claudeReports", callAs)({}).then(
+      r => { if (!dead) setReports(r && r.data && r.data.ok && Array.isArray(r.data.reports) ? r.data.reports.filter(x => x && !x.ownersOnly && !x.shareOff && !x.archived) : null); },
+      e => { console.warn("[myjobs reports]", e); if (!dead) setReports(null); });
+    return () => { dead = true; };
+  }, [callKey, repTick]); // eslint-disable-line
   const first = odFirst((mj.rec && mj.rec.name) || (identity && identity.name) || "");
   const active = mj.rows.filter(r => !mjIsDone(r.job)), done = mj.rows.filter(r => mjIsDone(r.job));
   // A foreman's page groups the jobs by who runs them: their own first, then each person on their crew.
@@ -57599,7 +57613,7 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
     const order = [(mj.rec && mj.rec.name) || "", ...mj.crew];
     return order.map(n => ({ key: n, label: n === order[0] ? (viewAs ? `${odFirst(n)}'s own jobs` : "Your jobs") : `${odFirst(n)}'s jobs`, rows: rows.filter(r => r.person === n) })).filter(g => g.rows.length);
   };
-  const jobEl = (r) => <MyJobsJob key={(viewAs ? viewAs.id : "me") + ":" + r.job.id} row={r} costs={costs} reports={reports} identity={identity} users={users} allJobs={allJobs} onOpenJob={onOpenJob}/>;
+  const jobEl = (r) => <MyJobsJob key={(viewAs ? viewAs.id : "me") + ":" + r.job.id} row={r} costs={costs} reports={reports} identity={callAs} users={users} allJobs={allJobs} onOpenJob={onOpenJob} onRetryReports={() => setRepTick(t => t + 1)}/>;
   const [tipOff, setTipOff] = useState(() => { try { return mjIsStandalone() || localStorage.getItem("myjobs.tipOff") === "1"; } catch (e) { return true; } });
   return (
     <div className="od-page mj-page" ref={root}>
@@ -57637,6 +57651,7 @@ function MyJobsPage({ identity, users, allJobs, onOpenJob, actions }) {
         .mj-sub[open]{padding-bottom:8px}.mj-sub .jc{margin:0 8px}
         .mj-reps{border:1px solid rgba(41,33,25,.1);border-radius:12px;background:#FBF9F5;padding:10px 12px}
         .mj-rh{display:flex;gap:8px;align-items:baseline}.mj-rh small{font-size:12px;color:${C.dim}}
+        .mj-retry{margin-left:auto;font:inherit;font-size:12.5px;font-weight:700;border:0;background:none;color:${OD_A};cursor:pointer;padding:6px}
         .mj-grp{margin-top:8px}.mj-gl{font-size:11.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:${C.dim};margin:0 0 4px}
         .mj-rep{border-top:1px solid rgba(41,33,25,.08)}
         .mj-rep>summary{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:9px 2px;min-height:44px;align-items:center;font-size:14px}
@@ -66193,8 +66208,11 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-25 · App SW version: v687
+**Last manifest update:** 2026-11-25 · App SW version: v688
 ---
+
+- **Reports foremen see: hours, percentages and job words no longer read as money; dollar and cost figures still do** · 'in-flight 2026-11-26' · 'SW v688' · 'functions/duetWrites/reports.js' · 'moneyText' · 'unMoney' · 'moneyHead' · Koy, 2026-11-25: *"Yes, tomorrow"* to loosening the report check so finish plans show on My Jobs. The check that decides whether a report needs owners-only (report.file in duetApi) and the foreman copy (claudeReports, Foreman Meeting, My Jobs, share link) use one test, moneyText. A line still counts as money with a dollar sign or USD, or a money word (cost, sell, budget, spent, labor cost …) beside a plain amount. Now taken out before that test: "cost center(s)", "overhead" lights / cans / fans / wiring, PO / quote / job / CO / change order / ticket / lot numbers and "#1435", dates and times; and counts of things or people (14 cans, 4 people, 120 ft) are not amounts, like percents and hours already weren't. A "Cost center" table column stays; a "Cost" column still goes. "Material spent 14,820", "Labor cost 9,240", "Overhead 4,200" and "invoice 881" still count. Owners-only reports are unchanged. Test: 'scripts/claude-reports-test.js' (v689 check). **Deploy:** duetApi, claudeReports, claudeFlagAnswer. **Why it won't lose data:** a text test only; no stored report changes, and filed reports keep their owners-only flag.
+- **My Jobs: reports load every time, not "couldn't load"** · 'in-flight 2026-11-25' · 'SW v688' · 'MyJobsPage callAs' · Koy: *"is there a reason on all of the reports it says could not load"*. My Jobs opens before the team list has loaded, and until then the live record is the sign-in screen's stand-in, which has no PIN, so the one reports call was refused ("Sign in again") and never tried again: every job said couldn't load. Calls now go out with a record that has a PIN (the live one once it loads, else the signed-in copy on this device), the list is read again when that record changes, and a **Try again** shows beside "couldn't load" if a read still fails. **Deploy:** hosting only. **Why it won't lose data:** read-only page; only when a read is sent changes.
 
 - **My Jobs for admins: a Viewing as picker shows any foreman's, jr. foreman's or lead's page exactly as they see it** · 'in-flight 2026-11-25' · 'SW v687' · 'MyJobsPage' · 'isAdminRec' · 'viewablePeople' · 'myjobs.viewAs' · Koy: *"Okay and how do I see their pages myself?"*, *"Any admin needs to be able to see all their pages too"*. Every admin now gets the **My Jobs** link in Command Center's top bar. On My Jobs an admin sees **Viewing as** (Me, then every active foreman, jr. foreman and lead, grouped by title); picking a person shows that person's page: the same jobs (a foreman's whole crew), the same grouping, margin and hours, job costs and reports. Only admins see the picker; the page stays read-only and still shows percentages and hours only, with owners-only reports left out. The pick is remembered on that device. Test: 'scripts/my-jobs-test.js' (admins get the link, the people list, never admins, crew or deactivated people). **Deploy:** hosting only. **Why it won't lose data:** a read-only view; nothing is written.
 
@@ -81196,7 +81214,7 @@ function App() {
     return (
       <ProjectsCtx.Provider value={projectsCtx}>
         {appGlobalStyle}
-        <MyJobsPage identity={myLiveRec} users={users} allJobs={allJobs}
+        <MyJobsPage identity={myLiveRec} signedIn={identity} users={users} allJobs={allJobs}
           onOpenJob={(job) => { if (job && job.id) openJobById(job.id); }}
           actions={<span className="od-bell">{inboxBellBtn}</span>}/>
         <HEConfirmHost/>

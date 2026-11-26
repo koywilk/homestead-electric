@@ -212,6 +212,26 @@ const base = { jobId: "1755000000001", type: "plan", title: "889 Rose Residence:
     assert(RP.planFile({ ...base, title: "Rose labor cost 9,240" }, ROSE, null, NOW).refused);
   });
 
+  // v689 (Koy, 2026-11-25: loosen the check so finish plans reach My Jobs). Percent, hours, Simpro section names,
+  // overhead fixtures, PO / quote / job / CO numbers, dates and times pass; dollar and cost figures are still refused.
+  await check("v689: finish-plan wording passes the foreman check; dollar and cost figures still don't", () => {
+    const pass = ["Cost center: Base Finish, 12 items, 120 h estimated", "Overhead lights: 14 cans in the kitchen, budget 40 hours",
+      "Cost center Change Order - Shop lights: 3 of 3 items, 15 h used", "PO 45210 covers the finish trim; PO #45211 still to send",
+      "Quote 2210: 6 cans added, cost center CO 3", "Job 1435 Hardman: finish starts 11/25 at 7:00 AM", "Invoice #881 is in",
+      "Rough net margin 18%, finish margin 12%, total margin 16.4%", "Profit so far 18%", "Base Rough In is 100% invoiced"];
+    for (const x of pass) assert(!RP.moneyText(x), "should pass: " + x);
+    const block = ["Material spent: 14,820 of 16,500", "Labor cost to date: 9,240", "Sell $161,631", "Contract value 48,000", "Revenue 12k",
+      "USD 400", "invoice 881", "Overhead 4,200", "overhead costs 3,100", "Budget 12,000 on cost center Base Rough", "Overhead lights cost 1,250"];
+    for (const x of block) assert(RP.moneyText(x), "should block: " + x);
+    const plan = ["# 1435 Hardman Residence: Finish plan", "", "- Cost center Base Finish: 120 h estimated, 4 people for 4 days",
+      "- Overhead lights: 22 cans, PO #45210 picked up 11/24", "- Rough net margin 18%"].join("\n");
+    assert(!RP.planFile({ ...base, content: plan }, ROSE, null, NOW).refused, "a finish plan with hours, %, POs and cost center names files for foremen");
+    assert.strictEqual(RP.foremanSafe(plan).cut, 0, "and the foreman copy keeps every line");
+    assert(RP.planFile({ ...base, content: plan + "\n- Material spent 14,820" }, ROSE, null, NOW).refused, "one cost line still refuses it");
+    const t = RP.foremanSafe("| Cost center | Hours | Cost |\n| --- | --- | --- |\n| Base Rough | 120 | 9,240 |");
+    assert(t.content.includes("| Cost center | Hours |") && !t.content.includes("9,240"), "a Cost center column stays, a Cost column goes");
+  });
+
   await check("callable: non-admins get only the foreman copy; admins get both", () => {
     // A report filed before v667 could hold a cost line with no $ sign.
     const old = { ...RP.planFile({ ...base, content: "Hours ok" }, ROSE, null, NOW).doc, content: WATCH.replace("- Sell $161,631\n", "") };

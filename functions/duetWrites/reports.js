@@ -55,12 +55,32 @@ const hasDollars = (s) => DOLLARS.test(String(s || ""));
 // much out is the safe side; nothing here ever adds text.
 const MONEY_WORD = /\b(costs?|costing|price[ds]?|pricing|invoice[ds]?|invoicing|revenue|profit|sell|selling|sold|sales|budget(?:ed)?|bill(?:ed|ing)|spen[dt]|spending|overhead|contract\s+(?:value|amount|total|price)|payments?|paid|pay|dollars?|bucks|wages?|payroll|gross\s+profit)\b/i;
 // A number that is NOT a percent, hours or days (those are fine for foremen).
-const AMOUNT = /(?:^|[^\w.,%])(\d[\d,]*(?:\.\d+)?)(?![\d,.]*\s*(?:%|percent\b|h\b|hrs?\b|hours?\b|days?\b|wks?\b|weeks?\b))/i;
+// v689: nor a count of things or people on the job ("14 cans", "4 people", "120 ft").
+const AMOUNT = /(?:^|[^\w.,%])(\d[\d,]*(?:\.\d+)?)(?![\d,.]*\s*(?:%|percent\b|h\b|hrs?\b|hours?\b|days?\b|wks?\b|weeks?\b|(?:cans?|lights?|fixtures?|items?|people|guys|men|crew|boxes|box|keypads?|outlets?|receptacles?|switch(?:es)?|circuits?|panels?|rolls?|ft|feet|floors?|rooms?|trips?)\b))/i;
+// v689 (Koy, 2026-11-25, "Yes, tomorrow" to loosening the check so finish plans reach My Jobs): words and numbers
+// that read as money to the two patterns above but aren't. Taken out of a line before it is judged, never out of the
+// report itself. Dollar signs and USD still always count (DOLLARS is tested first, on the untouched text).
+//   • "cost center(s)" is a Simpro section, "overhead" lights, cans, fans or wiring are fixtures
+//   • numbers that name a thing: PO / quote / job / CO / change order / ticket / lot numbers, "#1435", and
+//     "invoice #881" (with the #); a plain "invoice 881" still counts, the safe side
+//   • dates and times: 11/25, 11/25/2026, 2026-11-25, 7:00 AM
+const NOT_MONEY = [
+  /\bcost[\s-]*cent(?:er|re)s?\b/gi,
+  /\boverhead(?=[\s-]+(?:light|lights|lighting|cans?|fans?|fixtures?|wiring|wire|doors?|heaters?|speakers?|power|outlets?|receptacles?))/gi,
+  /\b(?:P\.?\s?O\.?s?|quotes?|jobs?|COs?|change\s+orders?|tickets?|lots?)\s*(?:no\.?|number|#)?\s*\d[\d-]*\b/gi,
+  /#\s*\d[\d-]*\b/g,
+  /\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g,
+  /\b\d{1,2}:\d{2}(?:\s*[ap]\.?m\.?)?/gi,
+];
+const unMoney = (t) => NOT_MONEY.reduce((x, re) => x.replace(re, " "), String(t == null ? "" : t));
 const moneyText = (s) => {
   const t = String(s == null ? "" : s);
   if (DOLLARS.test(t)) return true;
-  return MONEY_WORD.test(t) && AMOUNT.test(t);
+  const c = unMoney(t);
+  return MONEY_WORD.test(c) && AMOUNT.test(c);
 };
+// A table heading that names money ("Cost", "Sell $"); "Cost center" is a section, not money.
+const moneyHead = (h) => DOLLARS.test(h) || MONEY_WORD.test(unMoney(h));
 const isTableRow = (l) => /^\s*\|.*\|\s*$/.test(l);
 const isRuleRow = (l) => /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l.trim());
 const splitCells = (row) => { let s = row.trim(); if (s.startsWith("|")) s = s.slice(1); if (s.endsWith("|")) s = s.slice(0, -1); return s.split("|").map(c => c.trim()); };
@@ -76,7 +96,7 @@ function foremanSafe(md) {
       while (i < lines.length && isTableRow(lines[i])) block.push(lines[i++]);
       i--;
       const head = splitCells(block[0]);
-      const drop = head.map(h => DOLLARS.test(h) || MONEY_WORD.test(h));
+      const drop = head.map(moneyHead);
       cut += drop.filter(Boolean).length;
       if (drop.every(Boolean)) { cut += block.length - 2; continue; }
       const keep = (cells) => "| " + cells.filter((c, k) => !drop[k]).join(" | ") + " |";

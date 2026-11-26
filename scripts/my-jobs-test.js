@@ -84,5 +84,12 @@ ok(MJ.reportsByGroup(reps, "").length === 0, "a job with no number has no report
 ok(MJ.reportName(reps[0]) === "Finish plan", "the job number in front comes off the name");
 ok(MJ.reportName(reps[1]) === "Foreman packet, week of 11/24", "other names stay");
 
+// v688: the page must never send the reports read with the sign-in stand-in (no PIN), and must read again once
+// the team list loads. Pinned against the page's source.
+const app = require("fs").readFileSync(require("path").join(__dirname, "../src/App.js"), "utf8");
+ok(/<MyJobsPage identity=\{myLiveRec\} signedIn=\{identity\}/.test(app), "the page gets the signed-in copy as well as the live record");
+ok(/const callAs = identity && identity\.pin && !identity\._standIn \? identity : \(signedIn && signedIn\.pin \? signedIn : identity\);/.test(app), "calls go out with a record that has a PIN, never the stand-in");
+ok(/if \(!callAs \|\| !callAs\.pin\) return undefined;/.test(app) && /\}, \[callKey, repTick\]\);/.test(app), "no call without a PIN, and the list is read again when the record changes");
+
 if (fails) { console.error(`\nmy-jobs-test: ${fails} failed`); process.exit(1); }
 console.log("\nmy-jobs-test: all passed");
