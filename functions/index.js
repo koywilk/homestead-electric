@@ -7871,6 +7871,7 @@ exports.claudeReports = functions.https.onCall(async (data) => {
 // email or announcement (claudeWork.js FLAG_ACTIONS). Deploy these three:
 //   FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions:claudeWork,functions:claudeFlagAnswer,functions:duetApi --project homestead-electric
 const _claudeWork = require("./duetWrites/claudeWork.js");
+const _claudeInventory = require("./claudeInventory.js");
 exports.claudeWork = functions.https.onCall(async (data) => {
   const user = await requireAdmin(data);
   if (gcAdminAccessOf(user) !== "admin") throw new functions.https.HttpsError("permission-denied", "The Claude tab is for admins.");
@@ -7878,7 +7879,9 @@ exports.claudeWork = functions.https.onCall(async (data) => {
     db.collection("claude_routines").limit(500).get(),
     db.collection("claude_flags").orderBy("updatedAt", "desc").limit(1000).get(),
   ]);
-  return _claudeWork.buildWork({ routines: rs.docs.map(d => [d.id, d.data()]), flags: fs.docs.map(d => [d.id, d.data()]), viewer: user, nowIso: new Date().toISOString() });
+  const work = _claudeWork.buildWork({ routines: rs.docs.map(d => [d.id, d.data()]), flags: fs.docs.map(d => [d.id, d.data()]), viewer: user, nowIso: new Date().toISOString() });
+  // SW v689: "Everything Claude runs" (functions/claudeInventory.json); Koy-only rows go to Koy alone.
+  return { ...work, inventory: _claudeInventory.inventoryFor(user) };
 });
 exports.claudeFlagAnswer = functions.runWith({ timeoutSeconds: 120 }).https.onCall(async (data) => {
   const user = await requireAdmin(data);

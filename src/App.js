@@ -55729,6 +55729,11 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
   const [routineOpen, setRoutineOpen] = useState(null);
   const [routineGrpOpen, setRoutineGrpOpen] = useState({});   // v637: which Automations groups are open
   const [routineQ, setRoutineQ] = useState("");
+  // v689: "Everything Claude runs" (claudeWork's inventory): the open row, the find box, which groups are open.
+  const [invOpen, setInvOpen] = useState(null);
+  const [invQ, setInvQ] = useState("");
+  const [invOnlyNot, setInvOnlyNot] = useState(false);
+  const [invGrpOpen, setInvGrpOpen] = useState({});
   const [flagBusy, setFlagBusy] = useState(null);             // the flag id whose answer is in flight
   const [flagMsg, setFlagMsg] = useState({});                 // id → last message for that flag
   useEffect(() => {
@@ -57025,6 +57030,62 @@ function OfficeDash({ jobs, allJobs = null, users = [], needs = [], upcoming = [
               : <div className="od-empty">No automation matches "{routineQ.trim()}".</div>}
             </>; })()
           : <div className="od-empty">No routines listed yet. The list fills in on the first sync.</div>, OD_B)}
+        {/* v689: Everything Claude runs. The list is data on the server (functions/claudeInventory.json);
+            Koy-only rows (Shared with me, his claude.ai pages) reach his record alone. Owners' view and
+            Foreman view leave them off here too, and Foreman view also leaves off rows tied to dollar data. */}
+        {(() => {
+          const inv = claudeWork.inventory;
+          if (!inv) return fold("everything", "Everything Claude runs", "every automation, feature, sheet, doc and page", null,
+            <div className="od-empty">This list shows here once the new Claude function is deployed.</div>, OD_B);
+          const hideKoy = !isKoy || claudeOwners, hideMoney = !!fview;
+          const rows = (inv.items || []).filter(r => !(hideKoy && r.koyOnly) && !(hideMoney && r.money));
+          const notPulled = (r) => r.group === "autos" ? r.on === false : r.pulled === false;
+          const iq = invQ.trim().toLowerCase();
+          const hits = rows.filter(r => (!invOnlyNot || notPulled(r)) && (!iq || [r.title, r.what, r.from, r.where, r.owner, r.when].join(" ").toLowerCase().includes(iq)));
+          const onN = rows.filter(r => r.group === "autos" && r.on).length, offN = rows.filter(r => r.group === "autos" && !r.on).length;
+          const npN = rows.filter(r => r.group !== "autos" && r.pulled === false).length;
+          const checked = inv.checkedAt ? odShort(D(inv.checkedAt + "T12:00:00")) : "";
+          const KIND_ICON = { sheet: "fileText", doc: "fileText", folder: "folder", form: "clipboard", file: "paperclip" };
+          const GRP_ICON = { autos: "zap", app: "settings", files: "fileText", shared: "users", pages: "external" };
+          const tagOf = (r) => r.group === "autos" ? (r.on ? ["On", r.when].filter(Boolean).join(" · ") : "Off")
+            : [r.pulled === false ? "Not pulled yet" : r.where || (r.kind ? r.kind[0].toUpperCase() + r.kind.slice(1) : ""), r.owner && `from ${r.owner}`].filter(Boolean).join(" · ");
+          const colorOf = (r) => notPulled(r) ? OD_GREY : OD_B;
+          const openLink = (u) => { try { window.open(u, "_blank", "noopener,noreferrer"); } catch (e) {} };
+          const invRow = (r) => (
+            <Fragment key={r.id}>
+              <OdItem color={colorOf(r)} icon={r.group === "autos" ? (r.on ? "zap" : "eyeOff") : KIND_ICON[r.kind] || GRP_ICON[r.group]} tag={tagOf(r)}
+                tagColor={notPulled(r) ? OD_SLATE : undefined} title={r.title} sub={r.what}
+                when={invOpen === r.id ? "Close" : r.link ? "Open" : ""} onClick={() => setInvOpen(o => (o === r.id ? null : r.id))}/>
+              {invOpen === r.id ? <div className="od-rep-body">
+                {r.what ? <p><b>What it does:</b> {r.what}</p> : null}
+                {r.from ? <p><b>Where its data comes from:</b> {r.from}</p> : null}
+                {r.group === "autos" ? <p><b>When:</b> {r.on ? (r.when || "on a schedule") : "Off. It doesn't run."}{r.where ? ` · posts in ${r.where}` : ""}</p>
+                  : r.where ? <p><b>Where it shows:</b> {r.where}</p> : null}
+                {notPulled(r) && r.group !== "autos" ? <p><b>Not pulled yet:</b> nothing in the app or a Claude routine reads or refreshes it yet.</p> : null}
+                {r.note ? <p><b>Note:</b> {r.note}</p> : null}
+                {r.link ? <div className="od-ct-actions"><button type="button" className="od-mini-btn" onClick={() => openLink(r.link)}>Open it</button></div> : null}
+              </div> : null}
+            </Fragment>);
+          const groups = (inv.groups || []).map(g => ({ ...g, rows: hits.filter(r => r.group === g.k) })).filter(g => g.rows.length);
+          return fold("everything", "Everything Claude runs", `every automation, feature, sheet, doc and page${checked ? ` · checked ${checked}` : ""}`,
+            `${onN} on · ${offN} off${npN ? ` · ${npN} not pulled yet` : ""}`, <>
+            <div className="od-chips">
+              <button type="button" aria-pressed={!invOnlyNot} onClick={() => setInvOnlyNot(false)} style={{ "--c": OD_B }}>All <span>{rows.length}</span></button>
+              <button type="button" aria-pressed={invOnlyNot} onClick={() => setInvOnlyNot(true)} style={{ "--c": OD_GREY }}><i/>Off or not pulled yet <span>{offN + npN}</span></button>
+            </div>
+            <input className="od-q" type="search" value={invQ} onChange={e => setInvQ(e.target.value)} placeholder="Find by name, what it does or where its data comes from" aria-label="Find in everything Claude runs"/>
+            {groups.length ? groups.map(g => { const open = !!iq || invOnlyNot || !!invGrpOpen[g.k];
+              const np = g.rows.filter(notPulled).length; return (
+              <div key={g.k} className="od-rgrp">
+                <button type="button" className="od-sec od-sec-tap" aria-expanded={open} onClick={() => setInvGrpOpen(o => ({ ...o, [g.k]: !o[g.k] }))}>
+                  <span>{g.label}</span>
+                  <small>{g.rows.length}{np ? ` · ${np} ${g.k === "autos" ? "off" : "not pulled yet"}` : ""}</small>
+                  <Icon name={open ? "chevronDown" : "chevronRight"} size={14}/>
+                </button>
+                {open ? <div className="od-list">{g.rows.map(invRow)}</div> : null}
+              </div>); })
+            : <div className="od-empty">Nothing matches{iq ? ` "${invQ.trim()}"` : ""}.</div>}
+          </>, OD_B); })()}
       </>}
       {cd && cd.sample ? <div className="od-white od-pad" role="note"><b>Preview with sample rows.</b> These are made up from today's jobs so you can see the layout. Real rows show once the new Claude function is deployed and the connector starts logging here.</div> : null}
       {cd === undefined ? <div className="od-white od-pad">Loading…</div> : cd && cd.ok === false ? <div className="od-white od-pad">Couldn't load this: {cd.err || "try Refresh"}</div> : <>
@@ -66208,9 +66269,10 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-11-25 · App SW version: v688
+**Last manifest update:** 2026-11-26 · App SW version: v689
 ---
 
+- **Claude tab: Everything Claude runs, one list of every automation, feature, sheet, doc and page with a walkthrough** · 'in-flight 2026-11-26' · 'SW v689' · 'functions/claudeInventory.json' · 'claudeInventory.js' · 'claudeWork' · Koy (2026-11-25): *"any single thing that Claude is doing or helping with or automating... on a list the link to them and then I want a complete walkthrough of what that sheet does... not being pulled yet"* and *"Include any that have been sent or shared with me too"*. A new fold **Everything Claude runs** on the Claude tab, under Automations, grouped **Automations** (On with when it runs, or Off), **App and dashboard features**, **Sheets and docs**, **Shared with me** and **Claude pages**. Each row shows what it does; tap it for the walkthrough (what it does, where its data comes from, when it runs or where it shows, any note) and **Open it** for its link. Anything nothing in the app or a Claude routine reads or refreshes yet is tagged **Not pulled yet**; a chip shows only the off and not-pulled rows, and a find box searches the lot. The list is **data on the server** ('functions/claudeInventory.json', checked 2026-11-25), sent by the admin-PIN 'claudeWork' callable, so links to pay and dollar sheets never ship in the app. **Shared with me** and Koy's claude.ai pages reach Koy's record alone; Koy's Owners' view leaves them off too, and Foreman view also leaves off rows tied to dollar data. To update the list, edit the JSON and deploy 'claudeWork'. Test: 'scripts/claude-inventory-test.js' (prebuild). Guide dashboard.html Claude updated. **Deploy:** hosting + 'Deploy-functions: claudeWork'. **Why it won't lose data:** read only; nothing is written, and no rule changes.
 - **Reports foremen see: hours, percentages and job words no longer read as money; dollar and cost figures still do** · 'in-flight 2026-11-26' · 'SW v688' · 'functions/duetWrites/reports.js' · 'moneyText' · 'unMoney' · 'moneyHead' · Koy, 2026-11-25: *"Yes, tomorrow"* to loosening the report check so finish plans show on My Jobs. The check that decides whether a report needs owners-only (report.file in duetApi) and the foreman copy (claudeReports, Foreman Meeting, My Jobs, share link) use one test, moneyText. A line still counts as money with a dollar sign or USD, or a money word (cost, sell, budget, spent, labor cost …) beside a plain amount. Now taken out before that test: "cost center(s)", "overhead" lights / cans / fans / wiring, PO / quote / job / CO / change order / ticket / lot numbers and "#1435", dates and times; and counts of things or people (14 cans, 4 people, 120 ft) are not amounts, like percents and hours already weren't. A "Cost center" table column stays; a "Cost" column still goes. "Material spent 14,820", "Labor cost 9,240", "Overhead 4,200" and "invoice 881" still count. Owners-only reports are unchanged. Test: 'scripts/claude-reports-test.js' (v689 check). **Deploy:** duetApi, claudeReports, claudeFlagAnswer. **Why it won't lose data:** a text test only; no stored report changes, and filed reports keep their owners-only flag.
 - **My Jobs: reports load every time, not "couldn't load"** · 'in-flight 2026-11-25' · 'SW v688' · 'MyJobsPage callAs' · Koy: *"is there a reason on all of the reports it says could not load"*. My Jobs opens before the team list has loaded, and until then the live record is the sign-in screen's stand-in, which has no PIN, so the one reports call was refused ("Sign in again") and never tried again: every job said couldn't load. Calls now go out with a record that has a PIN (the live one once it loads, else the signed-in copy on this device), the list is read again when that record changes, and a **Try again** shows beside "couldn't load" if a read still fails. **Deploy:** hosting only. **Why it won't lose data:** read-only page; only when a read is sent changes.
 
